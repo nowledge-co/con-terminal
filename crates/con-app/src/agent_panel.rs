@@ -852,39 +852,43 @@ impl AgentPanel {
             return true;
         }
 
-        let has_meaningful_config = |kind: &ProviderKind| {
+        let has_auth_config = |kind: &ProviderKind| {
             config.providers.get(kind).is_some_and(|provider| {
-                provider
-                    .model
+                let has_api_key = provider
+                    .api_key
                     .as_ref()
                     .is_some_and(|v| !v.trim().is_empty())
                     || provider
-                        .api_key
-                        .as_ref()
-                        .is_some_and(|v| !v.trim().is_empty())
-                    || provider
                         .api_key_env
                         .as_ref()
-                        .is_some_and(|v| !v.trim().is_empty())
-                    || provider
+                        .is_some_and(|v| !v.trim().is_empty());
+                if has_api_key {
+                    return true;
+                }
+
+                *kind == ProviderKind::OpenAICompatible
+                    && provider
                         .base_url
                         .as_ref()
                         .is_some_and(|v| !v.trim().is_empty())
-                    || provider.max_tokens.is_some()
             })
         };
 
-        has_meaningful_config(&sidebar_provider)
+        has_auth_config(&sidebar_provider)
             || match sidebar_provider {
-                ProviderKind::MiniMax => has_meaningful_config(&ProviderKind::MiniMaxAnthropic),
-                ProviderKind::Moonshot => has_meaningful_config(&ProviderKind::MoonshotAnthropic),
-                ProviderKind::ZAI => has_meaningful_config(&ProviderKind::ZAIAnthropic),
+                ProviderKind::MiniMax => has_auth_config(&ProviderKind::MiniMaxAnthropic),
+                ProviderKind::Moonshot => has_auth_config(&ProviderKind::MoonshotAnthropic),
+                ProviderKind::ZAI => has_auth_config(&ProviderKind::ZAIAnthropic),
                 _ => false,
             }
     }
 
     pub fn configured_session_providers(config: &AgentConfig) -> Vec<ProviderKind> {
-        let mut providers = vec![Self::session_sidebar_provider_kind(&config.provider)];
+        let current_provider = Self::session_sidebar_provider_kind(&config.provider);
+        let mut providers = Vec::new();
+        if Self::provider_is_configured(config, &current_provider) {
+            providers.push(current_provider.clone());
+        }
         for provider in [
             ProviderKind::Anthropic,
             ProviderKind::OpenAI,
@@ -904,6 +908,9 @@ impl AgentPanel {
             if Self::provider_is_configured(config, &provider) && !providers.contains(&provider) {
                 providers.push(provider);
             }
+        }
+        if providers.is_empty() {
+            providers.push(current_provider);
         }
         providers
     }
@@ -5056,10 +5063,14 @@ fn humanize_model_name(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
+    use con_agent::{AgentConfig, ProviderConfig, ProviderKind};
 
     #[test]
     fn humanize_strips_date_suffix() {
-        assert_eq!(humanize_model_name("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+        assert_eq!(
+            humanize_model_name("claude-sonnet-4-5-20250929"),
+            "Sonnet 4.5"
+        );
         assert_eq!(humanize_model_name("claude-opus-4-1-20250805"), "Opus 4.1");
         assert_eq!(humanize_model_name("claude-sonnet-4-6"), "Sonnet 4.6");
         assert_eq!(humanize_model_name(""), "No model");
@@ -5104,6 +5115,83 @@ mod tests {
             text.chars().count() as u32,
             false,
         ));
+    }
+
+    #[test]
+    fn provider_model_only_is_not_treated_as_configured() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::OpenAI,
+            ProviderConfig {
+                model: Some("gpt-4o".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(!AgentPanel::provider_is_configured(
+            &config,
+            &ProviderKind::OpenAI
+        ));
+    }
+
+    #[test]
+    fn provider_api_key_is_treated_as_configured() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::OpenAI,
+            ProviderConfig {
+                api_key: Some("sk-test".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(AgentPanel::provider_is_configured(
+            &config,
+            &ProviderKind::OpenAI
+        ));
+    }
+
+    #[test]
+    fn openai_compatible_base_url_only_is_treated_as_configured() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::OpenAICompatible,
+            ProviderConfig {
+                base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(AgentPanel::provider_is_configured(
+            &config,
+            &ProviderKind::OpenAICompatible
+        ));
+    }
+
+    #[test]
+    fn configured_provider_list_excludes_model_only_entries() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::Anthropic,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::OpenAI,
+            ProviderConfig {
+                model: Some("gpt-4.1".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                api_key: Some("sk-ant-test".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        let providers = AgentPanel::configured_session_providers(&config);
+        assert!(providers.contains(&ProviderKind::Anthropic));
+        assert!(!providers.contains(&ProviderKind::OpenAI));
     }
 
     #[test]
