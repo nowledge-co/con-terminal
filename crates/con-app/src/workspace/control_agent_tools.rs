@@ -926,29 +926,39 @@ impl ConWorkspace {
                                         }
                                     } else {
                                         // Quiescence mode: output unchanged for QUIET_THRESHOLD polls
-                                        let current = normalize_output(pane.recent_lines(50, cx));
-                                        if current.is_empty() {
-                                            // Terminal not producing output yet — don't count as stable
-                                            None
-                                        } else if last_snapshot.is_empty() {
-                                            // First non-empty snapshot — set baseline, start counting
-                                            log::info!("[wait_for] quiescence: baseline set ({} bytes)", current.len());
-                                            last_snapshot = current;
+                                        let is_alive = pane.is_alive(cx);
+                                        let surface_ready = pane.surface_ready(cx);
+                                        if !is_alive || !surface_ready {
+                                            // A pane can exist before its terminal surface is bootstrapped.
+                                            // Never report quiescent-idle until the pane is both alive and ready.
+                                            last_snapshot.clear();
                                             stable_count = 0;
                                             None
-                                        } else if current == last_snapshot {
-                                            stable_count += 1;
-                                            log::info!("[wait_for] quiescence: stable {}/{}", stable_count, QUIET_THRESHOLD);
-                                            if stable_count >= QUIET_THRESHOLD {
-                                                Some(("idle".to_string(), current))
+                                        } else {
+                                            let current = normalize_output(pane.recent_lines(50, cx));
+                                            if current.is_empty() {
+                                                // Terminal not producing output yet — don't count as stable
+                                                None
+                                            } else if last_snapshot.is_empty() {
+                                                // First non-empty snapshot — set baseline, start counting
+                                                log::info!("[wait_for] quiescence: baseline set ({} bytes)", current.len());
+                                                last_snapshot = current;
+                                                stable_count = 0;
+                                                None
+                                            } else if current == last_snapshot {
+                                                stable_count += 1;
+                                                log::info!("[wait_for] quiescence: stable {}/{}", stable_count, QUIET_THRESHOLD);
+                                                if stable_count >= QUIET_THRESHOLD {
+                                                    Some(("idle".to_string(), current))
+                                                } else {
+                                                    None
+                                                }
                                             } else {
+                                                log::info!("[wait_for] quiescence: output changed, resetting (stable was {})", stable_count);
+                                                last_snapshot = current;
+                                                stable_count = 0;
                                                 None
                                             }
-                                        } else {
-                                            log::info!("[wait_for] quiescence: output changed, resetting (stable was {})", stable_count);
-                                            last_snapshot = current;
-                                            stable_count = 0;
-                                            None
                                         }
                                     }
                                 })
