@@ -5152,6 +5152,40 @@ mod tests {
     }
 
     #[test]
+    fn provider_api_key_env_is_treated_as_configured() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(AgentPanel::provider_is_configured(
+            &config,
+            &ProviderKind::Anthropic
+        ));
+    }
+
+    #[test]
+    fn provider_whitespace_api_key_is_not_configured() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::OpenAI,
+            ProviderConfig {
+                api_key: Some("   ".to_string()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(!AgentPanel::provider_is_configured(
+            &config,
+            &ProviderKind::OpenAI
+        ));
+    }
+
+    #[test]
     fn openai_compatible_base_url_only_is_treated_as_configured() {
         let mut config = AgentConfig::default();
         config.providers.set(

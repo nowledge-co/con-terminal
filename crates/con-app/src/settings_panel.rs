@@ -504,16 +504,11 @@ impl SettingsPanel {
             return true;
         }
 
-        let current_provider =
-            Self::sidebar_provider_kind(&self.selected_provider) == sidebar_provider;
-        if current_provider {
-            let current = self.read_provider_inputs(cx);
-            if Self::provider_config_has_auth_signal(&sidebar_provider, &current) {
-                return true;
-            }
-        }
-
         let has_config = |kind: &ProviderKind| {
+            if *kind == self.selected_provider {
+                let current = self.read_provider_inputs(cx);
+                return Self::provider_config_has_auth_signal(kind, &current);
+            }
             self.config
                 .agent
                 .providers

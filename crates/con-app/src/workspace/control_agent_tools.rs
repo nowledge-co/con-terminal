@@ -820,12 +820,21 @@ impl ConWorkspace {
 
                 match self.resolve_pane_target_for_tab(tab_idx, target) {
                     Ok(resolved) => {
+                        let pane_index = resolved.pane_index;
+                        let pane_id = resolved.pane_id;
+                        let pane_target = con_agent::tools::PaneSelector::new(None, Some(pane_id));
                         let pane = resolved.pane;
                         let has_si = pane.has_shell_integration(cx);
                         let timeout = timeout_secs.unwrap_or(30).min(120);
                         let response_tx = req.response_tx;
 
-                        log::info!("[wait_for] has_si={} is_busy={}", has_si, pane.is_busy(cx),);
+                        log::info!(
+                            "[wait_for] pane_index={} pane_id={} has_si={} is_busy={}",
+                            pane_index,
+                            pane_id,
+                            has_si,
+                            pane.is_busy(cx),
+                        );
 
                         // Check if already in target state before spawning async task
                         if pattern.is_none() && has_si && !pane.is_busy(cx) {
@@ -874,7 +883,15 @@ impl ConWorkspace {
                         // long enough to avoid false positives from progress output.
                         const QUIET_THRESHOLD: u32 = 4;
                         let mut last_snapshot = if use_quiescence {
-                            match this.update(cx, |_, cx| normalize_output(pane.recent_lines(50, cx))) {
+                            match this.update(cx, |workspace, cx| {
+                                workspace
+                                    .resolve_pane_target_for_tab(tab_idx, pane_target)
+                                    .ok()
+                                    .map(|resolved| {
+                                        normalize_output(resolved.pane.recent_lines(50, cx))
+                                    })
+                                    .unwrap_or_default()
+                            }) {
                                 Ok(s) if !s.is_empty() => s,
                                 _ => {
                                     // Terminal not ready yet — use sentinel that won't match real output.
@@ -895,7 +912,13 @@ impl ConWorkspace {
 
                             if std::time::Instant::now() >= deadline {
                                 let output = this
-                                    .update(cx, |_, cx| pane.recent_lines(50, cx).join("\n"))
+                                    .update(cx, |workspace, cx| {
+                                        workspace
+                                            .resolve_pane_target_for_tab(tab_idx, pane_target)
+                                            .ok()
+                                            .map(|resolved| resolved.pane.recent_lines(50, cx).join("\n"))
+                                            .unwrap_or_default()
+                                    })
                                     .unwrap_or_default();
                                 let _ = response_tx.send(PaneResponse::WaitComplete {
                                     status: "timeout".into(),
@@ -904,25 +927,48 @@ impl ConWorkspace {
                                 return;
                             }
 
-                            let done = this
-                                .update(cx, |_, cx| {
+                            enum WaitPoll {
+                                Continue,
+                                Done {
+                                    status: String,
+                                    output: String,
+                                },
+                                Error(String),
+                            }
+
+                            let poll = this
+                                .update(cx, |workspace, cx| {
+                                    let resolved = match workspace
+                                        .resolve_pane_target_for_tab(tab_idx, pane_target)
+                                    {
+                                        Ok(resolved) => resolved,
+                                        Err(err) => return WaitPoll::Error(err),
+                                    };
+                                    let pane = resolved.pane;
+                                    let has_si = pane.has_shell_integration(cx);
+
                                     if let Some(ref pat) = pattern {
                                         // Pattern mode
                                         let content = pane.recent_lines(50, cx).join("\n");
                                         if content.contains(pat.as_str()) {
-                                            Some(("matched".to_string(), content))
+                                            WaitPoll::Done {
+                                                status: "matched".to_string(),
+                                                output: content,
+                                            }
                                         } else {
-                                            None
+                                            WaitPoll::Continue
                                         }
                                     } else if has_si {
                                         // Shell integration idle mode
                                         if pane.take_command_finished(cx).is_some()
                                             || !pane.is_busy(cx)
                                         {
-                                            let output = pane.recent_lines(50, cx).join("\n");
-                                            Some(("idle".to_string(), output))
+                                            WaitPoll::Done {
+                                                status: "idle".to_string(),
+                                                output: pane.recent_lines(50, cx).join("\n"),
+                                            }
                                         } else {
-                                            None
+                                            WaitPoll::Continue
                                         }
                                     } else {
                                         // Quiescence mode: output unchanged for QUIET_THRESHOLD polls
@@ -933,44 +979,54 @@ impl ConWorkspace {
                                             // Never report quiescent-idle until the pane is both alive and ready.
                                             last_snapshot.clear();
                                             stable_count = 0;
-                                            None
+                                            WaitPoll::Continue
                                         } else {
                                             let current = normalize_output(pane.recent_lines(50, cx));
                                             if current.is_empty() {
                                                 // Terminal not producing output yet — don't count as stable
-                                                None
+                                                WaitPoll::Continue
                                             } else if last_snapshot.is_empty() {
                                                 // First non-empty snapshot — set baseline, start counting
                                                 log::info!("[wait_for] quiescence: baseline set ({} bytes)", current.len());
                                                 last_snapshot = current;
                                                 stable_count = 0;
-                                                None
+                                                WaitPoll::Continue
                                             } else if current == last_snapshot {
                                                 stable_count += 1;
                                                 log::info!("[wait_for] quiescence: stable {}/{}", stable_count, QUIET_THRESHOLD);
                                                 if stable_count >= QUIET_THRESHOLD {
-                                                    Some(("idle".to_string(), current))
+                                                    WaitPoll::Done {
+                                                        status: "idle".to_string(),
+                                                        output: current,
+                                                    }
                                                 } else {
-                                                    None
+                                                    WaitPoll::Continue
                                                 }
                                             } else {
                                                 log::info!("[wait_for] quiescence: output changed, resetting (stable was {})", stable_count);
                                                 last_snapshot = current;
                                                 stable_count = 0;
-                                                None
+                                                WaitPoll::Continue
                                             }
                                         }
                                     }
                                 })
-                                .ok()
-                                .flatten();
+                                .ok();
 
-                            if let Some((status, output)) = done {
-                                let _ = response_tx.send(PaneResponse::WaitComplete {
-                                    status,
-                                    output,
-                                });
-                                return;
+                            match poll {
+                                Some(WaitPoll::Done { status, output }) => {
+                                    let _ = response_tx.send(PaneResponse::WaitComplete {
+                                        status,
+                                        output,
+                                    });
+                                    return;
+                                }
+                                Some(WaitPoll::Error(err)) => {
+                                    let _ = response_tx.send(PaneResponse::Error(err));
+                                    return;
+                                }
+                                Some(WaitPoll::Continue) => {}
+                                None => return,
                             }
                         }
                     })
