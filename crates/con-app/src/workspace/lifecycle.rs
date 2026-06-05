@@ -1141,12 +1141,19 @@ impl ConWorkspace {
 
         let generation = self.ghostty_app.wake_generation();
         if generation == self.last_ghostty_wake_generation {
+            for tab in &self.tabs {
+                for terminal in tab.pane_tree.all_surface_terminals() {
+                    drain_count += 1;
+                    changed |= terminal.drain_surface_state_with_native_scroll(false, cx);
+                }
+            }
             if let Some(started) = started {
                 if changed {
                     log::info!(
                         target: "con::perf",
-                        "pump_ghostty_views generation_unchanged terminals={} changed=1 elapsed_ms={:.3}",
+                        "pump_ghostty_views generation_unchanged terminals={} drains={} changed=1 elapsed_ms={:.3}",
                         terminal_count,
+                        drain_count,
                         started.elapsed().as_secs_f64() * 1000.0
                     );
                 }

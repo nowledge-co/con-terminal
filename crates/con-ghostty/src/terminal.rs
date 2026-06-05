@@ -1385,6 +1385,14 @@ unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
     });
 }
 
+fn mark_child_exited_state(state: &StateRef) {
+    let mut s = state.lock();
+    s.child_exited = true;
+    s.needs_render = true;
+    s.is_busy = false;
+    s.last_command_finished_input_generation = s.input_generation;
+}
+
 unsafe extern "C" fn action_callback(
     _app: ffi::ghostty_app_t,
     target: ffi::ghostty_target_s,
@@ -1495,7 +1503,7 @@ unsafe extern "C" fn action_callback(
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHOW_CHILD_EXITED => {
-                state.lock().child_exited = true;
+                mark_child_exited_state(&state);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COLOR_CHANGE => {
@@ -1638,12 +1646,19 @@ unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_aliv
         return;
     }
     let state = unsafe { &*(userdata as *const StateRef) };
-    state.lock().child_exited = true;
+    mark_child_exited_state(state);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GhosttyConfigPatch, TerminalColors, installed_app_ghostty_resources_dir_for_exe};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use super::{
+        GhosttyConfigPatch, TerminalColors, TerminalState,
+        installed_app_ghostty_resources_dir_for_exe, mark_child_exited_state,
+    };
 
     fn sample_colors(seed: u8) -> TerminalColors {
         TerminalColors {
@@ -1655,6 +1670,24 @@ mod tests {
             ],
             palette: [[seed; 3]; 16],
         }
+    }
+
+    #[test]
+    fn mark_child_exited_state_clears_busy_and_marks_input_finished() {
+        let state = Arc::new(Mutex::new(TerminalState {
+            is_busy: true,
+            input_generation: 7,
+            last_command_finished_input_generation: 3,
+            ..TerminalState::default()
+        }));
+
+        mark_child_exited_state(&state);
+
+        let state = state.lock();
+        assert!(state.child_exited);
+        assert!(state.needs_render);
+        assert!(!state.is_busy);
+        assert_eq!(state.last_command_finished_input_generation, 7);
     }
 
     #[test]
