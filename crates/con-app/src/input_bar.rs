@@ -7,6 +7,10 @@ use gpui_component::{
 
 use crate::ui_scale::{mono_density_scale, mono_px, mono_space_px};
 
+const INPUT_BAR_MIN_HEIGHT: f32 = 43.0;
+const INPUT_BAR_ROW_HEIGHT: f32 = 20.0;
+const INPUT_BAR_MAX_ROWS: usize = 6;
+
 actions!(
     input_bar,
     [
@@ -396,7 +400,7 @@ impl InputBar {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
                 .code_editor("con-shell")
-                .multi_line(false)
+                .auto_grow(1, INPUT_BAR_MAX_ROWS)
                 .folding(false)
         });
         shell_input_state.update(cx, |state, cx| {
@@ -794,15 +798,21 @@ impl InputBar {
     }
 
     pub fn skill_popup_offset(&self, cx: &App) -> Pixels {
-        let rows = self
-            .current_input_state()
+        px(56.0 + (self.content_rows(cx).saturating_sub(1) as f32 * INPUT_BAR_ROW_HEIGHT))
+    }
+
+    pub fn rendered_height(&self, cx: &App) -> Pixels {
+        px(INPUT_BAR_MIN_HEIGHT
+            + (self.content_rows(cx).saturating_sub(1) as f32 * INPUT_BAR_ROW_HEIGHT))
+    }
+
+    fn content_rows(&self, cx: &App) -> usize {
+        self.current_input_state()
             .read(cx)
             .value()
             .lines()
             .count()
-            .clamp(1, 6);
-
-        px(56.0 + (rows.saturating_sub(1) as f32 * 20.0))
+            .clamp(1, INPUT_BAR_MAX_ROWS)
     }
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1577,7 +1587,7 @@ impl Render for InputBar {
                         .text_size(input_text_size)
                         .line_height(input_line_height)
                         .pl(px(12.0 * mono_scale))
-                        .h(control_size)
+                        .min_h(control_size)
                         .into_any_element()
                 } else {
                     Input::new(&input_state)
@@ -1591,7 +1601,7 @@ impl Render for InputBar {
                         })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
-                        .h(control_size)
+                        .min_h(control_size)
                         .into_any_element()
                 },
             ));
@@ -1611,7 +1621,6 @@ impl Render for InputBar {
                     .min_h(px(44.0 * mono_scale))
                     .flex()
                     .items_center()
-                    .h(px(32.0 * mono_scale))
                     .gap(px(9.0 * mono_scale))
                     .child(mode_prefix)
                     .children(pane_row)

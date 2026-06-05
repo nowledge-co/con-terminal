@@ -118,7 +118,11 @@ impl ConWorkspace {
         }
 
         let top_bar_height = self.current_top_bar_height();
-        let input_bar_height = if self.input_bar_visible { 42.0 } else { 0.0 };
+        let input_bar_height = if self.input_bar_visible {
+            self.input_bar.read(cx).rendered_height(cx).as_f32()
+        } else {
+            0.0
+        };
         let win_w = f32::from(win.bounds().size.width);
         let win_h = f32::from(win.bounds().size.height);
         let effective_agent_panel_width = self.agent_panel_width.min(max_agent_panel_width(win_w));
@@ -742,10 +746,11 @@ impl Render for ConWorkspace {
             input_bar_progress > 0.01 || input_bar_snap_guard_active;
 
         if input_bar_reserved_for_layout {
+            let full_input_bar_height = self.input_bar.read(cx).rendered_height(cx).as_f32();
             let input_bar_height = if input_bar_progress > 0.01 {
-                43.0 * input_bar_progress
+                full_input_bar_height * input_bar_progress
             } else {
-                43.0
+                full_input_bar_height
             };
             let input_bar_content_opacity = if input_bar_progress > 0.01 {
                 input_bar_content_progress
@@ -761,7 +766,7 @@ impl Render for ConWorkspace {
                     .child(div().h(px(1.0)).bg(chrome_static_seam_color))
                     .child(
                         div()
-                            .h(px(42.0))
+                            .min_h(px((input_bar_height - 1.0).max(0.0)))
                             .opacity(input_bar_content_opacity)
                             .child(self.input_bar.clone()),
                     ),
@@ -1038,7 +1043,11 @@ impl Render for ConWorkspace {
                     }
 
                     let top_bar_height = this.current_top_bar_height();
-                    let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
+                    let input_bar_height = if this.input_bar_visible {
+                        this.input_bar.read(cx).rendered_height(cx).as_f32()
+                    } else {
+                        0.0
+                    };
 
                     // Compute layout-dependent inputs *before* re-borrowing
                     // `this` mutably for the pane tree, otherwise we
@@ -1397,7 +1406,7 @@ impl Render for ConWorkspace {
                         .absolute()
                         .left(px(terminal_content_left))
                         .right(px(agent_panel_outer_width))
-                        .bottom(px(43.0))
+                        .bottom(self.input_bar.read(cx).rendered_height(cx))
                         .h(px(CHROME_MOTION_SEAM_OVERDRAW))
                         .bg(chrome_transition_seam_color),
                 );
@@ -1411,7 +1420,7 @@ impl Render for ConWorkspace {
                     .left(px(terminal_content_left))
                     .right(px(agent_panel_outer_width))
                     .bottom_0()
-                    .h(px(43.0))
+                    .h(self.input_bar.read(cx).rendered_height(cx))
                     .bg(chrome_transition_seam_color),
             );
         }
