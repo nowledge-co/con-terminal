@@ -825,6 +825,28 @@ impl ConWorkspace {
                         let timeout = timeout_secs.unwrap_or(30).min(120);
                         let response_tx = req.response_tx;
 
+                        // con #239: never poll an interactive agent-CLI pane (Claude Code /
+                        // Codex / OpenCode). Those TUIs never return to a settled shell prompt,
+                        // so wait_for would loop until the turn hits max_turns and the panel
+                        // appears hung. Short-circuit with guidance toward agent_cli_turn.
+                        let recent_for_agent_cli = pane.recent_lines(80, cx);
+                        if let Some(agent) =
+                            con_agent::context::classify_screen_agent_cli(None, &recent_for_agent_cli)
+                        {
+                            log::info!("[wait_for] → skipped: interactive agent-CLI '{agent}'");
+                            let _ = response_tx.send(PaneResponse::WaitComplete {
+                                status: "skipped_agent_cli".into(),
+                                output: format!(
+                                    "This pane is running an interactive agent-CLI ('{agent}'), which never \
+                                     returns to a settled shell prompt — waiting on it would loop indefinitely. \
+                                     Do not poll it with wait_for or repeated read_pane. To drive it, use \
+                                     agent_cli_turn(agent_name=\"{agent}\", prompt=…); otherwise send one input \
+                                     and stop, or just report the current screen."
+                                ),
+                            });
+                            return;
+                        }
+
                         log::info!("[wait_for] has_si={} is_busy={}", has_si, pane.is_busy(cx),);
 
                         // Check if already in target state before spawning async task
