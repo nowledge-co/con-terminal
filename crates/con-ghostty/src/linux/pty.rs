@@ -110,6 +110,46 @@ impl SessionShared {
         self.needs_render.store(true, Ordering::Release);
         self.wake();
     }
+
+    fn mark_exited(&self, exit_code: Option<i32>, duration: Duration) {
+        if !self.alive.swap(false, Ordering::AcqRel) {
+            if exit_code.is_some() {
+                let mut backfilled = false;
+                let mut last_exit_code = self.last_exit_code.lock();
+                if last_exit_code.is_none() {
+                    *last_exit_code = exit_code;
+                    *self.last_duration.lock() = Some(duration);
+                    backfilled = true;
+                }
+
+                let mut finished_signal = self.finished_signal.lock();
+                if finished_signal
+                    .as_ref()
+                    .map_or(true, |signal| signal.exit_code.is_none())
+                {
+                    *finished_signal = Some(CommandFinishedSignal {
+                        exit_code,
+                        duration,
+                    });
+                    backfilled = true;
+                }
+
+                if backfilled {
+                    self.needs_render.store(true, Ordering::Release);
+                    self.wake();
+                }
+            }
+            return;
+        }
+        *self.last_exit_code.lock() = exit_code;
+        *self.last_duration.lock() = Some(duration);
+        *self.finished_signal.lock() = Some(CommandFinishedSignal {
+            exit_code,
+            duration,
+        });
+        self.needs_render.store(true, Ordering::Release);
+        self.wake();
+    }
 }
 
 impl LinuxPtySession {
@@ -181,7 +221,8 @@ impl LinuxPtySession {
         {
             shared.transcript.lock().push(text);
         }
-        spawn_reader_thread(reader, shared.clone());
+        let started_at = Instant::now();
+        spawn_reader_thread(reader, shared.clone(), started_at);
 
         Ok(Self {
             master: Mutex::new(pair.master),
@@ -195,7 +236,7 @@ impl LinuxPtySession {
             )),
             current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
             input_generation: AtomicU64::new(0),
-            started_at: Instant::now(),
+            started_at,
         })
     }
 
@@ -366,17 +407,9 @@ impl LinuxPtySession {
             return;
         };
 
-        self.shared.alive.store(false, Ordering::Release);
         let exit_code = i32::try_from(status.exit_code()).unwrap_or(i32::MAX);
-        let duration = self.started_at.elapsed();
-        *self.shared.last_exit_code.lock() = Some(exit_code);
-        *self.shared.last_duration.lock() = Some(duration);
-        *self.shared.finished_signal.lock() = Some(CommandFinishedSignal {
-            exit_code: Some(exit_code),
-            duration,
-        });
-        self.shared.needs_render.store(true, Ordering::Release);
-        self.shared.wake();
+        self.shared
+            .mark_exited(Some(exit_code), self.started_at.elapsed());
     }
 }
 
@@ -391,14 +424,21 @@ impl Drop for LinuxPtySession {
     }
 }
 
-fn spawn_reader_thread(mut reader: Box<dyn Read + Send>, shared: Arc<SessionShared>) {
+fn spawn_reader_thread(
+    mut reader: Box<dyn Read + Send>,
+    shared: Arc<SessionShared>,
+    started_at: Instant,
+) {
     std::thread::Builder::new()
         .name("con-linux-pty-reader".into())
         .spawn(move || {
             let mut buffer = [0_u8; 8192];
             loop {
                 match reader.read(&mut buffer) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        shared.mark_exited(None, started_at.elapsed());
+                        break;
+                    }
                     Ok(read) => {
                         shared.screen.feed(&buffer[..read]);
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
@@ -407,6 +447,7 @@ fn spawn_reader_thread(mut reader: Box<dyn Read + Send>, shared: Arc<SessionShar
                     Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                     Err(err) => {
                         log::debug!("linux pty reader terminated: {err}");
+                        shared.mark_exited(None, started_at.elapsed());
                         break;
                     }
                 }
@@ -482,7 +523,13 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
+    use crate::vt::VtScreen;
+
+    use super::SessionShared;
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -517,5 +564,37 @@ mod tests {
     #[test]
     fn sanitize_terminal_output_honors_carriage_return_rewrites() {
         assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
+    }
+
+    #[test]
+    fn mark_exited_backfills_exit_code_after_eof() {
+        let shared = SessionShared::new(
+            Arc::new(VtScreen::new(80, 24, None).expect("create vt screen")),
+            None,
+            None,
+        );
+
+        shared.mark_exited(None, Duration::from_millis(10));
+        shared
+            .needs_render
+            .store(false, std::sync::atomic::Ordering::Release);
+        shared.mark_exited(Some(7), Duration::from_millis(20));
+
+        assert_eq!(*shared.last_exit_code.lock(), Some(7));
+        assert_eq!(
+            *shared.last_duration.lock(),
+            Some(Duration::from_millis(20))
+        );
+        assert!(
+            shared
+                .needs_render
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        let finished = shared
+            .finished_signal
+            .lock()
+            .expect("exit signal should be backfilled");
+        assert_eq!(finished.exit_code, Some(7));
+        assert_eq!(finished.duration, Duration::from_millis(20));
     }
 }
