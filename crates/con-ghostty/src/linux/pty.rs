@@ -113,6 +113,32 @@ impl SessionShared {
 
     fn mark_exited(&self, exit_code: Option<i32>, duration: Duration) {
         if !self.alive.swap(false, Ordering::AcqRel) {
+            if exit_code.is_some() {
+                let mut backfilled = false;
+                let mut last_exit_code = self.last_exit_code.lock();
+                if last_exit_code.is_none() {
+                    *last_exit_code = exit_code;
+                    *self.last_duration.lock() = Some(duration);
+                    backfilled = true;
+                }
+
+                let mut finished_signal = self.finished_signal.lock();
+                if finished_signal
+                    .as_ref()
+                    .map_or(true, |signal| signal.exit_code.is_none())
+                {
+                    *finished_signal = Some(CommandFinishedSignal {
+                        exit_code,
+                        duration,
+                    });
+                    backfilled = true;
+                }
+
+                if backfilled {
+                    self.needs_render.store(true, Ordering::Release);
+                    self.wake();
+                }
+            }
             return;
         }
         *self.last_exit_code.lock() = exit_code;
@@ -497,7 +523,13 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
+    use crate::vt::VtScreen;
+
+    use super::SessionShared;
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -532,5 +564,37 @@ mod tests {
     #[test]
     fn sanitize_terminal_output_honors_carriage_return_rewrites() {
         assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
+    }
+
+    #[test]
+    fn mark_exited_backfills_exit_code_after_eof() {
+        let shared = SessionShared::new(
+            Arc::new(VtScreen::new(80, 24, None).expect("create vt screen")),
+            None,
+            None,
+        );
+
+        shared.mark_exited(None, Duration::from_millis(10));
+        shared
+            .needs_render
+            .store(false, std::sync::atomic::Ordering::Release);
+        shared.mark_exited(Some(7), Duration::from_millis(20));
+
+        assert_eq!(*shared.last_exit_code.lock(), Some(7));
+        assert_eq!(
+            *shared.last_duration.lock(),
+            Some(Duration::from_millis(20))
+        );
+        assert!(
+            shared
+                .needs_render
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        let finished = shared
+            .finished_signal
+            .lock()
+            .expect("exit signal should be backfilled");
+        assert_eq!(finished.exit_code, Some(7));
+        assert_eq!(finished.duration, Duration::from_millis(20));
     }
 }
