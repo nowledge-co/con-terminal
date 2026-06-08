@@ -7,6 +7,18 @@ use gpui_component::{
 
 use crate::ui_scale::{mono_density_scale, mono_px, mono_space_px};
 
+const INPUT_BAR_MIN_HEIGHT: f32 = 44.0;
+const INPUT_BAR_ROW_HEIGHT: f32 = 20.0;
+const INPUT_BAR_MAX_ROWS: usize = 6;
+
+fn input_bar_content_rows(value: &str) -> usize {
+    (value.matches('\n').count() + 1).clamp(1, INPUT_BAR_MAX_ROWS)
+}
+
+fn input_bar_rendered_height_for_rows(rows: usize, mono_scale: f32) -> f32 {
+    (INPUT_BAR_MIN_HEIGHT + rows.saturating_sub(1) as f32 * INPUT_BAR_ROW_HEIGHT) * mono_scale
+}
+
 actions!(
     input_bar,
     [
@@ -390,14 +402,13 @@ impl InputBar {
         let agent_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Ask anything…")
-                .auto_grow(1, 6)
+                .auto_grow(1, INPUT_BAR_MAX_ROWS)
         });
         let shell_input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
                 .code_editor("con-shell")
-                .multi_line(false)
-                .folding(false)
+                .auto_grow(1, INPUT_BAR_MAX_ROWS)
         });
         shell_input_state.update(cx, |state, cx| {
             state.set_highlighter("con-shell", cx);
@@ -794,15 +805,22 @@ impl InputBar {
     }
 
     pub fn skill_popup_offset(&self, cx: &App) -> Pixels {
-        let rows = self
-            .current_input_state()
-            .read(cx)
-            .value()
-            .lines()
-            .count()
-            .clamp(1, 6);
+        let mono_scale = mono_density_scale(cx.theme());
+        px(
+            (56.0 + (self.content_rows(cx).saturating_sub(1) as f32 * INPUT_BAR_ROW_HEIGHT))
+                * mono_scale,
+        )
+    }
 
-        px(56.0 + (rows.saturating_sub(1) as f32 * 20.0))
+    pub fn rendered_height(&self, cx: &App) -> Pixels {
+        px(input_bar_rendered_height_for_rows(
+            self.content_rows(cx),
+            mono_density_scale(cx.theme()),
+        ))
+    }
+
+    fn content_rows(&self, cx: &App) -> usize {
+        input_bar_content_rows(&self.current_input_state().read(cx).value())
     }
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1577,7 +1595,7 @@ impl Render for InputBar {
                         .text_size(input_text_size)
                         .line_height(input_line_height)
                         .pl(px(12.0 * mono_scale))
-                        .h(control_size)
+                        .min_h(control_size)
                         .into_any_element()
                 } else {
                     Input::new(&input_state)
@@ -1591,7 +1609,7 @@ impl Render for InputBar {
                         })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
-                        .h(control_size)
+                        .min_h(control_size)
                         .into_any_element()
                 },
             ));
@@ -1611,12 +1629,34 @@ impl Render for InputBar {
                     .min_h(px(44.0 * mono_scale))
                     .flex()
                     .items_center()
-                    .h(px(32.0 * mono_scale))
                     .gap(px(9.0 * mono_scale))
                     .child(mode_prefix)
                     .children(pane_row)
                     .child(div().flex_1().min_w_0().child(input_field))
                     .child(send_button),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{INPUT_BAR_MAX_ROWS, input_bar_content_rows, input_bar_rendered_height_for_rows};
+
+    #[test]
+    fn content_rows_counts_trailing_newline_and_clamps() {
+        assert_eq!(input_bar_content_rows(""), 1);
+        assert_eq!(input_bar_content_rows("cmd"), 1);
+        assert_eq!(input_bar_content_rows("cmd\n"), 2);
+        assert_eq!(input_bar_content_rows("cmd\nnext"), 2);
+
+        let many_rows = "1\n2\n3\n4\n5\n6\n7\n8";
+        assert_eq!(input_bar_content_rows(many_rows), INPUT_BAR_MAX_ROWS);
+    }
+
+    #[test]
+    fn rendered_height_scales_minimum_and_extra_rows() {
+        assert_eq!(input_bar_rendered_height_for_rows(1, 1.0), 44.0);
+        assert_eq!(input_bar_rendered_height_for_rows(3, 1.0), 84.0);
+        assert_eq!(input_bar_rendered_height_for_rows(3, 1.25), 105.0);
     }
 }
