@@ -409,7 +409,6 @@ impl InputBar {
                 .placeholder("Type a command or ask AI…")
                 .code_editor("con-shell")
                 .auto_grow(1, INPUT_BAR_MAX_ROWS)
-                .folding(false)
         });
         shell_input_state.update(cx, |state, cx| {
             state.set_highlighter("con-shell", cx);
