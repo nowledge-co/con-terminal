@@ -844,23 +844,52 @@ fn import_codex_chatgpt_auth_from_file_if_needed(
 fn write_auth_record_create_new(path: &std::path::Path, bytes: &[u8]) -> Result<bool> {
     use std::io::Write;
 
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
 
-    match options.open(path) {
-        Ok(mut file) => {
-            file.write_all(bytes)?;
-            file.sync_all()?;
+    let tmp_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("tmp.{}.{}", std::process::id(), unique))
+    };
+
+    let write_result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let mut file = options.open(&tmp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    match std::fs::hard_link(&tmp_path, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp_path);
             Ok(true)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(err) => Err(err.into()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Ok(false)
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(err.into())
+        }
     }
 }
 
