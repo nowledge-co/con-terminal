@@ -1162,6 +1162,10 @@ impl InputBar {
 
         Some(runs.into_iter().filter(|run| run.len > 0).collect())
     }
+
+    fn should_hide_native_command_text(input: &str, has_command_overlay: bool) -> bool {
+        !input.is_empty() && has_command_overlay
+    }
 }
 
 fn syntax_color(theme: &gpui_component::Theme, name: &str) -> Option<Hsla> {
@@ -1399,6 +1403,8 @@ impl Render for InputBar {
         } else {
             None
         };
+        let hide_native_command_text =
+            Self::should_hide_native_command_text(&input_value, command_overlay_runs.is_some());
 
         let input_field = div()
             .flex_1()
@@ -1602,7 +1608,7 @@ impl Render for InputBar {
                         .appearance(false)
                         .cleanable(false)
                         .font_family(input_font)
-                        .text_color(if !input_value.is_empty() {
+                        .text_color(if hide_native_command_text {
                             gpui::transparent_black()
                         } else {
                             theme.foreground
@@ -1640,7 +1646,10 @@ impl Render for InputBar {
 
 #[cfg(test)]
 mod tests {
-    use super::{INPUT_BAR_MAX_ROWS, input_bar_content_rows, input_bar_rendered_height_for_rows};
+    use super::{
+        INPUT_BAR_MAX_ROWS, InputBar, input_bar_content_rows,
+        input_bar_rendered_height_for_rows,
+    };
 
     #[test]
     fn content_rows_counts_trailing_newline_and_clamps() {
@@ -1658,5 +1667,15 @@ mod tests {
         assert_eq!(input_bar_rendered_height_for_rows(1, 1.0), 44.0);
         assert_eq!(input_bar_rendered_height_for_rows(3, 1.0), 84.0);
         assert_eq!(input_bar_rendered_height_for_rows(3, 1.25), 105.0);
+    }
+
+    #[test]
+    fn native_command_text_stays_visible_when_multiline_overlay_is_unavailable() {
+        assert!(!InputBar::should_hide_native_command_text("echo one\necho two", false));
+    }
+
+    #[test]
+    fn native_command_text_hides_when_single_line_overlay_is_available() {
+        assert!(InputBar::should_hide_native_command_text("echo one", true));
     }
 }
