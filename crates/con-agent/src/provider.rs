@@ -358,6 +358,114 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_chatgpt_auth_converter_flattens_codex_token_shape() {
+        let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "id_token": "id",
+                "account_id": "account"
+            }
+        }))
+        .expect("codex auth shape should parse");
+
+        assert_eq!(
+            convert_codex_chatgpt_auth(auth),
+            Some(RigChatGptAuthRecord {
+                access_token: "access".into(),
+                refresh_token: Some("refresh".into()),
+                id_token: Some("id".into()),
+                account_id: Some("account".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_converter_ignores_non_chatgpt_auth() {
+        let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
+            "auth_mode": "api-key",
+            "tokens": {
+                "access_token": "access",
+                "refresh_token": "refresh"
+            }
+        }))
+        .expect("codex auth shape should parse");
+
+        assert_eq!(convert_codex_chatgpt_auth(auth), None);
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_converter_requires_refresh_token() {
+        let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "access_token": "access",
+                "id_token": "id",
+                "account_id": "account"
+            }
+        }))
+        .expect("codex auth shape should parse");
+
+        assert_eq!(convert_codex_chatgpt_auth(auth), None);
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_import_writes_rig_cache_without_overwrite() {
+        let root = std::env::temp_dir().join(format!(
+            "con-agent-codex-auth-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let source = root.join("codex-auth.json");
+        let target = root.join("con").join("auth.json");
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "id_token": "id",
+                    "account_id": "account"
+                }
+            }))
+            .expect("source json should serialize"),
+        )
+        .expect("source auth should be written");
+
+        assert!(
+            import_codex_chatgpt_auth_from_file_if_needed(&source, &target)
+                .expect("codex auth import should succeed")
+        );
+
+        let imported = std::fs::read_to_string(&target).expect("target auth should exist");
+        let imported: serde_json::Value =
+            serde_json::from_str(&imported).expect("target auth should be valid json");
+        assert_eq!(imported["access_token"], "access");
+        assert_eq!(imported["refresh_token"], "refresh");
+        assert_eq!(imported["id_token"], "id");
+        assert_eq!(imported["account_id"], "account");
+
+        std::fs::write(&target, r#"{"access_token":"existing"}"#)
+            .expect("target auth should be overwritten by test setup");
+        assert!(
+            !import_codex_chatgpt_auth_from_file_if_needed(&source, &target)
+                .expect("existing target should be left alone")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"existing"}"#
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn migrate_legacy_infers_anthropic_transport_preferences() {
         let mut config = AgentConfig {
             provider: ProviderKind::Anthropic,
@@ -658,6 +766,140 @@ pub fn oauth_token_dir(kind: &ProviderKind) -> Option<PathBuf> {
     Some(con_paths::app_config_dir().join("auth").join(provider_dir))
 }
 
+#[derive(Debug, Deserialize)]
+struct CodexAuthFile {
+    auth_mode: Option<String>,
+    tokens: Option<CodexAuthTokens>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexAuthTokens {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct RigChatGptAuthRecord {
+    access_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+    account_id: Option<String>,
+}
+
+fn convert_codex_chatgpt_auth(auth: CodexAuthFile) -> Option<RigChatGptAuthRecord> {
+    if auth.auth_mode.as_deref() != Some("chatgpt") {
+        return None;
+    }
+
+    let tokens = auth.tokens?;
+    let refresh_token = tokens.refresh_token?;
+    Some(RigChatGptAuthRecord {
+        access_token: tokens.access_token?,
+        refresh_token: Some(refresh_token),
+        id_token: tokens.id_token,
+        account_id: tokens.account_id,
+    })
+}
+
+fn codex_auth_file() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".codex").join("auth.json"))
+}
+
+fn import_codex_chatgpt_auth_from_file_if_needed(
+    source_auth_file: &std::path::Path,
+    target_auth_file: &std::path::Path,
+) -> Result<bool> {
+    if target_auth_file.exists() {
+        return Ok(false);
+    }
+
+    if !source_auth_file.is_file() {
+        return Ok(false);
+    }
+
+    let source = std::fs::read_to_string(source_auth_file)?;
+    let codex_auth: CodexAuthFile = serde_json::from_str(&source)?;
+    let Some(record) = convert_codex_chatgpt_auth(codex_auth) else {
+        return Ok(false);
+    };
+
+    if let Some(parent) = target_auth_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let bytes = serde_json::to_vec_pretty(&record)?;
+    if !write_auth_record_create_new(target_auth_file, &bytes)? {
+        return Ok(false);
+    }
+
+    log::info!(
+        "[provider] Imported ChatGPT OAuth cache from Codex auth into {}",
+        target_auth_file.display()
+    );
+    Ok(true)
+}
+
+fn write_auth_record_create_new(path: &std::path::Path, bytes: &[u8]) -> Result<bool> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tmp_path = {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        path.with_extension(format!("tmp.{}.{}", std::process::id(), unique))
+    };
+
+    let write_result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        let mut file = options.open(&tmp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_result {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    match std::fs::hard_link(&tmp_path, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Ok(false)
+        }
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(err.into())
+        }
+    }
+}
+
+fn import_codex_chatgpt_auth_if_needed(target_auth_file: &std::path::Path) -> Result<bool> {
+    let Some(source_auth_file) = codex_auth_file() else {
+        return Ok(false);
+    };
+    import_codex_chatgpt_auth_from_file_if_needed(&source_auth_file, target_auth_file)
+}
+
 pub async fn authorize_oauth_provider<F>(kind: ProviderKind, prompt_handler: F) -> Result<()>
 where
     F: Fn(OAuthDevicePrompt) + Send + Sync + 'static,
@@ -676,6 +918,13 @@ where
                     });
                 });
             if let Some(dir) = oauth_token_dir(&kind) {
+                let auth_file = dir.join("auth.json");
+                match import_codex_chatgpt_auth_if_needed(&auth_file) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::warn!("[provider] Failed to import Codex ChatGPT auth cache: {err}");
+                    }
+                }
                 builder = builder.token_dir(dir);
             }
             let client = builder
@@ -1501,15 +1750,20 @@ impl AgentProvider {
         if let Some(url) = self.config.effective_base_url(&ProviderKind::ChatGPT) {
             builder = builder.base_url(url);
         }
-        let mut builder =
+        let builder =
             if let Some(api_key) = self.resolve_optional_api_key(&ProviderKind::ChatGPT)? {
                 builder.api_key(api_key)
             } else {
-                builder.oauth()
+                let mut builder = builder.oauth();
+                if let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) {
+                    let auth_file = dir.join("auth.json");
+                    if let Err(err) = import_codex_chatgpt_auth_if_needed(&auth_file) {
+                        log::warn!("[provider] Failed to import Codex ChatGPT auth cache: {err}");
+                    }
+                    builder = builder.token_dir(dir);
+                }
+                builder
             };
-        if let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) {
-            builder = builder.token_dir(dir);
-        }
         builder
             .build()
             .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))

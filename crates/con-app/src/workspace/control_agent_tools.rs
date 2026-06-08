@@ -1,5 +1,7 @@
 use super::*;
 
+const AGENT_CLI_DETECT_LOOKBACK_LINES: usize = 80;
+
 impl ConWorkspace {
     /// Handle a visible terminal execution request from the agent.
     ///
@@ -827,6 +829,33 @@ impl ConWorkspace {
                         let has_si = pane.has_shell_integration(cx);
                         let timeout = timeout_secs.unwrap_or(30).min(120);
                         let response_tx = req.response_tx;
+
+                        // con #239: never poll an interactive agent-CLI pane (Claude Code /
+                        // Codex / OpenCode). Those TUIs never return to a settled shell prompt,
+                        // so wait_for would loop until the turn hits max_turns and the panel
+                        // appears hung. Short-circuit with guidance toward agent_cli_turn.
+                        let observation =
+                            pane.observation_frame(AGENT_CLI_DETECT_LOOKBACK_LINES, cx);
+                        if let Some(agent) = con_agent::context::classify_screen_agent_cli(
+                            observation.title.as_deref(),
+                            &observation.recent_output,
+                        ) {
+                            log::info!("[wait_for] → skipped: interactive agent-CLI '{agent}'");
+                            let _ = response_tx.send(PaneResponse::WaitComplete {
+                                status: "skipped_agent_cli".into(),
+                                output: format!(
+                                    concat!(
+                                        "This pane is running an interactive agent-CLI ('{}'), which never ",
+                                        "returns to a settled shell prompt — waiting on it would loop indefinitely. ",
+                                        "Do not poll it with wait_for or repeated read_pane. To drive it, use ",
+                                        "agent_cli_turn(agent_name=\"{}\", prompt=…); otherwise send one input ",
+                                        "and stop, or just report the current screen."
+                                    ),
+                                    agent, agent
+                                ),
+                            });
+                            return;
+                        }
 
                         log::info!(
                             "[wait_for] pane_index={} pane_id={} has_si={} is_busy={}",
