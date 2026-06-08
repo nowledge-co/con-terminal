@@ -1482,7 +1482,14 @@ pub fn derive_screen_hints(title: Option<&str>, lines: &[String]) -> Vec<PaneObs
     hints
 }
 
-fn classify_screen_agent_cli(_title: Option<&str>, lines: &[String]) -> Option<&'static str> {
+/// Classifies whether recent visible pane lines appear to be an interactive agent CLI.
+///
+/// Pass the current pane title, when available, and the current visible screen or other recent
+/// pane lines. Returns `"codex"`, `"claude"`, or `"opencode"` when the marker heuristics match a
+/// known agent CLI; returns `None` for ordinary shell output or unknown TUIs. Detection is based on
+/// visible text markers, so stale scrollback, localized UI text, or future CLI UI changes can cause
+/// false positives or false negatives.
+pub fn classify_screen_agent_cli(_title: Option<&str>, lines: &[String]) -> Option<&'static str> {
     let joined = lines.join("\n").to_ascii_lowercase();
 
     if joined.contains("openai codex") {
@@ -3387,6 +3394,31 @@ impl TerminalContext {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn classify_screen_agent_cli_detects_coding_clis_and_skips_plain_shell() {
+        let claude = vec!["✻ Ideating…".to_string(), "Claude Code".to_string()];
+        assert_eq!(
+            super::classify_screen_agent_cli(None, &claude),
+            Some("claude")
+        );
+        let codex = vec!["OpenAI Codex".to_string()];
+        assert_eq!(
+            super::classify_screen_agent_cli(None, &codex),
+            Some("codex")
+        );
+        let opencode = vec![
+            "Ask anything".to_string(),
+            "Tab agents".to_string(),
+            "Ctrl+P commands".to_string(),
+        ];
+        assert_eq!(
+            super::classify_screen_agent_cli(None, &opencode),
+            Some("opencode")
+        );
+        let plain_shell = vec!["tony@host ~ %".to_string(), "ls -la".to_string()];
+        assert_eq!(super::classify_screen_agent_cli(None, &plain_shell), None);
+    }
+
     use crate::control::{PaneControlState, TmuxControlMode, TmuxControlState};
     use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
     use crate::tmux::{TmuxPaneInfo, TmuxSnapshot};
