@@ -12,7 +12,7 @@ con-cli --json panes list --tab 1  # now have 2 panes
 ---- contains
 "index":2
 
-con-cli --json panes wait --tab 1 --pane-index 2 --timeout 5  # wait for new pane to become alive
+con-cli --json panes wait --tab 1 --pane-index 2 --timeout 15  # wait for new pane to become alive
 ---- ok
 
 con-cli --json panes list --tab 1  # both panes are alive

@@ -472,21 +472,24 @@ impl SettingsPanel {
         }
     }
 
-    fn provider_config_is_meaningful(config: &ProviderConfig) -> bool {
-        config.model.as_ref().is_some_and(|v| !v.trim().is_empty())
-            || config
-                .api_key
-                .as_ref()
-                .is_some_and(|v| !v.trim().is_empty())
+    fn provider_config_has_auth_signal(provider: &ProviderKind, config: &ProviderConfig) -> bool {
+        let has_api_key = config
+            .api_key
+            .as_ref()
+            .is_some_and(|v| !v.trim().is_empty())
             || config
                 .api_key_env
                 .as_ref()
-                .is_some_and(|v| !v.trim().is_empty())
-            || config
+                .is_some_and(|v| !v.trim().is_empty());
+        if has_api_key {
+            return true;
+        }
+
+        *provider == ProviderKind::OpenAICompatible
+            && config
                 .base_url
                 .as_ref()
                 .is_some_and(|v| !v.trim().is_empty())
-            || config.max_tokens.is_some()
     }
 
     fn provider_is_configured(&self, provider: &ProviderKind, cx: &App) -> bool {
@@ -501,21 +504,16 @@ impl SettingsPanel {
             return true;
         }
 
-        let current_provider =
-            Self::sidebar_provider_kind(&self.selected_provider) == sidebar_provider;
-        if current_provider {
-            let current = self.read_provider_inputs(cx);
-            if Self::provider_config_is_meaningful(&current) {
-                return true;
-            }
-        }
-
         let has_config = |kind: &ProviderKind| {
+            if *kind == self.selected_provider {
+                let current = self.read_provider_inputs(cx);
+                return Self::provider_config_has_auth_signal(kind, &current);
+            }
             self.config
                 .agent
                 .providers
                 .get(kind)
-                .is_some_and(Self::provider_config_is_meaningful)
+                .is_some_and(|config| Self::provider_config_has_auth_signal(kind, config))
         };
 
         has_config(&sidebar_provider)
