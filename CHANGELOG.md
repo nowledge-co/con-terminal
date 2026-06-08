@@ -4,6 +4,59 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.77` - 2026-06-08
+
+### Added
+
+**Agent**
+
+- Added Codex ChatGPT auth-cache import support so the built-in agent can
+  reuse an existing authenticated Codex session instead of requiring a separate
+  credential setup path. _(PR
+  [#223](https://github.com/nowledge-co/con-terminal/pull/223) by
+  [@hhh2210](https://github.com/hhh2210))_
+
+### Changed
+
+**Input Bar**
+
+- Made multiline command input grow dynamically with its contents and stay
+  readable while editing longer commands. _(PR
+  [#235](https://github.com/nowledge-co/con-terminal/pull/235) by
+  [@frostming](https://github.com/frostming), PR
+  [#241](https://github.com/nowledge-co/con-terminal/pull/241) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+### Fixed
+
+**Agent**
+
+- Prevented interactive agent-CLI panes from getting stuck behind prompt-wait
+  detection that should only apply to shell-style panes. _(PR
+  [#240](https://github.com/nowledge-co/con-terminal/pull/240) by
+  [@Job28703](https://github.com/Job28703))_
+
+**Providers**
+
+- Fixed stale provider activation after credentials are cleared, so removed
+  credentials no longer leave a provider looking usable in the UI. _(PR
+  [#228](https://github.com/nowledge-co/con-terminal/pull/228) by
+  [@tao12345666333](https://github.com/tao12345666333))_
+
+**Terminal**
+
+- Fixed Quick Terminal IME targeting on macOS so marked text and committed IME
+  input route to the active terminal pane reliably. _(PR
+  [#237](https://github.com/nowledge-co/con-terminal/pull/237) by
+  [@sundy-li](https://github.com/sundy-li))_
+- Improved terminal recovery when child processes exit or SSH sessions
+  disconnect, keeping terminal state transitions aligned with the visible pane
+  lifecycle. _(PR
+  [#234](https://github.com/nowledge-co/con-terminal/pull/234) by
+  [@frostming](https://github.com/frostming))_
+
+---
+
 ## `v0.1.0-beta.76` - 2026-05-14
 
 ### Changed

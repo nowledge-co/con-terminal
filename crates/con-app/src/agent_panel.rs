@@ -5204,10 +5204,8 @@ mod tests {
 
     #[test]
     fn configured_provider_list_excludes_model_only_entries() {
-        let mut config = AgentConfig {
-            provider: ProviderKind::Anthropic,
-            ..AgentConfig::default()
-        };
+        let mut config = AgentConfig::default();
+        config.provider = ProviderKind::Anthropic;
         config.providers.set(
             &ProviderKind::OpenAI,
             ProviderConfig {
