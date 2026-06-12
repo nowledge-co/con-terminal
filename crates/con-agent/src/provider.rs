@@ -832,6 +832,11 @@ struct RigChatGptAuthRecord {
     account_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RigChatGptAuthTokenView {
+    access_token: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct CodexAuthSyncState {
     source_fingerprint: String,
@@ -854,6 +859,20 @@ fn convert_codex_chatgpt_auth(auth: CodexAuthFile) -> Option<RigChatGptAuthRecor
 
 fn codex_auth_file() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".codex").join("auth.json"))
+}
+
+pub fn read_chatgpt_oauth_access_token(auth_file: &std::path::Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(auth_file) {
+        Ok(raw) => {
+            let record: RigChatGptAuthTokenView = serde_json::from_str(&raw)?;
+            Ok(record
+                .access_token
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty()))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn codex_auth_sync_state_file(target_auth_file: &std::path::Path) -> PathBuf {
