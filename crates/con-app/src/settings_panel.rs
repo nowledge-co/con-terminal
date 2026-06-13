@@ -1,7 +1,7 @@
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_agent::{
     OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
-    authorize_oauth_provider, oauth_token_dir, read_chatgpt_oauth_access_token,
+    authorize_oauth_provider, oauth_token_dir, read_synced_chatgpt_oauth_access_token,
 };
 use con_core::{
     Config,
@@ -2248,7 +2248,7 @@ impl SettingsPanel {
                     cx.notify();
                     return;
                 };
-                let access_token = match read_chatgpt_oauth_access_token(&auth_file) {
+                let access_token = match read_synced_chatgpt_oauth_access_token(&auth_file) {
                     Ok(Some(token)) => token,
                     Ok(None) => {
                         self.provider_model_status =
@@ -2259,7 +2259,7 @@ impl SettingsPanel {
                     }
                     Err(err) => {
                         self.provider_model_status =
-                            Some(format!("Could not read ChatGPT OAuth cache: {err}"));
+                            Some(format!("Could not refresh ChatGPT OAuth cache: {err}"));
                         self.provider_model_status_error = true;
                         cx.notify();
                         return;

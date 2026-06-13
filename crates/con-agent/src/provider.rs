@@ -875,6 +875,13 @@ pub fn read_chatgpt_oauth_access_token(auth_file: &std::path::Path) -> Result<Op
     }
 }
 
+pub fn read_synced_chatgpt_oauth_access_token(
+    auth_file: &std::path::Path,
+) -> Result<Option<String>> {
+    sync_codex_chatgpt_auth(auth_file)?;
+    read_chatgpt_oauth_access_token(auth_file)
+}
+
 fn codex_auth_sync_state_file(target_auth_file: &std::path::Path) -> PathBuf {
     target_auth_file.with_file_name("codex-auth-sync.json")
 }

@@ -23,7 +23,7 @@ pub use hook::{ConHook, ToolApprovalDecision, is_dangerous};
 pub use provider::{
     AgentConfig, AgentEvent, AgentProvider, OAuthDevicePrompt, ProviderConfig, ProviderKind,
     ProviderMap, SuggestionModelConfig, authorize_oauth_provider, oauth_token_dir,
-    read_chatgpt_oauth_access_token,
+    read_chatgpt_oauth_access_token, read_synced_chatgpt_oauth_access_token,
 };
 pub use shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 pub use skills::{Skill, SkillRegistry};
