@@ -1,7 +1,7 @@
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_agent::{
     OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
-    authorize_oauth_provider, oauth_token_dir,
+    authorize_oauth_provider, oauth_token_dir, read_synced_chatgpt_oauth_access_token,
 };
 use con_core::{
     Config,
@@ -44,6 +44,59 @@ struct ProviderOAuthState {
     prompt: Option<OAuthDevicePrompt>,
     status_message: Option<String>,
     error_message: Option<String>,
+}
+
+enum ProviderModelFetchRequest {
+    OpenAICompatible {
+        base_url: String,
+        api_key: Option<String>,
+    },
+    ChatGPT {
+        access_token: String,
+        base_url: Option<String>,
+    },
+}
+
+impl ProviderModelFetchRequest {
+    async fn fetch(self) -> anyhow::Result<ProviderModelFetchResult> {
+        match self {
+            Self::OpenAICompatible { base_url, api_key } => {
+                let models =
+                    ModelRegistry::fetch_openai_compatible_models(&base_url, api_key.as_deref())
+                        .await?;
+                Ok(ProviderModelFetchResult::OpenAICompatible { base_url, models })
+            }
+            Self::ChatGPT {
+                access_token,
+                base_url,
+            } => {
+                let models = ModelRegistry::fetch_chatgpt_subscription_models(
+                    &access_token,
+                    base_url.as_deref(),
+                )
+                .await?;
+                Ok(ProviderModelFetchResult::ChatGPT { models })
+            }
+        }
+    }
+}
+
+enum ProviderModelFetchResult {
+    OpenAICompatible {
+        base_url: String,
+        models: Vec<String>,
+    },
+    ChatGPT {
+        models: Vec<String>,
+    },
+}
+
+impl ProviderModelFetchResult {
+    fn models(&self) -> &[String] {
+        match self {
+            Self::OpenAICompatible { models, .. } | Self::ChatGPT { models } => models,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2143,39 +2196,87 @@ impl SettingsPanel {
     }
 
     fn fetch_selected_provider_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_provider != ProviderKind::OpenAICompatible || self.provider_model_fetching
+        if !matches!(
+            self.selected_provider,
+            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT
+        ) || self.provider_model_fetching
         {
             return;
         }
 
+        let provider = self.selected_provider.clone();
         let provider_config = self.read_provider_inputs(cx);
         self.config
             .agent
             .providers
-            .set(&self.selected_provider, provider_config.clone());
+            .set(&provider, provider_config.clone());
 
-        let Some(base_url) = provider_config
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-        else {
-            self.provider_model_status =
-                Some("Enter the provider Base URL, usually ending in /v1.".to_string());
-            self.provider_model_status_error = true;
-            cx.notify();
-            return;
-        };
+        let fetch_request = match provider {
+            ProviderKind::OpenAICompatible => {
+                let Some(base_url) = provider_config
+                    .base_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                else {
+                    self.provider_model_status =
+                        Some("Enter the provider Base URL, usually ending in /v1.".to_string());
+                    self.provider_model_status_error = true;
+                    cx.notify();
+                    return;
+                };
 
-        let api_key = match Self::resolve_provider_api_key(&provider_config) {
-            Ok(api_key) => api_key,
-            Err(message) => {
-                self.provider_model_status = Some(message);
-                self.provider_model_status_error = true;
-                cx.notify();
-                return;
+                let api_key = match Self::resolve_provider_api_key(&provider_config) {
+                    Ok(api_key) => api_key,
+                    Err(message) => {
+                        self.provider_model_status = Some(message);
+                        self.provider_model_status_error = true;
+                        cx.notify();
+                        return;
+                    }
+                };
+                ProviderModelFetchRequest::OpenAICompatible { base_url, api_key }
             }
+            ProviderKind::ChatGPT => {
+                let Some(auth_file) =
+                    oauth_token_dir(&ProviderKind::ChatGPT).map(|dir| dir.join("auth.json"))
+                else {
+                    self.provider_model_status =
+                        Some("ChatGPT OAuth token storage is unavailable.".to_string());
+                    self.provider_model_status_error = true;
+                    cx.notify();
+                    return;
+                };
+                let access_token = match read_synced_chatgpt_oauth_access_token(&auth_file) {
+                    Ok(Some(token)) => token,
+                    Ok(None) => {
+                        self.provider_model_status =
+                            Some("Sign in with ChatGPT OAuth before fetching models.".to_string());
+                        self.provider_model_status_error = true;
+                        cx.notify();
+                        return;
+                    }
+                    Err(err) => {
+                        self.provider_model_status =
+                            Some(format!("Could not refresh ChatGPT OAuth cache: {err}"));
+                        self.provider_model_status_error = true;
+                        cx.notify();
+                        return;
+                    }
+                };
+                let base_url = provider_config
+                    .base_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned);
+                ProviderModelFetchRequest::ChatGPT {
+                    access_token,
+                    base_url,
+                }
+            }
+            _ => return,
         };
 
         self.provider_model_fetching = true;
@@ -2185,13 +2286,9 @@ impl SettingsPanel {
 
         let registry = self.registry.clone();
         let runtime = self.oauth_runtime.clone();
-        let base_url_for_cache = base_url.clone();
         cx.spawn_in(window, async move |this, window| {
             let result = runtime
-                .spawn(async move {
-                    ModelRegistry::fetch_openai_compatible_models(&base_url, api_key.as_deref())
-                        .await
-                })
+                .spawn(async move { fetch_request.fetch().await })
                 .await
                 .map_err(|err| anyhow::anyhow!("Model fetch task failed: {err}"))
                 .and_then(|result| result);
@@ -2200,40 +2297,47 @@ impl SettingsPanel {
                 let _ = this.update(cx, |panel, cx| {
                     panel.provider_model_fetching = false;
                     match result {
-                        Ok(models) if models.is_empty() => {
+                        Ok(result) if result.models().is_empty() => {
                             panel.provider_model_status = Some(
                                 "The endpoint responded, but returned no models. Type the model ID manually."
                                     .to_string(),
                             );
                             panel.provider_model_status_error = true;
                         }
-                        Ok(models) => {
-                            let count = models.len();
-                            if let Err(err) = registry.set_provider_models_for_base_url(
-                                ProviderKind::OpenAICompatible,
-                                &base_url_for_cache,
-                                models,
-                            ) {
-                                panel.provider_model_status = Some(err.to_string());
-                                panel.provider_model_status_error = true;
-                                cx.notify();
-                                return;
+                        Ok(result) => {
+                            let count = result.models().len();
+                            match result {
+                                ProviderModelFetchResult::OpenAICompatible { base_url, models } => {
+                                    if let Err(err) = registry.set_provider_models_for_base_url(
+                                        ProviderKind::OpenAICompatible,
+                                        &base_url,
+                                        models,
+                                    ) {
+                                        panel.provider_model_status = Some(err.to_string());
+                                        panel.provider_model_status_error = true;
+                                        cx.notify();
+                                        return;
+                                    }
+                                }
+                                ProviderModelFetchResult::ChatGPT { models } => {
+                                    registry.set_provider_models(ProviderKind::ChatGPT, models);
+                                }
                             }
-                            if panel.selected_provider == ProviderKind::OpenAICompatible {
+                            if panel.selected_provider == provider {
                                 let current_model =
                                     panel.model_input.read(cx).value().trim().to_string();
                                 let current_model =
                                     (!current_model.is_empty()).then_some(current_model);
                                 panel.model_select = Self::make_model_select(
-                                    &ProviderKind::OpenAICompatible,
+                                    &provider,
                                     &current_model,
-                                    Some(&base_url_for_cache),
+                                    Self::provider_base_url(&panel.config, &provider),
                                     &registry,
                                     window,
                                     cx,
                                 );
                             }
-                            if panel.config.agent.provider == ProviderKind::OpenAICompatible {
+                            if panel.config.agent.provider == provider {
                                 panel.active_model_select = Self::make_active_model_select(
                                     &panel.config,
                                     &registry,
@@ -2241,9 +2345,7 @@ impl SettingsPanel {
                                     cx,
                                 );
                             }
-                            if Self::effective_suggestion_provider(&panel.config)
-                                == ProviderKind::OpenAICompatible
-                            {
+                            if Self::effective_suggestion_provider(&panel.config) == provider {
                                 panel.suggestion_model_select = Self::make_suggestion_model_select(
                                     &panel.config,
                                     &registry,
@@ -4203,7 +4305,10 @@ impl SettingsPanel {
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
-        let can_fetch_models = self.selected_provider == ProviderKind::OpenAICompatible;
+        let can_fetch_models = matches!(
+            self.selected_provider,
+            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT
+        );
         let protocol_switch_label = Self::protocol_switch_label(&self.selected_provider);
         let protocol_switch_hint = Self::protocol_switch_hint(&self.selected_provider);
         let anthropic_protocol_enabled = Self::uses_anthropic_protocol(&self.selected_provider);
@@ -4418,7 +4523,11 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     self.provider_model_status.clone().unwrap_or_else(|| {
-                                        "Fetch /models when the provider exposes a model list. Or enter the model ID.".to_string()
+                                        if self.selected_provider == ProviderKind::ChatGPT {
+                                            "Fetch the current ChatGPT Subscription model list after OAuth sign-in. Or enter the model ID.".to_string()
+                                        } else {
+                                            "Fetch /models when the provider exposes a model list. Or enter the model ID.".to_string()
+                                        }
                                     }),
                                 ),
                         )
