@@ -684,6 +684,17 @@ impl ChatMarkdownBlockView {
             MarkdownBlock::Mermaid { .. } | MarkdownBlock::MathBlock { .. } => self
                 .render_rich_svg_block(path, block, style, cx)
                 .unwrap_or_else(|| render_block(block, index, style, table_scroll_handle)),
+            MarkdownBlock::CodeBlock {
+                language,
+                code,
+                highlight_cache,
+            } => render_code_block(
+                code_block_copy_id(path, code),
+                language,
+                code,
+                highlight_cache,
+                style,
+            ),
             MarkdownBlock::Paragraph {
                 inlines,
                 inline_cache,
@@ -1139,6 +1150,17 @@ fn render_block(
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
 ) -> AnyElement {
+    let mut path = vec![index];
+    render_block_at_path(block, &mut path, style, table_scroll_handle)
+}
+
+fn render_block_at_path(
+    block: &MarkdownBlock,
+    path: &mut Vec<usize>,
+    style: &ChatMarkdownStyle<'_>,
+    table_scroll_handle: Option<&ScrollHandle>,
+) -> AnyElement {
+    let index = path.last().copied().unwrap_or(0);
     match block {
         MarkdownBlock::Paragraph {
             inlines,
@@ -1170,7 +1192,13 @@ fn render_block(
             language,
             code,
             highlight_cache,
-        } => render_code_block(index, language, code, highlight_cache, style),
+        } => render_code_block(
+            code_block_copy_id(path, code),
+            language,
+            code,
+            highlight_cache,
+            style,
+        ),
         MarkdownBlock::Mermaid { code, scale } => {
             render_mermaid_code_fallback(index, code, *scale, style)
         }
@@ -1179,7 +1207,12 @@ fn render_block(
             let children = blocks
                 .iter()
                 .enumerate()
-                .map(|(idx, block)| render_block(block, idx, style, None))
+                .map(|(idx, block)| {
+                    path.push(idx);
+                    let rendered = render_block_at_path(block, path, style, None);
+                    path.pop();
+                    rendered
+                })
                 .collect::<Vec<_>>();
 
             render_blockquote_children(children, style)
@@ -1191,12 +1224,18 @@ fn render_block(
         } => {
             let item_children = items
                 .iter()
-                .map(|item_blocks| {
+                .enumerate()
+                .map(|(item_idx, item_blocks)| {
                     item_blocks
                         .iter()
                         .enumerate()
                         .map(|(nested_idx, nested_block)| {
-                            render_block(nested_block, nested_idx, style, None)
+                            path.push(item_idx);
+                            path.push(nested_idx);
+                            let rendered = render_block_at_path(nested_block, path, style, None);
+                            path.pop();
+                            path.pop();
+                            rendered
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1463,7 +1502,7 @@ fn render_table_block(
 }
 
 fn render_code_block(
-    _index: usize,
+    copy_id: String,
     language: &Option<String>,
     code: &str,
     highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
@@ -1489,10 +1528,7 @@ fn render_code_block(
                 .child(header_label),
         )
         .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
-        .child(
-            Clipboard::new(format!("copy-code-block-{_index}"))
-                .value(SharedString::from(code.to_string())),
-        );
+        .child(Clipboard::new(copy_id).value(SharedString::from(code.to_string())));
 
     let block = div()
         .w_full()
@@ -2013,12 +2049,29 @@ fn rich_svg_render_id(path: &[usize], key: &RichSvgRenderKey) -> SharedString {
         RichSvgRenderKind::Math => "math",
         RichSvgRenderKind::InlineMath => "inline-math",
     };
-    let path = path
-        .iter()
+    let path = markdown_path_id(path);
+    SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
+}
+
+fn code_block_copy_id(path: &[usize], code: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    code.hash(&mut hasher);
+    format!(
+        "copy-code-block-{}-{:x}",
+        markdown_path_id(path),
+        hasher.finish()
+    )
+}
+
+fn markdown_path_id(path: &[usize]) -> String {
+    if path.is_empty() {
+        return "root".to_string();
+    }
+
+    path.iter()
         .map(usize::to_string)
         .collect::<Vec<_>>()
-        .join(".");
-    SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
+        .join(".")
 }
 
 fn rich_svg_render_scale(key: &RichSvgRenderKey) -> f32 {
@@ -3009,6 +3062,18 @@ mod tests {
         let first = rich_svg_render_id(&[0, 0, 0], &key);
         let second = rich_svg_render_id(&[1, 0, 0], &key);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn code_block_copy_ids_include_nested_block_path() {
+        let code = "brew services start lizardbyte/homebrew/sunshine";
+
+        let first = code_block_copy_id(&[0, 0, 1], code);
+        let second = code_block_copy_id(&[0, 1, 1], code);
+
+        assert_ne!(first, second);
+        assert!(first.contains("0.0.1"));
+        assert!(second.contains("0.1.1"));
     }
 
     #[test]
