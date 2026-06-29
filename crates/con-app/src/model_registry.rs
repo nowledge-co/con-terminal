@@ -41,7 +41,6 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.4-nano",
-            "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
             "chat-latest",
         ],
@@ -603,7 +602,6 @@ mod tests {
                 "gpt-5.4".to_string(),
                 "gpt-5.4-mini".to_string(),
                 "gpt-5.4-nano".to_string(),
-                "gpt-5.3-codex".to_string(),
                 "gpt-5.3-codex-spark".to_string(),
                 "chat-latest".to_string(),
             ]

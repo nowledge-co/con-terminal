@@ -829,11 +829,43 @@ impl Config {
             let mut config: Config = toml::from_str(&content)?;
             config.normalize();
             config.agent.migrate_legacy();
+            config.apply_zero_touch_chatgpt_default();
             Ok(config)
         } else {
             let mut config = Config::default();
             config.normalize();
+            config.apply_zero_touch_chatgpt_default();
             Ok(config)
+        }
+    }
+
+    /// Zero-touch ChatGPT Subscription sign-in applied on every config load.
+    ///
+    /// 1. Sync the ChatGPT OAuth cache from Codex's `~/.codex/auth.json` (cheap
+    ///    and idempotent — a fingerprint check short-circuits when nothing
+    ///    changed), so a user already signed in to Codex never has to do a
+    ///    manual device login.
+    /// 2. If the user has no Anthropic key (the hard-coded default provider) but
+    ///    ChatGPT credentials are now available, default the active provider to
+    ///    ChatGPT. This makes every new window/tab use ChatGPT out of the box
+    ///    instead of falling back to an unconfigured Anthropic.
+    ///
+    /// Best-effort: failures are logged, never fatal. Conservative: a user who
+    /// configured Anthropic or picked another provider is never redirected
+    /// (see [`con_agent::preferred_default_provider`]).
+    fn apply_zero_touch_chatgpt_default(&mut self) {
+        match con_agent::ensure_chatgpt_oauth_synced_from_codex() {
+            Ok(true) => log::info!("[config] Synced ChatGPT OAuth cache from Codex"),
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("[config] Failed to sync ChatGPT OAuth cache from Codex: {err}")
+            }
+        }
+        if let Some(provider) = con_agent::preferred_default_provider(&self.agent) {
+            log::info!(
+                "[config] Defaulting agent provider to {provider} (ChatGPT auto-detected, no Anthropic key configured)"
+            );
+            self.agent.provider = provider;
         }
     }
 

@@ -69,6 +69,18 @@ impl ConWorkspace {
         )
         .map(std::sync::Arc::new)
         .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
+        // Seed the ChatGPT Subscription OAuth cache before provider status UI
+        // renders. Provider client construction still re-syncs later, so Codex
+        // token refreshes are picked up after startup too.
+        match con_agent::ensure_chatgpt_oauth_synced_from_codex() {
+            Ok(true) => {
+                log::info!("[workspace] Synced ChatGPT OAuth cache from Codex on startup")
+            }
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("[workspace] Failed to sync ChatGPT OAuth cache from Codex: {err}")
+            }
+        }
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!(
                 "Failed to create agent harness: {}. Agent features disabled.",

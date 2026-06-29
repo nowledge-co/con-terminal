@@ -547,7 +547,7 @@ impl SettingsPanel {
 
     fn provider_is_configured(&self, provider: &ProviderKind, cx: &App) -> bool {
         let sidebar_provider = Self::sidebar_provider_kind(provider);
-        if oauth_token_dir(&sidebar_provider).is_some_and(|dir| dir.exists()) {
+        if Self::provider_oauth_cache_present(&sidebar_provider) {
             return true;
         }
         if self
@@ -576,6 +576,27 @@ impl SettingsPanel {
                 ProviderKind::ZAI => has_config(&ProviderKind::ZAIAnthropic),
                 _ => false,
             }
+    }
+
+    fn provider_oauth_cache_present(provider: &ProviderKind) -> bool {
+        let Some(dir) = oauth_token_dir(provider) else {
+            return false;
+        };
+        match provider {
+            ProviderKind::ChatGPT => dir.join("auth.json").is_file(),
+            ProviderKind::GitHubCopilot => {
+                dir.join("access-token").is_file() || dir.join("api-key.json").is_file()
+            }
+            _ => false,
+        }
+    }
+
+    fn provider_oauth_ready(&self, provider: &ProviderKind) -> bool {
+        let sidebar_provider = Self::sidebar_provider_kind(provider);
+        Self::provider_oauth_cache_present(&sidebar_provider)
+            || self
+                .oauth_state(&sidebar_provider)
+                .is_some_and(|state| state.connected || state.in_progress)
     }
 
     fn sidebar_selection_target(
@@ -4419,11 +4440,11 @@ impl SettingsPanel {
 
         let oauth_state = self.oauth_state(&self.selected_provider).cloned();
         let has_key_override = !self.api_key_input.read(cx).value().is_empty();
+        let oauth_cache_present = Self::provider_oauth_cache_present(&Self::sidebar_provider_kind(
+            &self.selected_provider,
+        ));
         let connection_ready = if Self::provider_has_oauth(&self.selected_provider) {
-            oauth_state
-                .as_ref()
-                .map(|state| state.connected || state.in_progress)
-                .unwrap_or(false)
+            self.provider_oauth_ready(&self.selected_provider)
         } else {
             has_key_override
         };
@@ -4431,6 +4452,7 @@ impl SettingsPanel {
             match oauth_state.as_ref() {
                 Some(state) if state.in_progress => "Signing In",
                 Some(state) if state.connected => "Signed In",
+                _ if oauth_cache_present => "Signed In",
                 _ => "OAuth",
             }
         } else if has_key_override {
@@ -4622,6 +4644,8 @@ impl SettingsPanel {
                         .children(Self::provider_oauth_label(&self.selected_provider).map(
                             |provider_name| {
                                 let oauth = oauth_state.clone().unwrap_or_default();
+                                let oauth_ready =
+                                    self.provider_oauth_ready(&self.selected_provider);
                                 let provider_for_click = self.selected_provider.clone();
                                 let prompt = oauth.prompt.clone();
                                 div()
@@ -4656,7 +4680,7 @@ impl SettingsPanel {
                                                     "oauth-connect-{}",
                                                     provider_label(&self.selected_provider)
                                                 ))
-                                                .label(if oauth.connected {
+                                                .label(if oauth_ready && !oauth.in_progress {
                                                     "Reconnect"
                                                 } else {
                                                     Self::provider_oauth_button_label(
