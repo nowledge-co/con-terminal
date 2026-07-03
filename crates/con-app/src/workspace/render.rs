@@ -1155,6 +1155,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::rename_current_surface))
             .on_action(cx.listener(Self::close_surface))
             .on_action(cx.listener(Self::focus_input))
+            .on_action(cx.listener(Self::ask_ai))
             .on_action(cx.listener(Self::editor_move_left))
             .on_action(cx.listener(Self::editor_move_right))
             .on_action(cx.listener(Self::editor_move_up))

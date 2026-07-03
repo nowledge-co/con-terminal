@@ -173,6 +173,10 @@ impl TerminalPane {
             .update(cx, |view, cx| view.mark_native_layout_pending(cx));
     }
 
+    pub fn selection_text(&self, cx: &App) -> Option<String> {
+        self.entity.read(cx).selection_text()
+    }
+
     pub fn release_mouse_selection(&self, cx: &App) {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             terminal.send_mouse_button(false, con_ghostty::MouseButton::Left, 0);

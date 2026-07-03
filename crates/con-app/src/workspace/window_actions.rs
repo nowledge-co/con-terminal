@@ -100,6 +100,45 @@ impl ConWorkspace {
         self.focus_preferred_input_surface(window, cx);
     }
 
+    /// Send the focused terminal's selection to the agent input.
+    ///
+    /// Grabs the current selection (if any), routes it to the preferred
+    /// input surface (input bar in Agent mode, or the agent panel's inline
+    /// input when the bar is hidden), and focuses that input so the user
+    /// can type their question immediately. Without a selection this still
+    /// focuses the agent input, so the shortcut doubles as "ask AI".
+    pub(super) fn ask_ai(&mut self, _: &AskAi, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_modal_open(cx) {
+            return;
+        }
+
+        let selection = self
+            .has_active_tab()
+            .then(|| {
+                self.tabs[self.active_tab]
+                    .pane_tree
+                    .try_visible_focus_terminal()
+                    .and_then(|(_, terminal)| terminal.selection_text(cx))
+            })
+            .flatten()
+            .map(|text| text.trim_end().to_string())
+            .filter(|text| !text.is_empty());
+
+        if !self.input_bar_visible && self.agent_panel_open {
+            let inserted = self.agent_panel.update(cx, |panel, cx| {
+                panel.ask_ai_with_context(selection.as_deref(), window, cx)
+            });
+            if inserted {
+                return;
+            }
+        }
+
+        self.focus_input_bar_surface(window, cx);
+        self.input_bar.update(cx, |bar, cx| {
+            bar.ask_ai_with_context(selection.as_deref(), window, cx);
+        });
+    }
+
     pub(super) fn is_input_surface_focused(&self, window: &Window, cx: &App) -> bool {
         let input_bar_focused =
             self.input_bar_visible && self.input_bar.focus_handle(cx).is_focused(window);

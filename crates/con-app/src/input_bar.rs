@@ -19,6 +19,42 @@ fn input_bar_rendered_height_for_rows(rows: usize, mono_scale: f32) -> f32 {
     (INPUT_BAR_MIN_HEIGHT + rows.saturating_sub(1) as f32 * INPUT_BAR_ROW_HEIGHT) * mono_scale
 }
 
+/// Append terminal-selection context to the agent input as a fenced code
+/// block. The fence grows when the selection itself contains backticks so
+/// the block never terminates early.
+pub(crate) fn append_ask_ai_context(current: &str, context: &str) -> String {
+    let longest_backtick_run = context
+        .split(|ch| ch != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat((longest_backtick_run + 1).max(3));
+
+    let mut updated = String::new();
+    let trimmed_current = current.trim_end();
+    if !trimmed_current.is_empty() {
+        updated.push_str(trimmed_current);
+        updated.push('\n');
+    }
+    updated.push_str(&fence);
+    updated.push('\n');
+    updated.push_str(context);
+    updated.push('\n');
+    updated.push_str(&fence);
+    updated.push('\n');
+    updated
+}
+
+pub(crate) fn text_end_position(text: &str) -> Position {
+    let line = text.matches('\n').count() as u32;
+    let character = text
+        .rsplit('\n')
+        .next()
+        .map(|last| last.chars().count() as u32)
+        .unwrap_or(0);
+    Position::new(line, character)
+}
+
 actions!(
     input_bar,
     [
@@ -826,6 +862,36 @@ impl InputBar {
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_mode(self.mode.next(), window, cx);
         self.clear_completion_ui();
+        cx.emit(InputScopeChanged);
+        cx.emit(InputEdited);
+        cx.notify();
+    }
+
+    /// Switch to Agent mode and append quoted context (e.g. a terminal
+    /// selection) to the input, leaving the cursor at the end so the user
+    /// can type their question right away.
+    pub fn ask_ai_with_context(
+        &mut self,
+        context: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.mode != InputMode::Agent {
+            self.set_mode(InputMode::Agent, window, cx);
+        }
+        self.clear_completion_ui();
+
+        if let Some(context) = context.map(str::trim_end).filter(|text| !text.is_empty()) {
+            let state = self.current_input_state();
+            let current = state.read(cx).value().to_string();
+            let updated = append_ask_ai_context(&current, context);
+            let end = text_end_position(&updated);
+            state.update(cx, |s, cx| {
+                s.set_value(&updated, window, cx);
+                s.set_cursor_position(end, window, cx);
+            });
+        }
+
         cx.emit(InputScopeChanged);
         cx.emit(InputEdited);
         cx.notify();
@@ -1647,9 +1713,10 @@ impl Render for InputBar {
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_BAR_MAX_ROWS, InputBar, input_bar_content_rows,
-        input_bar_rendered_height_for_rows,
+        INPUT_BAR_MAX_ROWS, InputBar, append_ask_ai_context, input_bar_content_rows,
+        input_bar_rendered_height_for_rows, text_end_position,
     };
+    use gpui_component::input::Position;
 
     #[test]
     fn content_rows_counts_trailing_newline_and_clamps() {
@@ -1671,11 +1738,45 @@ mod tests {
 
     #[test]
     fn native_command_text_stays_visible_when_multiline_overlay_is_unavailable() {
-        assert!(!InputBar::should_hide_native_command_text("echo one\necho two", false));
+        assert!(!InputBar::should_hide_native_command_text(
+            "echo one\necho two",
+            false
+        ));
     }
 
     #[test]
     fn native_command_text_hides_when_single_line_overlay_is_available() {
         assert!(InputBar::should_hide_native_command_text("echo one", true));
+    }
+
+    #[test]
+    fn ask_ai_context_wraps_selection_in_fence() {
+        assert_eq!(
+            append_ask_ai_context("", "error: it broke"),
+            "```\nerror: it broke\n```\n"
+        );
+    }
+
+    #[test]
+    fn ask_ai_context_appends_after_existing_input() {
+        assert_eq!(
+            append_ask_ai_context("why does this fail?  ", "error: it broke"),
+            "why does this fail?\n```\nerror: it broke\n```\n"
+        );
+    }
+
+    #[test]
+    fn ask_ai_context_fence_grows_past_embedded_backticks() {
+        let context = "see ```rust\ncode\n```";
+        let updated = append_ask_ai_context("", context);
+        assert!(updated.starts_with("````\n"));
+        assert!(updated.ends_with("\n````\n"));
+    }
+
+    #[test]
+    fn text_end_position_counts_lines_and_last_column() {
+        assert_eq!(text_end_position(""), Position::new(0, 0));
+        assert_eq!(text_end_position("ask"), Position::new(0, 3));
+        assert_eq!(text_end_position("a\n```\nxy\n```\n"), Position::new(4, 0));
     }
 }

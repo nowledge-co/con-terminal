@@ -70,8 +70,8 @@ use crate::ghostty_view::{
     GhosttyTitleChanged, GhosttyView,
 };
 use crate::{
-    AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
-    CloseTab, CollapseSidebar, Copy, Cut, CycleInputMode, EditorDeleteBackward,
+    AddWorkspaceLayoutTabs, AskAi, ClearRestoredTerminalHistory, ClearTerminal, ClosePane,
+    CloseSurface, CloseTab, CollapseSidebar, Copy, Cut, CycleInputMode, EditorDeleteBackward,
     EditorDeleteForward, EditorInsertNewline, EditorMoveDown, EditorMoveEnd, EditorMoveHome,
     EditorMoveLeft, EditorMoveLineEnd, EditorMoveLineStart, EditorMoveRight, EditorMoveUp,
     EditorSave, EditorSelectDown, EditorSelectEnd, EditorSelectHome, EditorSelectLeft,

@@ -319,6 +319,20 @@ fn default_focus_input() -> String {
     "ctrl-shift-i".into()
 }
 
+#[cfg(target_os = "macos")]
+fn default_ask_ai() -> String {
+    // Pairs with Cmd+L (toggle agent): Cmd+Shift+L sends the current
+    // terminal selection to the agent input, matching the editor
+    // convention of "add selection to chat".
+    "secondary-shift-l".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_ask_ai() -> String {
+    // Ctrl+Shift+L is taken by toggle-agent off macOS; Ctrl+Shift+A
+    // ("Ask") stays free of terminal control characters.
+    "ctrl-shift-a".into()
+}
+
 fn default_toggle_input_bar() -> String {
     "ctrl-`".into()
 }
@@ -442,6 +456,7 @@ pub struct KeybindingConfig {
     pub split_right: String,
     pub split_down: String,
     pub focus_input: String,
+    pub ask_ai: String,
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
@@ -501,6 +516,7 @@ impl KeybindingConfig {
             ("Toggle Agent", self.toggle_agent.as_str()),
             ("Toggle Input Bar", self.toggle_input_bar.as_str()),
             ("Toggle Input / Terminal", self.focus_input.as_str()),
+            ("Ask AI About Selection", self.ask_ai.as_str()),
             ("Cycle Input Mode", self.cycle_input_mode.as_str()),
             ("Split Right", self.split_right.as_str()),
             ("Split Down", self.split_down.as_str()),
@@ -585,6 +601,7 @@ impl Default for KeybindingConfig {
             split_right: default_split_right(),
             split_down: default_split_down(),
             focus_input: default_focus_input(),
+            ask_ai: default_ask_ai(),
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
