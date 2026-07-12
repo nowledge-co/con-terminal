@@ -467,7 +467,18 @@ pub fn render_parsed_chat_markdown_prefix(
     theme: &Theme,
     max_blocks: usize,
 ) -> AnyElement {
+    render_parsed_chat_markdown_prefix_with_copy_namespace(document, tone, theme, max_blocks, "")
+}
+
+pub fn render_parsed_chat_markdown_prefix_with_copy_namespace(
+    document: &ParsedChatMarkdown,
+    tone: ChatMarkdownTone,
+    theme: &Theme,
+    max_blocks: usize,
+    copy_namespace: impl Into<SharedString>,
+) -> AnyElement {
     let style = ChatMarkdownStyle::new(theme, tone);
+    let copy_namespace = copy_namespace.into();
     let block_count = document.blocks.len().min(max_blocks);
     let blocks = &document.blocks[..block_count];
 
@@ -480,12 +491,9 @@ pub fn render_parsed_chat_markdown_prefix(
         .flex()
         .flex_col()
         .gap(style.block_gap)
-        .children(
-            blocks
-                .iter()
-                .enumerate()
-                .map(|(idx, block)| render_block_with_width(block, idx, &style, None)),
-        )
+        .children(blocks.iter().enumerate().map(|(idx, block)| {
+            render_block_with_width(block, idx, &style, None, copy_namespace.as_ref())
+        }))
         .into_any_element()
 }
 
@@ -497,6 +505,7 @@ pub struct ChatMarkdownBlockView {
     document: Arc<ParsedChatMarkdown>,
     block_index: usize,
     tone: ChatMarkdownTone,
+    copy_namespace: SharedString,
     table_scroll_handle: ScrollHandle,
     rich_svg_renders: HashMap<RichSvgRenderKey, RichSvgRenderEntry>,
 }
@@ -506,11 +515,13 @@ impl ChatMarkdownBlockView {
         document: Arc<ParsedChatMarkdown>,
         block_index: usize,
         tone: ChatMarkdownTone,
+        copy_namespace: impl Into<SharedString>,
     ) -> Self {
         Self {
             document,
             block_index,
             tone,
+            copy_namespace: copy_namespace.into(),
             table_scroll_handle: ScrollHandle::new(),
             rich_svg_renders: HashMap::new(),
         }
@@ -521,20 +532,26 @@ impl ChatMarkdownBlockView {
         document: Arc<ParsedChatMarkdown>,
         block_index: usize,
         tone: ChatMarkdownTone,
+        copy_namespace: impl Into<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let copy_namespace = copy_namespace.into();
         let old_block = self.document.blocks.get(self.block_index);
         let new_block = document.blocks.get(block_index);
-        let block_changed =
-            self.block_index != block_index || self.tone != tone || old_block != new_block;
+        let block_changed = self.block_index != block_index
+            || self.tone != tone
+            || self.copy_namespace != copy_namespace
+            || old_block != new_block;
 
         if self.block_index != block_index
             || self.tone != tone
+            || self.copy_namespace != copy_namespace
             || !Arc::ptr_eq(&self.document, &document)
         {
             self.document = document;
             self.block_index = block_index;
             self.tone = tone;
+            self.copy_namespace = copy_namespace;
             if block_changed {
                 self.table_scroll_handle = ScrollHandle::new();
                 self.rich_svg_renders.clear();
@@ -683,13 +700,21 @@ impl ChatMarkdownBlockView {
         match block {
             MarkdownBlock::Mermaid { .. } | MarkdownBlock::MathBlock { .. } => self
                 .render_rich_svg_block(path, block, style, cx)
-                .unwrap_or_else(|| render_block(block, index, style, table_scroll_handle)),
+                .unwrap_or_else(|| {
+                    render_block(
+                        block,
+                        index,
+                        style,
+                        table_scroll_handle,
+                        self.copy_namespace.as_ref(),
+                    )
+                }),
             MarkdownBlock::CodeBlock {
                 language,
                 code,
                 highlight_cache,
             } => render_code_block(
-                code_block_copy_id(path, code),
+                code_block_copy_id(self.copy_namespace.as_ref(), path, code),
                 language,
                 code,
                 highlight_cache,
@@ -766,7 +791,13 @@ impl ChatMarkdownBlockView {
 
                 render_list_children(*ordered, *start, items.len(), item_children, style)
             }
-            _ => render_block(block, index, style, table_scroll_handle),
+            _ => render_block(
+                block,
+                index,
+                style,
+                table_scroll_handle,
+                self.copy_namespace.as_ref(),
+            ),
         }
     }
 
@@ -1149,9 +1180,10 @@ fn render_block(
     index: usize,
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
 ) -> AnyElement {
     let mut path = vec![index];
-    render_block_at_path(block, &mut path, style, table_scroll_handle)
+    render_block_at_path(block, &mut path, style, table_scroll_handle, copy_namespace)
 }
 
 fn render_block_at_path(
@@ -1159,6 +1191,7 @@ fn render_block_at_path(
     path: &mut Vec<usize>,
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
 ) -> AnyElement {
     let index = path.last().copied().unwrap_or(0);
     match block {
@@ -1193,7 +1226,7 @@ fn render_block_at_path(
             code,
             highlight_cache,
         } => render_code_block(
-            code_block_copy_id(path, code),
+            code_block_copy_id(copy_namespace, path, code),
             language,
             code,
             highlight_cache,
@@ -1209,7 +1242,7 @@ fn render_block_at_path(
                 .enumerate()
                 .map(|(idx, block)| {
                     path.push(idx);
-                    let rendered = render_block_at_path(block, path, style, None);
+                    let rendered = render_block_at_path(block, path, style, None, copy_namespace);
                     path.pop();
                     rendered
                 })
@@ -1232,7 +1265,13 @@ fn render_block_at_path(
                         .map(|(nested_idx, nested_block)| {
                             path.push(item_idx);
                             path.push(nested_idx);
-                            let rendered = render_block_at_path(nested_block, path, style, None);
+                            let rendered = render_block_at_path(
+                                nested_block,
+                                path,
+                                style,
+                                None,
+                                copy_namespace,
+                            );
                             path.pop();
                             path.pop();
                             rendered
@@ -1261,6 +1300,7 @@ fn render_block_with_width(
     index: usize,
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
 ) -> AnyElement {
     let mut wrapper = div().w_full();
     if !matches!(
@@ -1273,7 +1313,13 @@ fn render_block_with_width(
     }
 
     wrapper
-        .child(render_block(block, index, style, table_scroll_handle))
+        .child(render_block(
+            block,
+            index,
+            style,
+            table_scroll_handle,
+            copy_namespace,
+        ))
         .into_any_element()
 }
 
@@ -2053,11 +2099,13 @@ fn rich_svg_render_id(path: &[usize], key: &RichSvgRenderKey) -> SharedString {
     SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
 }
 
-fn code_block_copy_id(path: &[usize], code: &str) -> String {
+fn code_block_copy_id(copy_namespace: &str, path: &[usize], code: &str) -> String {
     let mut hasher = DefaultHasher::new();
+    copy_namespace.hash(&mut hasher);
     code.hash(&mut hasher);
     format!(
-        "copy-code-block-{}-{:x}",
+        "copy-code-block-{}-{}-{:x}",
+        copy_namespace,
         markdown_path_id(path),
         hasher.finish()
     )
@@ -3068,12 +3116,24 @@ mod tests {
     fn code_block_copy_ids_include_nested_block_path() {
         let code = "brew services start lizardbyte/homebrew/sunshine";
 
-        let first = code_block_copy_id(&[0, 0, 1], code);
-        let second = code_block_copy_id(&[0, 1, 1], code);
+        let first = code_block_copy_id("asst-1", &[0, 0, 1], code);
+        let second = code_block_copy_id("asst-1", &[0, 1, 1], code);
 
         assert_ne!(first, second);
         assert!(first.contains("0.0.1"));
         assert!(second.contains("0.1.1"));
+    }
+
+    #[test]
+    fn code_block_copy_ids_include_message_namespace() {
+        let code = "brew services start lizardbyte/homebrew/sunshine";
+
+        let first = code_block_copy_id("asst-1", &[0, 0, 1], code);
+        let second = code_block_copy_id("asst-2", &[0, 0, 1], code);
+
+        assert_ne!(first, second);
+        assert!(first.contains("asst-1"));
+        assert!(second.contains("asst-2"));
     }
 
     #[test]
