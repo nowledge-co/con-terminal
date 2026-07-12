@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use crate::chat_markdown::{
     ChatMarkdownBlockView, ChatMarkdownTone, ParsedChatMarkdown, chat_markdown_block_gap,
-    render_parsed_chat_markdown, render_parsed_chat_markdown_prefix_with_copy_namespace,
+    render_parsed_chat_markdown_prefix_with_copy_namespace,
 };
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
@@ -3172,11 +3172,14 @@ fn render_assistant_message(
                 .line_height(px(18.0))
                 .text_color(theme.muted_foreground.opacity(0.54));
             if let Some(markdown) = msg.thinking_markdown.as_ref() {
-                thinking_el = thinking_el.child(render_parsed_chat_markdown(
-                    markdown,
-                    ChatMarkdownTone::Thinking,
-                    theme,
-                ));
+                thinking_el =
+                    thinking_el.child(render_parsed_chat_markdown_prefix_with_copy_namespace(
+                        markdown,
+                        ChatMarkdownTone::Thinking,
+                        theme,
+                        markdown.block_count(),
+                        format!("asst-think-{msg_idx}"),
+                    ));
             } else {
                 thinking_el = thinking_el.child(div().whitespace_normal().child(thinking.clone()));
             }

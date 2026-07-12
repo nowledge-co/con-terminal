@@ -453,23 +453,6 @@ impl ParsedChatMarkdown {
     }
 }
 
-pub fn render_parsed_chat_markdown(
-    document: &ParsedChatMarkdown,
-    tone: ChatMarkdownTone,
-    theme: &Theme,
-) -> AnyElement {
-    render_parsed_chat_markdown_prefix(document, tone, theme, document.blocks.len())
-}
-
-pub fn render_parsed_chat_markdown_prefix(
-    document: &ParsedChatMarkdown,
-    tone: ChatMarkdownTone,
-    theme: &Theme,
-    max_blocks: usize,
-) -> AnyElement {
-    render_parsed_chat_markdown_prefix_with_copy_namespace(document, tone, theme, max_blocks, "")
-}
-
 pub fn render_parsed_chat_markdown_prefix_with_copy_namespace(
     document: &ParsedChatMarkdown,
     tone: ChatMarkdownTone,
