@@ -141,6 +141,7 @@ actions!(
         RenameSurface,
         CloseSurface,
         FocusInput,
+        AskAi,
         CycleInputMode,
         TogglePaneScopePicker,
         ToggleLeftPanel,
@@ -1526,6 +1527,7 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<RenameSurface>(&mut specs, &kb.rename_surface);
     push_global::<CloseSurface>(&mut specs, &kb.close_surface);
     push_global::<FocusInput>(&mut specs, &kb.focus_input);
+    push_global::<AskAi>(&mut specs, &kb.ask_ai);
     push_global::<CycleInputMode>(&mut specs, &kb.cycle_input_mode);
     push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);

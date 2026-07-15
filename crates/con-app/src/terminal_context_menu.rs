@@ -51,6 +51,7 @@ pub(crate) fn terminal_context_menu(
     menu.min_w(px(220.0))
         .item(action_item("Paste", Box::new(crate::Paste)))
         .item(action_item("Copy", Box::new(crate::Copy)))
+        .item(action_item("Ask AI", Box::new(crate::AskAi)))
         .item(action_item(
             "Clear Terminal",
             Box::new(crate::ClearTerminal),

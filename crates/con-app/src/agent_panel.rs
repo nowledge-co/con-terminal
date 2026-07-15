@@ -7,6 +7,7 @@ use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
+use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, Theme};
 
 /// Max lines to show for tool result previews in collapsed steps
@@ -480,6 +481,9 @@ struct PanelMessage {
     thinking: Option<String>,
     thinking_markdown: Option<Arc<ParsedChatMarkdown>>,
     thinking_collapsed: bool,
+    /// When true, render the message body as a selectable text view so the
+    /// user can drag-select and copy arbitrary sentences.
+    select_mode: bool,
     steps: Vec<StepEntry>,
     steps_collapsed: bool,
     /// Model name for assistant messages (e.g. "claude-sonnet-4-6")
@@ -524,6 +528,7 @@ impl PanelMessage {
             thinking: None,
             thinking_markdown: None,
             thinking_collapsed: true,
+            select_mode: false,
             steps: Vec::new(),
             steps_collapsed: false,
             model: None,
@@ -1350,6 +1355,34 @@ impl AgentPanel {
         true
     }
 
+    /// Append quoted context (e.g. a terminal selection) to the inline
+    /// agent input and focus it. Returns false when the inline input is
+    /// not available yet so the caller can fall back to the input bar.
+    pub fn ask_ai_with_context(
+        &mut self,
+        context: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(input) = self.inline_input_state.clone() else {
+            return false;
+        };
+
+        if let Some(context) = context.map(str::trim_end).filter(|text| !text.is_empty()) {
+            let current = input.read(cx).value().to_string();
+            let updated = crate::input_bar::append_ask_ai_context(&current, context);
+            let end = crate::input_bar::text_end_position(&updated);
+            input.update(cx, |state, cx| {
+                state.set_value(&updated, window, cx);
+                state.set_cursor_position(end, window, cx);
+            });
+        }
+
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        cx.notify();
+        true
+    }
+
     /// Return matching skills if the inline input text starts with `/`.
     pub fn filtered_inline_skills(&self, cx: &App) -> Vec<&SkillEntry> {
         let Some(ref input) = self.inline_input_state else {
@@ -1568,6 +1601,33 @@ impl AgentPanel {
         if msg_idx < self.message_list_state.item_count() {
             self.message_list_state
                 .remeasure_items(msg_idx..msg_idx + 1);
+        }
+    }
+
+    fn toggle_message_select_mode(&mut self, msg_idx: usize, cx: &mut Context<Self>) {
+        let Some(msg) = self.state.messages.get_mut(msg_idx) else {
+            return;
+        };
+        msg.select_mode = !msg.select_mode;
+        let entering = msg.select_mode;
+        msg.touch();
+        self.remeasure_message(msg_idx);
+        cx.notify();
+
+        if entering {
+            // The selectable text view parses its markdown on a background
+            // task, so the final row height settles a few frames later —
+            // remeasure once more after the parse had time to land.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(80))
+                    .await;
+                let _ = this.update(cx, |panel, cx| {
+                    panel.remeasure_message(msg_idx);
+                    cx.notify();
+                });
+            })
+            .detach();
         }
     }
 
@@ -3184,6 +3244,12 @@ fn render_assistant_message(
                 thinking_el = thinking_el.child(div().whitespace_normal().child(thinking.clone()));
             }
             msg_el = msg_el.child(thinking_el);
+            msg_el = msg_el.child(
+                div().ml(px(23.0)).child(
+                    Clipboard::new(format!("copy-think-{msg_idx}"))
+                        .value(SharedString::from(thinking.clone())),
+                ),
+            );
         }
     }
 
@@ -3195,7 +3261,23 @@ fn render_assistant_message(
             .line_height(px(23.0))
             .text_color(theme.foreground.opacity(0.88));
 
-        if let Some(markdown) = msg.content_markdown.as_ref() {
+        if msg.select_mode {
+            content_el = content_el.child(
+                div()
+                    .w_full()
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(8.0))
+                    .bg(theme.primary.opacity(0.04))
+                    .child(
+                        TextView::markdown(
+                            ElementId::Name(format!("select-md-{}", msg.id).into()),
+                            SharedString::from(msg.content.clone()),
+                        )
+                        .selectable(true),
+                    ),
+            );
+        } else if let Some(markdown) = msg.content_markdown.as_ref() {
             let visible_blocks =
                 visible_markdown_block_count(rendered_markdown_blocks, markdown.block_count());
             if let Some(rendered_markdown) = rendered_markdown {
@@ -3279,11 +3361,44 @@ fn render_assistant_message(
 
         msg_el = msg_el.child(content_el);
 
+        let select_mode = msg.select_mode;
+        let select_panel = panel.clone();
         msg_el = msg_el.child(
-            div().ml(px(19.0)).mt(px(2.0)).child(
-                Clipboard::new(format!("copy-asst-{msg_idx}"))
-                    .value(SharedString::from(assistant_content_for_copy)),
-            ),
+            div()
+                .ml(px(19.0))
+                .mt(px(2.0))
+                .flex()
+                .items_center()
+                .gap(px(1.0))
+                .child(
+                    Clipboard::new(format!("copy-asst-{msg_idx}"))
+                        .value(SharedString::from(assistant_content_for_copy)),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("select-toggle-{msg_idx}")))
+                        .icon(Icon::default().path(if select_mode {
+                            "phosphor/selection-all.svg"
+                        } else {
+                            "phosphor/selection-plus.svg"
+                        }))
+                        .ghost()
+                        .xsmall()
+                        .text_color(if select_mode {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground.opacity(0.4)
+                        })
+                        .tooltip(if select_mode {
+                            "Exit text selection"
+                        } else {
+                            "Select text"
+                        })
+                        .on_click(move |_, _, cx| {
+                            let _ = select_panel.update(cx, |this, cx| {
+                                this.toggle_message_select_mode(msg_idx, cx);
+                            });
+                        }),
+                ),
         );
     }
 
@@ -3560,8 +3675,14 @@ fn render_assistant_message(
                     };
                     let detail_block = div()
                         .px(ui_space_px(theme, 12.0))
-                        .pt(ui_space_px(theme, 10.0))
+                        .pt(ui_space_px(theme, 4.0))
                         .bg(trace_detail_surface(theme))
+                        .child(
+                            div().flex().justify_end().child(
+                                Clipboard::new(format!("copy-step-{msg_idx}-{step_idx}"))
+                                    .value(SharedString::from(detail.to_string())),
+                            ),
+                        )
                         .child(render_result_block(
                             &visible_detail,
                             &format!("step-result-{msg_idx}-{step_idx}"),
