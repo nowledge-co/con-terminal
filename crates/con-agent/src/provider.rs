@@ -382,14 +382,39 @@ mod tests {
     }
 
     #[test]
-    fn preferred_default_keeps_explicitly_selected_non_anthropic_provider() {
-        // A non-default provider means the user already chose something — never
-        // override it, regardless of credentials on disk.
+    fn preferred_default_keeps_explicitly_selected_provider() {
         let config = AgentConfig {
             provider: ProviderKind::OpenAI,
             ..AgentConfig::default()
         };
-        assert_eq!(preferred_default_provider(&config), None);
+        assert_eq!(
+            preferred_default_provider_for_state(&config, true, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_keeps_explicit_anthropic_without_credentials() {
+        let config = AgentConfig::default();
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, true, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_uses_chatgpt_for_implicit_unconfigured_anthropic() {
+        let config = AgentConfig::default();
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, true),
+            Some(ProviderKind::ChatGPT)
+        );
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, false),
+            None
+        );
     }
 
     #[test]
@@ -410,7 +435,11 @@ mod tests {
                 max_tokens: None,
             },
         );
-        assert_eq!(preferred_default_provider(&config), None);
+        assert!(anthropic_credentials_available(&config));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            None
+        );
     }
 
     #[test]
@@ -429,7 +458,11 @@ mod tests {
                 max_tokens: None,
             },
         );
-        assert_eq!(preferred_default_provider(&config), None);
+        assert!(anthropic_credentials_available(&config));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            None
+        );
     }
 
     #[test]
@@ -1210,35 +1243,55 @@ fn provider_api_key_env_name_like(value: &str) -> bool {
         .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
-/// Whether the ChatGPT Subscription OAuth cache exists on disk (e.g. synced
-/// from Codex by [`ensure_chatgpt_oauth_synced_from_codex`]).
-fn chatgpt_oauth_cache_present() -> bool {
-    oauth_token_dir(&ProviderKind::ChatGPT)
-        .map(|dir| dir.join("auth.json").is_file())
-        .unwrap_or(false)
+/// Whether the ChatGPT Subscription OAuth cache contains a usable access token
+/// (e.g. synced from Codex by [`ensure_chatgpt_oauth_synced_from_codex`]).
+fn chatgpt_oauth_cache_ready() -> bool {
+    let Some(auth_file) = oauth_token_dir(&ProviderKind::ChatGPT).map(|dir| dir.join("auth.json"))
+    else {
+        return false;
+    };
+
+    read_chatgpt_oauth_access_token(&auth_file)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// Choose the effective default provider for a freshly loaded config.
 ///
 /// Zero-touch sign-in: the hard-coded default provider is Anthropic, but when
 /// the user has *not* configured any Anthropic credentials and a ChatGPT
-/// Subscription OAuth cache is present (typically just synced from Codex),
+/// Subscription OAuth cache is ready (typically just synced from Codex),
 /// prefer ChatGPT so the first run — and every new window — works without
 /// manually switching providers.
 ///
-/// Deliberately conservative: it only overrides the *default* Anthropic
-/// selection, and only when Anthropic has no usable key. A user who has set up
-/// Anthropic, or who explicitly selected another provider, is never
-/// redirected. Returns the provider to switch to, or `None` to keep the
-/// configured default.
-pub fn preferred_default_provider(config: &AgentConfig) -> Option<ProviderKind> {
-    if config.provider != ProviderKind::Anthropic {
-        return None;
-    }
-    if anthropic_credentials_available(config) {
-        return None;
-    }
-    chatgpt_oauth_cache_present().then_some(ProviderKind::ChatGPT)
+/// Deliberately conservative: it only overrides an implicit *default*
+/// Anthropic selection, and only when Anthropic has no usable key. Any provider
+/// explicitly present in config, including Anthropic, is preserved. Returns the
+/// provider to switch to, or `None` to keep the configured default.
+pub fn preferred_default_provider(
+    config: &AgentConfig,
+    provider_is_explicit: bool,
+) -> Option<ProviderKind> {
+    preferred_default_provider_for_state(
+        config,
+        provider_is_explicit,
+        anthropic_credentials_available(config),
+        chatgpt_oauth_cache_ready(),
+    )
+}
+
+fn preferred_default_provider_for_state(
+    config: &AgentConfig,
+    provider_is_explicit: bool,
+    anthropic_credentials_ready: bool,
+    chatgpt_oauth_ready: bool,
+) -> Option<ProviderKind> {
+    (!provider_is_explicit
+        && config.provider == ProviderKind::Anthropic
+        && !anthropic_credentials_ready
+        && chatgpt_oauth_ready)
+        .then_some(ProviderKind::ChatGPT)
 }
 
 fn mark_codex_chatgpt_auth_source_seen(target_auth_file: &std::path::Path) -> Result<bool> {
