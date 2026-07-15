@@ -866,8 +866,9 @@ impl Config {
     ///    changed), so a user already signed in to Codex never has to do a
     ///    manual device login.
     /// 2. Recompute an automatic provider choice from current credentials:
-    ///    configured Anthropic wins; otherwise ChatGPT is used while its cache
-    ///    is ready. Explicit choices are never changed.
+    ///    configured Anthropic wins; otherwise ChatGPT is used while an API-key
+    ///    override or its OAuth cache is ready. Explicit choices are never
+    ///    changed.
     ///
     /// Best-effort: failures are logged, never fatal. Conservative: a user who
     /// configured Anthropic or picked another provider is never redirected
