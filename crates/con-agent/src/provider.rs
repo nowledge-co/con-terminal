@@ -533,6 +533,30 @@ mod tests {
     }
 
     #[test]
+    fn preferred_default_keeps_automatic_chatgpt_with_key_override() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::ChatGPT,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::ChatGPT,
+            ProviderConfig {
+                api_key: Some("chatgpt-access-token".into()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(provider_credentials_available(
+            &config,
+            &ProviderKind::ChatGPT
+        ));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, true),
+            None
+        );
+    }
+
+    #[test]
     fn codex_chatgpt_auth_converter_ignores_non_chatgpt_auth() {
         let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
             "auth_mode": "api-key",
@@ -1348,14 +1372,18 @@ pub fn ensure_chatgpt_oauth_synced_from_codex() -> Result<bool> {
     sync_codex_chatgpt_auth(&dir.join("auth.json"))
 }
 
-/// Whether a usable Anthropic API key is configured — either inline in the
-/// provider config, via a referenced env var, or the default
-/// `ANTHROPIC_API_KEY` environment variable.
 fn anthropic_credentials_available(config: &AgentConfig) -> bool {
-    if configured_api_key_value(config, &ProviderKind::Anthropic).is_some() {
+    provider_credentials_available(config, &ProviderKind::Anthropic)
+}
+
+/// Whether a provider has a usable API credential through the same paths used
+/// by live requests: inline config, a referenced env var, a legacy direct key
+/// in `api_key_env`, or the provider's default environment variable.
+fn provider_credentials_available(config: &AgentConfig, kind: &ProviderKind) -> bool {
+    if configured_api_key_value(config, kind).is_some() {
         return true;
     }
-    std::env::var(ProviderKind::Anthropic.default_api_key_env()).is_ok_and(|v| !v.trim().is_empty())
+    std::env::var(kind.default_api_key_env()).is_ok_and(|value| !value.trim().is_empty())
 }
 
 fn configured_api_key_value(config: &AgentConfig, kind: &ProviderKind) -> Option<String> {
@@ -1422,20 +1450,22 @@ fn chatgpt_oauth_cache_ready() -> bool {
 ///
 /// Zero-touch sign-in: the hard-coded default provider is Anthropic, but when
 /// the user has *not* configured any Anthropic credentials and a ChatGPT
-/// Subscription OAuth cache is ready (typically just synced from Codex),
-/// prefer ChatGPT so the first run — and every new window — works without
-/// manually switching providers.
+/// credential is ready (an API-key override or a Subscription OAuth cache,
+/// typically synced from Codex), prefer ChatGPT so the first run — and every
+/// new window — works without manually switching providers.
 ///
 /// Deliberately conservative: explicit choices are always preserved. An
 /// automatic choice is recomputed from current credential readiness, preferring
-/// configured Anthropic and otherwise using ChatGPT only while its cache is
-/// usable. Returns the provider to switch to, or `None` when it is unchanged.
+/// configured Anthropic and otherwise using ChatGPT only while one of its
+/// credential paths is usable. Returns the provider to switch to, or `None`
+/// when it is unchanged.
 pub fn preferred_default_provider(config: &AgentConfig) -> Option<ProviderKind> {
     preferred_default_provider_for_state(
         config,
         config.provider_is_explicit,
         anthropic_credentials_available(config),
-        chatgpt_oauth_cache_ready(),
+        provider_credentials_available(config, &ProviderKind::ChatGPT)
+            || chatgpt_oauth_cache_ready(),
     )
 }
 
@@ -1443,13 +1473,13 @@ fn preferred_default_provider_for_state(
     config: &AgentConfig,
     provider_is_explicit: bool,
     anthropic_credentials_ready: bool,
-    chatgpt_oauth_ready: bool,
+    chatgpt_credentials_ready: bool,
 ) -> Option<ProviderKind> {
     if provider_is_explicit {
         return None;
     }
 
-    let provider = if anthropic_credentials_ready || !chatgpt_oauth_ready {
+    let provider = if anthropic_credentials_ready || !chatgpt_credentials_ready {
         ProviderKind::Anthropic
     } else {
         ProviderKind::ChatGPT
