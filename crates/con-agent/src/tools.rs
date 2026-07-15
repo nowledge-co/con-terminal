@@ -1,5 +1,4 @@
 use crossbeam_channel::Sender;
-use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -191,29 +190,29 @@ impl Tool for TerminalExecTool {
     type Args = TerminalExecArgs;
     type Output = ShellExecOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. Use pane_id from list_panes for stable follow-up targeting; pane_index is only a positional snapshot. These selectors refer to a con pane, not a tmux pane/window/editor target. For tmux, agent CLIs, and other TUIs, inspect first and use tmux-native tools or send_keys intentionally.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command to execute"
-                    },
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target pane index from the latest list_panes snapshot. Positional only; it can change when panes are added or removed."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
-                    }
+    fn description(&self) -> String {
+        "Execute a command visibly in a con terminal pane only when that pane's control_capabilities include exec_visible_shell. Use pane_id from list_panes for stable follow-up targeting; pane_index is only a positional snapshot. These selectors refer to a con pane, not a tmux pane/window/editor target. For tmux, agent CLIs, and other TUIs, inspect first and use tmux-native tools or send_keys intentionally.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute"
                 },
-                "required": ["command"]
-            }),
-        }
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target pane index from the latest list_panes snapshot. Positional only; it can change when panes are added or removed."
+                },
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
+                }
+            },
+            "required": ["command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -271,25 +270,25 @@ impl Tool for ShellExecTool {
     type Args = ShellExecArgs;
     type Output = ShellExecOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute a shell command in a hidden LOCAL background process on the con workspace machine. Output is captured but not shown in the terminal. Never use this for remote SSH/tmux inspection or remote mutations.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command to execute"
-                    },
-                    "working_dir": {
-                        "type": "string",
-                        "description": "Optional working directory"
-                    }
+    fn description(&self) -> String {
+        "Execute a shell command in a hidden LOCAL background process on the con workspace machine. Output is captured but not shown in the terminal. Never use this for remote SSH/tmux inspection or remote mutations.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to execute"
                 },
-                "required": ["command"]
-            }),
-        }
+                "working_dir": {
+                    "type": "string",
+                    "description": "Optional working directory"
+                }
+            },
+            "required": ["command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -333,29 +332,29 @@ impl Tool for FileReadTool {
     type Args = FileReadArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read a LOCAL file on the workspace machine. This tool CANNOT read files on remote SSH hosts. For remote files, use read_pane to see editor content or send_keys to run cat in a remote shell.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to read"
-                    },
-                    "start_line": {
-                        "type": "integer",
-                        "description": "Optional start line (1-indexed)"
-                    },
-                    "end_line": {
-                        "type": "integer",
-                        "description": "Optional end line (1-indexed)"
-                    }
+    fn description(&self) -> String {
+        "Read a LOCAL file on the workspace machine. This tool CANNOT read files on remote SSH hosts. For remote files, use read_pane to see editor content or send_keys to run cat in a remote shell.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to read"
                 },
-                "required": ["path"]
-            }),
-        }
+                "start_line": {
+                    "type": "integer",
+                    "description": "Optional start line (1-indexed)"
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "Optional end line (1-indexed)"
+                }
+            },
+            "required": ["path"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -400,26 +399,26 @@ impl Tool for FileWriteTool {
     type Args = FileWriteArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Write content to a LOCAL file on the workspace machine. Creates the file if it doesn't exist. CANNOT write to remote SSH hosts — use send_keys to operate remote editors or shell redirects instead."
-                .to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to write"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write"
-                    }
+    fn description(&self) -> String {
+        "Write content to a LOCAL file on the workspace machine. Creates the file if it doesn't exist. CANNOT write to remote SSH hosts — use send_keys to operate remote editors or shell redirects instead."
+                .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to write"
                 },
-                "required": ["path", "content"]
-            }),
-        }
+                "content": {
+                    "type": "string",
+                    "description": "Content to write"
+                }
+            },
+            "required": ["path", "content"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -460,29 +459,29 @@ impl Tool for EditFileTool {
     type Args = EditFileArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Edit a LOCAL file on the workspace machine by replacing a specific text snippet. CANNOT edit files on remote SSH hosts — use send_keys with editor commands instead.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the file to edit"
-                    },
-                    "old_text": {
-                        "type": "string",
-                        "description": "The exact text to find and replace (must match exactly)"
-                    },
-                    "new_text": {
-                        "type": "string",
-                        "description": "The replacement text"
-                    }
+    fn description(&self) -> String {
+        "Edit a LOCAL file on the workspace machine by replacing a specific text snippet. CANNOT edit files on remote SSH hosts — use send_keys with editor commands instead.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to edit"
                 },
-                "required": ["path", "old_text", "new_text"]
-            }),
-        }
+                "old_text": {
+                    "type": "string",
+                    "description": "The exact text to find and replace (must match exactly)"
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "The replacement text"
+                }
+            },
+            "required": ["path", "old_text", "new_text"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -541,28 +540,28 @@ impl Tool for ListFilesTool {
     type Args = ListFilesArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List LOCAL files and directories on the workspace machine. CANNOT list files on remote SSH hosts.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Directory to list (defaults to cwd)"
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Glob pattern to filter (e.g. '*.rs', '**/*.toml')"
-                    },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Maximum directory depth (default: 3)"
-                    }
+    fn description(&self) -> String {
+        "List LOCAL files and directories on the workspace machine. CANNOT list files on remote SSH hosts.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Directory to list (defaults to cwd)"
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern to filter (e.g. '*.rs', '**/*.toml')"
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Maximum directory depth (default: 3)"
                 }
-            }),
-        }
+            }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -668,29 +667,29 @@ impl Tool for SearchTool {
     type Args = SearchArgs;
     type Output = SearchOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Search for text in LOCAL files on the workspace machine using grep. CANNOT search remote SSH hosts. Returns matching lines with file paths and line numbers.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Search pattern (passed to grep -rn)"
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "Directory to search in (defaults to cwd)"
-                    },
-                    "file_pattern": {
-                        "type": "string",
-                        "description": "Glob pattern for files (e.g. '*.rs')"
-                    }
+    fn description(&self) -> String {
+        "Search for text in LOCAL files on the workspace machine using grep. CANNOT search remote SSH hosts. Returns matching lines with file paths and line numbers.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Search pattern (passed to grep -rn)"
                 },
-                "required": ["pattern"]
-            }),
-        }
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search in (defaults to cwd)"
+                },
+                "file_pattern": {
+                    "type": "string",
+                    "description": "Glob pattern for files (e.g. '*.rs')"
+                }
+            },
+            "required": ["pattern"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2498,15 +2497,15 @@ impl Tool for ListPanesTool {
     type Args = ListPanesArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, current visible-screen observation hints, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux, exec_tmux_command, or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "List all terminal panes currently open. Returns each pane's index, title, working directory, dimensions, current verified front-state, current runtime_stack, last_verified_runtime_stack, backend-support flags, typed shell context, recent con actions, current visible-screen observation hints, and control state: address space, visible target, nested target_stack, explicit control_attachments, control channels, control capabilities, and notes. Use this before acting in tmux/TUI panes so you do not confuse a con pane with a tmux pane or over-trust stale shell metadata. If a pane exposes query_tmux, exec_tmux_command, or send_tmux_keys, prefer tmux-native tools over outer-pane send_keys.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2561,15 +2560,15 @@ impl Tool for ListTabWorkspacesTool {
     type Args = ListTabWorkspacesArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Summarize the current tab as typed workspaces. Returns stable pane ids, current pane indices, hosts, tmux sessions, workspace kinds, and lifecycle states such as ready, needs_inspection, disconnected, or interactive. Use this for questions like 'what panes do you have?', 'which pane is the real remote shell?', or 'which SSH pane got disconnected?'.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        }
+    fn description(&self) -> String {
+        "Summarize the current tab as typed workspaces. Returns stable pane ids, current pane indices, hosts, tmux sessions, workspace kinds, and lifecycle states such as ready, needs_inspection, disconnected, or interactive. Use this for questions like 'what panes do you have?', 'which pane is the real remote shell?', or 'which SSH pane got disconnected?'.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2603,25 +2602,25 @@ impl Tool for TmuxInspectTool {
     type Args = TmuxInspectArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Inspect the tmux adapter state for a specific con pane. Returns tmux adapter details only when tmux has been authoritatively detected for that pane, including the explicit reason native tmux pane/window control is or is not available. Use this when a pane's target_stack includes tmux.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
-                    }
+    fn description(&self) -> String {
+        "Inspect the tmux adapter state for a specific con pane. Returns tmux adapter details only when tmux has been authoritatively detected for that pane, including the explicit reason native tmux pane/window control is or is not available. Use this when a pane's target_stack includes tmux.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2674,25 +2673,25 @@ impl Tool for TmuxListTool {
     type Args = TmuxListArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "List tmux panes across the current tmux session using a proven same-session tmux control anchor from the given con pane. This is the preferred first step whenever list_panes shows tmux native control. Returns tmux session/window/pane ids plus pane_current_command and pane_current_path so the agent can target Codex CLI, Claude Code, OpenCode, or shell panes inside tmux explicitly.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    }
+    fn description(&self) -> String {
+        "List tmux panes across the current tmux session using a proven same-session tmux control anchor from the given con pane. This is the preferred first step whenever list_panes shows tmux native control. Returns tmux session/window/pane ids plus pane_current_command and pane_current_path so the agent can target Codex CLI, Claude Code, OpenCode, or shell panes inside tmux explicitly.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2752,33 +2751,33 @@ impl Tool for TmuxCaptureTool {
     type Args = TmuxCaptureArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Capture scrollback from a tmux pane through a proven same-session tmux control anchor. This is the correct way to inspect a tmux pane's content without confusing it with the outer con pane. If target is omitted, captures the current tmux pane of the anchor shell.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "target": {
-                        "type": ["string", "null"],
-                        "description": "Optional tmux target such as %17, @3, or session:window.pane. When omitted, captures the current tmux pane of the anchor shell."
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "Number of recent lines to capture from the tmux pane (default: 120)."
-                    }
+    fn description(&self) -> String {
+        "Capture scrollback from a tmux pane through a proven same-session tmux control anchor. This is the correct way to inspect a tmux pane's content without confusing it with the outer con pane. If target is omitted, captures the current tmux pane of the anchor shell.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "target": {
+                    "type": ["string", "null"],
+                    "description": "Optional tmux target such as %17, @3, or session:window.pane. When omitted, captures the current tmux pane of the anchor shell."
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "Number of recent lines to capture from the tmux pane (default: 120)."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2841,42 +2840,42 @@ impl Tool for TmuxSendKeysTool {
     type Args = TmuxSendKeysArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Send text or tmux key names to a specific tmux pane through a proven same-session tmux control anchor. This is the preferred interaction path for Codex CLI, Claude Code, OpenCode, or shell panes inside tmux. Use this instead of raw outer-pane input whenever tmux native control is available. Provide literal_text for typed text, key_names for tmux key tokens like Enter, Escape, C-c, Up, Down, or both.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "tmux target such as %17, @3, or session:window.pane."
-                    },
-                    "literal_text": {
-                        "type": ["string", "null"],
-                        "description": "Optional literal text to send into the tmux target."
-                    },
-                    "key_names": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional tmux key names such as Enter, Escape, C-c, Up, Down."
-                    },
-                    "append_enter": {
-                        "type": "boolean",
-                        "description": "Whether to send Enter after literal_text and key_names. Defaults to false."
-                    }
+    fn description(&self) -> String {
+        "Send text or tmux key names to a specific tmux pane through a proven same-session tmux control anchor. This is the preferred interaction path for Codex CLI, Claude Code, OpenCode, or shell panes inside tmux. Use this instead of raw outer-pane input whenever tmux native control is available. Provide literal_text for typed text, key_names for tmux key tokens like Enter, Escape, C-c, Up, Down, or both.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": ["target"]
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "target": {
+                    "type": "string",
+                    "description": "tmux target such as %17, @3, or session:window.pane."
+                },
+                "literal_text": {
+                    "type": ["string", "null"],
+                    "description": "Optional literal text to send into the tmux target."
+                },
+                "key_names": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional tmux key names such as Enter, Escape, C-c, Up, Down."
+                },
+                "append_enter": {
+                    "type": "boolean",
+                    "description": "Whether to send Enter after literal_text and key_names. Defaults to false."
+                }
+            },
+            "required": ["target"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -2944,50 +2943,50 @@ impl Tool for TmuxRunCommandTool {
     type Args = TmuxRunCommandArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Run a command through tmux itself by creating a new tmux window or split pane from a proven same-session tmux control anchor. This is the preferred way to launch a fresh shell, Codex CLI, Claude Code, OpenCode, or any long-running command inside tmux without typing through the currently visible app.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["new_window", "split_horizontal", "split_vertical"],
-                        "description": "Where to create the tmux target."
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Command to run inside the new tmux target."
-                    },
-                    "target": {
-                        "type": ["string", "null"],
-                        "description": "Optional tmux target for placement, such as a session for new_window or an existing pane/window for split operations."
-                    },
-                    "window_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional tmux window name. Only used for new_window."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional working directory for the new tmux target."
-                    },
-                    "detached": {
-                        "type": "boolean",
-                        "description": "Whether the new tmux target should start detached. Defaults to true."
-                    }
+    fn description(&self) -> String {
+        "Run a command through tmux itself by creating a new tmux window or split pane from a proven same-session tmux control anchor. This is the preferred way to launch a fresh shell, Codex CLI, Claude Code, OpenCode, or any long-running command inside tmux without typing through the currently visible app.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": ["location", "command"]
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["new_window", "split_horizontal", "split_vertical"],
+                    "description": "Where to create the tmux target."
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Command to run inside the new tmux target."
+                },
+                "target": {
+                    "type": ["string", "null"],
+                    "description": "Optional tmux target for placement, such as a session for new_window or an existing pane/window for split operations."
+                },
+                "window_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional tmux window name. Only used for new_window."
+                },
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional working directory for the new tmux target."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "Whether the new tmux target should start detached. Defaults to true."
+                }
+            },
+            "required": ["location", "command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -3058,42 +3057,42 @@ impl Tool for TmuxFindTargetsTool {
     type Args = TmuxFindTargetsArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Find useful tmux pane targets through a proven same-session tmux control anchor. Use this helper instead of hand-filtering tmux_list_targets when you need a shell pane, an agent CLI pane, or a command/path match inside tmux.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "kind": {
-                        "type": ["string", "null"],
-                        "enum": ["any", "shell", "agent_cli", null],
-                        "description": "Optional target class filter."
-                    },
-                    "command_contains": {
-                        "type": ["string", "null"],
-                        "description": "Optional case-insensitive substring match against tmux pane_current_command."
-                    },
-                    "path_contains": {
-                        "type": ["string", "null"],
-                        "description": "Optional case-insensitive substring match against tmux pane_current_path."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of matches to return. Defaults to 8."
-                    }
+    fn description(&self) -> String {
+        "Find useful tmux pane targets through a proven same-session tmux control anchor. Use this helper instead of hand-filtering tmux_list_targets when you need a shell pane, an agent CLI pane, or a command/path match inside tmux.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "kind": {
+                    "type": ["string", "null"],
+                    "enum": ["any", "shell", "agent_cli", null],
+                    "description": "Optional target class filter."
+                },
+                "command_contains": {
+                    "type": ["string", "null"],
+                    "description": "Optional case-insensitive substring match against tmux pane_current_command."
+                },
+                "path_contains": {
+                    "type": ["string", "null"],
+                    "description": "Optional case-insensitive substring match against tmux pane_current_path."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return. Defaults to 8."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -3192,50 +3191,50 @@ impl Tool for TmuxEnsureShellTargetTool {
     type Args = TmuxEnsureShellTargetArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Return a tmux pane that is suitable for shell work. Reuses an existing shell pane when one already matches, otherwise creates a fresh tmux shell target through the native tmux control channel. Use this before writing files remotely, launching commands away from a visible TUI, or preparing a clean shell workspace in tmux.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "session_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional tmux session to constrain shell-target reuse. Defaults to the pane's active tmux workspace session when con already knows it."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional path hint. Existing tmux shell panes whose pane_current_path contains this value are preferred, and new shell targets inherit it when created."
-                    },
-                    "window_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional name for a newly created tmux window."
-                    },
-                    "shell_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional command for a newly created shell target. Defaults to an interactive login shell based on $SHELL."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["new_window", "split_horizontal", "split_vertical"],
-                        "description": "Where to create a new shell target if none already exists."
-                    },
-                    "detached": {
-                        "type": "boolean",
-                        "description": "Whether a newly created target should start detached. Defaults to true."
-                    }
+    fn description(&self) -> String {
+        "Return a tmux pane that is suitable for shell work. Reuses an existing shell pane when one already matches, otherwise creates a fresh tmux shell target through the native tmux control channel. Use this before writing files remotely, launching commands away from a visible TUI, or preparing a clean shell workspace in tmux.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "session_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional tmux session to constrain shell-target reuse. Defaults to the pane's active tmux workspace session when con already knows it."
+                },
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional path hint. Existing tmux shell panes whose pane_current_path contains this value are preferred, and new shell targets inherit it when created."
+                },
+                "window_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional name for a newly created tmux window."
+                },
+                "shell_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional command for a newly created shell target. Defaults to an interactive login shell based on $SHELL."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["new_window", "split_horizontal", "split_vertical"],
+                    "description": "Where to create a new shell target if none already exists."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "Whether a newly created target should start detached. Defaults to true."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -3501,42 +3500,42 @@ impl Tool for EnsureLocalAgentTargetTool {
     type Args = EnsureLocalAgentTargetArgs;
     type Output = EnsureLocalAgentTargetResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Reuse an existing LOCAL Codex, Claude Code, or OpenCode pane when one already matches, or create a fresh local agent-cli pane when needed. Pair this with ensure_local_shell_target so local coding workflows keep interactive agent UI and shell/file/test work in separate panes.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional working directory for the local agent target. Existing targets whose cwd contains this value are preferred, and new panes start there."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain reuse checks. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable pane id to constrain reuse checks."
-                    },
-                    "launch_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional explicit launch command. Defaults to the canonical CLI name for the requested agent."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created agent pane if one is needed. Defaults to right."
-                    }
+    fn description(&self) -> String {
+        "Reuse an existing LOCAL Codex, Claude Code, or OpenCode pane when one already matches, or create a fresh local agent-cli pane when needed. Pair this with ensure_local_shell_target so local coding workflows keep interactive agent UI and shell/file/test work in separate panes.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
                 },
-                "required": ["agent_name"]
-            }),
-        }
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional working directory for the local agent target. Existing targets whose cwd contains this value are preferred, and new panes start there."
+                },
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain reuse checks. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable pane id to constrain reuse checks."
+                },
+                "launch_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional explicit launch command. Defaults to the canonical CLI name for the requested agent."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created agent pane if one is needed. Defaults to right."
+                }
+            },
+            "required": ["agent_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -3722,42 +3721,42 @@ impl Tool for EnsureLocalCodingWorkspaceTool {
     type Args = EnsureLocalCodingWorkspaceArgs;
     type Output = EnsureLocalCodingWorkspaceResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Prepare a LOCAL coding workspace as a deliberate pair: one pane for the interactive Codex / Claude Code / OpenCode UI, and a separate local shell pane for file edits, tests, git commands, and other shell work. Reuses existing matching panes when possible and creates only the missing side of the pair.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional project directory the local coding workspace should be prepared in."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to bias or constrain agent-target reuse. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable pane id to bias or constrain agent-target reuse."
-                    },
-                    "launch_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional explicit launch command for the agent CLI. Defaults to the canonical CLI command."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place newly created panes. Defaults to right."
-                    }
+    fn description(&self) -> String {
+        "Prepare a LOCAL coding workspace as a deliberate pair: one pane for the interactive Codex / Claude Code / OpenCode UI, and a separate local shell pane for file edits, tests, git commands, and other shell work. Reuses existing matching panes when possible and creates only the missing side of the pair.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
                 },
-                "required": ["agent_name"]
-            }),
-        }
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional project directory the local coding workspace should be prepared in."
+                },
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to bias or constrain agent-target reuse. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable pane id to bias or constrain agent-target reuse."
+                },
+                "launch_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional explicit launch command for the agent CLI. Defaults to the canonical CLI command."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place newly created panes. Defaults to right."
+                }
+            },
+            "required": ["agent_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -3829,45 +3828,45 @@ impl Tool for AgentCliTurnTool {
     type Args = AgentCliTurnArgs;
     type Output = AgentCliTurnResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Send one natural-language turn to an already prepared interactive agent CLI target such as Codex, Claude Code, or OpenCode, then wait for the target to settle and return a fresh screen snapshot. This is the preferred tool for continuing work inside a known local agent pane or tmux agent target. It does not prepare missing targets; use ensure_local_agent_target, ensure_local_coding_workspace, or tmux_ensure_agent_target first when preparation is still required.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Agent CLI family to target, such as codex, claude, or opencode."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "Natural-language turn to send into the existing agent CLI target."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain target selection. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable con pane id to constrain target selection."
-                    },
-                    "cwd_contains": {
-                        "type": ["string", "null"],
-                        "description": "Optional project-path hint used to prefer a matching existing target."
-                    },
-                    "timeout_secs": {
-                        "type": "integer",
-                        "description": "How long to wait for the agent target to settle after sending the prompt. Defaults to 90 seconds."
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "How many recent lines to read or capture after the turn settles. Defaults to 50."
-                    }
+    fn description(&self) -> String {
+        "Send one natural-language turn to an already prepared interactive agent CLI target such as Codex, Claude Code, or OpenCode, then wait for the target to settle and return a fresh screen snapshot. This is the preferred tool for continuing work inside a known local agent pane or tmux agent target. It does not prepare missing targets; use ensure_local_agent_target, ensure_local_coding_workspace, or tmux_ensure_agent_target first when preparation is still required.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent CLI family to target, such as codex, claude, or opencode."
                 },
-                "required": ["agent_name", "prompt"]
-            }),
-        }
+                "prompt": {
+                    "type": "string",
+                    "description": "Natural-language turn to send into the existing agent CLI target."
+                },
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain target selection. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable con pane id to constrain target selection."
+                },
+                "cwd_contains": {
+                    "type": ["string", "null"],
+                    "description": "Optional project-path hint used to prefer a matching existing target."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "How long to wait for the agent target to settle after sending the prompt. Defaults to 90 seconds."
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "How many recent lines to read or capture after the turn settles. Defaults to 50."
+                }
+            },
+            "required": ["agent_name", "prompt"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4026,41 +4025,41 @@ impl Tool for TmuxShellTurnTool {
     type Args = TmuxShellTurnArgs;
     type Output = TmuxShellTurnResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Run one deterministic shell command inside an existing tmux shell target, wait for that target to settle, and return a fresh capture. Use this for file work, test runs, install checks, and other shell-lane work inside tmux instead of manually composing tmux_send_keys plus tmux_capture_pane.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index that owns the tmux control anchor. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable con pane id that owns the tmux control anchor."
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "tmux shell target such as %17 or session:window.pane."
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to run inside the existing tmux shell target."
-                    },
-                    "timeout_secs": {
-                        "type": "integer",
-                        "description": "How long to wait for the tmux shell target to settle after the command. Defaults to 90 seconds."
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "How many recent lines to capture after the command settles. Defaults to 50."
-                    }
+    fn description(&self) -> String {
+        "Run one deterministic shell command inside an existing tmux shell target, wait for that target to settle, and return a fresh capture. Use this for file work, test runs, install checks, and other shell-lane work inside tmux instead of manually composing tmux_send_keys plus tmux_capture_pane.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index that owns the tmux control anchor. Positional only."
                 },
-                "required": ["target", "command"]
-            }),
-        }
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable con pane id that owns the tmux control anchor."
+                },
+                "target": {
+                    "type": "string",
+                    "description": "tmux shell target such as %17 or session:window.pane."
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to run inside the existing tmux shell target."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "description": "How long to wait for the tmux shell target to settle after the command. Defaults to 90 seconds."
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "How many recent lines to capture after the command settles. Defaults to 50."
+                }
+            },
+            "required": ["target", "command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4163,50 +4162,50 @@ impl Tool for TmuxEnsureAgentTargetTool {
     type Args = TmuxEnsureAgentTargetArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Return a tmux pane that is suitable for interacting with a specific agent CLI. Reuses an existing tmux pane already running Codex, Claude Code, or OpenCode when one matches, otherwise creates a fresh tmux target with the requested agent launch command. This stays in the tmux control plane; it does not claim app-native Codex or OpenCode control unless a separate explicit attachment exists.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only; it can change."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
-                    },
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional path hint. Existing tmux agent panes whose pane_current_path contains this value are preferred, and new targets inherit it when created."
-                    },
-                    "window_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional name for a newly created tmux window."
-                    },
-                    "launch_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional explicit command to launch when no matching agent pane exists. Defaults to the canonical CLI name for the requested agent."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["new_window", "split_horizontal", "split_vertical"],
-                        "description": "Where to create a new agent target if none already exists."
-                    },
-                    "detached": {
-                        "type": "boolean",
-                        "description": "Whether a newly created target should start detached. Defaults to true."
-                    }
+    fn description(&self) -> String {
+        "Return a tmux pane that is suitable for interacting with a specific agent CLI. Reuses an existing tmux pane already running Codex, Claude Code, or OpenCode when one matches, otherwise creates a fresh tmux target with the requested agent launch command. This stays in the tmux control plane; it does not claim app-native Codex or OpenCode control unless a separate explicit attachment exists.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only; it can change."
                 },
-                "required": ["agent_name"]
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up tmux work."
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent CLI family to reuse or launch, such as codex, claude, or opencode."
+                },
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional path hint. Existing tmux agent panes whose pane_current_path contains this value are preferred, and new targets inherit it when created."
+                },
+                "window_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional name for a newly created tmux window."
+                },
+                "launch_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional explicit command to launch when no matching agent pane exists. Defaults to the canonical CLI name for the requested agent."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["new_window", "split_horizontal", "split_vertical"],
+                    "description": "Where to create a new agent target if none already exists."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "Whether a newly created target should start detached. Defaults to true."
+                }
+            },
+            "required": ["agent_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4339,46 +4338,46 @@ impl Tool for ResolveWorkTargetTool {
     type Args = ResolveWorkTargetArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Resolve the best pane or tmux target for a specific kind of work using con's typed control plane. Use this when multiple panes are open and you need to choose the right shell, the right tmux workspace, the best tmux shell pane, or a matching agent CLI target without re-deriving that logic from list_panes manually. When it returns a con pane target, prefer its stable pane_id for follow-up work.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "intent": {
-                        "type": "string",
-                        "enum": ["visible_shell", "remote_shell", "tmux_workspace", "tmux_shell", "agent_cli"],
-                        "description": "What kind of work target you need."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain resolution to a single pane. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable pane id to constrain resolution to a single pane."
-                    },
-                    "host_contains": {
-                        "type": ["string", "null"],
-                        "description": "Optional case-insensitive filter for the effective host name."
-                    },
-                    "cwd_contains": {
-                        "type": ["string", "null"],
-                        "description": "Optional case-insensitive filter for working directory or tmux pane path."
-                    },
-                    "agent_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional case-insensitive filter for an agent CLI name such as codex, claude, or opencode."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of candidates to return. Defaults to 8."
-                    }
+    fn description(&self) -> String {
+        "Resolve the best pane or tmux target for a specific kind of work using con's typed control plane. Use this when multiple panes are open and you need to choose the right shell, the right tmux workspace, the best tmux shell pane, or a matching agent CLI target without re-deriving that logic from list_panes manually. When it returns a con pane target, prefer its stable pane_id for follow-up work.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "intent": {
+                    "type": "string",
+                    "enum": ["visible_shell", "remote_shell", "tmux_workspace", "tmux_shell", "agent_cli"],
+                    "description": "What kind of work target you need."
                 },
-                "required": ["intent"]
-            }),
-        }
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain resolution to a single pane. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable pane id to constrain resolution to a single pane."
+                },
+                "host_contains": {
+                    "type": ["string", "null"],
+                    "description": "Optional case-insensitive filter for the effective host name."
+                },
+                "cwd_contains": {
+                    "type": ["string", "null"],
+                    "description": "Optional case-insensitive filter for working directory or tmux pane path."
+                },
+                "agent_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional case-insensitive filter for an agent CLI name such as codex, claude, or opencode."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of candidates to return. Defaults to 8."
+                }
+            },
+            "required": ["intent"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4422,25 +4421,25 @@ impl Tool for ProbeShellContextTool {
     type Args = ProbeShellContextArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Run a read-only shell-scoped probe in a pane that has the probe_shell_context capability. Use this only when list_panes reports a proven fresh shell prompt. Returns authoritative shell facts from that shell frame such as hostname, pwd, SSH env, TMUX env, tmux session/window/pane ids, pane_current_command, pane_current_path, and NVIM_LISTEN_ADDRESS when available. This is shell-scope truth, not proof of the foreground app after control passes to tmux or another TUI.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target con pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
-                    }
+    fn description(&self) -> String {
+        "Run a read-only shell-scoped probe in a pane that has the probe_shell_context capability. Use this only when list_panes reports a proven fresh shell prompt. Returns authoritative shell facts from that shell frame such as hostname, pwd, SSH env, TMUX env, tmux session/window/pane ids, pane_current_command, pane_current_path, and NVIM_LISTEN_ADDRESS when available. This is shell-scope truth, not proof of the foreground app after control passes to tmux or another TUI.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target con pane index from list_panes. Positional only."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4684,29 +4683,29 @@ impl Tool for ReadPaneTool {
     type Args = ReadPaneArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Read the recent visible output from a specific terminal pane. Use list_panes first to discover available panes. Prefer stable pane_id for follow-up work; pane_index is only positional.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "The pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "description": "Number of recent lines to read (default: 50)"
-                    }
+    fn description(&self) -> String {
+        "Read the recent visible output from a specific terminal pane. Use list_panes first to discover available panes. Prefer stable pane_id for follow-up work; pane_index is only positional.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "The pane index from list_panes. Positional only."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable pane id from list_panes. Prefer this for follow-up work."
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "Number of recent lines to read (default: 50)"
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4764,29 +4763,29 @@ impl Tool for SendKeysTool {
     type Args = SendKeysArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Send raw keystrokes to a specific con terminal pane. Use this for direct TUI interaction, prompt-level shell input when exec_visible_shell is unavailable, and tmux prefix sequences only when tmux native control is unavailable. IMPORTANT: Always follow send_keys with read_pane to verify the action took effect. Common sequences: \\n (Enter), \\x1b (Escape), \\x03 (Ctrl-C), \\x02 (Ctrl-B, tmux prefix), \\x1b[A/B/C/D (arrow keys). For shell commands, prefer terminal_exec when exec_visible_shell is available. For tmux panes with query_tmux/send_tmux_keys, prefer tmux-native tools.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "The pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
-                    },
-                    "keys": {
-                        "type": "string",
-                        "description": "Keystrokes to send. Supports escape sequences: \\n (Enter), \\t (Tab), \\x03 (Ctrl-C), \\x1b (Escape), \\x1b[A (Up arrow), etc."
-                    }
+    fn description(&self) -> String {
+        "Send raw keystrokes to a specific con terminal pane. Use this for direct TUI interaction, prompt-level shell input when exec_visible_shell is unavailable, and tmux prefix sequences only when tmux native control is unavailable. IMPORTANT: Always follow send_keys with read_pane to verify the action took effect. Common sequences: \\n (Enter), \\x1b (Escape), \\x03 (Ctrl-C), \\x02 (Ctrl-B, tmux prefix), \\x1b[A/B/C/D (arrow keys). For shell commands, prefer terminal_exec when exec_visible_shell is available. For tmux panes with query_tmux/send_tmux_keys, prefer tmux-native tools.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "The pane index from list_panes. Positional only."
                 },
-                "required": ["keys"]
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable pane id from list_panes. Prefer this for follow-up work."
+                },
+                "keys": {
+                    "type": "string",
+                    "description": "Keystrokes to send. Supports escape sequences: \\n (Enter), \\t (Tab), \\x03 (Ctrl-C), \\x1b (Escape), \\x1b[A (Up arrow), etc."
+                }
+            },
+            "required": ["keys"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -4888,39 +4887,39 @@ impl Tool for BatchExecTool {
     type Args = BatchExecArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute commands across multiple con panes in PARALLEL, but only when each pane's control_capabilities include exec_visible_shell. Prefer stable pane_id values from list_panes for follow-up work; pane_index is only positional.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "commands": {
-                        "type": "array",
-                        "description": "List of commands to execute, each targeting a specific pane",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "command": {
-                                    "type": "string",
-                                    "description": "The shell command to execute"
-                                },
-                                "pane_index": {
-                                    "type": "integer",
-                                    "description": "Target pane index from list_panes. Positional only."
-                                },
-                                "pane_id": {
-                                    "type": "integer",
-                                    "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
-                                }
+    fn description(&self) -> String {
+        "Execute commands across multiple con panes in PARALLEL, but only when each pane's control_capabilities include exec_visible_shell. Prefer stable pane_id values from list_panes for follow-up work; pane_index is only positional.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "commands": {
+                    "type": "array",
+                    "description": "List of commands to execute, each targeting a specific pane",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The shell command to execute"
                             },
-                            "required": ["command"]
-                        }
+                            "pane_index": {
+                                "type": "integer",
+                                "description": "Target pane index from list_panes. Positional only."
+                            },
+                            "pane_id": {
+                                "type": "integer",
+                                "description": "Stable target pane id from list_panes. Prefer this for follow-up work."
+                            }
+                        },
+                        "required": ["command"]
                     }
-                },
-                "required": ["commands"]
-            }),
-        }
+                }
+            },
+            "required": ["commands"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -5015,33 +5014,33 @@ impl Tool for SearchPanesTool {
     type Args = SearchPanesArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Search terminal scrollback and visible screen for text. Searches across all panes or a specific pane. Use this to find previous command output, error messages, or any text that appeared in any terminal pane.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {
-                        "type": "string",
-                        "description": "Text to search for (case-insensitive substring match)"
-                    },
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Optional pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Optional stable pane id from list_panes. Prefer this for follow-up work."
-                    },
-                    "max_matches": {
-                        "type": "integer",
-                        "description": "Maximum number of matching lines to return (default: 50)"
-                    }
+    fn description(&self) -> String {
+        "Search terminal scrollback and visible screen for text. Searches across all panes or a specific pane. Use this to find previous command output, error messages, or any text that appeared in any terminal pane.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Text to search for (case-insensitive substring match)"
                 },
-                "required": ["pattern"]
-            }),
-        }
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Optional pane index from list_panes. Positional only."
+                },
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Optional stable pane id from list_panes. Prefer this for follow-up work."
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "description": "Maximum number of matching lines to return (default: 50)"
+                }
+            },
+            "required": ["pattern"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -5126,29 +5125,29 @@ impl Tool for WaitForTool {
     type Args = WaitForArgs;
     type Output = WaitForOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, or timeout. On timeout, read_pane to check progress and call wait_for again if needed.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pane_index": {
-                        "type": "integer",
-                        "description": "Target pane index from list_panes. Positional only."
-                    },
-                    "pane_id": {
-                        "type": "integer",
-                        "description": "Stable pane id from list_panes. Prefer this for follow-up work."
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Text to wait for in pane output. If omitted, waits for the pane to become idle — preferred."
-                    }
+    fn description(&self) -> String {
+        "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, or timeout. On timeout, read_pane to check progress and call wait_for again if needed.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "pane_index": {
+                    "type": "integer",
+                    "description": "Target pane index from list_panes. Positional only."
                 },
-                "required": []
-            }),
-        }
+                "pane_id": {
+                    "type": "integer",
+                    "description": "Stable pane id from list_panes. Prefer this for follow-up work."
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Text to wait for in pane output. If omitted, waits for the pane to become idle — preferred."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -5702,34 +5701,34 @@ impl Tool for EnsureLocalShellTargetTool {
     type Args = EnsureLocalShellTargetArgs;
     type Output = EnsureLocalShellTargetResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Reuse an existing LOCAL visible shell pane when one is already suitable, or create a new one when needed. This is the preferred companion tool for local Codex, Claude Code, or OpenCode workflows: keep the agent CLI in one target, and prepare a separate shell target for file edits, test runs, and other shell commands.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional working directory the local shell should be prepared in. If no reusable shell matches it, con creates a new pane and starts it there."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain reuse checks. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable pane id to constrain reuse checks."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created shell pane if one is needed. Defaults to right."
-                    }
+    fn description(&self) -> String {
+        "Reuse an existing LOCAL visible shell pane when one is already suitable, or create a new one when needed. This is the preferred companion tool for local Codex, Claude Code, or OpenCode workflows: keep the agent CLI in one target, and prepare a separate shell target for file edits, test runs, and other shell commands.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional working directory the local shell should be prepared in. If no reusable shell matches it, con creates a new pane and starts it there."
                 },
-                "required": []
-            }),
-        }
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain reuse checks. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable pane id to constrain reuse checks."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created shell pane if one is needed. Defaults to right."
+                }
+            },
+            "required": []
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -6012,38 +6011,38 @@ impl Tool for EnsureRemoteShellTargetTool {
     type Args = EnsureRemoteShellTargetArgs;
     type Output = EnsureRemoteShellTargetResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Reuse an existing SSH pane for a specific remote host when one is already available, or create a new pane and connect to that host when none exists. This is the preferred tool for multi-host remote orchestration so the agent does not keep creating duplicate SSH panes across turns. The result includes stable pane_id for follow-up work.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "host": {
-                        "type": "string",
-                        "description": "SSH host or alias to target, such as haswell or user@host."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain reuse checks to a specific pane. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable pane id to constrain reuse checks to a specific pane."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created pane if one is needed. Defaults to right."
-                    },
-                    "startup_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional command to launch when a new pane is created. Defaults to `ssh <host>`."
-                    }
+    fn description(&self) -> String {
+        "Reuse an existing SSH pane for a specific remote host when one is already available, or create a new pane and connect to that host when none exists. This is the preferred tool for multi-host remote orchestration so the agent does not keep creating duplicate SSH panes across turns. The result includes stable pane_id for follow-up work.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "SSH host or alias to target, such as haswell or user@host."
                 },
-                "required": ["host"]
-            }),
-        }
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain reuse checks to a specific pane. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable pane id to constrain reuse checks to a specific pane."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created pane if one is needed. Defaults to right."
+                },
+                "startup_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional command to launch when a new pane is created. Defaults to `ssh <host>`."
+                }
+            },
+            "required": ["host"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -6067,42 +6066,42 @@ impl Tool for EnsureRemoteTmuxWorkspaceTool {
     type Args = EnsureRemoteTmuxWorkspaceArgs;
     type Output = EnsureRemoteTmuxWorkspaceResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Prepare a reusable REMOTE tmux session from a host shell anchor. con reuses or creates an SSH shell pane for the host, ensures the requested tmux session exists, and returns whether tmux-native control is immediately available from that same pane. Use this when you only need the tmux session/bootstrap fact. If you also need a clean tmux shell target for file work, prefer ensure_remote_tmux_shell_target instead of attaching tmux in the visible pane.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "host": {
-                        "type": "string",
-                        "description": "SSH host or alias to target, such as haswell or user@host."
-                    },
-                    "session_name": {
-                        "type": "string",
-                        "description": "tmux session name to ensure on that host."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain SSH reuse checks. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable con pane id to constrain SSH reuse checks."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created SSH pane if one is needed. Defaults to right."
-                    },
-                    "startup_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional startup command for a newly created remote pane. Defaults to `ssh <host>`."
-                    }
+    fn description(&self) -> String {
+        "Prepare a reusable REMOTE tmux session from a host shell anchor. con reuses or creates an SSH shell pane for the host, ensures the requested tmux session exists, and returns whether tmux-native control is immediately available from that same pane. Use this when you only need the tmux session/bootstrap fact. If you also need a clean tmux shell target for file work, prefer ensure_remote_tmux_shell_target instead of attaching tmux in the visible pane.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "SSH host or alias to target, such as haswell or user@host."
                 },
-                "required": ["host", "session_name"]
-            }),
-        }
+                "session_name": {
+                    "type": "string",
+                    "description": "tmux session name to ensure on that host."
+                },
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain SSH reuse checks. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable con pane id to constrain SSH reuse checks."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created SSH pane if one is needed. Defaults to right."
+                },
+                "startup_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional startup command for a newly created remote pane. Defaults to `ssh <host>`."
+                }
+            },
+            "required": ["host", "session_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -6116,63 +6115,63 @@ impl Tool for EnsureRemoteTmuxShellTargetTool {
     type Args = EnsureRemoteTmuxShellTargetArgs;
     type Output = EnsureRemoteTmuxShellTargetResult;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Prepare the full REMOTE ssh->tmux shell-work path in one step. con reuses or creates an SSH pane for the host, ensures the requested tmux session exists there, verifies tmux-native control on that same pane, and then reuses or creates a clean tmux shell target for file work. The result includes both a tmux snapshot and the selected shell target, so you can describe the tmux workspace and continue file work without attaching tmux in the visible outer pane unless the user explicitly asks to enter it.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "host": {
-                        "type": "string",
-                        "description": "SSH host or alias to target, such as haswell or user@host."
-                    },
-                    "session_name": {
-                        "type": "string",
-                        "description": "tmux session name to ensure on that host."
-                    },
-                    "pane_index": {
-                        "type": ["integer", "null"],
-                        "description": "Optional con pane index to constrain SSH reuse checks. Positional only."
-                    },
-                    "pane_id": {
-                        "type": ["integer", "null"],
-                        "description": "Optional stable con pane id to constrain SSH reuse checks."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created SSH pane if one is needed. Defaults to right."
-                    },
-                    "startup_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional startup command for a newly created remote pane. Defaults to `ssh <host>`."
-                    },
-                    "cwd": {
-                        "type": ["string", "null"],
-                        "description": "Optional path hint for the tmux shell target. Existing shell panes whose tmux cwd contains this value are preferred, and new targets inherit it when created."
-                    },
-                    "window_name": {
-                        "type": ["string", "null"],
-                        "description": "Optional tmux window name for a newly created shell target."
-                    },
-                    "shell_command": {
-                        "type": ["string", "null"],
-                        "description": "Optional command for a newly created tmux shell target. Defaults to an interactive login shell."
-                    },
-                    "tmux_location": {
-                        "type": "string",
-                        "enum": ["new_window", "split_horizontal", "split_vertical"],
-                        "description": "Where to create a new tmux shell target if none already exists."
-                    },
-                    "detached": {
-                        "type": "boolean",
-                        "description": "Whether a newly created tmux shell target should start detached. Defaults to true."
-                    }
+    fn description(&self) -> String {
+        "Prepare the full REMOTE ssh->tmux shell-work path in one step. con reuses or creates an SSH pane for the host, ensures the requested tmux session exists there, verifies tmux-native control on that same pane, and then reuses or creates a clean tmux shell target for file work. The result includes both a tmux snapshot and the selected shell target, so you can describe the tmux workspace and continue file work without attaching tmux in the visible outer pane unless the user explicitly asks to enter it.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "SSH host or alias to target, such as haswell or user@host."
                 },
-                "required": ["host", "session_name"]
-            }),
-        }
+                "session_name": {
+                    "type": "string",
+                    "description": "tmux session name to ensure on that host."
+                },
+                "pane_index": {
+                    "type": ["integer", "null"],
+                    "description": "Optional con pane index to constrain SSH reuse checks. Positional only."
+                },
+                "pane_id": {
+                    "type": ["integer", "null"],
+                    "description": "Optional stable con pane id to constrain SSH reuse checks."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created SSH pane if one is needed. Defaults to right."
+                },
+                "startup_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional startup command for a newly created remote pane. Defaults to `ssh <host>`."
+                },
+                "cwd": {
+                    "type": ["string", "null"],
+                    "description": "Optional path hint for the tmux shell target. Existing shell panes whose tmux cwd contains this value are preferred, and new targets inherit it when created."
+                },
+                "window_name": {
+                    "type": ["string", "null"],
+                    "description": "Optional tmux window name for a newly created shell target."
+                },
+                "shell_command": {
+                    "type": ["string", "null"],
+                    "description": "Optional command for a newly created tmux shell target. Defaults to an interactive login shell."
+                },
+                "tmux_location": {
+                    "type": "string",
+                    "enum": ["new_window", "split_horizontal", "split_vertical"],
+                    "description": "Where to create a new tmux shell target if none already exists."
+                },
+                "detached": {
+                    "type": "boolean",
+                    "description": "Whether a newly created tmux shell target should start detached. Defaults to true."
+                }
+            },
+            "required": ["host", "session_name"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -6345,31 +6344,31 @@ impl Tool for RemoteExecTool {
     type Args = RemoteExecArgs;
     type Output = serde_json::Value;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Reuse or create SSH workspaces for one or more hosts, then execute the same shell command on all of them in parallel. This is the preferred high-level tool for routine multi-host checks so the model does not need to stitch ensure_remote_shell_target and batch_exec together manually. Each host result includes stable pane_id for follow-up work.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "hosts": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "SSH hosts or aliases to target."
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to run on each host."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place a newly created pane if a host workspace does not exist yet. Defaults to right."
-                    }
+    fn description(&self) -> String {
+        "Reuse or create SSH workspaces for one or more hosts, then execute the same shell command on all of them in parallel. This is the preferred high-level tool for routine multi-host checks so the model does not need to stitch ensure_remote_shell_target and batch_exec together manually. Each host result includes stable pane_id for follow-up work.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "hosts": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "SSH hosts or aliases to target."
                 },
-                "required": ["hosts", "command"]
-            }),
-        }
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to run on each host."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place a newly created pane if a host workspace does not exist yet. Defaults to right."
+                }
+            },
+            "required": ["hosts", "command"]
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -6686,25 +6685,25 @@ impl Tool for CreatePaneTool {
     type Args = CreatePaneArgs;
     type Output = CreatePaneOutput;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. You can choose split placement for better workspace layout. Returns both pane_index and stable pane_id plus the initial terminal output (waits for output to settle). Prefer pane_id for follow-up targeting.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Optional startup command executed automatically in the new pane. Do NOT re-send this command — it already ran."
-                    },
-                    "location": {
-                        "type": "string",
-                        "enum": ["right", "down"],
-                        "description": "Where to place the new pane relative to the focused pane. Defaults to right for peer workspaces."
-                    }
+    fn description(&self) -> String {
+        "Create a new terminal pane (split in current tab). Optionally run a startup command (e.g. \"ssh host\"). The command executes automatically — do NOT re-send it via send_keys. You can choose split placement for better workspace layout. Returns both pane_index and stable pane_id plus the initial terminal output (waits for output to settle). Prefer pane_id for follow-up targeting.".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Optional startup command executed automatically in the new pane. Do NOT re-send this command — it already ran."
+                },
+                "location": {
+                    "type": "string",
+                    "enum": ["right", "down"],
+                    "description": "Where to place the new pane relative to the focused pane. Defaults to right for peer workspaces."
                 }
-            }),
-        }
+            }
+        })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
