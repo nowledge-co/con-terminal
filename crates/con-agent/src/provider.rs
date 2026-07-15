@@ -418,6 +418,23 @@ mod tests {
     }
 
     #[test]
+    fn preferred_default_recomputes_automatic_chatgpt_selection() {
+        let config = AgentConfig {
+            provider: ProviderKind::ChatGPT,
+            ..AgentConfig::default()
+        };
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            Some(ProviderKind::Anthropic)
+        );
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, false),
+            Some(ProviderKind::Anthropic)
+        );
+    }
+
+    #[test]
     fn preferred_default_keeps_anthropic_when_inline_key_configured() {
         // Anthropic with a usable inline key is a real setup — don't redirect to
         // ChatGPT even if a ChatGPT cache happens to exist.
@@ -1243,10 +1260,6 @@ fn provider_api_key_env_name_like(value: &str) -> bool {
         .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 /// Whether the ChatGPT Subscription OAuth cache contains a usable access token
 /// (e.g. synced from Codex by [`ensure_chatgpt_oauth_synced_from_codex`]).
 fn chatgpt_oauth_cache_ready() -> bool {
@@ -1269,10 +1282,10 @@ fn chatgpt_oauth_cache_ready() -> bool {
 /// prefer ChatGPT so the first run — and every new window — works without
 /// manually switching providers.
 ///
-/// Deliberately conservative: it only overrides an implicit *default*
-/// Anthropic selection, and only when Anthropic has no usable key. Any provider
-/// explicitly present in config, including Anthropic, is preserved. Returns the
-/// provider to switch to, or `None` to keep the configured default.
+/// Deliberately conservative: explicit choices are always preserved. An
+/// automatic choice is recomputed from current credential readiness, preferring
+/// configured Anthropic and otherwise using ChatGPT only while its cache is
+/// usable. Returns the provider to switch to, or `None` when it is unchanged.
 pub fn preferred_default_provider(config: &AgentConfig) -> Option<ProviderKind> {
     preferred_default_provider_for_state(
         config,
@@ -1288,11 +1301,16 @@ fn preferred_default_provider_for_state(
     anthropic_credentials_ready: bool,
     chatgpt_oauth_ready: bool,
 ) -> Option<ProviderKind> {
-    (!provider_is_explicit
-        && config.provider == ProviderKind::Anthropic
-        && !anthropic_credentials_ready
-        && chatgpt_oauth_ready)
-        .then_some(ProviderKind::ChatGPT)
+    if provider_is_explicit {
+        return None;
+    }
+
+    let provider = if anthropic_credentials_ready || !chatgpt_oauth_ready {
+        ProviderKind::Anthropic
+    } else {
+        ProviderKind::ChatGPT
+    };
+    (config.provider != provider).then_some(provider)
 }
 
 fn mark_codex_chatgpt_auth_source_seen(target_auth_file: &std::path::Path) -> Result<bool> {
@@ -1608,7 +1626,7 @@ pub struct AgentConfig {
     ///
     /// Older Con versions always serialized `provider`, including its default,
     /// so presence alone cannot distinguish a choice from generated config.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub provider_is_explicit: bool,
     /// High-level operating stance for the built-in agent.
     pub purpose: AgentPurpose,
