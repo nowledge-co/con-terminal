@@ -26,15 +26,16 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "claude-haiku-4-5",
         ],
         ProviderKind::OpenAI => &[
-            "o4-mini",
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.4",
+            "gpt-5.4-pro",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
             "o3",
             "o3-pro",
-            "o3-mini",
-            "gpt-4o",
-            "gpt-4o-mini",
             "gpt-4.1",
             "gpt-4.1-mini",
-            "gpt-4.1-nano",
         ],
         ProviderKind::ChatGPT => &[
             "gpt-5.5",
@@ -110,6 +111,18 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
 
 fn pinned_models(provider: &ProviderKind) -> &'static [&'static str] {
     match provider {
+        ProviderKind::OpenAI => &[
+            "gpt-5.5",
+            "gpt-5.5-pro",
+            "gpt-5.4",
+            "gpt-5.4-pro",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+            "o3",
+            "o3-pro",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+        ],
         ProviderKind::Moonshot => &["kimi-for-coding"],
         ProviderKind::DeepSeek => &["deepseek-v4-flash", "deepseek-v4-pro"],
         _ => &[],
@@ -614,6 +627,7 @@ mod tests {
     fn pinned_models_are_merged_into_live_cache() {
         let registry = ModelRegistry::new();
         let mut models = HashMap::new();
+        models.insert(ProviderKind::OpenAI, vec!["gpt-5.5".to_string()]);
         models.insert(ProviderKind::Moonshot, vec!["kimi-k2.5".to_string()]);
         models.insert(ProviderKind::DeepSeek, vec!["deepseek-chat".to_string()]);
         *registry.inner.lock().unwrap() = Some(CacheEntry {
@@ -621,6 +635,21 @@ mod tests {
             fetched_at: Instant::now(),
         });
 
+        assert_eq!(
+            registry.models_for(&ProviderKind::OpenAI),
+            vec![
+                "gpt-5.5".to_string(),
+                "gpt-5.5-pro".to_string(),
+                "gpt-5.4".to_string(),
+                "gpt-5.4-pro".to_string(),
+                "gpt-5.4-mini".to_string(),
+                "gpt-5.4-nano".to_string(),
+                "o3".to_string(),
+                "o3-pro".to_string(),
+                "gpt-4.1".to_string(),
+                "gpt-4.1-mini".to_string(),
+            ]
+        );
         assert_eq!(
             registry.models_for(&ProviderKind::Moonshot),
             vec!["kimi-k2.5".to_string(), "kimi-for-coding".to_string()]
