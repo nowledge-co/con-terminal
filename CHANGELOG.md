@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.78` - unreleased
+## `v0.1.0-beta.78` - 2026-07-15
 
 ### Added
 
