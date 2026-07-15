@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.79` - unreleased
+
+### Changed
+
+**Agent**
+
+- Updated Con's built-in agent to Rig 0.40 while preserving live responses,
+  tool approvals, conversation history, and existing turn limits. The agent now
+  follows Rig's published release instead of an interim source revision. _(PR
+  [#250](https://github.com/nowledge-co/con-terminal/pull/250) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
 ## `v0.1.0-beta.78` - 2026-07-15
 
 ### Added
