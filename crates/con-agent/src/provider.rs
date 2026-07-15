@@ -365,6 +365,42 @@ mod tests {
         assert_eq!(rig_model_call_budget(usize::MAX), usize::MAX);
     }
 
+    #[tokio::test]
+    async fn unified_final_response_backfills_missing_text_deltas() {
+        let final_item = MultiTurnStreamItem::<()>::final_response(
+            rig::OneOrMany::one(rig::message::AssistantContent::text("final answer")),
+            rig::completion::Usage::new(),
+        );
+        let stream: StreamingResult<()> = Box::pin(futures::stream::iter([Ok(final_item)]));
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        let response = consume_stream(stream, &event_tx, &AtomicBool::new(false))
+            .await
+            .unwrap();
+
+        assert_eq!(response, "final answer");
+    }
+
+    #[tokio::test]
+    async fn unified_final_response_does_not_duplicate_live_text() {
+        let text_item = MultiTurnStreamItem::StreamAssistantItem(
+            StreamedAssistantContent::<()>::Text(rig::message::Text::new("live answer")),
+        );
+        let final_item = MultiTurnStreamItem::<()>::final_response(
+            rig::OneOrMany::one(rig::message::AssistantContent::text("live answer")),
+            rig::completion::Usage::new(),
+        );
+        let stream: StreamingResult<()> =
+            Box::pin(futures::stream::iter([Ok(text_item), Ok(final_item)]));
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        let response = consume_stream(stream, &event_tx, &AtomicBool::new(false))
+            .await
+            .unwrap();
+
+        assert_eq!(response, "live answer");
+    }
+
     #[test]
     fn codex_chatgpt_auth_converter_flattens_codex_token_shape() {
         let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
