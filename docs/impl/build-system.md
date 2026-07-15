@@ -51,7 +51,7 @@ members = [
 |------------|---------|
 | `gpui` | native GPU UI framework (upstream Zed git source) |
 | `gpui-component` | reusable UI controls (upstream Longbridge git source) |
-| `rig-core` | multi-provider agent runtime (pinned fork revision) |
+| `rig-core` | multi-provider agent runtime (crates.io) |
 | `tokio` | async runtime for agent work |
 | `crossbeam-channel` | UI and harness event routing |
 | `reqwest` | live model list fetch from models.dev |

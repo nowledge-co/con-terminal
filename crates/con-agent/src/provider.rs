@@ -358,6 +358,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rig_budget_preserves_the_previous_model_call_ceiling() {
+        assert_eq!(rig_model_call_budget(0), 2);
+        assert_eq!(rig_model_call_budget(1), 3);
+        assert_eq!(rig_model_call_budget(30), 32);
+        assert_eq!(rig_model_call_budget(usize::MAX), usize::MAX);
+    }
+
+    #[tokio::test]
+    async fn unified_final_response_backfills_missing_text_deltas() {
+        let final_item = MultiTurnStreamItem::<()>::final_response(
+            rig::OneOrMany::one(rig::message::AssistantContent::text("final answer")),
+            rig::completion::Usage::new(),
+        );
+        let stream: StreamingResult<()> = Box::pin(futures::stream::iter([Ok(final_item)]));
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        let response = consume_stream(stream, &event_tx, &AtomicBool::new(false))
+            .await
+            .unwrap();
+
+        assert_eq!(response, "final answer");
+    }
+
+    #[tokio::test]
+    async fn unified_final_response_does_not_duplicate_live_text() {
+        let text_item = MultiTurnStreamItem::StreamAssistantItem(
+            StreamedAssistantContent::<()>::Text(rig::message::Text::new("live answer")),
+        );
+        let final_item = MultiTurnStreamItem::<()>::final_response(
+            rig::OneOrMany::one(rig::message::AssistantContent::text("live answer")),
+            rig::completion::Usage::new(),
+        );
+        let stream: StreamingResult<()> =
+            Box::pin(futures::stream::iter([Ok(text_item), Ok(final_item)]));
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        let response = consume_stream(stream, &event_tx, &AtomicBool::new(false))
+            .await
+            .unwrap();
+
+        assert_eq!(response, "live answer");
+    }
+
+    #[test]
     fn codex_chatgpt_auth_converter_flattens_codex_token_shape() {
         let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
             "auth_mode": "chatgpt",
@@ -2125,7 +2169,7 @@ macro_rules! build_and_stream {
             .tool(CreatePaneTool::new($pane_tx.clone()))
             .tool(WaitForTool::new($pane_tx, $cancelled.clone()))
             .tool(BatchExecTool::new($terminal_exec_tx))
-            .default_max_turns($cfg.max_turns);
+            .default_max_turns(rig_model_call_budget($cfg.max_turns));
 
         if let Some(max_tokens) = $cfg.effective_max_tokens(&$kind) {
             builder = builder.max_tokens(max_tokens);
@@ -2133,6 +2177,7 @@ macro_rules! build_and_stream {
         if let Some(temp) = $cfg.temperature {
             builder = builder.temperature(temp);
         }
+        builder = builder.add_hook($hook);
 
         let agent = builder.build();
 
@@ -2153,14 +2198,16 @@ macro_rules! build_and_stream {
             }
         }
 
-        let stream = agent
-            .stream_prompt($prompt)
-            .with_hook($hook)
-            .with_history($history)
-            .await;
+        let stream = agent.stream_prompt($prompt).history($history).await;
 
         consume_stream(stream, $event_tx, $cancelled).await
     }};
+}
+
+/// Rig 0.36 allowed two model calls beyond an explicit `max_turns` value. Rig
+/// 0.40 makes the model-call budget exact, so retain Con's shipped ceiling.
+fn rig_model_call_budget(tool_turns: usize) -> usize {
+    tool_turns.saturating_add(2)
 }
 
 // ── Provider ────────────────────────────────────────────────────────
@@ -2655,14 +2702,13 @@ impl AgentProvider {
             }};
         }
 
-        async fn drive_streaming_completion<M, P>(
-            agent: &rig::agent::Agent<M, P>,
+        async fn drive_streaming_completion<M>(
+            agent: &rig::agent::Agent<M>,
             prompt: &str,
         ) -> Result<String>
         where
             M: rig::completion::CompletionModel + 'static,
             M::StreamingResponse: rig::completion::GetTokenUsage,
-            P: rig::agent::PromptHook<M> + 'static,
         {
             let mut stream = agent.stream_prompt(prompt.to_owned()).await;
             // Most models emit answers to `content`; some reasoning
@@ -2690,7 +2736,7 @@ impl AgentProvider {
                         _ => {}
                     },
                     Ok(MultiTurnStreamItem::FinalResponse(fin)) => {
-                        let resp = fin.response();
+                        let resp = fin.output.as_str();
                         if !resp.is_empty() {
                             final_response_text = Some(resp.to_string());
                         }
@@ -2905,17 +2951,17 @@ async fn consume_stream<R: Send + 'static>(
                 log::info!(
                     "[agent] Stream: final response ({} chars accumulated, {} chars in FinalResponse)",
                     response_text.len(),
-                    final_resp.response().len(),
+                    final_resp.output.len(),
                 );
                 // Use FinalResponse text if we somehow missed streaming deltas.
                 // FinalResponse contains the last turn's text; response_text has
                 // all turns. Prefer response_text when available.
-                if response_text.is_empty() && !final_resp.response().is_empty() {
+                if response_text.is_empty() && !final_resp.output.is_empty() {
                     let _ = apply_stream_text_chunk(
                         &mut think_parser,
                         &mut response_text,
                         event_tx,
-                        final_resp.response(),
+                        &final_resp.output,
                         !had_reasoning_deltas,
                     );
                 }

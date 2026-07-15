@@ -71,9 +71,9 @@ ConWorkspace::send_to_agent()
                             ▼
                         AgentProvider (con-agent)
                             │
-                            ├── Builds Rig Agent with tools
-                            ├── Creates ConHook with event_tx + approval_rx
-                            └── agent.prompt(msg).with_hook(hook).with_history(history)
+                            ├── Builds Rig Agent with tools + ConHook
+                            ├── Creates streaming request with conversation history
+                            └── agent.stream_prompt(msg).history(history)
                                     │
                                     ▼
                                 Rig Agent Loop
@@ -196,7 +196,7 @@ The mutex is held briefly for two operations:
 1. **Snapshot** — clone conversation before agent call
 2. **Add message** — insert assistant response after agent completes
 
-Rig manages its own history via `with_history(&mut Vec<rig::message::Message>)`. Our `to_rig_history()` provides User/Assistant text pairs. Rig appends tool call/result messages during its turn loop.
+Each streaming request receives history from `to_rig_history()` as User/Assistant text pairs. Rig appends tool call/result messages during its turn loop and returns the final response to Con for persistence.
 
 ## Focused Pane Fact Preflight
 
@@ -235,7 +235,7 @@ auto_approve_tools = false  # skip approval for dangerous tools
 max_turns = 10              # max tool-use turns per request
 ```
 
-`auto_approve_tools = true` makes `ConHook` return `ToolCallHookAction::cont()` for all tools, bypassing the approval channel entirely.
+`auto_approve_tools = true` makes `ConHook` continue all tool calls without consulting the approval channel. Rig 0.40 uses an exact total model-call budget; Con preserves the ceiling shipped by its earlier Rig integration when converting `max_turns`.
 
 ## Input Classification
 

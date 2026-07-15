@@ -3,7 +3,9 @@
 ## Overview
 
 [Rig](https://rig.rs/) is the most mature Rust-native AI agent framework. MIT licensed.
-The current workspace pins `rig-core` to a maintained git revision in `wey-gu/rig` rather than a crates.io release. The architecture notes here still apply, but the exact provider surface is tied to that pinned revision.
+The workspace uses the published `rig-core` 0.40 release from crates.io. Con keeps
+provider construction, conversation persistence, terminal context, and approval
+policy in its own crates; Rig supplies provider clients and the agent run loop.
 
 ## Core Architecture
 
@@ -34,7 +36,7 @@ let agent = client
     .tool(ShellExecTool)
     .tool(FileReadTool)
     .max_tokens(4096)
-    .default_max_turns(10) // max tool call loops
+    .default_max_turns(12) // preserve Con's former max_turns = 10 ceiling
     .build();
 ```
 
@@ -62,8 +64,6 @@ let response: String = agent
 
 ```rust
 use rig::tool::Tool;
-use rig::completion::ToolDefinition;
-
 pub struct ShellExecTool;
 
 impl Tool for ShellExecTool {
@@ -72,12 +72,12 @@ impl Tool for ShellExecTool {
     type Args = ShellExecArgs;     // must impl Deserialize
     type Output = ShellExecOutput; // must impl Serialize
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Execute a shell command".to_string(),
-            parameters: serde_json::json!({ /* JSON schema */ }),
-        }
+    fn description(&self) -> String {
+        "Execute a shell command".to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({ /* JSON schema */ })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -86,25 +86,20 @@ impl Tool for ShellExecTool {
 }
 ```
 
-## PromptHook Trait (lifecycle callbacks)
+## AgentHook Trait (lifecycle callbacks)
 
 ```rust
-use rig::agent::PromptHook;
+use rig::agent::{AgentHook, Flow, HookContext, StepEvent};
 
-impl PromptHook<M> for MyHook {
-    async fn on_text_delta(&self, delta: &str, aggregated: &str) -> HookAction {
-        // Stream token to UI
-        HookAction::cont()
-    }
-
-    async fn on_tool_call(&self, name: &str, ...) -> ToolCallHookAction {
-        // Log or approve/deny tool calls
-        ToolCallHookAction::cont()
-    }
-
-    async fn on_tool_result(&self, name: &str, ...) -> HookAction {
-        // Observe tool results
-        HookAction::cont()
+impl<M: CompletionModel> AgentHook<M> for MyHook {
+    async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> Flow {
+        match event {
+            StepEvent::TextDelta { delta, .. } => stream_to_ui(delta),
+            StepEvent::ToolCall { tool_name, .. } => request_approval(tool_name),
+            StepEvent::ToolResult { result, .. } => record_result(result),
+            _ => {}
+        }
+        Flow::cont()
     }
 }
 ```
@@ -117,48 +112,47 @@ use rig::OneOrMany;
 
 // User message
 Message::User {
-    content: OneOrMany::one(UserContent::Text(Text { text: "hello".into() }))
+    content: OneOrMany::one(UserContent::Text(Text::new("hello")))
 }
 
 // Assistant message
 Message::Assistant {
     id: None,
-    content: OneOrMany::one(AssistantContent::Text(Text { text: "hi".into() }))
+    content: OneOrMany::one(AssistantContent::Text(Text::new("hi")))
 }
 ```
 
-## Streaming (RawStreamingChoice)
+## Streaming
 
 ```rust
-use rig::streaming::{StreamingCompletionResponse, RawStreamingChoice};
+use rig::agent::MultiTurnStreamItem;
+use rig::streaming::StreamedAssistantContent;
 
 // Streaming responses yield these variants:
-RawStreamingChoice::Message(String)       // text chunk
-RawStreamingChoice::ToolCall(...)         // complete tool call
-RawStreamingChoice::ToolCallDelta { .. }  // partial tool call
-RawStreamingChoice::Reasoning { .. }      // reasoning content
-RawStreamingChoice::FinalResponse(R)      // provider response object
+MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(...))
+MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(...))
+MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { ... })
+MultiTurnStreamItem::StreamUserItem(...)  // completed tool result
+MultiTurnStreamItem::FinalResponse(...)   // unified PromptResponse
 ```
 
 ## Integration with con
 
 1. `con-agent/provider.rs` creates `anthropic::Client` from config
-2. Builds an `Agent` with our 4 tool implementations
-3. Uses `Chat::chat()` for multi-turn conversation
+2. Builds an `Agent` with Con's terminal, tmux, file, and workspace tools
+3. Uses `stream_prompt()` for live multi-turn conversation
 4. `con-agent/conversation.rs` converts our Message types to Rig's `Vec<Message>`
 5. `con-core/harness.rs` runs agent work on a shared tokio runtime
 
-## Key Differences from Rig 0.10
+## Key Differences from Rig 0.36
 
-- `Tool` trait now uses `const NAME`, associated types for Args/Output/Error
-- `definition()` and `call()` are now async methods (not derive macros)
-- Client uses generic `Client<Ext, H>` architecture with `Capabilities` trait
-- `Chat::chat()` takes `impl Into<Message>` + `Vec<Message>` history
-- `PromptHook` replaces ad-hoc streaming callbacks
-- Agent builder has typestate for tool configuration (NoToolConfig → WithBuilderTools)
+- `Tool` exposes synchronous `description()` and `parameters()` metadata methods.
+- `AgentHook::on_event()` replaces the model-generic `PromptHook` method set.
+- `PromptResponse` unifies streaming and non-streaming final output.
+- `max_turns` is a total model-call budget, including the initial request.
+- Per-delta hook interest is explicit, avoiding dispatch work for unused stream events.
 
 ## Workspace Integration Notes
 
-Rig-core uses `workspace = true` for its deps. Since it lives inside our repo (at `3pp/rig/`),
-Cargo resolves those against OUR workspace root. We added rig-core's transitive workspace deps
-(as-any, async-stream, bytes, etc.) to our workspace Cargo.toml to satisfy these references.
+Rig is an ordinary crates.io dependency. `3pp/` remains read-only reference material and is
+never part of dependency resolution.
