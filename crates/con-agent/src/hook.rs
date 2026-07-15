@@ -61,86 +61,6 @@ impl ConHook {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn hook(
-        auto_approve: bool,
-        cancelled: bool,
-    ) -> (
-        ConHook,
-        crossbeam_channel::Receiver<AgentEvent>,
-        crossbeam_channel::Sender<ToolApprovalDecision>,
-    ) {
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (approval_tx, approval_rx) = crossbeam_channel::unbounded();
-        (
-            ConHook::new(
-                event_tx,
-                approval_rx,
-                auto_approve,
-                Arc::new(AtomicBool::new(cancelled)),
-            ),
-            event_rx,
-            approval_tx,
-        )
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn safe_tool_continues_without_approval() {
-        let (hook, event_rx, _approval_tx) = hook(false, false);
-
-        let flow = hook.on_tool_call("read_pane", "call-1", "{}").await;
-
-        assert_eq!(flow, Flow::Continue);
-        assert!(matches!(
-            event_rx.try_recv(),
-            Ok(AgentEvent::ToolCallStart { call_id, tool_name, .. })
-                if call_id == "call-1" && tool_name == "read_pane"
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn dangerous_tool_honors_denial_reason() {
-        let (hook, event_rx, approval_tx) = hook(false, false);
-        approval_tx
-            .send(ToolApprovalDecision {
-                call_id: "call-2".into(),
-                allowed: false,
-                reason: Some("Not approved".into()),
-            })
-            .unwrap();
-
-        let flow = hook.on_tool_call("terminal_exec", "call-2", "{}").await;
-
-        assert_eq!(
-            flow,
-            Flow::Skip {
-                reason: "Not approved".into()
-            }
-        );
-        assert!(matches!(
-            event_rx.try_recv(),
-            Ok(AgentEvent::ToolCallStart { call_id, .. }) if call_id == "call-2"
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn cancellation_releases_pending_approval() {
-        let (hook, _event_rx, _approval_tx) = hook(false, true);
-
-        let flow = hook.on_tool_call("file_write", "call-3", "{}").await;
-
-        assert_eq!(
-            flow,
-            Flow::Skip {
-                reason: "Tool approval timed out or cancelled".into()
-            }
-        );
-    }
-}
-
 pub fn is_dangerous(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -256,5 +176,85 @@ impl ConHook {
             }
         }
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hook(
+        auto_approve: bool,
+        cancelled: bool,
+    ) -> (
+        ConHook,
+        crossbeam_channel::Receiver<AgentEvent>,
+        crossbeam_channel::Sender<ToolApprovalDecision>,
+    ) {
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (approval_tx, approval_rx) = crossbeam_channel::unbounded();
+        (
+            ConHook::new(
+                event_tx,
+                approval_rx,
+                auto_approve,
+                Arc::new(AtomicBool::new(cancelled)),
+            ),
+            event_rx,
+            approval_tx,
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn safe_tool_continues_without_approval() {
+        let (hook, event_rx, _approval_tx) = hook(false, false);
+
+        let flow = hook.on_tool_call("read_pane", "call-1", "{}").await;
+
+        assert_eq!(flow, Flow::Continue);
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(AgentEvent::ToolCallStart { call_id, tool_name, .. })
+                if call_id == "call-1" && tool_name == "read_pane"
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dangerous_tool_honors_denial_reason() {
+        let (hook, event_rx, approval_tx) = hook(false, false);
+        approval_tx
+            .send(ToolApprovalDecision {
+                call_id: "call-2".into(),
+                allowed: false,
+                reason: Some("Not approved".into()),
+            })
+            .unwrap();
+
+        let flow = hook.on_tool_call("terminal_exec", "call-2", "{}").await;
+
+        assert_eq!(
+            flow,
+            Flow::Skip {
+                reason: "Not approved".into()
+            }
+        );
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(AgentEvent::ToolCallStart { call_id, .. }) if call_id == "call-2"
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_releases_pending_approval() {
+        let (hook, _event_rx, _approval_tx) = hook(false, true);
+
+        let flow = hook.on_tool_call("file_write", "call-3", "{}").await;
+
+        assert_eq!(
+            flow,
+            Flow::Skip {
+                reason: "Tool approval timed out or cancelled".into()
+            }
+        );
     }
 }
