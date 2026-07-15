@@ -382,6 +382,56 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_oauth_cache_accepts_unexpired_access_token() {
+        let record = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: Some(1_061),
+        };
+
+        assert!(chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_accepts_refreshable_record() {
+        let record = RigChatGptAuthTokenView {
+            access_token: None,
+            refresh_token: Some("refresh".into()),
+            expires_at: None,
+        };
+
+        assert!(chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_rejects_access_token_without_valid_expiry() {
+        let missing_expiry = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: None,
+        };
+        let inside_expiry_skew = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: Some(1_060),
+        };
+
+        assert!(!chatgpt_oauth_record_ready_at(missing_expiry, 1_000));
+        assert!(!chatgpt_oauth_record_ready_at(inside_expiry_skew, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_rejects_empty_credentials() {
+        let record = RigChatGptAuthTokenView {
+            access_token: Some("  ".into()),
+            refresh_token: Some(String::new()),
+            expires_at: Some(i64::MAX),
+        };
+
+        assert!(!chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
     fn preferred_default_keeps_explicitly_selected_provider() {
         let config = AgentConfig {
             provider: ProviderKind::OpenAI,
@@ -1005,7 +1055,11 @@ struct RigChatGptAuthRecord {
 #[derive(Debug, Deserialize)]
 struct RigChatGptAuthTokenView {
     access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<i64>,
 }
+
+const CHATGPT_TOKEN_EXPIRY_SKEW_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct CodexAuthSyncState {
@@ -1032,17 +1086,34 @@ fn codex_auth_file() -> Option<PathBuf> {
 }
 
 pub fn read_chatgpt_oauth_access_token(auth_file: &std::path::Path) -> Result<Option<String>> {
+    Ok(read_chatgpt_oauth_record(auth_file)?
+        .and_then(|record| non_empty_token(record.access_token)))
+}
+
+fn read_chatgpt_oauth_record(
+    auth_file: &std::path::Path,
+) -> Result<Option<RigChatGptAuthTokenView>> {
     match std::fs::read_to_string(auth_file) {
-        Ok(raw) => {
-            let record: RigChatGptAuthTokenView = serde_json::from_str(&raw)?;
-            Ok(record
-                .access_token
-                .map(|token| token.trim().to_string())
-                .filter(|token| !token.is_empty()))
-        }
+        Ok(raw) => Ok(Some(serde_json::from_str(&raw)?)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }
+}
+
+fn non_empty_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn chatgpt_oauth_record_ready_at(record: RigChatGptAuthTokenView, now: i64) -> bool {
+    let access_token_ready = non_empty_token(record.access_token).is_some()
+        && record.expires_at.is_some_and(|expires_at| {
+            now < expires_at.saturating_sub(CHATGPT_TOKEN_EXPIRY_SKEW_SECONDS)
+        });
+    let refresh_token_ready = non_empty_token(record.refresh_token).is_some();
+
+    access_token_ready || refresh_token_ready
 }
 
 pub fn read_synced_chatgpt_oauth_access_token(
@@ -1260,18 +1331,27 @@ fn provider_api_key_env_name_like(value: &str) -> bool {
         .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
-/// Whether the ChatGPT Subscription OAuth cache contains a usable access token
-/// (e.g. synced from Codex by [`ensure_chatgpt_oauth_synced_from_codex`]).
+/// Whether Rig can use the ChatGPT Subscription OAuth cache without prompting.
+///
+/// This mirrors Rig's native authenticator: it can proceed with either an
+/// unexpired access token (including Rig's 60-second expiry skew) or a refresh
+/// token. An access token without expiry metadata is not enough for zero-touch
+/// startup because Rig treats it as expired and opens device authorization.
 fn chatgpt_oauth_cache_ready() -> bool {
     let Some(auth_file) = oauth_token_dir(&ProviderKind::ChatGPT).map(|dir| dir.join("auth.json"))
     else {
         return false;
     };
 
-    read_chatgpt_oauth_access_token(&auth_file)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+
+    read_chatgpt_oauth_record(&auth_file)
         .ok()
         .flatten()
-        .is_some()
+        .is_some_and(|record| chatgpt_oauth_record_ready_at(record, now))
 }
 
 /// Choose the effective default provider for a freshly loaded config.
