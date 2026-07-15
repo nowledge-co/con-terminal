@@ -4,6 +4,57 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.78` - unreleased
+
+### Added
+
+**Agent**
+
+- Added **Ask AI** for terminal selections. Use the terminal context menu or
+  the configurable shortcut to place selected output in the agent input as a
+  fenced block. Assistant replies can also switch into selectable-text mode,
+  and thinking or tool-output details now have their own copy controls. _(PR
+  [#248](https://github.com/nowledge-co/con-terminal/pull/248) by
+  [@hhh2210](https://github.com/hhh2210))_
+
+### Changed
+
+**Providers**
+
+- Made ChatGPT Subscription ready on first launch for users already signed in
+  to Codex. Con now imports the compatible Codex auth cache during config load,
+  chooses ChatGPT only when the provider is still an implicit, unconfigured
+  default, and uses GPT-5.5 as the default ChatGPT model. Explicit provider and
+  model choices remain unchanged. _(PR
+  [#245](https://github.com/nowledge-co/con-terminal/pull/245) by
+  [@hhh2210](https://github.com/hhh2210))_
+- Updated the offline OpenAI model list with current GPT-5.5 and GPT-5.4
+  options, while retaining supported o3 and GPT-4.1 models. These choices stay
+  available when a compatible endpoint returns an incomplete model catalog.
+  _(PR [#246](https://github.com/nowledge-co/con-terminal/pull/246) by
+  [@dongshunyao](https://github.com/dongshunyao))_
+
+### Fixed
+
+**Agent**
+
+- Fixed ChatGPT Subscription auth becoming stale after Codex rotates its
+  credentials. Con refreshes imported credentials without overwriting a cache
+  refreshed locally, clears stale state before manual reauthorization, and
+  keeps the model picker focused on models available to subscription accounts.
+  _(PR [#244](https://github.com/nowledge-co/con-terminal/pull/244) by
+  [@hhh2210](https://github.com/hhh2210))_
+
+**Chat**
+
+- Fixed code-block copy feedback leaking between messages. Each copy control
+  now keeps independent state, including code blocks nested inside lists and
+  blockquotes. _(PR
+  [#247](https://github.com/nowledge-co/con-terminal/pull/247) by
+  [@hhh2210](https://github.com/hhh2210))_
+
+---
+
 ## `v0.1.0-beta.77` - 2026-06-08
 
 ### Added

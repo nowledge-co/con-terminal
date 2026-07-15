@@ -1,5 +1,5 @@
 use anyhow::Result;
-use con_agent::AgentConfig;
+use con_agent::{AgentConfig, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -841,16 +841,51 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path();
-        if config_path.exists() {
+        let mut config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let mut config: Config = toml::from_str(&content)?;
-            config.normalize();
+            let document: toml::Value = toml::from_str(&content)?;
+            let provider_provenance_is_present =
+                config_declares_agent_provider_provenance(&document);
+            let mut config: Config = document.try_into()?;
             config.agent.migrate_legacy();
-            Ok(config)
+            migrate_agent_provider_provenance(&mut config, provider_provenance_is_present);
+            config
         } else {
-            let mut config = Config::default();
-            config.normalize();
-            Ok(config)
+            Config::default()
+        };
+
+        config.normalize();
+        config.apply_zero_touch_chatgpt_default();
+        Ok(config)
+    }
+
+    /// Zero-touch ChatGPT Subscription sign-in applied on every config load.
+    ///
+    /// 1. Sync the ChatGPT OAuth cache from Codex's `~/.codex/auth.json` (cheap
+    ///    and idempotent — a fingerprint check short-circuits when nothing
+    ///    changed), so a user already signed in to Codex never has to do a
+    ///    manual device login.
+    /// 2. Recompute an automatic provider choice from current credentials:
+    ///    configured Anthropic wins; otherwise ChatGPT is used while an API-key
+    ///    override or its OAuth cache is ready. Explicit choices are never
+    ///    changed.
+    ///
+    /// Best-effort: failures are logged, never fatal. Conservative: a user who
+    /// configured Anthropic or picked another provider is never redirected
+    /// (see [`con_agent::preferred_default_provider`]).
+    fn apply_zero_touch_chatgpt_default(&mut self) {
+        match con_agent::ensure_chatgpt_oauth_synced_from_codex() {
+            Ok(true) => log::info!("[config] Synced ChatGPT OAuth cache from Codex"),
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("[config] Failed to sync ChatGPT OAuth cache from Codex: {err}")
+            }
+        }
+        if let Some(provider) = con_agent::preferred_default_provider(&self.agent) {
+            log::info!(
+                "[config] Recomputed automatic agent provider as {provider} from credential readiness"
+            );
+            self.agent.provider = provider;
         }
     }
 
@@ -862,6 +897,19 @@ impl Config {
         let path = Self::config_path();
         let content = toml::to_string_pretty(self)?;
         write_private_atomic(&path, content.as_bytes())
+    }
+}
+
+fn config_declares_agent_provider_provenance(document: &toml::Value) -> bool {
+    document
+        .get("agent")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|agent| agent.contains_key("provider_is_explicit"))
+}
+
+fn migrate_agent_provider_provenance(config: &mut Config, provenance_is_present: bool) {
+    if !provenance_is_present && config.agent.provider != ProviderKind::default() {
+        config.agent.provider_is_explicit = true;
     }
 }
 
@@ -939,8 +987,56 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 mod tests {
     use super::{
         Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig, TabsOrientation,
+        config_declares_agent_provider_provenance, migrate_agent_provider_provenance,
         sanitize_terminal_font_family,
     };
+    use con_agent::ProviderKind;
+
+    #[test]
+    fn explicit_agent_provider_choice_round_trips_with_provenance() {
+        let mut config = Config::default();
+        config.agent.select_provider(ProviderKind::Anthropic);
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+
+        assert!(encoded.contains("provider_is_explicit = true"));
+        assert!(decoded.agent.provider_is_explicit);
+    }
+
+    #[test]
+    fn legacy_serialized_default_provider_remains_implicit() {
+        let document: toml::Value = toml::from_str("[agent]\nprovider = \"anthropic\"").unwrap();
+        let provenance_is_present = config_declares_agent_provider_provenance(&document);
+        let mut config: Config = document.try_into().unwrap();
+        migrate_agent_provider_provenance(&mut config, provenance_is_present);
+
+        assert_eq!(config.agent.provider, ProviderKind::Anthropic);
+        assert!(!config.agent.provider_is_explicit);
+    }
+
+    #[test]
+    fn legacy_non_default_provider_is_migrated_as_explicit() {
+        let document: toml::Value = toml::from_str("[agent]\nprovider = \"chatgpt\"").unwrap();
+        let provenance_is_present = config_declares_agent_provider_provenance(&document);
+        let mut config: Config = document.try_into().unwrap();
+        migrate_agent_provider_provenance(&mut config, provenance_is_present);
+
+        assert!(config.agent.provider_is_explicit);
+    }
+
+    #[test]
+    fn serialized_automatic_provider_remains_automatic() {
+        let mut config = Config::default();
+        config.agent.provider = ProviderKind::ChatGPT;
+        let encoded = toml::to_string(&config).unwrap();
+        let document: toml::Value = toml::from_str(&encoded).unwrap();
+        let provenance_is_present = config_declares_agent_provider_provenance(&document);
+        let mut decoded: Config = document.try_into().unwrap();
+        migrate_agent_provider_provenance(&mut decoded, provenance_is_present);
+
+        assert!(encoded.contains("provider_is_explicit = false"));
+        assert!(!decoded.agent.provider_is_explicit);
+    }
 
     #[test]
     fn default_skill_path_uses_shared_app_path_policy() {

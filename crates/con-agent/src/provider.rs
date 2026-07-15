@@ -382,6 +382,181 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_oauth_cache_accepts_unexpired_access_token() {
+        let record = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: Some(1_061),
+        };
+
+        assert!(chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_accepts_refreshable_record() {
+        let record = RigChatGptAuthTokenView {
+            access_token: None,
+            refresh_token: Some("refresh".into()),
+            expires_at: None,
+        };
+
+        assert!(chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_rejects_access_token_without_valid_expiry() {
+        let missing_expiry = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: None,
+        };
+        let inside_expiry_skew = RigChatGptAuthTokenView {
+            access_token: Some("access".into()),
+            refresh_token: None,
+            expires_at: Some(1_060),
+        };
+
+        assert!(!chatgpt_oauth_record_ready_at(missing_expiry, 1_000));
+        assert!(!chatgpt_oauth_record_ready_at(inside_expiry_skew, 1_000));
+    }
+
+    #[test]
+    fn chatgpt_oauth_cache_rejects_empty_credentials() {
+        let record = RigChatGptAuthTokenView {
+            access_token: Some("  ".into()),
+            refresh_token: Some(String::new()),
+            expires_at: Some(i64::MAX),
+        };
+
+        assert!(!chatgpt_oauth_record_ready_at(record, 1_000));
+    }
+
+    #[test]
+    fn preferred_default_keeps_explicitly_selected_provider() {
+        let config = AgentConfig {
+            provider: ProviderKind::OpenAI,
+            ..AgentConfig::default()
+        };
+        assert_eq!(
+            preferred_default_provider_for_state(&config, true, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_keeps_explicit_anthropic_without_credentials() {
+        let config = AgentConfig::default();
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, true, false, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_uses_chatgpt_for_implicit_unconfigured_anthropic() {
+        let config = AgentConfig::default();
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, true),
+            Some(ProviderKind::ChatGPT)
+        );
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_recomputes_automatic_chatgpt_selection() {
+        let config = AgentConfig {
+            provider: ProviderKind::ChatGPT,
+            ..AgentConfig::default()
+        };
+
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            Some(ProviderKind::Anthropic)
+        );
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, false),
+            Some(ProviderKind::Anthropic)
+        );
+    }
+
+    #[test]
+    fn preferred_default_keeps_anthropic_when_inline_key_configured() {
+        // Anthropic with a usable inline key is a real setup — don't redirect to
+        // ChatGPT even if a ChatGPT cache happens to exist.
+        let mut config = AgentConfig {
+            provider: ProviderKind::Anthropic,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                model: None,
+                api_key: Some("sk-ant-test".into()),
+                api_key_env: None,
+                base_url: None,
+                max_tokens: None,
+            },
+        );
+        assert!(anthropic_credentials_available(&config));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_keeps_anthropic_when_legacy_api_key_env_contains_key() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::Anthropic,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                model: None,
+                api_key: None,
+                api_key_env: Some("sk-ant-legacy-direct-key".into()),
+                base_url: None,
+                max_tokens: None,
+            },
+        );
+        assert!(anthropic_credentials_available(&config));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn preferred_default_keeps_automatic_chatgpt_with_key_override() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::ChatGPT,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::ChatGPT,
+            ProviderConfig {
+                api_key: Some("chatgpt-access-token".into()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        assert!(provider_credentials_available(
+            &config,
+            &ProviderKind::ChatGPT
+        ));
+        assert_eq!(
+            preferred_default_provider_for_state(&config, false, false, true),
+            None
+        );
+    }
+
+    #[test]
     fn codex_chatgpt_auth_converter_ignores_non_chatgpt_auth() {
         let auth = serde_json::from_value::<CodexAuthFile>(serde_json::json!({
             "auth_mode": "api-key",
@@ -478,18 +653,14 @@ mod tests {
         std::fs::create_dir_all(&root).expect("temp root should be created");
         let source = root.join("codex-auth.json");
         let target = root.join("con").join("auth.json");
-        std::fs::create_dir_all(target.parent().expect("target should have a parent"))
-            .expect("target parent should be created");
-        std::fs::write(&target, r#"{"access_token":"stale"}"#)
-            .expect("target auth should be written");
 
         std::fs::write(
             &source,
             serde_json::to_vec(&serde_json::json!({
                 "auth_mode": "chatgpt",
                 "tokens": {
-                    "access_token": "fresh",
-                    "refresh_token": "refresh"
+                    "access_token": "codex-v1",
+                    "refresh_token": "refresh-v1"
                 }
             }))
             .expect("source json should serialize"),
@@ -498,13 +669,143 @@ mod tests {
 
         assert!(
             sync_codex_chatgpt_auth_from_file(&source, &target)
-                .expect("codex auth sync should succeed")
+                .expect("initial codex auth sync should succeed")
+        );
+
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex-v2",
+                    "refresh_token": "refresh-v2"
+                }
+            }))
+            .expect("updated source json should serialize"),
+        )
+        .expect("source auth should be updated");
+
+        assert!(
+            sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("managed codex auth should update")
         );
         let imported = std::fs::read_to_string(&target).expect("target auth should exist");
         let imported: serde_json::Value =
             serde_json::from_str(&imported).expect("target auth should be valid json");
-        assert_eq!(imported["access_token"], "fresh");
-        assert_eq!(imported["refresh_token"], "refresh");
+        assert_eq!(imported["access_token"], "codex-v2");
+        assert_eq!(imported["refresh_token"], "refresh-v2");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_sync_preserves_preexisting_unmanaged_auth() {
+        let root = std::env::temp_dir().join(format!(
+            "con-agent-codex-auth-unmanaged-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let source = root.join("codex-auth.json");
+        let target = root.join("con").join("auth.json");
+        std::fs::create_dir_all(target.parent().expect("target should have a parent"))
+            .expect("target parent should be created");
+        std::fs::write(&target, r#"{"access_token":"manual"}"#)
+            .expect("manual auth should be written");
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex",
+                    "refresh_token": "refresh"
+                }
+            }))
+            .expect("source json should serialize"),
+        )
+        .expect("source auth should be written");
+
+        assert!(
+            !sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("unmanaged auth should be preserved")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"manual"}"#
+        );
+        assert!(!codex_auth_sync_state_file(&target).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_sync_retires_ownership_after_local_auth_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "con-agent-codex-auth-local-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let source = root.join("codex-auth.json");
+        let target = root.join("con").join("auth.json");
+
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex-v1",
+                    "refresh_token": "refresh-v1"
+                }
+            }))
+            .expect("source json should serialize"),
+        )
+        .expect("source auth should be written");
+
+        assert!(
+            sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("initial codex auth sync should succeed")
+        );
+
+        std::fs::write(&target, r#"{"access_token":"manual"}"#)
+            .expect("manual auth should be written");
+        assert!(
+            !sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("same codex source should remain seen")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"manual"}"#
+        );
+        assert!(!codex_auth_sync_state_file(&target).exists());
+
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex-v2",
+                    "refresh_token": "refresh-v2"
+                }
+            }))
+            .expect("source json should serialize"),
+        )
+        .expect("source auth should be updated");
+
+        assert!(
+            !sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("updated codex auth should not replace local auth")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"manual"}"#
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -770,7 +1071,7 @@ impl ProviderKind {
     pub fn default_model(&self) -> &str {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
-            Self::ChatGPT => "gpt-5.3-codex",
+            Self::ChatGPT => "gpt-5.5",
             Self::GitHubCopilot => "gpt-4o",
             Self::OpenAICompatible => "gpt-4o",
             Self::OpenAI => "gpt-4o",
@@ -835,7 +1136,11 @@ struct RigChatGptAuthRecord {
 #[derive(Debug, Deserialize)]
 struct RigChatGptAuthTokenView {
     access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<i64>,
 }
+
+const CHATGPT_TOKEN_EXPIRY_SKEW_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct CodexAuthSyncState {
@@ -862,17 +1167,34 @@ fn codex_auth_file() -> Option<PathBuf> {
 }
 
 pub fn read_chatgpt_oauth_access_token(auth_file: &std::path::Path) -> Result<Option<String>> {
+    Ok(read_chatgpt_oauth_record(auth_file)?
+        .and_then(|record| non_empty_token(record.access_token)))
+}
+
+fn read_chatgpt_oauth_record(
+    auth_file: &std::path::Path,
+) -> Result<Option<RigChatGptAuthTokenView>> {
     match std::fs::read_to_string(auth_file) {
-        Ok(raw) => {
-            let record: RigChatGptAuthTokenView = serde_json::from_str(&raw)?;
-            Ok(record
-                .access_token
-                .map(|token| token.trim().to_string())
-                .filter(|token| !token.is_empty()))
-        }
+        Ok(raw) => Ok(Some(serde_json::from_str(&raw)?)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
     }
+}
+
+fn non_empty_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn chatgpt_oauth_record_ready_at(record: RigChatGptAuthTokenView, now: i64) -> bool {
+    let access_token_ready = non_empty_token(record.access_token).is_some()
+        && record.expires_at.is_some_and(|expires_at| {
+            now < expires_at.saturating_sub(CHATGPT_TOKEN_EXPIRY_SKEW_SECONDS)
+        });
+    let refresh_token_ready = non_empty_token(record.refresh_token).is_some();
+
+    access_token_ready || refresh_token_ready
 }
 
 pub fn read_synced_chatgpt_oauth_access_token(
@@ -900,30 +1222,35 @@ fn sync_codex_chatgpt_auth_from_file(
         return Ok(false);
     };
 
-    if let Some(parent) = target_auth_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     let bytes = serde_json::to_vec_pretty(&record)?;
     let source_fingerprint = stable_fingerprint(&bytes);
     let sync_state_file = codex_auth_sync_state_file(target_auth_file);
-    if target_auth_file.is_file()
-        && read_codex_auth_sync_state(&sync_state_file)?
-            .as_ref()
-            .is_some_and(|state| state.source_fingerprint == source_fingerprint)
-    {
+    let target_bytes = target_auth_file
+        .is_file()
+        .then(|| std::fs::read(target_auth_file))
+        .transpose()?;
+
+    // An identical cache is safe to adopt as Codex-managed, including caches
+    // imported by an older Con build before the provenance sidecar existed.
+    if target_bytes.as_deref() == Some(bytes.as_slice()) {
+        write_codex_auth_sync_state(&sync_state_file, &source_fingerprint)?;
         return Ok(false);
     }
 
-    if target_auth_file
-        .is_file()
-        .then(|| std::fs::read(target_auth_file))
-        .transpose()?
-        .as_deref()
-        == Some(bytes.as_slice())
-    {
-        write_codex_auth_sync_state(&sync_state_file, &source_fingerprint)?;
-        return Ok(false);
+    if let Some(target_bytes) = target_bytes.as_deref() {
+        let Some(sync_state) = read_codex_auth_sync_state(&sync_state_file)? else {
+            // A pre-existing cache without provenance belongs to the user (or
+            // another auth flow), not to the automatic Codex import path.
+            return Ok(false);
+        };
+
+        if stable_fingerprint(target_bytes) != sync_state.source_fingerprint {
+            // The cache changed after Con imported it. Rig may have refreshed
+            // it, or the user may have signed into another account. Either way,
+            // retire our ownership marker rather than overwrite local auth.
+            clear_auth_record_if_present(&sync_state_file)?;
+            return Ok(false);
+        }
     }
 
     write_auth_record(target_auth_file, &bytes)?;
@@ -1022,6 +1349,142 @@ fn sync_codex_chatgpt_auth(target_auth_file: &std::path::Path) -> Result<bool> {
         return Ok(false);
     };
     sync_codex_chatgpt_auth_from_file(&source_auth_file, target_auth_file)
+}
+
+/// Best-effort, zero-touch sync of the ChatGPT Subscription OAuth cache from
+/// Codex's `~/.codex/auth.json` into Con's token directory.
+///
+/// Call this once at startup so a user who is already signed in to Codex is
+/// picked up automatically — no manual device login and no need to ever open
+/// the Providers settings. UI sign-in indicators key off provider-specific
+/// cache files (for ChatGPT, `auth.json`), so writing the cache before the first
+/// render is what makes the experience feel seamless. Existing local auth is
+/// never replaced unless its provenance marker proves that Con previously
+/// imported it from Codex and it has not changed since.
+///
+/// Returns `Ok(true)` when fresh credentials were written, `Ok(false)` when
+/// there was nothing to do (no Codex auth, not a ChatGPT OAuth login, or the
+/// cache is current or independently owned).
+pub fn ensure_chatgpt_oauth_synced_from_codex() -> Result<bool> {
+    let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) else {
+        return Ok(false);
+    };
+    sync_codex_chatgpt_auth(&dir.join("auth.json"))
+}
+
+fn anthropic_credentials_available(config: &AgentConfig) -> bool {
+    provider_credentials_available(config, &ProviderKind::Anthropic)
+}
+
+/// Whether a provider has a usable API credential through the same paths used
+/// by live requests: inline config, a referenced env var, a legacy direct key
+/// in `api_key_env`, or the provider's default environment variable.
+fn provider_credentials_available(config: &AgentConfig, kind: &ProviderKind) -> bool {
+    if configured_api_key_value(config, kind).is_some() {
+        return true;
+    }
+    std::env::var(kind.default_api_key_env()).is_ok_and(|value| !value.trim().is_empty())
+}
+
+fn configured_api_key_value(config: &AgentConfig, kind: &ProviderKind) -> Option<String> {
+    let pc = config.providers.get(kind);
+
+    if let Some(key) = pc
+        .and_then(|p| p.api_key.as_ref())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return Some(key.to_string());
+    }
+
+    if let Some(key_or_env) = pc
+        .and_then(|p| p.api_key_env.as_ref())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        if provider_api_key_env_name_like(key_or_env) {
+            if let Ok(val) = std::env::var(key_or_env) {
+                let val = val.trim().to_string();
+                if !val.is_empty() {
+                    return Some(val);
+                }
+            }
+        } else {
+            return Some(key_or_env.to_string());
+        }
+    }
+
+    None
+}
+
+fn provider_api_key_env_name_like(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+}
+
+/// Whether Rig can use the ChatGPT Subscription OAuth cache without prompting.
+///
+/// This mirrors Rig's native authenticator: it can proceed with either an
+/// unexpired access token (including Rig's 60-second expiry skew) or a refresh
+/// token. An access token without expiry metadata is not enough for zero-touch
+/// startup because Rig treats it as expired and opens device authorization.
+fn chatgpt_oauth_cache_ready() -> bool {
+    let Some(auth_file) = oauth_token_dir(&ProviderKind::ChatGPT).map(|dir| dir.join("auth.json"))
+    else {
+        return false;
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default();
+
+    read_chatgpt_oauth_record(&auth_file)
+        .ok()
+        .flatten()
+        .is_some_and(|record| chatgpt_oauth_record_ready_at(record, now))
+}
+
+/// Choose the effective default provider for a freshly loaded config.
+///
+/// Zero-touch sign-in: the hard-coded default provider is Anthropic, but when
+/// the user has *not* configured any Anthropic credentials and a ChatGPT
+/// credential is ready (an API-key override or a Subscription OAuth cache,
+/// typically synced from Codex), prefer ChatGPT so the first run — and every
+/// new window — works without manually switching providers.
+///
+/// Deliberately conservative: explicit choices are always preserved. An
+/// automatic choice is recomputed from current credential readiness, preferring
+/// configured Anthropic and otherwise using ChatGPT only while one of its
+/// credential paths is usable. Returns the provider to switch to, or `None`
+/// when it is unchanged.
+pub fn preferred_default_provider(config: &AgentConfig) -> Option<ProviderKind> {
+    preferred_default_provider_for_state(
+        config,
+        config.provider_is_explicit,
+        anthropic_credentials_available(config),
+        provider_credentials_available(config, &ProviderKind::ChatGPT)
+            || chatgpt_oauth_cache_ready(),
+    )
+}
+
+fn preferred_default_provider_for_state(
+    config: &AgentConfig,
+    provider_is_explicit: bool,
+    anthropic_credentials_ready: bool,
+    chatgpt_credentials_ready: bool,
+) -> Option<ProviderKind> {
+    if provider_is_explicit {
+        return None;
+    }
+
+    let provider = if anthropic_credentials_ready || !chatgpt_credentials_ready {
+        ProviderKind::Anthropic
+    } else {
+        ProviderKind::ChatGPT
+    };
+    (config.provider != provider).then_some(provider)
 }
 
 fn mark_codex_chatgpt_auth_source_seen(target_auth_file: &std::path::Path) -> Result<bool> {
@@ -1333,6 +1796,12 @@ pub struct ProviderProtocolPreferences {
 pub struct AgentConfig {
     /// Active provider selection.
     pub provider: ProviderKind,
+    /// Whether the active provider was explicitly selected by the user.
+    ///
+    /// Older Con versions always serialized `provider`, including its default,
+    /// so presence alone cannot distinguish a choice from generated config.
+    #[serde(default)]
+    pub provider_is_explicit: bool,
     /// High-level operating stance for the built-in agent.
     pub purpose: AgentPurpose,
     /// Per-provider settings (model, key, endpoint, max_tokens).
@@ -1364,6 +1833,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: ProviderKind::default(),
+            provider_is_explicit: false,
             purpose: AgentPurpose::default(),
             providers: ProviderMap::default(),
             provider_protocols: ProviderProtocolPreferences::default(),
@@ -1393,6 +1863,11 @@ impl Default for SuggestionModelConfig {
 }
 
 impl AgentConfig {
+    pub fn select_provider(&mut self, provider: ProviderKind) {
+        self.provider = provider;
+        self.provider_is_explicit = true;
+    }
+
     pub fn provider_transport_for(&self, provider: &ProviderKind) -> Option<ProviderTransport> {
         match provider {
             ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
@@ -1549,6 +2024,7 @@ impl AgentConfig {
 
         AgentConfig {
             provider: suggestion_provider,
+            provider_is_explicit: false,
             purpose: self.purpose,
             providers,
             provider_protocols: ProviderProtocolPreferences::default(),
@@ -2321,39 +2797,7 @@ impl AgentProvider {
     }
 
     fn resolve_configured_api_key(&self, kind: &ProviderKind) -> Result<Option<String>> {
-        let pc = self.config.providers.get(kind);
-
-        // 1. Direct api_key from provider config
-        if let Some(key) = pc
-            .and_then(|p| p.api_key.as_ref())
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        {
-            return Ok(Some(key.to_string()));
-        }
-
-        // 2. api_key_env — could be env var name or direct key (legacy compat)
-        if let Some(key_or_env) = pc
-            .and_then(|p| p.api_key_env.as_ref())
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        {
-            let is_env_var_name = key_or_env
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
-            if is_env_var_name {
-                if let Ok(val) = std::env::var(key_or_env) {
-                    let val = val.trim().to_string();
-                    if !val.is_empty() {
-                        return Ok(Some(val));
-                    }
-                }
-            } else {
-                return Ok(Some(key_or_env.to_string()));
-            }
-        }
-
-        Ok(None)
+        Ok(configured_api_key_value(&self.config, kind))
     }
 }
 
