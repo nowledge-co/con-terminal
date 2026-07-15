@@ -629,18 +629,14 @@ mod tests {
         std::fs::create_dir_all(&root).expect("temp root should be created");
         let source = root.join("codex-auth.json");
         let target = root.join("con").join("auth.json");
-        std::fs::create_dir_all(target.parent().expect("target should have a parent"))
-            .expect("target parent should be created");
-        std::fs::write(&target, r#"{"access_token":"stale"}"#)
-            .expect("target auth should be written");
 
         std::fs::write(
             &source,
             serde_json::to_vec(&serde_json::json!({
                 "auth_mode": "chatgpt",
                 "tokens": {
-                    "access_token": "fresh",
-                    "refresh_token": "refresh"
+                    "access_token": "codex-v1",
+                    "refresh_token": "refresh-v1"
                 }
             }))
             .expect("source json should serialize"),
@@ -649,19 +645,80 @@ mod tests {
 
         assert!(
             sync_codex_chatgpt_auth_from_file(&source, &target)
-                .expect("codex auth sync should succeed")
+                .expect("initial codex auth sync should succeed")
+        );
+
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex-v2",
+                    "refresh_token": "refresh-v2"
+                }
+            }))
+            .expect("updated source json should serialize"),
+        )
+        .expect("source auth should be updated");
+
+        assert!(
+            sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("managed codex auth should update")
         );
         let imported = std::fs::read_to_string(&target).expect("target auth should exist");
         let imported: serde_json::Value =
             serde_json::from_str(&imported).expect("target auth should be valid json");
-        assert_eq!(imported["access_token"], "fresh");
-        assert_eq!(imported["refresh_token"], "refresh");
+        assert_eq!(imported["access_token"], "codex-v2");
+        assert_eq!(imported["refresh_token"], "refresh-v2");
 
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn codex_chatgpt_auth_sync_preserves_local_auth_until_codex_source_changes() {
+    fn codex_chatgpt_auth_sync_preserves_preexisting_unmanaged_auth() {
+        let root = std::env::temp_dir().join(format!(
+            "con-agent-codex-auth-unmanaged-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let source = root.join("codex-auth.json");
+        let target = root.join("con").join("auth.json");
+        std::fs::create_dir_all(target.parent().expect("target should have a parent"))
+            .expect("target parent should be created");
+        std::fs::write(&target, r#"{"access_token":"manual"}"#)
+            .expect("manual auth should be written");
+        std::fs::write(
+            &source,
+            serde_json::to_vec(&serde_json::json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": "codex",
+                    "refresh_token": "refresh"
+                }
+            }))
+            .expect("source json should serialize"),
+        )
+        .expect("source auth should be written");
+
+        assert!(
+            !sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("unmanaged auth should be preserved")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"manual"}"#
+        );
+        assert!(!codex_auth_sync_state_file(&target).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_chatgpt_auth_sync_retires_ownership_after_local_auth_changes() {
         let root = std::env::temp_dir().join(format!(
             "con-agent-codex-auth-local-test-{}-{}",
             std::process::id(),
@@ -702,6 +759,7 @@ mod tests {
             std::fs::read_to_string(&target).expect("target auth should still exist"),
             r#"{"access_token":"manual"}"#
         );
+        assert!(!codex_auth_sync_state_file(&target).exists());
 
         std::fs::write(
             &source,
@@ -717,14 +775,13 @@ mod tests {
         .expect("source auth should be updated");
 
         assert!(
-            sync_codex_chatgpt_auth_from_file(&source, &target)
-                .expect("updated codex auth should sync")
+            !sync_codex_chatgpt_auth_from_file(&source, &target)
+                .expect("updated codex auth should not replace local auth")
         );
-        let imported = std::fs::read_to_string(&target).expect("target auth should exist");
-        let imported: serde_json::Value =
-            serde_json::from_str(&imported).expect("target auth should be valid json");
-        assert_eq!(imported["access_token"], "codex-v2");
-        assert_eq!(imported["refresh_token"], "refresh-v2");
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target auth should still exist"),
+            r#"{"access_token":"manual"}"#
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1141,30 +1198,35 @@ fn sync_codex_chatgpt_auth_from_file(
         return Ok(false);
     };
 
-    if let Some(parent) = target_auth_file.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
     let bytes = serde_json::to_vec_pretty(&record)?;
     let source_fingerprint = stable_fingerprint(&bytes);
     let sync_state_file = codex_auth_sync_state_file(target_auth_file);
-    if target_auth_file.is_file()
-        && read_codex_auth_sync_state(&sync_state_file)?
-            .as_ref()
-            .is_some_and(|state| state.source_fingerprint == source_fingerprint)
-    {
+    let target_bytes = target_auth_file
+        .is_file()
+        .then(|| std::fs::read(target_auth_file))
+        .transpose()?;
+
+    // An identical cache is safe to adopt as Codex-managed, including caches
+    // imported by an older Con build before the provenance sidecar existed.
+    if target_bytes.as_deref() == Some(bytes.as_slice()) {
+        write_codex_auth_sync_state(&sync_state_file, &source_fingerprint)?;
         return Ok(false);
     }
 
-    if target_auth_file
-        .is_file()
-        .then(|| std::fs::read(target_auth_file))
-        .transpose()?
-        .as_deref()
-        == Some(bytes.as_slice())
-    {
-        write_codex_auth_sync_state(&sync_state_file, &source_fingerprint)?;
-        return Ok(false);
+    if let Some(target_bytes) = target_bytes.as_deref() {
+        let Some(sync_state) = read_codex_auth_sync_state(&sync_state_file)? else {
+            // A pre-existing cache without provenance belongs to the user (or
+            // another auth flow), not to the automatic Codex import path.
+            return Ok(false);
+        };
+
+        if stable_fingerprint(target_bytes) != sync_state.source_fingerprint {
+            // The cache changed after Con imported it. Rig may have refreshed
+            // it, or the user may have signed into another account. Either way,
+            // retire our ownership marker rather than overwrite local auth.
+            clear_auth_record_if_present(&sync_state_file)?;
+            return Ok(false);
+        }
     }
 
     write_auth_record(target_auth_file, &bytes)?;
@@ -1272,11 +1334,13 @@ fn sync_codex_chatgpt_auth(target_auth_file: &std::path::Path) -> Result<bool> {
 /// picked up automatically — no manual device login and no need to ever open
 /// the Providers settings. UI sign-in indicators key off provider-specific
 /// cache files (for ChatGPT, `auth.json`), so writing the cache before the first
-/// render is what makes the experience feel seamless.
+/// render is what makes the experience feel seamless. Existing local auth is
+/// never replaced unless its provenance marker proves that Con previously
+/// imported it from Codex and it has not changed since.
 ///
 /// Returns `Ok(true)` when fresh credentials were written, `Ok(false)` when
 /// there was nothing to do (no Codex auth, not a ChatGPT OAuth login, or the
-/// cache is already current).
+/// cache is current or independently owned).
 pub fn ensure_chatgpt_oauth_synced_from_codex() -> Result<bool> {
     let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) else {
         return Ok(false);
