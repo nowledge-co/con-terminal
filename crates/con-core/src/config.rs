@@ -841,23 +841,22 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path();
-        if config_path.exists() {
+        let mut config = if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let document: toml::Value = toml::from_str(&content)?;
             let provider_provenance_is_present =
                 config_declares_agent_provider_provenance(&document);
             let mut config: Config = document.try_into()?;
-            config.normalize();
             config.agent.migrate_legacy();
             migrate_agent_provider_provenance(&mut config, provider_provenance_is_present);
-            config.apply_zero_touch_chatgpt_default();
-            Ok(config)
+            config
         } else {
-            let mut config = Config::default();
-            config.normalize();
-            config.apply_zero_touch_chatgpt_default();
-            Ok(config)
-        }
+            Config::default()
+        };
+
+        config.normalize();
+        config.apply_zero_touch_chatgpt_default();
+        Ok(config)
     }
 
     /// Zero-touch ChatGPT Subscription sign-in applied on every config load.
