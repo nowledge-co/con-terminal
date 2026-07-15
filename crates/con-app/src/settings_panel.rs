@@ -704,7 +704,7 @@ impl SettingsPanel {
             return;
         }
 
-        self.config.agent.provider = target_provider.clone();
+        self.config.agent.select_provider(target_provider.clone());
         self.active_model_select =
             Self::make_active_model_select(&self.config, &self.registry, window, cx);
     }
@@ -1503,8 +1503,8 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     if let Some(provider) = Self::suggestion_provider_from_label(value) {
-                        this.config.agent.provider =
-                            Self::provider_for_saved_transport(&this.config, &provider);
+                        let provider = Self::provider_for_saved_transport(&this.config, &provider);
+                        this.config.agent.select_provider(provider);
                         this.active_model_select = Self::make_active_model_select(
                             &this.config,
                             &this.registry,

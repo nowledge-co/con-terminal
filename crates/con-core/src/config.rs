@@ -843,17 +843,15 @@ impl Config {
         let config_path = Self::config_path();
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let document: toml::Value = toml::from_str(&content)?;
-            let provider_is_explicit = config_declares_agent_provider(&document);
-            let mut config: Config = document.try_into()?;
+            let mut config: Config = toml::from_str(&content)?;
             config.normalize();
             config.agent.migrate_legacy();
-            config.apply_zero_touch_chatgpt_default(provider_is_explicit);
+            config.apply_zero_touch_chatgpt_default();
             Ok(config)
         } else {
             let mut config = Config::default();
             config.normalize();
-            config.apply_zero_touch_chatgpt_default(false);
+            config.apply_zero_touch_chatgpt_default();
             Ok(config)
         }
     }
@@ -872,7 +870,7 @@ impl Config {
     /// Best-effort: failures are logged, never fatal. Conservative: a user who
     /// configured Anthropic or picked another provider is never redirected
     /// (see [`con_agent::preferred_default_provider`]).
-    fn apply_zero_touch_chatgpt_default(&mut self, provider_is_explicit: bool) {
+    fn apply_zero_touch_chatgpt_default(&mut self) {
         match con_agent::ensure_chatgpt_oauth_synced_from_codex() {
             Ok(true) => log::info!("[config] Synced ChatGPT OAuth cache from Codex"),
             Ok(false) => {}
@@ -880,9 +878,7 @@ impl Config {
                 log::warn!("[config] Failed to sync ChatGPT OAuth cache from Codex: {err}")
             }
         }
-        if let Some(provider) =
-            con_agent::preferred_default_provider(&self.agent, provider_is_explicit)
-        {
+        if let Some(provider) = con_agent::preferred_default_provider(&self.agent) {
             log::info!(
                 "[config] Defaulting agent provider to {provider} (ChatGPT auto-detected, no Anthropic key configured)"
             );
@@ -899,13 +895,6 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         write_private_atomic(&path, content.as_bytes())
     }
-}
-
-fn config_declares_agent_provider(document: &toml::Value) -> bool {
-    document
-        .get("agent")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|agent| agent.contains_key("provider"))
 }
 
 fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
@@ -982,16 +971,27 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 mod tests {
     use super::{
         Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig, TabsOrientation,
-        config_declares_agent_provider, sanitize_terminal_font_family,
+        sanitize_terminal_font_family,
     };
+    use con_agent::ProviderKind;
 
     #[test]
-    fn agent_provider_presence_distinguishes_defaults_from_user_choice() {
-        let implicit: toml::Value = toml::from_str("[appearance]\nterminal_opacity = 0.8").unwrap();
-        let explicit: toml::Value = toml::from_str("[agent]\nprovider = \"anthropic\"").unwrap();
+    fn explicit_agent_provider_choice_round_trips_with_provenance() {
+        let mut config = Config::default();
+        config.agent.select_provider(ProviderKind::Anthropic);
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
 
-        assert!(!config_declares_agent_provider(&implicit));
-        assert!(config_declares_agent_provider(&explicit));
+        assert!(encoded.contains("provider_is_explicit = true"));
+        assert!(decoded.agent.provider_is_explicit);
+    }
+
+    #[test]
+    fn legacy_serialized_default_provider_remains_implicit() {
+        let config: Config = toml::from_str("[agent]\nprovider = \"anthropic\"").unwrap();
+
+        assert_eq!(config.agent.provider, ProviderKind::Anthropic);
+        assert!(!config.agent.provider_is_explicit);
     }
 
     #[test]

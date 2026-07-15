@@ -1243,6 +1243,10 @@ fn provider_api_key_env_name_like(value: &str) -> bool {
         .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Whether the ChatGPT Subscription OAuth cache contains a usable access token
 /// (e.g. synced from Codex by [`ensure_chatgpt_oauth_synced_from_codex`]).
 fn chatgpt_oauth_cache_ready() -> bool {
@@ -1269,13 +1273,10 @@ fn chatgpt_oauth_cache_ready() -> bool {
 /// Anthropic selection, and only when Anthropic has no usable key. Any provider
 /// explicitly present in config, including Anthropic, is preserved. Returns the
 /// provider to switch to, or `None` to keep the configured default.
-pub fn preferred_default_provider(
-    config: &AgentConfig,
-    provider_is_explicit: bool,
-) -> Option<ProviderKind> {
+pub fn preferred_default_provider(config: &AgentConfig) -> Option<ProviderKind> {
     preferred_default_provider_for_state(
         config,
-        provider_is_explicit,
+        config.provider_is_explicit,
         anthropic_credentials_available(config),
         chatgpt_oauth_cache_ready(),
     )
@@ -1603,6 +1604,12 @@ pub struct ProviderProtocolPreferences {
 pub struct AgentConfig {
     /// Active provider selection.
     pub provider: ProviderKind,
+    /// Whether the active provider was explicitly selected by the user.
+    ///
+    /// Older Con versions always serialized `provider`, including its default,
+    /// so presence alone cannot distinguish a choice from generated config.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provider_is_explicit: bool,
     /// High-level operating stance for the built-in agent.
     pub purpose: AgentPurpose,
     /// Per-provider settings (model, key, endpoint, max_tokens).
@@ -1634,6 +1641,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             provider: ProviderKind::default(),
+            provider_is_explicit: false,
             purpose: AgentPurpose::default(),
             providers: ProviderMap::default(),
             provider_protocols: ProviderProtocolPreferences::default(),
@@ -1663,6 +1671,11 @@ impl Default for SuggestionModelConfig {
 }
 
 impl AgentConfig {
+    pub fn select_provider(&mut self, provider: ProviderKind) {
+        self.provider = provider;
+        self.provider_is_explicit = true;
+    }
+
     pub fn provider_transport_for(&self, provider: &ProviderKind) -> Option<ProviderTransport> {
         match provider {
             ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
@@ -1819,6 +1832,7 @@ impl AgentConfig {
 
         AgentConfig {
             provider: suggestion_provider,
+            provider_is_explicit: false,
             purpose: self.purpose,
             providers,
             provider_protocols: ProviderProtocolPreferences::default(),
