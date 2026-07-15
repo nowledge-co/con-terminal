@@ -156,7 +156,7 @@ cargo build -p con -p con-cli -p con-test
 
 ## CI
 
-The `.github/workflows/e2e.yml` workflow runs on `macos-latest` on every push/PR that
+The `.github/workflows/e2e.yml` workflow runs on `macos-15` on every push/PR that
 touches con-test, con-app, con-core, con-cli, or con-ghostty.
 
 Steps:

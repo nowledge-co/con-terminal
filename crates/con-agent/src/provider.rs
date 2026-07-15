@@ -1149,9 +1149,9 @@ fn sync_codex_chatgpt_auth(target_auth_file: &std::path::Path) -> Result<bool> {
 ///
 /// Call this once at startup so a user who is already signed in to Codex is
 /// picked up automatically — no manual device login and no need to ever open
-/// the Providers settings. UI sign-in indicators key off the existence of the
-/// token directory (`oauth_token_dir(...).exists()`), so writing the cache
-/// before the first render is what makes the experience feel seamless.
+/// the Providers settings. UI sign-in indicators key off provider-specific
+/// cache files (for ChatGPT, `auth.json`), so writing the cache before the first
+/// render is what makes the experience feel seamless.
 ///
 /// Returns `Ok(true)` when fresh credentials were written, `Ok(false)` when
 /// there was nothing to do (no Codex auth, not a ChatGPT OAuth login, or the

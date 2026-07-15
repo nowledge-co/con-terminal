@@ -46,6 +46,35 @@ struct ProviderOAuthState {
     error_message: Option<String>,
 }
 
+fn provider_connection_status(
+    provider_has_oauth: bool,
+    oauth_ready: bool,
+    oauth_state: Option<&ProviderOAuthState>,
+    oauth_cache_present: bool,
+    has_key_override: bool,
+) -> (bool, &'static str) {
+    let connection_ready = if provider_has_oauth {
+        oauth_ready || has_key_override
+    } else {
+        has_key_override
+    };
+    let connection_label = if provider_has_oauth {
+        match oauth_state {
+            Some(state) if state.in_progress => "Signing In",
+            Some(state) if state.connected => "Signed In",
+            _ if oauth_cache_present => "Signed In",
+            _ if has_key_override => "Ready",
+            _ => "OAuth",
+        }
+    } else if has_key_override {
+        "Ready"
+    } else {
+        "No key"
+    };
+
+    (connection_ready, connection_label)
+}
+
 enum ProviderModelFetchRequest {
     OpenAICompatible {
         base_url: String,
@@ -4443,23 +4472,15 @@ impl SettingsPanel {
         let oauth_cache_present = Self::provider_oauth_cache_present(&Self::sidebar_provider_kind(
             &self.selected_provider,
         ));
-        let connection_ready = if Self::provider_has_oauth(&self.selected_provider) {
-            self.provider_oauth_ready(&self.selected_provider)
-        } else {
-            has_key_override
-        };
-        let connection_label = if Self::provider_has_oauth(&self.selected_provider) {
-            match oauth_state.as_ref() {
-                Some(state) if state.in_progress => "Signing In",
-                Some(state) if state.connected => "Signed In",
-                _ if oauth_cache_present => "Signed In",
-                _ => "OAuth",
-            }
-        } else if has_key_override {
-            "Ready"
-        } else {
-            "No key"
-        };
+        let provider_has_oauth = Self::provider_has_oauth(&self.selected_provider);
+        let oauth_ready = provider_has_oauth && self.provider_oauth_ready(&self.selected_provider);
+        let (connection_ready, connection_label) = provider_connection_status(
+            provider_has_oauth,
+            oauth_ready,
+            oauth_state.as_ref(),
+            oauth_cache_present,
+            has_key_override,
+        );
 
         let model_card_content = card(theme, card_opacity).child(
             div()
@@ -6440,5 +6461,49 @@ fn display_theme_name(name: &str) -> String {
             })
             .collect::<Vec<_>>()
             .join(" "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProviderKind, ProviderOAuthState, SettingsPanel, provider_connection_status};
+
+    #[test]
+    fn oauth_providers_are_ready_with_key_override() {
+        for provider in [ProviderKind::ChatGPT, ProviderKind::GitHubCopilot] {
+            let status = provider_connection_status(
+                SettingsPanel::provider_has_oauth(&provider),
+                false,
+                None,
+                false,
+                true,
+            );
+            assert_eq!(status, (true, "Ready"), "provider: {provider:?}");
+        }
+    }
+
+    #[test]
+    fn oauth_labels_take_precedence_over_key_override() {
+        let signing_in = ProviderOAuthState {
+            in_progress: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            provider_connection_status(true, true, Some(&signing_in), false, true),
+            (true, "Signing In")
+        );
+
+        let connected = ProviderOAuthState {
+            connected: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            provider_connection_status(true, true, Some(&connected), false, true),
+            (true, "Signed In")
+        );
+        assert_eq!(
+            provider_connection_status(true, true, None, true, true),
+            (true, "Signed In")
+        );
     }
 }
