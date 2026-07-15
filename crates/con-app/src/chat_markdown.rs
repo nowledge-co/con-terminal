@@ -453,21 +453,15 @@ impl ParsedChatMarkdown {
     }
 }
 
-pub fn render_parsed_chat_markdown(
-    document: &ParsedChatMarkdown,
-    tone: ChatMarkdownTone,
-    theme: &Theme,
-) -> AnyElement {
-    render_parsed_chat_markdown_prefix(document, tone, theme, document.blocks.len())
-}
-
-pub fn render_parsed_chat_markdown_prefix(
+pub fn render_parsed_chat_markdown_prefix_with_copy_namespace(
     document: &ParsedChatMarkdown,
     tone: ChatMarkdownTone,
     theme: &Theme,
     max_blocks: usize,
+    copy_namespace: impl Into<SharedString>,
 ) -> AnyElement {
     let style = ChatMarkdownStyle::new(theme, tone);
+    let copy_namespace = copy_namespace.into();
     let block_count = document.blocks.len().min(max_blocks);
     let blocks = &document.blocks[..block_count];
 
@@ -480,12 +474,9 @@ pub fn render_parsed_chat_markdown_prefix(
         .flex()
         .flex_col()
         .gap(style.block_gap)
-        .children(
-            blocks
-                .iter()
-                .enumerate()
-                .map(|(idx, block)| render_block_with_width(block, idx, &style, None)),
-        )
+        .children(blocks.iter().enumerate().map(|(idx, block)| {
+            render_block_with_width(block, idx, &style, None, copy_namespace.as_ref())
+        }))
         .into_any_element()
 }
 
@@ -497,6 +488,7 @@ pub struct ChatMarkdownBlockView {
     document: Arc<ParsedChatMarkdown>,
     block_index: usize,
     tone: ChatMarkdownTone,
+    copy_namespace: SharedString,
     table_scroll_handle: ScrollHandle,
     rich_svg_renders: HashMap<RichSvgRenderKey, RichSvgRenderEntry>,
 }
@@ -506,11 +498,13 @@ impl ChatMarkdownBlockView {
         document: Arc<ParsedChatMarkdown>,
         block_index: usize,
         tone: ChatMarkdownTone,
+        copy_namespace: impl Into<SharedString>,
     ) -> Self {
         Self {
             document,
             block_index,
             tone,
+            copy_namespace: copy_namespace.into(),
             table_scroll_handle: ScrollHandle::new(),
             rich_svg_renders: HashMap::new(),
         }
@@ -521,20 +515,26 @@ impl ChatMarkdownBlockView {
         document: Arc<ParsedChatMarkdown>,
         block_index: usize,
         tone: ChatMarkdownTone,
+        copy_namespace: impl Into<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let copy_namespace = copy_namespace.into();
         let old_block = self.document.blocks.get(self.block_index);
         let new_block = document.blocks.get(block_index);
-        let block_changed =
-            self.block_index != block_index || self.tone != tone || old_block != new_block;
+        let block_changed = self.block_index != block_index
+            || self.tone != tone
+            || self.copy_namespace != copy_namespace
+            || old_block != new_block;
 
         if self.block_index != block_index
             || self.tone != tone
+            || self.copy_namespace != copy_namespace
             || !Arc::ptr_eq(&self.document, &document)
         {
             self.document = document;
             self.block_index = block_index;
             self.tone = tone;
+            self.copy_namespace = copy_namespace;
             if block_changed {
                 self.table_scroll_handle = ScrollHandle::new();
                 self.rich_svg_renders.clear();
@@ -683,7 +683,26 @@ impl ChatMarkdownBlockView {
         match block {
             MarkdownBlock::Mermaid { .. } | MarkdownBlock::MathBlock { .. } => self
                 .render_rich_svg_block(path, block, style, cx)
-                .unwrap_or_else(|| render_block(block, index, style, table_scroll_handle)),
+                .unwrap_or_else(|| {
+                    render_block(
+                        block,
+                        index,
+                        style,
+                        table_scroll_handle,
+                        self.copy_namespace.as_ref(),
+                    )
+                }),
+            MarkdownBlock::CodeBlock {
+                language,
+                code,
+                highlight_cache,
+            } => render_code_block(
+                code_block_copy_id(self.copy_namespace.as_ref(), path, code),
+                language,
+                code,
+                highlight_cache,
+                style,
+            ),
             MarkdownBlock::Paragraph {
                 inlines,
                 inline_cache,
@@ -755,7 +774,13 @@ impl ChatMarkdownBlockView {
 
                 render_list_children(*ordered, *start, items.len(), item_children, style)
             }
-            _ => render_block(block, index, style, table_scroll_handle),
+            _ => render_block(
+                block,
+                index,
+                style,
+                table_scroll_handle,
+                self.copy_namespace.as_ref(),
+            ),
         }
     }
 
@@ -1138,7 +1163,20 @@ fn render_block(
     index: usize,
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
 ) -> AnyElement {
+    let mut path = vec![index];
+    render_block_at_path(block, &mut path, style, table_scroll_handle, copy_namespace)
+}
+
+fn render_block_at_path(
+    block: &MarkdownBlock,
+    path: &mut Vec<usize>,
+    style: &ChatMarkdownStyle<'_>,
+    table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
+) -> AnyElement {
+    let index = path.last().copied().unwrap_or(0);
     match block {
         MarkdownBlock::Paragraph {
             inlines,
@@ -1170,7 +1208,13 @@ fn render_block(
             language,
             code,
             highlight_cache,
-        } => render_code_block(index, language, code, highlight_cache, style),
+        } => render_code_block(
+            code_block_copy_id(copy_namespace, path, code),
+            language,
+            code,
+            highlight_cache,
+            style,
+        ),
         MarkdownBlock::Mermaid { code, scale } => {
             render_mermaid_code_fallback(index, code, *scale, style)
         }
@@ -1179,7 +1223,12 @@ fn render_block(
             let children = blocks
                 .iter()
                 .enumerate()
-                .map(|(idx, block)| render_block(block, idx, style, None))
+                .map(|(idx, block)| {
+                    path.push(idx);
+                    let rendered = render_block_at_path(block, path, style, None, copy_namespace);
+                    path.pop();
+                    rendered
+                })
                 .collect::<Vec<_>>();
 
             render_blockquote_children(children, style)
@@ -1191,12 +1240,24 @@ fn render_block(
         } => {
             let item_children = items
                 .iter()
-                .map(|item_blocks| {
+                .enumerate()
+                .map(|(item_idx, item_blocks)| {
                     item_blocks
                         .iter()
                         .enumerate()
                         .map(|(nested_idx, nested_block)| {
-                            render_block(nested_block, nested_idx, style, None)
+                            path.push(item_idx);
+                            path.push(nested_idx);
+                            let rendered = render_block_at_path(
+                                nested_block,
+                                path,
+                                style,
+                                None,
+                                copy_namespace,
+                            );
+                            path.pop();
+                            path.pop();
+                            rendered
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1222,6 +1283,7 @@ fn render_block_with_width(
     index: usize,
     style: &ChatMarkdownStyle<'_>,
     table_scroll_handle: Option<&ScrollHandle>,
+    copy_namespace: &str,
 ) -> AnyElement {
     let mut wrapper = div().w_full();
     if !matches!(
@@ -1234,7 +1296,13 @@ fn render_block_with_width(
     }
 
     wrapper
-        .child(render_block(block, index, style, table_scroll_handle))
+        .child(render_block(
+            block,
+            index,
+            style,
+            table_scroll_handle,
+            copy_namespace,
+        ))
         .into_any_element()
 }
 
@@ -1463,7 +1531,7 @@ fn render_table_block(
 }
 
 fn render_code_block(
-    _index: usize,
+    copy_id: String,
     language: &Option<String>,
     code: &str,
     highlight_cache: &RefCell<Option<CachedCodeHighlightRuns>>,
@@ -1489,10 +1557,7 @@ fn render_code_block(
                 .child(header_label),
         )
         .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
-        .child(
-            Clipboard::new(format!("copy-code-block-{_index}"))
-                .value(SharedString::from(code.to_string())),
-        );
+        .child(Clipboard::new(copy_id).value(SharedString::from(code.to_string())));
 
     let block = div()
         .w_full()
@@ -2013,12 +2078,31 @@ fn rich_svg_render_id(path: &[usize], key: &RichSvgRenderKey) -> SharedString {
         RichSvgRenderKind::Math => "math",
         RichSvgRenderKind::InlineMath => "inline-math",
     };
-    let path = path
-        .iter()
+    let path = markdown_path_id(path);
+    SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
+}
+
+fn code_block_copy_id(copy_namespace: &str, path: &[usize], code: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    copy_namespace.hash(&mut hasher);
+    code.hash(&mut hasher);
+    format!(
+        "copy-code-block-{}-{}-{:x}",
+        copy_namespace,
+        markdown_path_id(path),
+        hasher.finish()
+    )
+}
+
+fn markdown_path_id(path: &[usize]) -> String {
+    if path.is_empty() {
+        return "root".to_string();
+    }
+
+    path.iter()
         .map(usize::to_string)
         .collect::<Vec<_>>()
-        .join(".");
-    SharedString::from(format!("chat-md-{kind}-{path}-{:x}", hasher.finish()))
+        .join(".")
 }
 
 fn rich_svg_render_scale(key: &RichSvgRenderKey) -> f32 {
@@ -3009,6 +3093,30 @@ mod tests {
         let first = rich_svg_render_id(&[0, 0, 0], &key);
         let second = rich_svg_render_id(&[1, 0, 0], &key);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn code_block_copy_ids_include_nested_block_path() {
+        let code = "brew services start lizardbyte/homebrew/sunshine";
+
+        let first = code_block_copy_id("asst-1", &[0, 0, 1], code);
+        let second = code_block_copy_id("asst-1", &[0, 1, 1], code);
+
+        assert_ne!(first, second);
+        assert!(first.contains("0.0.1"));
+        assert!(second.contains("0.1.1"));
+    }
+
+    #[test]
+    fn code_block_copy_ids_include_message_namespace() {
+        let code = "brew services start lizardbyte/homebrew/sunshine";
+
+        let first = code_block_copy_id("asst-1", &[0, 0, 1], code);
+        let second = code_block_copy_id("asst-2", &[0, 0, 1], code);
+
+        assert_ne!(first, second);
+        assert!(first.contains("asst-1"));
+        assert!(second.contains("asst-2"));
     }
 
     #[test]

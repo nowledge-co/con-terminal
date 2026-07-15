@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use crate::chat_markdown::{
     ChatMarkdownBlockView, ChatMarkdownTone, ParsedChatMarkdown, chat_markdown_block_gap,
-    render_parsed_chat_markdown, render_parsed_chat_markdown_prefix,
+    render_parsed_chat_markdown_prefix_with_copy_namespace,
 };
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
@@ -738,6 +738,7 @@ impl AssistantMessageView {
         }
 
         let gap = chat_markdown_block_gap(ChatMarkdownTone::Message, theme);
+        let copy_namespace = format!("asst-{}", self.msg_idx);
         div()
             .w_full()
             .flex()
@@ -748,12 +749,23 @@ impl AssistantMessageView {
                 let view = if let Some(view) = self.markdown_block_views[block_idx].as_ref() {
                     let view = view.clone();
                     view.update(cx, |view, cx| {
-                        view.update(document, block_idx, ChatMarkdownTone::Message, cx);
+                        view.update(
+                            document,
+                            block_idx,
+                            ChatMarkdownTone::Message,
+                            copy_namespace.clone(),
+                            cx,
+                        );
                     });
                     view
                 } else {
                     let view = cx.new(|_| {
-                        ChatMarkdownBlockView::new(document, block_idx, ChatMarkdownTone::Message)
+                        ChatMarkdownBlockView::new(
+                            document,
+                            block_idx,
+                            ChatMarkdownTone::Message,
+                            copy_namespace.clone(),
+                        )
                     });
                     self.markdown_block_views[block_idx] = Some(view.clone());
                     view
@@ -3160,11 +3172,14 @@ fn render_assistant_message(
                 .line_height(px(18.0))
                 .text_color(theme.muted_foreground.opacity(0.54));
             if let Some(markdown) = msg.thinking_markdown.as_ref() {
-                thinking_el = thinking_el.child(render_parsed_chat_markdown(
-                    markdown,
-                    ChatMarkdownTone::Thinking,
-                    theme,
-                ));
+                thinking_el =
+                    thinking_el.child(render_parsed_chat_markdown_prefix_with_copy_namespace(
+                        markdown,
+                        ChatMarkdownTone::Thinking,
+                        theme,
+                        markdown.block_count(),
+                        format!("asst-think-{msg_idx}"),
+                    ));
             } else {
                 thinking_el = thinking_el.child(div().whitespace_normal().child(thinking.clone()));
             }
@@ -3186,12 +3201,14 @@ fn render_assistant_message(
             if let Some(rendered_markdown) = rendered_markdown {
                 content_el = content_el.child(rendered_markdown);
             } else {
-                content_el = content_el.child(render_parsed_chat_markdown_prefix(
-                    markdown,
-                    ChatMarkdownTone::Message,
-                    theme,
-                    visible_blocks,
-                ));
+                content_el =
+                    content_el.child(render_parsed_chat_markdown_prefix_with_copy_namespace(
+                        markdown,
+                        ChatMarkdownTone::Message,
+                        theme,
+                        visible_blocks,
+                        format!("asst-{msg_idx}"),
+                    ));
             }
             if let Some(suffix) = unparsed_markdown_suffix(msg) {
                 content_el = content_el.child(div().mt(ui_space_px(theme, 6.0)).child(
