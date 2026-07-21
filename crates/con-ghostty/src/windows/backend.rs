@@ -231,8 +231,8 @@ impl WindowsGhosttyTerminal {
     pub fn update_appearance(
         &self,
         colors: &TerminalColors,
-        _font_family: &str,
-        _font_size: f32,
+        font_family: &str,
+        font_size: f32,
         background_opacity: f32,
         _background_blur: bool,
         _cursor_style: &str,
@@ -244,6 +244,9 @@ impl WindowsGhosttyTerminal {
     ) -> Result<(), String> {
         if let Some(session) = self.inner.lock().as_ref() {
             let theme = theme_from_colors(colors);
+            session
+                .set_font(font_family, font_size)
+                .map_err(|err| err.to_string())?;
             session.set_appearance(Some(&theme), clamp_opacity(background_opacity));
         }
         Ok(())
