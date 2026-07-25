@@ -182,6 +182,49 @@ impl ConHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
+    use rig::agent::{AgentBuilder, MultiTurnStreamItem};
+    use rig::streaming::StreamingPrompt;
+    use rig::test_utils::{MockCompletionModel, MockStreamEvent, MockToolError};
+    use rig::tool::Tool;
+    use serde::Deserialize;
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Deserialize)]
+    struct ContractToolArgs {
+        value: String,
+    }
+
+    #[derive(Clone)]
+    struct ContractTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Tool for ContractTool {
+        const NAME: &'static str = "shell_exec";
+        type Error = MockToolError;
+        type Args = ContractToolArgs;
+        type Output = String;
+
+        fn description(&self) -> String {
+            "Rig migration contract tool".to_string()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                },
+                "required": ["value"]
+            })
+        }
+
+        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(args.value)
+        }
+    }
 
     fn hook(
         auto_approve: bool,
@@ -256,5 +299,122 @@ mod tests {
                 reason: "Tool approval timed out or cancelled".into()
             }
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rig_streaming_loop_preserves_con_tool_and_text_events() {
+        let model = MockCompletionModel::from_stream_turns([
+            vec![
+                MockStreamEvent::tool_call(
+                    "tool-1",
+                    ContractTool::NAME,
+                    serde_json::json!({"value": "tool output"}),
+                ),
+                MockStreamEvent::final_response_with_total_tokens(4),
+            ],
+            vec![
+                MockStreamEvent::text("final answer"),
+                MockStreamEvent::final_response_with_total_tokens(6),
+            ],
+        ]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (hook, event_rx, _approval_tx) = hook(true, false);
+        let agent = AgentBuilder::new(model)
+            .tool(ContractTool {
+                calls: calls.clone(),
+            })
+            .add_hook(hook)
+            .default_max_turns(3)
+            .build();
+
+        let mut stream = agent.stream_prompt("run the contract tool").await;
+        let mut final_output = None;
+        while let Some(item) = stream.next().await {
+            match item.expect("Rig streaming loop should complete") {
+                MultiTurnStreamItem::FinalResponse(response) => {
+                    final_output = Some(response.output);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(final_output.as_deref(), Some("final answer"));
+
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        let start_call_id = events.iter().find_map(|event| match event {
+            AgentEvent::ToolCallStart {
+                call_id, tool_name, ..
+            } if tool_name == ContractTool::NAME => Some(call_id.as_str()),
+            _ => None,
+        });
+        let start_call_id = start_call_id.expect("Con hook should emit the tool start");
+        assert!(!start_call_id.is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallComplete {
+                call_id,
+                tool_name,
+                result,
+            } if call_id == start_call_id
+                && tool_name == ContractTool::NAME
+                && result.contains("tool output")
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Token(text) if text == "final answer"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rig_streaming_loop_does_not_execute_denied_dangerous_tool() {
+        let model = MockCompletionModel::from_stream_turns([
+            vec![
+                MockStreamEvent::tool_call(
+                    "tool-2",
+                    ContractTool::NAME,
+                    serde_json::json!({"value": "must not execute"}),
+                ),
+                MockStreamEvent::final_response_with_total_tokens(4),
+            ],
+            vec![
+                MockStreamEvent::text("denied"),
+                MockStreamEvent::final_response_with_total_tokens(6),
+            ],
+        ]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (hook, event_rx, approval_tx) = hook(false, false);
+        approval_tx
+            .send(ToolApprovalDecision {
+                call_id: "tool-2".into(),
+                allowed: false,
+                reason: Some("Denied by test".into()),
+            })
+            .unwrap();
+        let agent = AgentBuilder::new(model)
+            .tool(ContractTool {
+                calls: calls.clone(),
+            })
+            .add_hook(hook)
+            .default_max_turns(3)
+            .build();
+
+        let mut stream = agent.stream_prompt("run the contract tool").await;
+        while let Some(item) = stream.next().await {
+            if matches!(
+                item.expect("Rig streaming loop should recover from denied tool"),
+                MultiTurnStreamItem::FinalResponse(_)
+            ) {
+                break;
+            }
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(event_rx.try_iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallComplete { result, .. } if result.contains("Denied by test")
+        )));
     }
 }
