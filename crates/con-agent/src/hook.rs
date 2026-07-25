@@ -86,6 +86,35 @@ const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 /// Total approval timeout: 5 minutes.
 const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+fn wait_for_tool_approval(
+    approval_rx: &crossbeam_channel::Receiver<ToolApprovalDecision>,
+    cancel_flag: &AtomicBool,
+    call_id: &str,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) -> Option<ToolApprovalDecision> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
+        match approval_rx.recv_timeout(remaining.min(poll_interval)) {
+            Ok(decision) if decision.call_id == call_id => return Some(decision),
+            Ok(decision) => {
+                log::warn!(
+                    "[agent] Ignoring approval for tool call {} while waiting for {}",
+                    decision.call_id,
+                    call_id,
+                );
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
 impl<M: CompletionModel> AgentHook<M> for ConHook {
     async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> Flow {
         match event {
@@ -145,32 +174,13 @@ impl ConHook {
             // Poll for approval with short intervals so we can respond
             // to cancellation (e.g. app quit) without blocking shutdown.
             let decision = tokio::task::block_in_place(|| {
-                let deadline = std::time::Instant::now() + APPROVAL_TIMEOUT;
-                loop {
-                    // Check cancellation first — enables clean shutdown
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        return None;
-                    }
-
-                    match approval_rx.recv_timeout(APPROVAL_POLL_INTERVAL) {
-                        Ok(decision) if decision.call_id == call_id => return Some(decision),
-                        Ok(decision) => {
-                            log::warn!(
-                                "[agent] Ignoring approval for tool call {} while waiting for {}",
-                                decision.call_id,
-                                call_id,
-                            );
-                        }
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                            if std::time::Instant::now() >= deadline {
-                                return None;
-                            }
-                        }
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                            return None;
-                        }
-                    }
-                }
+                wait_for_tool_approval(
+                    &approval_rx,
+                    &cancel_flag,
+                    &call_id,
+                    APPROVAL_TIMEOUT,
+                    APPROVAL_POLL_INTERVAL,
+                )
             });
 
             match decision {
@@ -312,6 +322,53 @@ mod tests {
             Flow::Skip {
                 reason: "Tool approval timed out or cancelled".into()
             }
+        );
+    }
+
+    #[test]
+    fn approval_wait_keeps_its_deadline_under_mismatched_decisions() {
+        let (approval_tx, approval_rx) = crossbeam_channel::bounded(1);
+        let keep_sending = Arc::new(AtomicBool::new(true));
+        let sent = Arc::new(AtomicUsize::new(0));
+        let sender_keep_sending = keep_sending.clone();
+        let sender_sent = sent.clone();
+        let sender = std::thread::spawn(move || {
+            while sender_keep_sending.load(Ordering::Relaxed) {
+                if approval_tx
+                    .send_timeout(
+                        ToolApprovalDecision {
+                            call_id: "other-call".into(),
+                            allowed: true,
+                            reason: None,
+                        },
+                        std::time::Duration::from_millis(1),
+                    )
+                    .is_ok()
+                {
+                    sender_sent.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        let cancel_flag = AtomicBool::new(false);
+        let timeout = std::time::Duration::from_millis(40);
+        let started = std::time::Instant::now();
+
+        let decision = wait_for_tool_approval(
+            &approval_rx,
+            &cancel_flag,
+            "expected-call",
+            timeout,
+            std::time::Duration::from_millis(10),
+        );
+        let elapsed = started.elapsed();
+        keep_sending.store(false, Ordering::Relaxed);
+        sender.join().unwrap();
+
+        assert!(decision.is_none());
+        assert!(sent.load(Ordering::Relaxed) > 0);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "mismatched approvals extended the deadline: {elapsed:?}"
         );
     }
 
