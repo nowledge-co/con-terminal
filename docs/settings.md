@@ -73,9 +73,10 @@ cheaper model for suggestions if you want inline help without slowing down the
 terminal.
 
 ChatGPT and GitHub Copilot can use OAuth, so you can leave the API key empty for
-those sign-in flows. OpenAI-compatible hosts can fetch models from `/models`
-when the host supports it. If the host has no models endpoint, type the model ID
-manually and save it.
+those sign-in flows. After signing in to ChatGPT, use **Fetch Models** to load
+the models available to that subscription. OpenAI-compatible hosts can fetch
+models from `/models` when the host supports it. If the host has no models
+endpoint, type the model ID manually and save it.
 
 The provider picker in the agent panel shows configured providers. If a provider
 is missing there, configure it first in Settings.

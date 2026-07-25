@@ -86,6 +86,35 @@ const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mi
 /// Total approval timeout: 5 minutes.
 const APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+fn wait_for_tool_approval(
+    approval_rx: &crossbeam_channel::Receiver<ToolApprovalDecision>,
+    cancel_flag: &AtomicBool,
+    call_id: &str,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) -> Option<ToolApprovalDecision> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        let remaining = deadline.checked_duration_since(std::time::Instant::now())?;
+        match approval_rx.recv_timeout(remaining.min(poll_interval)) {
+            Ok(decision) if decision.call_id == call_id => return Some(decision),
+            Ok(decision) => {
+                log::warn!(
+                    "[agent] Ignoring approval for tool call {} while waiting for {}",
+                    decision.call_id,
+                    call_id,
+                );
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
 impl<M: CompletionModel> AgentHook<M> for ConHook {
     async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> Flow {
         match event {
@@ -145,25 +174,13 @@ impl ConHook {
             // Poll for approval with short intervals so we can respond
             // to cancellation (e.g. app quit) without blocking shutdown.
             let decision = tokio::task::block_in_place(|| {
-                let deadline = std::time::Instant::now() + APPROVAL_TIMEOUT;
-                loop {
-                    // Check cancellation first — enables clean shutdown
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        return None;
-                    }
-
-                    match approval_rx.recv_timeout(APPROVAL_POLL_INTERVAL) {
-                        Ok(decision) => return Some(decision),
-                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                            if std::time::Instant::now() >= deadline {
-                                return None;
-                            }
-                        }
-                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                            return None;
-                        }
-                    }
-                }
+                wait_for_tool_approval(
+                    &approval_rx,
+                    &cancel_flag,
+                    &call_id,
+                    APPROVAL_TIMEOUT,
+                    APPROVAL_POLL_INTERVAL,
+                )
             });
 
             match decision {
@@ -182,6 +199,49 @@ impl ConHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
+    use rig::agent::{AgentBuilder, MultiTurnStreamItem};
+    use rig::streaming::StreamingPrompt;
+    use rig::test_utils::{MockCompletionModel, MockStreamEvent, MockToolError};
+    use rig::tool::Tool;
+    use serde::Deserialize;
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Deserialize)]
+    struct ContractToolArgs {
+        value: String,
+    }
+
+    #[derive(Clone)]
+    struct ContractTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Tool for ContractTool {
+        const NAME: &'static str = "shell_exec";
+        type Error = MockToolError;
+        type Args = ContractToolArgs;
+        type Output = String;
+
+        fn description(&self) -> String {
+            "Rig migration contract tool".to_string()
+        }
+
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" }
+                },
+                "required": ["value"]
+            })
+        }
+
+        async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(args.value)
+        }
+    }
 
     fn hook(
         auto_approve: bool,
@@ -224,6 +284,13 @@ mod tests {
         let (hook, event_rx, approval_tx) = hook(false, false);
         approval_tx
             .send(ToolApprovalDecision {
+                call_id: "other-call".into(),
+                allowed: true,
+                reason: None,
+            })
+            .unwrap();
+        approval_tx
+            .send(ToolApprovalDecision {
                 call_id: "call-2".into(),
                 allowed: false,
                 reason: Some("Not approved".into()),
@@ -256,5 +323,184 @@ mod tests {
                 reason: "Tool approval timed out or cancelled".into()
             }
         );
+    }
+
+    #[test]
+    fn approval_wait_keeps_its_deadline_under_mismatched_decisions() {
+        let (approval_tx, approval_rx) = crossbeam_channel::bounded(1);
+        let keep_sending = Arc::new(AtomicBool::new(true));
+        let sent = Arc::new(AtomicUsize::new(0));
+        let sender_keep_sending = keep_sending.clone();
+        let sender_sent = sent.clone();
+        let sender = std::thread::spawn(move || {
+            while sender_keep_sending.load(Ordering::Relaxed) {
+                if approval_tx
+                    .send_timeout(
+                        ToolApprovalDecision {
+                            call_id: "other-call".into(),
+                            allowed: true,
+                            reason: None,
+                        },
+                        std::time::Duration::from_millis(1),
+                    )
+                    .is_ok()
+                {
+                    sender_sent.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        let cancel_flag = AtomicBool::new(false);
+        let timeout = std::time::Duration::from_millis(40);
+        let started = std::time::Instant::now();
+
+        let decision = wait_for_tool_approval(
+            &approval_rx,
+            &cancel_flag,
+            "expected-call",
+            timeout,
+            std::time::Duration::from_millis(10),
+        );
+        let elapsed = started.elapsed();
+        keep_sending.store(false, Ordering::Relaxed);
+        sender.join().unwrap();
+
+        assert!(decision.is_none());
+        assert!(sent.load(Ordering::Relaxed) > 0);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "mismatched approvals extended the deadline: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rig_streaming_loop_preserves_con_tool_and_text_events() {
+        let model = MockCompletionModel::from_stream_turns([
+            vec![
+                MockStreamEvent::tool_call(
+                    "tool-1",
+                    ContractTool::NAME,
+                    serde_json::json!({"value": "tool output"}),
+                ),
+                MockStreamEvent::final_response_with_total_tokens(4),
+            ],
+            vec![
+                MockStreamEvent::text("final answer"),
+                MockStreamEvent::final_response_with_total_tokens(6),
+            ],
+        ]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (hook, event_rx, _approval_tx) = hook(true, false);
+        let agent = AgentBuilder::new(model)
+            .tool(ContractTool {
+                calls: calls.clone(),
+            })
+            .add_hook(hook)
+            .default_max_turns(3)
+            .build();
+
+        let mut stream = agent.stream_prompt("run the contract tool").await;
+        let mut final_output = None;
+        while let Some(item) = stream.next().await {
+            match item.expect("Rig streaming loop should complete") {
+                MultiTurnStreamItem::FinalResponse(response) => {
+                    final_output = Some(response.output);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(final_output.as_deref(), Some("final answer"));
+
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        let start_call_id = events.iter().find_map(|event| match event {
+            AgentEvent::ToolCallStart {
+                call_id, tool_name, ..
+            } if tool_name == ContractTool::NAME => Some(call_id.as_str()),
+            _ => None,
+        });
+        let start_call_id = start_call_id.expect("Con hook should emit the tool start");
+        assert!(!start_call_id.is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallComplete {
+                call_id,
+                tool_name,
+                result,
+            } if call_id == start_call_id
+                && tool_name == ContractTool::NAME
+                && result.contains("tool output")
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Token(text) if text == "final answer"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rig_streaming_loop_does_not_execute_denied_dangerous_tool() {
+        let model = MockCompletionModel::from_stream_turns([
+            vec![
+                MockStreamEvent::tool_call(
+                    "tool-2",
+                    ContractTool::NAME,
+                    serde_json::json!({"value": "must not execute"}),
+                ),
+                MockStreamEvent::final_response_with_total_tokens(4),
+            ],
+            vec![
+                MockStreamEvent::text("denied"),
+                MockStreamEvent::final_response_with_total_tokens(6),
+            ],
+        ]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (hook, event_rx, approval_tx) = hook(false, false);
+        let approval_event_rx = event_rx.clone();
+        let approval_thread = std::thread::spawn(move || {
+            loop {
+                match approval_event_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(AgentEvent::ToolCallStart { call_id, .. }) => {
+                        approval_tx
+                            .send(ToolApprovalDecision {
+                                call_id,
+                                allowed: false,
+                                reason: Some("Denied by test".into()),
+                            })
+                            .unwrap();
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(error) => panic!("tool approval event should arrive: {error}"),
+                }
+            }
+        });
+        let agent = AgentBuilder::new(model)
+            .tool(ContractTool {
+                calls: calls.clone(),
+            })
+            .add_hook(hook)
+            .default_max_turns(3)
+            .build();
+
+        let mut stream = agent.stream_prompt("run the contract tool").await;
+        while let Some(item) = stream.next().await {
+            if matches!(
+                item.expect("Rig streaming loop should recover from denied tool"),
+                MultiTurnStreamItem::FinalResponse(_)
+            ) {
+                break;
+            }
+        }
+        approval_thread
+            .join()
+            .expect("approval thread should finish");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(event_rx.try_iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallComplete { result, .. } if result.contains("Denied by test")
+        )));
     }
 }

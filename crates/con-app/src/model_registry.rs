@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 
 const API_URL: &str = "https://models.dev/api.json";
 const CHATGPT_CODEX_API_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+// The Codex model catalog filters entries by client compatibility. Keep this
+// explicit: 0.144.0 is the first catalog version whose wire contract Con
+// supports that exposes the GPT-5.6 family.
+const CHATGPT_CODEX_MODELS_CLIENT_VERSION: &str = "0.144.0";
 const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 
 // ── Fallback model lists (used when API is unreachable) ──────────────
@@ -38,6 +42,9 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-4.1-mini",
         ],
         ProviderKind::ChatGPT => &[
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",
@@ -427,6 +434,24 @@ impl ModelRegistry {
 
         parsed.set_path(&path);
         parsed.set_fragment(None);
+        let query_pairs = parsed
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        if !query_pairs
+            .iter()
+            .any(|(key, value)| key == "client_version" && !value.trim().is_empty())
+        {
+            parsed.set_query(None);
+            parsed
+                .query_pairs_mut()
+                .extend_pairs(
+                    query_pairs
+                        .iter()
+                        .filter(|(key, _)| key != "client_version"),
+                )
+                .append_pair("client_version", CHATGPT_CODEX_MODELS_CLIENT_VERSION);
+        }
         Ok(parsed.to_string())
     }
 
@@ -611,6 +636,9 @@ mod tests {
         assert_eq!(
             registry.models_for(&ProviderKind::ChatGPT),
             vec![
+                "gpt-5.6-sol".to_string(),
+                "gpt-5.6-terra".to_string(),
+                "gpt-5.6-luna".to_string(),
                 "gpt-5.5".to_string(),
                 "gpt-5.4".to_string(),
                 "gpt-5.4-mini".to_string(),
@@ -702,21 +730,42 @@ mod tests {
     fn chatgpt_subscription_models_url_uses_codex_models_endpoint() {
         assert_eq!(
             ModelRegistry::chatgpt_subscription_models_url(None).unwrap(),
-            "https://chatgpt.com/backend-api/codex/models"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.144.0"
         );
         assert_eq!(
             ModelRegistry::chatgpt_subscription_models_url(Some(
                 "https://chatgpt.com/backend-api/codex"
             ))
             .unwrap(),
-            "https://chatgpt.com/backend-api/codex/models"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.144.0"
         );
         assert_eq!(
             ModelRegistry::chatgpt_subscription_models_url(Some(
                 "https://chatgpt.com/backend-api/codex/models"
             ))
             .unwrap(),
-            "https://chatgpt.com/backend-api/codex/models"
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.144.0"
+        );
+        assert_eq!(
+            ModelRegistry::chatgpt_subscription_models_url(Some(
+                "https://chatgpt.com/backend-api/codex?region=us"
+            ))
+            .unwrap(),
+            "https://chatgpt.com/backend-api/codex/models?region=us&client_version=0.144.0"
+        );
+        assert_eq!(
+            ModelRegistry::chatgpt_subscription_models_url(Some(
+                "https://chatgpt.com/backend-api/codex/models?client_version=0.200.0"
+            ))
+            .unwrap(),
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.200.0"
+        );
+        assert_eq!(
+            ModelRegistry::chatgpt_subscription_models_url(Some(
+                "https://chatgpt.com/backend-api/codex?region=us&client_version="
+            ))
+            .unwrap(),
+            "https://chatgpt.com/backend-api/codex/models?region=us&client_version=0.144.0"
         );
     }
 

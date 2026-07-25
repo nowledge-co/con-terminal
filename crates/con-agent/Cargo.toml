@@ -23,3 +23,6 @@ uuid.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 gethostname.workspace = true
+
+[dev-dependencies]
+rig = { workspace = true, features = ["test-utils"] }
