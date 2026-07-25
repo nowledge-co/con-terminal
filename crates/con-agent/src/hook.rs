@@ -153,7 +153,14 @@ impl ConHook {
                     }
 
                     match approval_rx.recv_timeout(APPROVAL_POLL_INTERVAL) {
-                        Ok(decision) => return Some(decision),
+                        Ok(decision) if decision.call_id == call_id => return Some(decision),
+                        Ok(decision) => {
+                            log::warn!(
+                                "[agent] Ignoring approval for tool call {} while waiting for {}",
+                                decision.call_id,
+                                call_id,
+                            );
+                        }
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                             if std::time::Instant::now() >= deadline {
                                 return None;
@@ -265,6 +272,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn dangerous_tool_honors_denial_reason() {
         let (hook, event_rx, approval_tx) = hook(false, false);
+        approval_tx
+            .send(ToolApprovalDecision {
+                call_id: "other-call".into(),
+                allowed: true,
+                reason: None,
+            })
+            .unwrap();
         approval_tx
             .send(ToolApprovalDecision {
                 call_id: "call-2".into(),
@@ -386,13 +400,25 @@ mod tests {
         ]);
         let calls = Arc::new(AtomicUsize::new(0));
         let (hook, event_rx, approval_tx) = hook(false, false);
-        approval_tx
-            .send(ToolApprovalDecision {
-                call_id: "tool-2".into(),
-                allowed: false,
-                reason: Some("Denied by test".into()),
-            })
-            .unwrap();
+        let approval_event_rx = event_rx.clone();
+        let approval_thread = std::thread::spawn(move || {
+            loop {
+                match approval_event_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                    Ok(AgentEvent::ToolCallStart { call_id, .. }) => {
+                        approval_tx
+                            .send(ToolApprovalDecision {
+                                call_id,
+                                allowed: false,
+                                reason: Some("Denied by test".into()),
+                            })
+                            .unwrap();
+                        return;
+                    }
+                    Ok(_) => {}
+                    Err(error) => panic!("tool approval event should arrive: {error}"),
+                }
+            }
+        });
         let agent = AgentBuilder::new(model)
             .tool(ContractTool {
                 calls: calls.clone(),
@@ -410,6 +436,9 @@ mod tests {
                 break;
             }
         }
+        approval_thread
+            .join()
+            .expect("approval thread should finish");
 
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(event_rx.try_iter().any(|event| matches!(
