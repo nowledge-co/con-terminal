@@ -23,8 +23,10 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed ChatGPT Subscription model discovery after the Codex model catalog
   started requiring an explicit client compatibility version. **Fetch Models**
   now loads the account's available catalog, including GPT-5.6 models where
-  available, and the offline fallback includes the GPT-5.6 family. _(Issue
-  [#251](https://github.com/nowledge-co/con-terminal/issues/251), reported by
+  available, and the offline fallback includes the GPT-5.6 family. _(PR
+  [#252](https://github.com/nowledge-co/con-terminal/pull/252) by
+  [@wey-gu](https://github.com/wey-gu); reported in issue
+  [#251](https://github.com/nowledge-co/con-terminal/issues/251) by
   [@zjp1997720](https://github.com/zjp1997720))_
 
 ---
