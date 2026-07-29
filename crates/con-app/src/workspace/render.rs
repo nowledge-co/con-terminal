@@ -1174,6 +1174,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::editor_delete_forward))
             .on_action(cx.listener(Self::editor_insert_newline))
             .on_action(cx.listener(Self::editor_save))
+            .on_action(cx.listener(Self::editor_toggle_preview))
             .on_action(cx.listener(Self::editor_undo))
             .on_action(cx.listener(Self::editor_copy))
             .on_action(cx.listener(Self::editor_cut))

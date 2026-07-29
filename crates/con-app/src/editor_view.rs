@@ -4,17 +4,18 @@
 //! are laid out each frame, so large files are fast.
 
 use crate::{
+    chat_markdown::ParsedChatMarkdown,
     editor_buffer::{CursorPosition, EditorBuffer},
     editor_lsp::{self, EditorDiagnostic, LspClient, LspClientEvent},
-    editor_syntax,
+    editor_preview, editor_syntax,
 };
 use crossbeam_channel::{Receiver, Sender};
 use gpui::{
     App, Bounds, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
     InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollStrategy,
-    SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div, px, svg,
-    uniform_list,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle,
+    ScrollStrategy, SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div,
+    px, svg, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Theme,
@@ -39,6 +40,7 @@ const CHAR_WIDTH: f32 = editor_char_width(EDITOR_FONT_SIZE);
 const SCROLLBAR_HITBOX_SIZE: f32 = 16.0;
 const CURSOR_SCROLL_PADDING: f32 = 32.0;
 const LSP_DID_CHANGE_DEBOUNCE_MS: u64 = 150;
+const PREVIEW_PARSE_DEBOUNCE_MS: u64 = 300;
 
 const fn editor_char_width(font_size: f32) -> f32 {
     // GPUI's text rendering does the actual shaping, but this lightweight editor
@@ -85,6 +87,8 @@ pub struct EditorTab {
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
     save_enabled: bool,
+    preview: bool,
+    preview_cache: Option<(u64, Arc<ParsedChatMarkdown>)>,
 }
 
 #[derive(Clone, Default)]
@@ -124,6 +128,8 @@ impl EditorTab {
             buffer,
             render_cache: EditorRenderCache::default(),
             save_enabled: true,
+            preview: false,
+            preview_cache: None,
         }
     }
 
@@ -133,6 +139,8 @@ impl EditorTab {
             buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
             render_cache: EditorRenderCache::default(),
             save_enabled: false,
+            preview: false,
+            preview_cache: None,
         }
     }
 
@@ -219,6 +227,9 @@ pub struct EditorView {
     lsp_change_generations: HashMap<PathBuf, u64>,
     lsp_change_debounce_tasks: HashMap<PathBuf, Task<()>>,
     dirty_close_blocked_tab: Option<usize>,
+    preview_scroll_handle: ScrollHandle,
+    preview_parse_generation: u64,
+    preview_parse_task: Option<Task<()>>,
 }
 
 impl EditorView {
@@ -243,6 +254,9 @@ impl EditorView {
             lsp_change_generations: HashMap::new(),
             lsp_change_debounce_tasks: HashMap::new(),
             dirty_close_blocked_tab: None,
+            preview_scroll_handle: ScrollHandle::new(),
+            preview_parse_generation: 0,
+            preview_parse_task: None,
         }
     }
 
@@ -397,10 +411,81 @@ impl EditorView {
             self.active_tab = index;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
+            self.preview_scroll_handle = ScrollHandle::new();
             if let Some(path) = self.active_path().map(Path::to_path_buf) {
                 self.ensure_lsp_for_path(&path);
             }
         }
+    }
+
+    fn preview_active(&self) -> bool {
+        self.tabs.get(self.active_tab).is_some_and(|tab| tab.preview)
+    }
+
+    fn preview_toggle_target(path: &Path, preview: bool) -> Option<bool> {
+        (editor_syntax::language_for_path(path) == Some("markdown")).then_some(!preview)
+    }
+
+    /// Toggle the rendered markdown preview for the active tab. Only markdown
+    /// files can be previewed; other languages ignore the toggle.
+    pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(preview) = Self::preview_toggle_target(&tab.path, tab.preview) else {
+            return;
+        };
+        let tab = &mut self.tabs[self.active_tab];
+        tab.preview = preview;
+        let preview = tab.preview;
+        self.preview_scroll_handle = ScrollHandle::new();
+        if preview {
+            self.schedule_preview_parse(self.active_tab, cx);
+        }
+        cx.notify();
+    }
+
+    /// Reparse the tab's markdown after a debounce, unless the cached parse
+    /// already matches the buffer revision. Stale results are dropped via a
+    /// generation counter, mirroring the LSP did-change debounce.
+    fn schedule_preview_parse(&mut self, tab_index: usize, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        let revision = tab.buffer.revision();
+        let cache_current = tab
+            .preview_cache
+            .as_ref()
+            .is_some_and(|(cached, _)| *cached == revision);
+        if cache_current {
+            return;
+        }
+        let text = tab.buffer.text();
+        self.preview_parse_generation = self.preview_parse_generation.wrapping_add(1);
+        let generation = self.preview_parse_generation;
+        self.preview_parse_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(PREVIEW_PARSE_DEBOUNCE_MS))
+                .await;
+            // ParsedChatMarkdown is Send but not Sync (RefCell render caches),
+            // so parse on the background executor and wrap in Arc back on the
+            // main thread.
+            let parsed = cx
+                .background_executor()
+                .spawn(async move { ParsedChatMarkdown::parse(&text) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.preview_parse_generation != generation {
+                    return;
+                }
+                if let Some(tab) = this.tabs.get_mut(tab_index)
+                    && tab.buffer.revision() == revision
+                {
+                    tab.preview_cache = Some((revision, Arc::new(parsed)));
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn activate_tab_and_emit(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -864,6 +949,9 @@ impl EditorView {
     }
 
     pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_text(text);
         }
@@ -872,6 +960,9 @@ impl EditorView {
     }
 
     pub fn insert_newline(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_newline();
         }
@@ -880,6 +971,9 @@ impl EditorView {
     }
 
     pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_backward();
         }
@@ -888,6 +982,9 @@ impl EditorView {
     }
 
     pub fn delete_forward(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_forward();
         }
@@ -896,6 +993,9 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.preview_active() {
+            return false;
+        }
         let undid = self.active_tab_mut().is_some_and(|tab| tab.buffer.undo());
         if undid {
             self.notify_lsp_active_did_change(cx);
@@ -1028,6 +1128,9 @@ impl EditorView {
     }
 
     pub fn cut_selection(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        if self.preview_active() {
+            return None;
+        }
         let text = self
             .active_tab_mut()
             .and_then(|tab| tab.buffer.cut_selection());
@@ -1170,6 +1273,24 @@ impl Render for EditorView {
         let line_height = px(metrics.line_height);
         let gutter_bg = theme.muted.opacity(0.04);
         let gutter_color = theme.muted_foreground.opacity(0.42);
+        let preview_active = self.preview_active();
+        if preview_active {
+            let cache_stale = match &self.tabs[active_index].preview_cache {
+                Some((revision, _)) => *revision != self.tabs[active_index].buffer.revision(),
+                None => true,
+            };
+            if cache_stale {
+                self.schedule_preview_parse(active_index, cx);
+            }
+        }
+        let preview_document = if preview_active {
+            self.tabs[active_index]
+                .preview_cache
+                .as_ref()
+                .map(|(_, document)| document.clone())
+        } else {
+            None
+        };
         let tabs = self
             .tabs
             .iter()
@@ -1278,6 +1399,50 @@ impl Render for EditorView {
 
             tab_bar = tab_bar.child(tab_el);
         }
+
+        let preview_available = editor_syntax::language_for_path(&active.path) == Some("markdown");
+        let preview_toggle = preview_available.then(|| {
+            let (icon, icon_color) = if preview_active {
+                ("phosphor/code.svg", fg.opacity(0.85))
+            } else {
+                ("phosphor/eye.svg", theme.muted_foreground.opacity(0.72))
+            };
+            div()
+                .id("editor-preview-toggle")
+                .h(px(TAB_BAR_HEIGHT))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .px(px(6.0))
+                .bg(theme.tab_bar_segmented.opacity(0.72))
+                .child(
+                    div()
+                        .size(px(20.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(fg.opacity(0.08)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _event, window, cx| {
+                                cx.stop_propagation();
+                                window.prevent_default();
+                                this.focus_handle.focus(window, cx);
+                                this.toggle_preview(cx);
+                            }),
+                        )
+                        .child(svg().path(icon).size(px(12.0)).text_color(icon_color)),
+                )
+        });
+
+        let header = div()
+            .h(px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .child(tab_bar.flex_1().min_w_0())
+            .children(preview_toggle);
 
         let diagnostic_count = diagnostics.len();
         let diagnostics_label = if diagnostic_count == 0 {
@@ -1496,6 +1661,41 @@ impl Render for EditorView {
             .child(list)
             .child(Scrollbar::new(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always));
 
+        let body = if preview_active {
+            match preview_document {
+                Some(document) => {
+                    let base_dir = active
+                        .path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default();
+                    let namespace = format!("editor-preview-{active_index}");
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(editor_preview::render_markdown_preview(
+                            &document,
+                            &base_dir,
+                            &theme,
+                            &self.preview_scroll_handle,
+                            &namespace,
+                        ))
+                        .into_any_element()
+                }
+                None => div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .child("Rendering preview…")
+                    .into_any_element(),
+            }
+        } else {
+            list_frame.into_any_element()
+        };
+
         let view_handle = cx.weak_entity();
 
         div()
@@ -1524,13 +1724,19 @@ impl Render for EditorView {
                         return;
                     }
                     this.focus_handle.focus(window, cx);
+                    if this.preview_active() {
+                        window.prevent_default();
+                        cx.notify();
+                        return;
+                    }
                     this.mouse_down(event);
                     window.prevent_default();
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.point_hits_scrollbar(event.position)
+                if this.preview_active()
+                    || this.point_hits_scrollbar(event.position)
                     || !this.point_in_content_bounds(event.position)
                 {
                     return;
@@ -1542,6 +1748,9 @@ impl Render for EditorView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    if this.preview_active() {
+                        return;
+                    }
                     if this.point_hits_scrollbar(event.position) {
                         this.mouse_up(event);
                         return;
@@ -1556,8 +1765,8 @@ impl Render for EditorView {
                     cx.notify();
                 }),
             )
-            .child(tab_bar)
-            .child(list_frame)
+            .child(header)
+            .child(body)
             .child(status_bar)
             .into_any_element()
     }
@@ -1567,6 +1776,26 @@ impl Render for EditorView {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn preview_toggle_only_applies_to_markdown() {
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("notes.md"), false),
+            Some(true)
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("README.markdown"), false),
+            Some(true)
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("main.rs"), false),
+            None
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("notes.md"), true),
+            Some(false)
+        );
+    }
 
     #[test]
     fn content_point_accounts_for_text_gutter() {
