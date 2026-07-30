@@ -2517,8 +2517,12 @@ fn main() {
         .with_quit_mode(QuitMode::Explicit)
         .with_assets(assets::ConAssets)
         // Real HTTP client so markdown preview can fetch remote images;
-        // gpui's default NullHttpClient fails every request.
-        .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()));
+        // gpui's default NullHttpClient fails every request. reqwest picks
+        // up HTTP(S)_PROXY from the environment (see [network] proxy above).
+        .with_http_client(std::sync::Arc::new(
+            reqwest_client::ReqwestClient::user_agent(concat!("con/", env!("CARGO_PKG_VERSION")))
+                .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
+        ));
     log::info!("gpui application created");
     app.on_reopen(|cx| {
         let has_windows = cx

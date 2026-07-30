@@ -18,15 +18,23 @@ use gpui::{
     px, svg, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Theme,
+    ActiveTheme, Icon, Sizable, Theme,
+    button::{Button, ButtonVariants as _},
     scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow},
 };
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+
+/// Unique-per-process id for `EditorView` instances, used to namespace GPUI
+/// element ids (multiple editor panes may show previews simultaneously).
+static NEXT_EDITOR_VIEW_ID: AtomicU64 = AtomicU64::new(1);
 
 const EDITOR_FONT_SIZE: f32 = 14.0;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -227,9 +235,11 @@ pub struct EditorView {
     lsp_change_generations: HashMap<PathBuf, u64>,
     lsp_change_debounce_tasks: HashMap<PathBuf, Task<()>>,
     dirty_close_blocked_tab: Option<usize>,
+    view_id: u64,
     preview_scroll_handle: ScrollHandle,
     preview_parse_generation: u64,
     preview_parse_task: Option<Task<()>>,
+    preview_parse_pending: Option<(PathBuf, u64)>,
 }
 
 impl EditorView {
@@ -254,9 +264,11 @@ impl EditorView {
             lsp_change_generations: HashMap::new(),
             lsp_change_debounce_tasks: HashMap::new(),
             dirty_close_blocked_tab: None,
+            view_id: NEXT_EDITOR_VIEW_ID.fetch_add(1, Ordering::Relaxed),
             preview_scroll_handle: ScrollHandle::new(),
             preview_parse_generation: 0,
             preview_parse_task: None,
+            preview_parse_pending: None,
         }
     }
 
@@ -446,8 +458,9 @@ impl EditorView {
     }
 
     /// Reparse the tab's markdown after a debounce, unless the cached parse
-    /// already matches the buffer revision. Stale results are dropped via a
-    /// generation counter, mirroring the LSP did-change debounce.
+    /// already matches the buffer revision. Results are keyed by tab path (not
+    /// index, which shifts on close), and an in-flight parse for the same
+    /// tab+revision is not restarted by unrelated renders.
     fn schedule_preview_parse(&mut self, tab_index: usize, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(tab_index) else {
             return;
@@ -460,9 +473,20 @@ impl EditorView {
         if cache_current {
             return;
         }
+        let path = tab.path.clone();
+        if self
+            .preview_parse_pending
+            .as_ref()
+            .is_some_and(|(pending_path, pending_revision)| {
+                *pending_path == path && *pending_revision == revision
+            })
+        {
+            return;
+        }
         let text = tab.buffer.text();
         self.preview_parse_generation = self.preview_parse_generation.wrapping_add(1);
         let generation = self.preview_parse_generation;
+        self.preview_parse_pending = Some((path.clone(), revision));
         self.preview_parse_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(PREVIEW_PARSE_DEBOUNCE_MS))
@@ -478,7 +502,8 @@ impl EditorView {
                 if this.preview_parse_generation != generation {
                     return;
                 }
-                if let Some(tab) = this.tabs.get_mut(tab_index)
+                this.preview_parse_pending = None;
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.path == path)
                     && tab.buffer.revision() == revision
                 {
                     tab.preview_cache = Some((revision, Arc::new(parsed)));
@@ -1402,13 +1427,12 @@ impl Render for EditorView {
 
         let preview_available = editor_syntax::language_for_path(&active.path) == Some("markdown");
         let preview_toggle = preview_available.then(|| {
-            let (icon, icon_color) = if preview_active {
-                ("phosphor/code.svg", fg.opacity(0.85))
+            let icon = if preview_active {
+                "phosphor/code.svg"
             } else {
-                ("phosphor/eye.svg", theme.muted_foreground.opacity(0.72))
+                "phosphor/eye.svg"
             };
             div()
-                .id("editor-preview-toggle")
                 .h(px(TAB_BAR_HEIGHT))
                 .flex_shrink_0()
                 .flex()
@@ -1416,24 +1440,14 @@ impl Render for EditorView {
                 .px(px(6.0))
                 .bg(theme.tab_bar_segmented.opacity(0.72))
                 .child(
-                    div()
-                        .size(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.0))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(fg.opacity(0.08)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _event, window, cx| {
-                                cx.stop_propagation();
-                                window.prevent_default();
-                                this.focus_handle.focus(window, cx);
-                                this.toggle_preview(cx);
-                            }),
-                        )
-                        .child(svg().path(icon).size(px(12.0)).text_color(icon_color)),
+                    Button::new("editor-preview-toggle")
+                        .icon(Icon::default().path(icon))
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            this.focus_handle.focus(window, cx);
+                            this.toggle_preview(cx);
+                        })),
                 )
         });
 
@@ -1668,8 +1682,8 @@ impl Render for EditorView {
                         .path
                         .parent()
                         .map(Path::to_path_buf)
-                        .unwrap_or_default();
-                    let namespace = format!("editor-preview-{active_index}");
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let namespace = format!("editor-preview-{}-{active_index}", self.view_id);
                     div()
                         .flex_1()
                         .min_h_0()

@@ -914,13 +914,47 @@ impl Render for ChatMarkdownBlockView {
 
 fn parse_markdown(source: &str) -> Vec<MarkdownBlock> {
     match markdown::to_mdast(source, &chat_parse_options()) {
-        Ok(mdast::Node::Root(root)) => root.children.iter().flat_map(parse_block_node).collect(),
+        Ok(mdast::Node::Root(root)) => parse_block_children(&root.children),
         Ok(node) => parse_block_node(&node),
         Err(_) => vec![MarkdownBlock::Paragraph {
             inlines: vec![MarkdownInline::Text(source.to_string())],
             inline_cache: RefCell::new(None),
         }],
     }
+}
+
+/// Parse a sequence of mdast children, concatenating runs of consecutive
+/// `Html` nodes into one fragment first. CommonMark ends an HTML block at a
+/// blank line, so wrappers like `<p>…\n\n…</p>` arrive as several fragments;
+/// joining adjacent ones lets the DOM parser recover the structure.
+/// Well-formed independent fragments convert identically either way, since
+/// they parse as siblings under the same document body.
+fn parse_block_children(nodes: &[mdast::Node]) -> Vec<MarkdownBlock> {
+    fn flush_html_run(blocks: &mut Vec<MarkdownBlock>, html_run: &mut String) {
+        if !html_run.trim().is_empty() {
+            blocks.extend(parse_html_blocks(html_run));
+        }
+        html_run.clear();
+    }
+
+    let mut blocks = Vec::new();
+    let mut html_run = String::new();
+    for node in nodes {
+        match node {
+            mdast::Node::Html(raw) => {
+                if !html_run.is_empty() {
+                    html_run.push_str("\n\n");
+                }
+                html_run.push_str(&raw.value);
+            }
+            _ => {
+                flush_html_run(&mut blocks, &mut html_run);
+                blocks.extend(parse_block_node(node));
+            }
+        }
+    }
+    flush_html_run(&mut blocks, &mut html_run);
+    blocks
 }
 
 fn chat_parse_options() -> ParseOptions {
@@ -952,7 +986,7 @@ fn parse_block_node(node: &mdast::Node) -> Vec<MarkdownBlock> {
                 highlight_cache: RefCell::new(None),
             })],
         mdast::Node::Blockquote(val) => vec![MarkdownBlock::BlockQuote(
-            val.children.iter().flat_map(parse_block_node).collect(),
+            parse_block_children(&val.children),
         )],
         mdast::Node::List(list) => vec![MarkdownBlock::List {
             ordered: list.ordered,
@@ -961,13 +995,9 @@ fn parse_block_node(node: &mdast::Node) -> Vec<MarkdownBlock> {
                 .children
                 .iter()
                 .filter_map(|item| match item {
-                    mdast::Node::ListItem(list_item) => Some(
-                        list_item
-                            .children
-                            .iter()
-                            .flat_map(parse_block_node)
-                            .collect::<Vec<_>>(),
-                    ),
+                    mdast::Node::ListItem(list_item) => {
+                        Some(parse_block_children(&list_item.children))
+                    }
                     _ => None,
                 })
                 .collect(),
@@ -1171,10 +1201,13 @@ fn html_inlines_from(handle: &Handle, inlines: &mut Vec<MarkdownInline>) {
                     "br" | "wbr" => inlines.push(MarkdownInline::LineBreak),
                     "img" => {
                         let attrs = attrs.borrow();
-                        inlines.push(MarkdownInline::Image {
-                            alt: html_attr(&attrs, "alt").unwrap_or_default(),
-                            url: html_attr(&attrs, "src").unwrap_or_default(),
-                        });
+                        let alt = html_attr(&attrs, "alt").unwrap_or_default();
+                        let url = html_attr(&attrs, "src").unwrap_or_default();
+                        // Skip content-free images instead of rendering an
+                        // invisible empty block.
+                        if !alt.is_empty() || !url.is_empty() {
+                            inlines.push(MarkdownInline::Image { alt, url });
+                        }
                     }
                     "a" => {
                         let destination = html_attr(&attrs.borrow(), "href").unwrap_or_default();
@@ -1314,10 +1347,11 @@ fn parse_inline_nodes(nodes: &[mdast::Node]) -> Vec<MarkdownInline> {
         }
     }
 
-    // Unclosed containers still wrap whatever they collected.
+    // Unclosed containers still wrap whatever they collected — nested into
+    // any still-open parent container rather than flattened as siblings.
     while let Some(container) = html_stack.pop() {
         if let Some(inline) = container.finish() {
-            inlines.push(inline);
+            push_to_html_target(&mut inlines, &mut html_stack, inline);
         }
     }
 
@@ -1503,18 +1537,15 @@ fn handle_inline_html_token(
                     None
                 }
                 "img" => {
-                    push_to_html_target(
-                        inlines,
-                        stack,
-                        MarkdownInline::Image {
-                            alt: html_attr_value(&attrs, "alt")
-                                .unwrap_or_default()
-                                .to_string(),
-                            url: html_attr_value(&attrs, "src")
-                                .unwrap_or_default()
-                                .to_string(),
-                        },
-                    );
+                    let alt = html_attr_value(&attrs, "alt")
+                        .unwrap_or_default()
+                        .to_string();
+                    let url = html_attr_value(&attrs, "src")
+                        .unwrap_or_default()
+                        .to_string();
+                    if !alt.is_empty() || !url.is_empty() {
+                        push_to_html_target(inlines, stack, MarkdownInline::Image { alt, url });
+                    }
                     None
                 }
                 "a" => Some(HtmlInlineContainer::Link {
@@ -3584,6 +3615,66 @@ mod tests {
                 .iter()
                 .any(|inline| matches!(inline, MarkdownInline::LineBreak)),
             "expected <br> to become a line break, got {inlines:?}"
+        );
+    }
+
+    #[test]
+    fn html_fragments_split_by_blank_line_still_render_as_links() {
+        // CommonMark ends the HTML block at the blank line, so the badge row
+        // becomes separate blocks — but each fragment must still convert to a
+        // linked image instead of leaking raw markup.
+        let blocks = parse_markdown("<p align=\"center\">\n<a href=\"https://x\"><img src=\"a.png\" alt=\"a\"></a>\n\n<a href=\"https://y\"><img src=\"b.png\" alt=\"b\"></a>\n</p>");
+        let paragraphs: Vec<_> = blocks
+            .iter()
+            .filter(|block| matches!(block, MarkdownBlock::Paragraph { .. }))
+            .collect();
+        assert_eq!(paragraphs.len(), 2, "expected two paragraphs, got {blocks:?}");
+        for paragraph in paragraphs {
+            let MarkdownBlock::Paragraph { inlines, .. } = paragraph else {
+                unreachable!()
+            };
+            assert!(
+                matches!(
+                    inlines.as_slice(),
+                    [MarkdownInline::Link { label, .. }]
+                        if matches!(label.as_slice(), [MarkdownInline::Image { .. }])
+                ),
+                "expected linked image, got {inlines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn img_without_src_or_alt_is_skipped() {
+        let blocks = parse_markdown("<p><img></p>");
+        assert!(blocks.is_empty(), "expected no blocks, got {blocks:?}");
+
+        let blocks = parse_markdown("before <img> after");
+        let Some(MarkdownBlock::Paragraph { inlines, .. }) = blocks.first() else {
+            panic!("expected paragraph block, got {blocks:?}");
+        };
+        assert!(
+            !inlines
+                .iter()
+                .any(|inline| matches!(inline, MarkdownInline::Image { .. })),
+            "expected no image inline, got {inlines:?}"
+        );
+    }
+
+    #[test]
+    fn unclosed_nested_inline_html_nests_containers() {
+        let blocks = parse_markdown("a <strong><em>b");
+        let Some(MarkdownBlock::Paragraph { inlines, .. }) = blocks.first() else {
+            panic!("expected paragraph block, got {blocks:?}");
+        };
+        assert!(
+            inlines.iter().any(|inline| matches!(
+                inline,
+                MarkdownInline::Strong(children)
+                    if matches!(children.as_slice(), [MarkdownInline::Emphasis(inner)]
+                        if matches!(inner.as_slice(), [MarkdownInline::Text(text)] if text == "b"))
+            )),
+            "expected nested strong>emphasis, got {inlines:?}"
         );
     }
 

@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use gpui::{
-    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::Theme;
@@ -36,7 +36,12 @@ pub(crate) fn render_markdown_preview(
     }
 
     div()
-        .id("editor-markdown-preview")
+        // The id is namespaced per editor view + tab: multiple editor panes
+        // can show previews in the same window, and element ids must be
+        // unique or scroll state cross-wires.
+        .id(SharedString::from(format!(
+            "editor-markdown-preview-{copy_namespace}"
+        )))
         .size_full()
         .overflow_y_scroll()
         .track_scroll(scroll_handle)
