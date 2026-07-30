@@ -1440,7 +1440,7 @@ impl Render for EditorView {
                 .px(px(6.0))
                 .bg(theme.tab_bar_segmented.opacity(0.72))
                 .child(
-                    Button::new("editor-preview-toggle")
+                    Button::new(("editor-preview-toggle", self.view_id))
                         .icon(Icon::default().path(icon))
                         .ghost()
                         .small()
