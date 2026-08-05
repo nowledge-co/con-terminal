@@ -16,6 +16,15 @@ con is still pre-release, so entries may group related beta work while the produ
   [#254](https://github.com/nowledge-co/con-terminal/pull/254) by
   [@sunny0826](https://github.com/sunny0826))_
 
+### Fixed
+
+**Editor**
+
+- Fixed Markdown preview layout in wide editor panes: blockquotes now wrap
+  inside the preview column, and prose is centered instead of hugging the left
+  edge. _(PR [#255](https://github.com/nowledge-co/con-terminal/pull/255) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ---
 
 ## `v0.1.0-beta.79` - 2026-07-25
