@@ -4,28 +4,37 @@
 //! are laid out each frame, so large files are fast.
 
 use crate::{
+    chat_markdown::ParsedChatMarkdown,
     editor_buffer::{CursorPosition, EditorBuffer},
     editor_lsp::{self, EditorDiagnostic, LspClient, LspClientEvent},
-    editor_syntax,
+    editor_preview, editor_syntax,
 };
 use crossbeam_channel::{Receiver, Sender};
 use gpui::{
     App, Bounds, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
     InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollStrategy,
-    SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div, px, svg,
-    uniform_list,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle,
+    ScrollStrategy, SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div,
+    px, svg, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Theme,
+    ActiveTheme, Icon, Sizable, Theme,
+    button::{Button, ButtonVariants as _},
     scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow},
 };
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+
+/// Unique-per-process id for `EditorView` instances, used to namespace GPUI
+/// element ids (multiple editor panes may show previews simultaneously).
+static NEXT_EDITOR_VIEW_ID: AtomicU64 = AtomicU64::new(1);
 
 const EDITOR_FONT_SIZE: f32 = 14.0;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -39,6 +48,7 @@ const CHAR_WIDTH: f32 = editor_char_width(EDITOR_FONT_SIZE);
 const SCROLLBAR_HITBOX_SIZE: f32 = 16.0;
 const CURSOR_SCROLL_PADDING: f32 = 32.0;
 const LSP_DID_CHANGE_DEBOUNCE_MS: u64 = 150;
+const PREVIEW_PARSE_DEBOUNCE_MS: u64 = 300;
 
 const fn editor_char_width(font_size: f32) -> f32 {
     // GPUI's text rendering does the actual shaping, but this lightweight editor
@@ -85,6 +95,8 @@ pub struct EditorTab {
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
     save_enabled: bool,
+    preview: bool,
+    preview_cache: Option<(u64, Arc<ParsedChatMarkdown>)>,
 }
 
 #[derive(Clone, Default)]
@@ -117,6 +129,14 @@ struct EditorRenderSnapshot {
     selection: Option<(CursorPosition, CursorPosition)>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewParseRequest {
+    path: PathBuf,
+    revision: u64,
+    generation: u64,
+    text: String,
+}
+
 impl EditorTab {
     fn new(path: PathBuf, buffer: EditorBuffer) -> Self {
         Self {
@@ -124,6 +144,8 @@ impl EditorTab {
             buffer,
             render_cache: EditorRenderCache::default(),
             save_enabled: true,
+            preview: false,
+            preview_cache: None,
         }
     }
 
@@ -133,6 +155,8 @@ impl EditorTab {
             buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
             render_cache: EditorRenderCache::default(),
             save_enabled: false,
+            preview: false,
+            preview_cache: None,
         }
     }
 
@@ -219,6 +243,11 @@ pub struct EditorView {
     lsp_change_generations: HashMap<PathBuf, u64>,
     lsp_change_debounce_tasks: HashMap<PathBuf, Task<()>>,
     dirty_close_blocked_tab: Option<usize>,
+    view_id: u64,
+    preview_scroll_handle: ScrollHandle,
+    preview_parse_generation: u64,
+    preview_parse_task: Option<Task<()>>,
+    preview_parse_pending: Option<(PathBuf, u64)>,
 }
 
 impl EditorView {
@@ -243,6 +272,11 @@ impl EditorView {
             lsp_change_generations: HashMap::new(),
             lsp_change_debounce_tasks: HashMap::new(),
             dirty_close_blocked_tab: None,
+            view_id: NEXT_EDITOR_VIEW_ID.fetch_add(1, Ordering::Relaxed),
+            preview_scroll_handle: ScrollHandle::new(),
+            preview_parse_generation: 0,
+            preview_parse_task: None,
+            preview_parse_pending: None,
         }
     }
 
@@ -397,10 +431,163 @@ impl EditorView {
             self.active_tab = index;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
+            self.preview_scroll_handle = ScrollHandle::new();
             if let Some(path) = self.active_path().map(Path::to_path_buf) {
                 self.ensure_lsp_for_path(&path);
             }
         }
+    }
+
+    fn preview_active(&self) -> bool {
+        self.tabs
+            .get(self.active_tab)
+            .is_some_and(|tab| tab.preview)
+    }
+
+    fn preview_toggle_target(path: &Path, preview: bool) -> Option<bool> {
+        (editor_syntax::language_for_path(path) == Some("markdown")).then_some(!preview)
+    }
+
+    fn preview_parse_plan(
+        tab: &EditorTab,
+        pending: Option<(&Path, u64)>,
+    ) -> Option<(PathBuf, u64, String)> {
+        let revision = tab.buffer.revision();
+        let cache_current = tab
+            .preview_cache
+            .as_ref()
+            .is_some_and(|(cached, _)| *cached == revision);
+        if cache_current {
+            return None;
+        }
+        if pending.is_some_and(|(pending_path, pending_revision)| {
+            pending_path == tab.path && pending_revision == revision
+        }) {
+            return None;
+        }
+        Some((tab.path.clone(), revision, tab.buffer.text()))
+    }
+
+    fn begin_preview_parse_for_tabs(
+        tabs: &[EditorTab],
+        tab_index: usize,
+        pending: &mut Option<(PathBuf, u64)>,
+        generation: &mut u64,
+    ) -> Option<PreviewParseRequest> {
+        let tab = tabs.get(tab_index)?;
+        let pending_ref = pending
+            .as_ref()
+            .map(|(path, revision)| (path.as_path(), *revision));
+        let (path, revision, text) = Self::preview_parse_plan(tab, pending_ref)?;
+        *generation = generation.wrapping_add(1);
+        let request_generation = *generation;
+        *pending = Some((path.clone(), revision));
+        Some(PreviewParseRequest {
+            path,
+            revision,
+            generation: request_generation,
+            text,
+        })
+    }
+
+    fn begin_preview_parse(&mut self, tab_index: usize) -> Option<PreviewParseRequest> {
+        Self::begin_preview_parse_for_tabs(
+            &self.tabs,
+            tab_index,
+            &mut self.preview_parse_pending,
+            &mut self.preview_parse_generation,
+        )
+    }
+
+    fn apply_preview_parse_result_to_tabs(
+        tabs: &mut [EditorTab],
+        pending: &mut Option<(PathBuf, u64)>,
+        current_generation: u64,
+        path: &Path,
+        revision: u64,
+        result_generation: u64,
+        parsed: ParsedChatMarkdown,
+    ) -> bool {
+        if current_generation != result_generation {
+            return false;
+        }
+        *pending = None;
+        let Some(tab) = tabs.iter_mut().find(|tab| tab.path == path) else {
+            return false;
+        };
+        if tab.buffer.revision() != revision {
+            return false;
+        }
+        tab.preview_cache = Some((revision, Arc::new(parsed)));
+        true
+    }
+
+    fn apply_preview_parse_result(
+        &mut self,
+        path: &Path,
+        revision: u64,
+        generation: u64,
+        parsed: ParsedChatMarkdown,
+    ) -> bool {
+        Self::apply_preview_parse_result_to_tabs(
+            &mut self.tabs,
+            &mut self.preview_parse_pending,
+            self.preview_parse_generation,
+            path,
+            revision,
+            generation,
+            parsed,
+        )
+    }
+
+    /// Toggle the rendered markdown preview for the active tab. Only markdown
+    /// files can be previewed; other languages ignore the toggle.
+    pub fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(self.active_tab) else {
+            return;
+        };
+        let Some(preview) = Self::preview_toggle_target(&tab.path, tab.preview) else {
+            return;
+        };
+        let tab = &mut self.tabs[self.active_tab];
+        tab.preview = preview;
+        let preview = tab.preview;
+        self.preview_scroll_handle = ScrollHandle::new();
+        if preview {
+            self.schedule_preview_parse(self.active_tab, cx);
+        }
+        cx.notify();
+    }
+
+    /// Reparse the tab's markdown after a debounce, unless the cached parse
+    /// already matches the buffer revision. Results are keyed by tab path (not
+    /// index, which shifts on close), and an in-flight parse for the same
+    /// tab+revision is not restarted by unrelated renders.
+    fn schedule_preview_parse(&mut self, tab_index: usize, cx: &mut Context<Self>) {
+        let Some(request) = self.begin_preview_parse(tab_index) else {
+            return;
+        };
+        let path = request.path;
+        let revision = request.revision;
+        let generation = request.generation;
+        let text = request.text;
+        self.preview_parse_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(PREVIEW_PARSE_DEBOUNCE_MS))
+                .await;
+            // ParsedChatMarkdown is Send but not Sync (RefCell render caches),
+            // so parse on the background executor and wrap in Arc back on the
+            // main thread.
+            let parsed = cx
+                .background_executor()
+                .spawn(async move { ParsedChatMarkdown::parse(&text) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.apply_preview_parse_result(&path, revision, generation, parsed) {
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn activate_tab_and_emit(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -864,6 +1051,9 @@ impl EditorView {
     }
 
     pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_text(text);
         }
@@ -872,6 +1062,9 @@ impl EditorView {
     }
 
     pub fn insert_newline(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_newline();
         }
@@ -880,6 +1073,9 @@ impl EditorView {
     }
 
     pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_backward();
         }
@@ -888,6 +1084,9 @@ impl EditorView {
     }
 
     pub fn delete_forward(&mut self, cx: &mut Context<Self>) {
+        if self.preview_active() {
+            return;
+        }
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_forward();
         }
@@ -896,6 +1095,9 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.preview_active() {
+            return false;
+        }
         let undid = self.active_tab_mut().is_some_and(|tab| tab.buffer.undo());
         if undid {
             self.notify_lsp_active_did_change(cx);
@@ -1028,6 +1230,9 @@ impl EditorView {
     }
 
     pub fn cut_selection(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        if self.preview_active() {
+            return None;
+        }
         let text = self
             .active_tab_mut()
             .and_then(|tab| tab.buffer.cut_selection());
@@ -1170,6 +1375,24 @@ impl Render for EditorView {
         let line_height = px(metrics.line_height);
         let gutter_bg = theme.muted.opacity(0.04);
         let gutter_color = theme.muted_foreground.opacity(0.42);
+        let preview_active = self.preview_active();
+        if preview_active {
+            let cache_stale = match &self.tabs[active_index].preview_cache {
+                Some((revision, _)) => *revision != self.tabs[active_index].buffer.revision(),
+                None => true,
+            };
+            if cache_stale {
+                self.schedule_preview_parse(active_index, cx);
+            }
+        }
+        let preview_document = if preview_active {
+            self.tabs[active_index]
+                .preview_cache
+                .as_ref()
+                .map(|(_, document)| document.clone())
+        } else {
+            None
+        };
         let tabs = self
             .tabs
             .iter()
@@ -1278,6 +1501,39 @@ impl Render for EditorView {
 
             tab_bar = tab_bar.child(tab_el);
         }
+
+        let preview_available = editor_syntax::language_for_path(&active.path) == Some("markdown");
+        let preview_toggle = preview_available.then(|| {
+            let icon = if preview_active {
+                "phosphor/code.svg"
+            } else {
+                "phosphor/eye.svg"
+            };
+            div()
+                .h(px(TAB_BAR_HEIGHT))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .px(px(6.0))
+                .bg(theme.tab_bar_segmented.opacity(0.72))
+                .child(
+                    Button::new(("editor-preview-toggle", self.view_id))
+                        .icon(Icon::default().path(icon))
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            this.focus_handle.focus(window, cx);
+                            this.toggle_preview(cx);
+                        })),
+                )
+        });
+
+        let header = div()
+            .h(px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .child(tab_bar.flex_1().min_w_0())
+            .children(preview_toggle);
 
         let diagnostic_count = diagnostics.len();
         let diagnostics_label = if diagnostic_count == 0 {
@@ -1496,6 +1752,41 @@ impl Render for EditorView {
             .child(list)
             .child(Scrollbar::new(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always));
 
+        let body = if preview_active {
+            match preview_document {
+                Some(document) => {
+                    let base_dir = active
+                        .path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| PathBuf::from("."));
+                    let namespace = format!("editor-preview-{}-{active_index}", self.view_id);
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(editor_preview::render_markdown_preview(
+                            &document,
+                            &base_dir,
+                            &theme,
+                            &self.preview_scroll_handle,
+                            &namespace,
+                        ))
+                        .into_any_element()
+                }
+                None => div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .child("Rendering preview…")
+                    .into_any_element(),
+            }
+        } else {
+            list_frame.into_any_element()
+        };
+
         let view_handle = cx.weak_entity();
 
         div()
@@ -1524,13 +1815,19 @@ impl Render for EditorView {
                         return;
                     }
                     this.focus_handle.focus(window, cx);
+                    if this.preview_active() {
+                        window.prevent_default();
+                        cx.notify();
+                        return;
+                    }
                     this.mouse_down(event);
                     window.prevent_default();
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.point_hits_scrollbar(event.position)
+                if this.preview_active()
+                    || this.point_hits_scrollbar(event.position)
                     || !this.point_in_content_bounds(event.position)
                 {
                     return;
@@ -1542,6 +1839,9 @@ impl Render for EditorView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    if this.preview_active() {
+                        return;
+                    }
                     if this.point_hits_scrollbar(event.position) {
                         this.mouse_up(event);
                         return;
@@ -1556,8 +1856,8 @@ impl Render for EditorView {
                     cx.notify();
                 }),
             )
-            .child(tab_bar)
-            .child(list_frame)
+            .child(header)
+            .child(body)
             .child(status_bar)
             .into_any_element()
     }
@@ -1566,7 +1866,156 @@ impl Render for EditorView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::AppContext as _;
     use std::path::Path;
+
+    #[test]
+    fn preview_toggle_only_applies_to_markdown() {
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("notes.md"), false),
+            Some(true)
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("README.markdown"), false),
+            Some(true)
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("main.rs"), false),
+            None
+        );
+        assert_eq!(
+            EditorView::preview_toggle_target(Path::new("notes.md"), true),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn preview_parse_plan_skips_current_cache_and_duplicate_pending() {
+        let mut tab = EditorTab::new(
+            PathBuf::from("notes.md"),
+            EditorBuffer::from_text("# Notes\n\nbody"),
+        );
+        let revision = tab.buffer.revision();
+        assert_eq!(
+            EditorView::preview_parse_plan(&tab, None)
+                .map(|(path, revision, text)| { (path, revision, text.starts_with("# Notes")) }),
+            Some((PathBuf::from("notes.md"), revision, true))
+        );
+
+        assert!(
+            EditorView::preview_parse_plan(&tab, Some((Path::new("notes.md"), revision))).is_none()
+        );
+
+        tab.preview_cache = Some((revision, Arc::new(ParsedChatMarkdown::parse("cached"))));
+        assert!(EditorView::preview_parse_plan(&tab, None).is_none());
+
+        tab.buffer.insert_text("!");
+        assert!(EditorView::preview_parse_plan(&tab, None).is_some());
+    }
+
+    #[test]
+    fn preview_parse_result_requires_matching_generation_path_and_revision() {
+        let mut tabs = vec![EditorTab::new(
+            PathBuf::from("notes.md"),
+            EditorBuffer::from_text("# Notes"),
+        )];
+        let mut generation = 0;
+        let mut pending = None;
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("parse request");
+        assert_eq!(request.path, PathBuf::from("notes.md"));
+        assert_eq!(pending, Some((PathBuf::from("notes.md"), request.revision)));
+        assert!(
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .is_none()
+        );
+
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation.wrapping_add(1),
+            ParsedChatMarkdown::parse("wrong generation"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+        assert_eq!(pending, Some((PathBuf::from("notes.md"), request.revision)));
+
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("other.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("wrong path"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+        assert!(pending.is_none());
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("second parse request");
+        tabs[0].buffer.insert_text(" updated");
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("stale revision"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("fresh parse request");
+        assert!(EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("# Notes"),
+        ));
+        assert_eq!(
+            tabs[0]
+                .preview_cache
+                .as_ref()
+                .map(|(revision, _)| *revision),
+            Some(request.revision)
+        );
+    }
+
+    #[gpui::test]
+    fn preview_mode_guards_edit_operations(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            let apply = view.open_file_from_content_with_activation(
+                PathBuf::from("notes.md"),
+                "hello".to_string(),
+                true,
+            );
+            assert!(apply.activated);
+            view.tabs[0].preview = true;
+            view.tabs[0].buffer.select_all();
+
+            view.insert_text("changed", cx);
+            view.insert_newline(cx);
+            view.delete_backward(cx);
+            view.delete_forward(cx);
+            assert!(!view.undo(cx));
+            assert!(view.cut_selection(cx).is_none());
+
+            assert_eq!(view.tabs[0].buffer.text(), "hello");
+            assert_eq!(view.tabs[0].buffer.revision(), 0);
+        });
+    }
 
     #[test]
     fn content_point_accounts_for_text_gutter() {

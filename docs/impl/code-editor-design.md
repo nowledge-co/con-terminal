@@ -96,6 +96,43 @@ Closing follows the pane model: `Cmd+W` closes editor files one by one. When the
 last editor file in an editor pane closes, the pane is closed instead of
 rendering a "No file open" placeholder.
 
+## Markdown Preview
+
+Markdown tabs (`language_for_path == "markdown"`) can switch in place between
+source editing and a rendered preview. The toggle lives at the right end of the
+editor tab bar (eye/code phosphor icon) and on `Cmd+Shift+V`
+(`EditorTogglePreview`, scoped to `EditorView` like the other editor bindings).
+
+- Preview state is per `EditorTab` and session-only — it is not serialized into
+  workspace layouts, and the pane tree is untouched.
+- The rendered view reuses the agent panel's markdown renderer
+  (`chat_markdown.rs`) through `render_parsed_chat_markdown_file_preview`,
+  wrapped in a scroll container by `editor_preview.rs`. Whole-document
+  rendering, no block virtualization.
+- Reparsing is live: `schedule_preview_parse` debounces 300 ms, parses on the
+  background executor, and caches the result per tab keyed on the buffer
+  `revision`. A generation counter drops stale results, mirroring the LSP
+  did-change debounce. The render pass reschedules whenever the cached revision
+  lags the buffer.
+- Local images render inline: `mdast::Node::Image` parses into a dedicated
+  `MarkdownInline::Image`, and a paragraph holding a single image renders as a
+  GPUI `img()` element with the path resolved against the markdown file's
+  directory (`resolve_image_source`). Remote `http(s)` images also render
+  inline through GPUI's async image asset loader (alt text shows while
+  loading and as the failure fallback); only `data:` and empty URLs degrade
+  to alt text. Everything keeps degrading to alt text when no base dir is
+  set — so agent panel rendering is unchanged.
+- Raw HTML renders structurally instead of leaking source text: block-level
+  HTML goes through `html5ever` (`parse_html_blocks` — headings, paragraphs,
+  lists, quotes, `<pre>`, and linked `<img>` badges map onto markdown blocks),
+  while inline HTML arrives as single tag tokens and is reconstructed with a
+  container stack in `parse_inline_nodes` (`<strong>`/`<em>`/`<s>`/`<code>`/
+  `<kbd>`/`<a>`/`<img>`/`<br>`; `<script>`/`<style>` content is dropped and
+  unknown tags degrade to their text).
+- Preview mode is read-only: text mutation methods (`insert_text`,
+  `delete_*`, `cut_selection`, `undo`) no-op, and editor mouse hit-testing is
+  skipped while a preview is showing.
+
 ## Focus and Keybindings
 
 Editor text-editing bindings are scoped to `EditorView` so terminal keys such as
@@ -132,6 +169,9 @@ crates/con-app/src/editor_syntax.rs
 
 crates/con-app/src/editor_lsp.rs
   Best-effort language-server process integration and diagnostics parsing.
+
+crates/con-app/src/editor_preview.rs
+  Scrollable markdown preview body on top of the chat markdown renderer.
 
 crates/con-app/src/workspace/editor_actions.rs
   Editor action dispatch and text-key fallback handling.

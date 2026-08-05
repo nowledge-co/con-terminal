@@ -40,6 +40,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
 gpui-component-assets.workspace = true
+reqwest_client.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -58,6 +59,8 @@ chrono.workspace = true
 reqwest.workspace = true
 url.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
 ropey.workspace = true
 mermaid-rs-renderer.workspace = true
 mathjax-svg-rs.workspace = true
@@ -91,6 +94,10 @@ x11rb = "0.13.2"
 
 [target.'cfg(unix)'.dependencies]
 socket2 = "0.6"
+
+[dev-dependencies]
+# Layout tests use gpui's visual test harness (debug_bounds, TestAppContext).
+gpui = { workspace = true, features = ["test-support"] }
 
 [build-dependencies]
 cc = "1"

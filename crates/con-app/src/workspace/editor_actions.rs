@@ -372,6 +372,20 @@ impl ConWorkspace {
         }
     }
 
+    pub(crate) fn editor_toggle_preview(
+        &mut self,
+        _action: &EditorTogglePreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .with_focused_editor_view(window, cx, |editor, cx| editor.toggle_preview(cx))
+            .is_some()
+        {
+            Self::notify_editor_action(cx);
+        }
+    }
+
     pub(crate) fn editor_undo(
         &mut self,
         _action: &Undo,

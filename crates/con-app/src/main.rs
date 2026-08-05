@@ -55,6 +55,7 @@ mod ghostty_view;
 mod activity_bar;
 mod editor_buffer;
 mod editor_lsp;
+mod editor_preview;
 mod editor_syntax;
 mod editor_view;
 mod file_tree_view;
@@ -166,6 +167,7 @@ actions!(
         EditorDeleteForward,
         EditorInsertNewline,
         EditorSave,
+        EditorTogglePreview,
         HideApp,
         HideOtherApps,
         ShowAllApps,
@@ -1598,6 +1600,7 @@ fn editor_binding_specs() -> Vec<BindingSpec> {
     push_editor::<EditorDeleteForward>(&mut specs, "delete");
     push_editor::<EditorInsertNewline>(&mut specs, "enter");
     push_editor::<EditorSave>(&mut specs, "secondary-s");
+    push_editor::<EditorTogglePreview>(&mut specs, "secondary-shift-v");
     push_editor::<SelectAll>(&mut specs, "secondary-a");
     push_editor::<Copy>(&mut specs, "secondary-c");
     push_editor::<Cut>(&mut specs, "secondary-x");
@@ -2512,7 +2515,14 @@ fn main() {
 
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)
-        .with_assets(assets::ConAssets);
+        .with_assets(assets::ConAssets)
+        // Real HTTP client so markdown preview can fetch remote images;
+        // gpui's default NullHttpClient fails every request. reqwest picks
+        // up HTTP(S)_PROXY from the environment (see [network] proxy above).
+        .with_http_client(std::sync::Arc::new(
+            reqwest_client::ReqwestClient::user_agent(concat!("con/", env!("CARGO_PKG_VERSION")))
+                .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
+        ));
     log::info!("gpui application created");
     app.on_reopen(|cx| {
         let has_windows = cx
