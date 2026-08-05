@@ -63,6 +63,8 @@ sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 rust-i18n = "3"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 unicode-width = "0.2"
+html5ever = "0.27.0"
+markup5ever_rcdom = "0.3.0"
 
 # Utilities
 anyhow = "1"

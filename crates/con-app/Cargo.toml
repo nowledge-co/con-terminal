@@ -59,8 +59,8 @@ chrono.workspace = true
 reqwest.workspace = true
 url.workspace = true
 markdown = { version = "1.0.0", features = ["serde"] }
-html5ever = "0.27.0"
-markup5ever_rcdom = "0.3.0"
+html5ever.workspace = true
+markup5ever_rcdom.workspace = true
 ropey.workspace = true
 mermaid-rs-renderer.workspace = true
 mathjax-svg-rs.workspace = true

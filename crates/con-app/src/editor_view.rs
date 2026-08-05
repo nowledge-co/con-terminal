@@ -129,6 +129,14 @@ struct EditorRenderSnapshot {
     selection: Option<(CursorPosition, CursorPosition)>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewParseRequest {
+    path: PathBuf,
+    revision: u64,
+    generation: u64,
+    text: String,
+}
+
 impl EditorTab {
     fn new(path: PathBuf, buffer: EditorBuffer) -> Self {
         Self {
@@ -431,11 +439,105 @@ impl EditorView {
     }
 
     fn preview_active(&self) -> bool {
-        self.tabs.get(self.active_tab).is_some_and(|tab| tab.preview)
+        self.tabs
+            .get(self.active_tab)
+            .is_some_and(|tab| tab.preview)
     }
 
     fn preview_toggle_target(path: &Path, preview: bool) -> Option<bool> {
         (editor_syntax::language_for_path(path) == Some("markdown")).then_some(!preview)
+    }
+
+    fn preview_parse_plan(
+        tab: &EditorTab,
+        pending: Option<(&Path, u64)>,
+    ) -> Option<(PathBuf, u64, String)> {
+        let revision = tab.buffer.revision();
+        let cache_current = tab
+            .preview_cache
+            .as_ref()
+            .is_some_and(|(cached, _)| *cached == revision);
+        if cache_current {
+            return None;
+        }
+        if pending.is_some_and(|(pending_path, pending_revision)| {
+            pending_path == tab.path && pending_revision == revision
+        }) {
+            return None;
+        }
+        Some((tab.path.clone(), revision, tab.buffer.text()))
+    }
+
+    fn begin_preview_parse_for_tabs(
+        tabs: &[EditorTab],
+        tab_index: usize,
+        pending: &mut Option<(PathBuf, u64)>,
+        generation: &mut u64,
+    ) -> Option<PreviewParseRequest> {
+        let tab = tabs.get(tab_index)?;
+        let pending_ref = pending
+            .as_ref()
+            .map(|(path, revision)| (path.as_path(), *revision));
+        let (path, revision, text) = Self::preview_parse_plan(tab, pending_ref)?;
+        *generation = generation.wrapping_add(1);
+        let request_generation = *generation;
+        *pending = Some((path.clone(), revision));
+        Some(PreviewParseRequest {
+            path,
+            revision,
+            generation: request_generation,
+            text,
+        })
+    }
+
+    fn begin_preview_parse(&mut self, tab_index: usize) -> Option<PreviewParseRequest> {
+        Self::begin_preview_parse_for_tabs(
+            &self.tabs,
+            tab_index,
+            &mut self.preview_parse_pending,
+            &mut self.preview_parse_generation,
+        )
+    }
+
+    fn apply_preview_parse_result_to_tabs(
+        tabs: &mut [EditorTab],
+        pending: &mut Option<(PathBuf, u64)>,
+        current_generation: u64,
+        path: &Path,
+        revision: u64,
+        result_generation: u64,
+        parsed: ParsedChatMarkdown,
+    ) -> bool {
+        if current_generation != result_generation {
+            return false;
+        }
+        *pending = None;
+        let Some(tab) = tabs.iter_mut().find(|tab| tab.path == path) else {
+            return false;
+        };
+        if tab.buffer.revision() != revision {
+            return false;
+        }
+        tab.preview_cache = Some((revision, Arc::new(parsed)));
+        true
+    }
+
+    fn apply_preview_parse_result(
+        &mut self,
+        path: &Path,
+        revision: u64,
+        generation: u64,
+        parsed: ParsedChatMarkdown,
+    ) -> bool {
+        Self::apply_preview_parse_result_to_tabs(
+            &mut self.tabs,
+            &mut self.preview_parse_pending,
+            self.preview_parse_generation,
+            path,
+            revision,
+            generation,
+            parsed,
+        )
     }
 
     /// Toggle the rendered markdown preview for the active tab. Only markdown
@@ -462,31 +564,13 @@ impl EditorView {
     /// index, which shifts on close), and an in-flight parse for the same
     /// tab+revision is not restarted by unrelated renders.
     fn schedule_preview_parse(&mut self, tab_index: usize, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.get(tab_index) else {
+        let Some(request) = self.begin_preview_parse(tab_index) else {
             return;
         };
-        let revision = tab.buffer.revision();
-        let cache_current = tab
-            .preview_cache
-            .as_ref()
-            .is_some_and(|(cached, _)| *cached == revision);
-        if cache_current {
-            return;
-        }
-        let path = tab.path.clone();
-        if self
-            .preview_parse_pending
-            .as_ref()
-            .is_some_and(|(pending_path, pending_revision)| {
-                *pending_path == path && *pending_revision == revision
-            })
-        {
-            return;
-        }
-        let text = tab.buffer.text();
-        self.preview_parse_generation = self.preview_parse_generation.wrapping_add(1);
-        let generation = self.preview_parse_generation;
-        self.preview_parse_pending = Some((path.clone(), revision));
+        let path = request.path;
+        let revision = request.revision;
+        let generation = request.generation;
+        let text = request.text;
         self.preview_parse_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(PREVIEW_PARSE_DEBOUNCE_MS))
@@ -499,16 +583,9 @@ impl EditorView {
                 .spawn(async move { ParsedChatMarkdown::parse(&text) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.preview_parse_generation != generation {
-                    return;
+                if this.apply_preview_parse_result(&path, revision, generation, parsed) {
+                    cx.notify();
                 }
-                this.preview_parse_pending = None;
-                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.path == path)
-                    && tab.buffer.revision() == revision
-                {
-                    tab.preview_cache = Some((revision, Arc::new(parsed)));
-                }
-                cx.notify();
             });
         }));
     }
@@ -1789,6 +1866,7 @@ impl Render for EditorView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::AppContext as _;
     use std::path::Path;
 
     #[test]
@@ -1809,6 +1887,134 @@ mod tests {
             EditorView::preview_toggle_target(Path::new("notes.md"), true),
             Some(false)
         );
+    }
+
+    #[test]
+    fn preview_parse_plan_skips_current_cache_and_duplicate_pending() {
+        let mut tab = EditorTab::new(
+            PathBuf::from("notes.md"),
+            EditorBuffer::from_text("# Notes\n\nbody"),
+        );
+        let revision = tab.buffer.revision();
+        assert_eq!(
+            EditorView::preview_parse_plan(&tab, None)
+                .map(|(path, revision, text)| { (path, revision, text.starts_with("# Notes")) }),
+            Some((PathBuf::from("notes.md"), revision, true))
+        );
+
+        assert!(
+            EditorView::preview_parse_plan(&tab, Some((Path::new("notes.md"), revision))).is_none()
+        );
+
+        tab.preview_cache = Some((revision, Arc::new(ParsedChatMarkdown::parse("cached"))));
+        assert!(EditorView::preview_parse_plan(&tab, None).is_none());
+
+        tab.buffer.insert_text("!");
+        assert!(EditorView::preview_parse_plan(&tab, None).is_some());
+    }
+
+    #[test]
+    fn preview_parse_result_requires_matching_generation_path_and_revision() {
+        let mut tabs = vec![EditorTab::new(
+            PathBuf::from("notes.md"),
+            EditorBuffer::from_text("# Notes"),
+        )];
+        let mut generation = 0;
+        let mut pending = None;
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("parse request");
+        assert_eq!(request.path, PathBuf::from("notes.md"));
+        assert_eq!(pending, Some((PathBuf::from("notes.md"), request.revision)));
+        assert!(
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .is_none()
+        );
+
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation.wrapping_add(1),
+            ParsedChatMarkdown::parse("wrong generation"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+        assert_eq!(pending, Some((PathBuf::from("notes.md"), request.revision)));
+
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("other.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("wrong path"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+        assert!(pending.is_none());
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("second parse request");
+        tabs[0].buffer.insert_text(" updated");
+        assert!(!EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("stale revision"),
+        ));
+        assert!(tabs[0].preview_cache.is_none());
+
+        let request =
+            EditorView::begin_preview_parse_for_tabs(&tabs, 0, &mut pending, &mut generation)
+                .expect("fresh parse request");
+        assert!(EditorView::apply_preview_parse_result_to_tabs(
+            &mut tabs,
+            &mut pending,
+            generation,
+            Path::new("notes.md"),
+            request.revision,
+            request.generation,
+            ParsedChatMarkdown::parse("# Notes"),
+        ));
+        assert_eq!(
+            tabs[0]
+                .preview_cache
+                .as_ref()
+                .map(|(revision, _)| *revision),
+            Some(request.revision)
+        );
+    }
+
+    #[gpui::test]
+    fn preview_mode_guards_edit_operations(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            let apply = view.open_file_from_content_with_activation(
+                PathBuf::from("notes.md"),
+                "hello".to_string(),
+                true,
+            );
+            assert!(apply.activated);
+            view.tabs[0].preview = true;
+            view.tabs[0].buffer.select_all();
+
+            view.insert_text("changed", cx);
+            view.insert_newline(cx);
+            view.delete_backward(cx);
+            view.delete_forward(cx);
+            assert!(!view.undo(cx));
+            assert!(view.cut_selection(cx).is_none());
+
+            assert_eq!(view.tabs[0].buffer.text(), "hello");
+            assert_eq!(view.tabs[0].buffer.revision(), 0);
+        });
     }
 
     #[test]

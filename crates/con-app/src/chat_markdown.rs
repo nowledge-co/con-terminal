@@ -512,8 +512,8 @@ pub fn render_parsed_chat_markdown_file_preview(
     theme: &Theme,
     copy_namespace: impl Into<SharedString>,
 ) -> AnyElement {
-    let style = ChatMarkdownStyle::new(theme, ChatMarkdownTone::Message)
-        .with_image_base_dir(base_dir);
+    let style =
+        ChatMarkdownStyle::new(theme, ChatMarkdownTone::Message).with_image_base_dir(base_dir);
     let copy_namespace = copy_namespace.into();
     let block_count = document.blocks.len();
 
@@ -975,19 +975,21 @@ fn parse_block_node(node: &mdast::Node) -> Vec<MarkdownBlock> {
             inlines: parse_inline_nodes(&val.children),
             inline_cache: RefCell::new(None),
         }],
-        mdast::Node::Code(raw) => vec![parse_mermaid_scale(raw.lang.as_deref(), raw.meta.as_deref())
-            .map(|scale| MarkdownBlock::Mermaid {
-                code: SharedString::from(raw.value.clone()),
-                scale,
-            })
-            .unwrap_or_else(|| MarkdownBlock::CodeBlock {
-                language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
-                code: raw.value.clone(),
-                highlight_cache: RefCell::new(None),
-            })],
-        mdast::Node::Blockquote(val) => vec![MarkdownBlock::BlockQuote(
-            parse_block_children(&val.children),
-        )],
+        mdast::Node::Code(raw) => vec![
+            parse_mermaid_scale(raw.lang.as_deref(), raw.meta.as_deref())
+                .map(|scale| MarkdownBlock::Mermaid {
+                    code: SharedString::from(raw.value.clone()),
+                    scale,
+                })
+                .unwrap_or_else(|| MarkdownBlock::CodeBlock {
+                    language: raw.lang.clone().filter(|lang| !lang.trim().is_empty()),
+                    code: raw.value.clone(),
+                    highlight_cache: RefCell::new(None),
+                }),
+        ],
+        mdast::Node::Blockquote(val) => vec![MarkdownBlock::BlockQuote(parse_block_children(
+            &val.children,
+        ))],
         mdast::Node::List(list) => vec![MarkdownBlock::List {
             ordered: list.ordered,
             start: list.start.unwrap_or(1) as usize,
@@ -1085,8 +1087,21 @@ fn parse_mermaid_scale(lang: Option<&str>, meta: Option<&str>) -> Option<u32> {
 
 /// Elements whose children are lifted to the surrounding block level.
 const HTML_TRANSPARENT_BLOCKS: &[&str] = &[
-    "html", "head", "body", "main", "section", "article", "header", "footer", "div", "figure",
-    "figcaption", "details", "summary", "center", "picture",
+    "html",
+    "head",
+    "body",
+    "main",
+    "section",
+    "article",
+    "header",
+    "footer",
+    "div",
+    "figure",
+    "figcaption",
+    "details",
+    "summary",
+    "center",
+    "picture",
 ];
 
 /// Parse a CommonMark `html` block into markdown blocks.
@@ -1568,7 +1583,9 @@ fn handle_inline_html_token(
             }
         }
         HtmlToken::Close { tag } => {
-            if stack.last().is_some_and(|container| container.same_kind(&tag))
+            if stack
+                .last()
+                .is_some_and(|container| container.same_kind(&tag))
                 && let Some(inline) = stack.pop().and_then(HtmlInlineContainer::finish)
             {
                 push_to_html_target(inlines, stack, inline);
@@ -1718,7 +1735,7 @@ fn render_block_at_path(
             if style.image_base_dir.is_some()
                 && let Some((alt, url)) = single_image_paragraph(inlines)
             {
-                return render_local_image_block(alt, url, style);
+                return render_image_block(alt, url, style);
             }
             div()
                 .w_full()
@@ -1877,7 +1894,11 @@ pub(crate) fn resolve_image_source(base_dir: &Path, url: &str) -> Option<Markdow
     }))
 }
 
-fn render_local_image_block(alt: &str, url: &str, style: &ChatMarkdownStyle<'_>) -> AnyElement {
+fn image_label<'a>(alt: &'a str, url: &'a str) -> &'a str {
+    if alt.is_empty() { url } else { alt }
+}
+
+fn render_image_block(alt: &str, url: &str, style: &ChatMarkdownStyle<'_>) -> AnyElement {
     let make_fallback = |label: &str| {
         let label = label.to_string();
         let font_family = style.theme.font_family.clone();
@@ -1894,7 +1915,7 @@ fn render_local_image_block(alt: &str, url: &str, style: &ChatMarkdownStyle<'_>)
         }
     };
 
-    let label = if alt.is_empty() { url } else { alt };
+    let label = image_label(alt, url);
     let Some(source) = style
         .image_base_dir
         .as_deref()
@@ -1929,9 +1950,9 @@ fn render_block_with_width(
     table_scroll_handle: Option<&ScrollHandle>,
     copy_namespace: &str,
 ) -> AnyElement {
-    let mut wrapper = div().w_full().debug_selector(move || {
-        format!("chat-md-block-{index}")
-    });
+    let mut wrapper = div()
+        .w_full()
+        .debug_selector(move || format!("chat-md-block-{index}"));
     if !matches!(
         block,
         MarkdownBlock::CodeBlock { .. }
@@ -2839,10 +2860,7 @@ fn table_cell_measure_chars(inlines: &[MarkdownInline]) -> usize {
             | MarkdownInline::Strong(children)
             | MarkdownInline::Strikethrough(children) => table_cell_measure_chars(children),
             MarkdownInline::Link { label, .. } => table_cell_measure_chars(label),
-            MarkdownInline::Image { alt, url } => {
-                let text = if alt.is_empty() { url } else { alt };
-                text.chars().count().min(24)
-            }
+            MarkdownInline::Image { alt, url } => image_label(alt, url).chars().count().min(24),
             MarkdownInline::SoftBreak | MarkdownInline::LineBreak => 1,
         })
         .max()
@@ -3312,8 +3330,7 @@ fn collect_inline_flow_items(
                 items.push(InlineFlowItem::LineBreak);
             }
             MarkdownInline::Image { alt, url } => {
-                let label = if alt.is_empty() { url } else { alt };
-                push_run(text, runs, &current_style, label);
+                push_run(text, runs, &current_style, image_label(alt, url));
             }
         }
     }
@@ -3478,8 +3495,7 @@ fn append_inline_runs(
             MarkdownInline::SoftBreak => push_run(text, runs, &current_style, " "),
             MarkdownInline::LineBreak => push_run(text, runs, &current_style, "\n"),
             MarkdownInline::Image { alt, url } => {
-                let label = if alt.is_empty() { url } else { alt };
-                push_run(text, runs, &current_style, label);
+                push_run(text, runs, &current_style, image_label(alt, url));
             }
         }
     }
@@ -3525,7 +3541,10 @@ mod tests {
             },
             MarkdownInline::Text("  ".to_string()),
         ];
-        assert_eq!(single_image_paragraph(&with_whitespace), Some(("a", "x.png")));
+        assert_eq!(
+            single_image_paragraph(&with_whitespace),
+            Some(("a", "x.png"))
+        );
 
         let with_text = vec![
             MarkdownInline::Text("see ".to_string()),
@@ -3551,7 +3570,9 @@ mod tests {
 
     #[test]
     fn html_block_heading_and_paragraph() {
-        let blocks = parse_markdown("<h1 align=\"center\">con</h1>\n\n<p align=\"center\"><strong>The terminal</strong></p>");
+        let blocks = parse_markdown(
+            "<h1 align=\"center\">con</h1>\n\n<p align=\"center\"><strong>The terminal</strong></p>",
+        );
         assert!(matches!(
             &blocks[0],
             MarkdownBlock::Heading { level: 1, inlines, .. }
@@ -3567,8 +3588,9 @@ mod tests {
 
     #[test]
     fn html_block_linked_image() {
-        let blocks =
-            parse_markdown("<p align=\"center\">\n  <a href=\"https://con.nowledge.co\"><img src=\"assets/logo.png\" width=\"120\" alt=\"con logo\"></a>\n</p>");
+        let blocks = parse_markdown(
+            "<p align=\"center\">\n  <a href=\"https://con.nowledge.co\"><img src=\"assets/logo.png\" width=\"120\" alt=\"con logo\"></a>\n</p>",
+        );
         let Some(MarkdownBlock::Paragraph { inlines, .. }) = blocks.first() else {
             panic!("expected paragraph block, got {blocks:?}");
         };
@@ -3623,12 +3645,18 @@ mod tests {
         // CommonMark ends the HTML block at the blank line, so the badge row
         // becomes separate blocks — but each fragment must still convert to a
         // linked image instead of leaking raw markup.
-        let blocks = parse_markdown("<p align=\"center\">\n<a href=\"https://x\"><img src=\"a.png\" alt=\"a\"></a>\n\n<a href=\"https://y\"><img src=\"b.png\" alt=\"b\"></a>\n</p>");
+        let blocks = parse_markdown(
+            "<p align=\"center\">\n<a href=\"https://x\"><img src=\"a.png\" alt=\"a\"></a>\n\n<a href=\"https://y\"><img src=\"b.png\" alt=\"b\"></a>\n</p>",
+        );
         let paragraphs: Vec<_> = blocks
             .iter()
             .filter(|block| matches!(block, MarkdownBlock::Paragraph { .. }))
             .collect();
-        assert_eq!(paragraphs.len(), 2, "expected two paragraphs, got {blocks:?}");
+        assert_eq!(
+            paragraphs.len(),
+            2,
+            "expected two paragraphs, got {blocks:?}"
+        );
         for paragraph in paragraphs {
             let MarkdownBlock::Paragraph { inlines, .. } = paragraph else {
                 unreachable!()
@@ -4057,7 +4085,11 @@ mod tests {
     }
 
     impl Render for PreviewLayoutTestView {
-        fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
             let theme = Theme::default();
             let document = ParsedChatMarkdown::parse(self.source);
             let content = render_parsed_chat_markdown_file_preview(
@@ -4098,8 +4130,10 @@ mod tests {
         let paragraph = cx
             .debug_bounds("chat-md-block-1")
             .expect("paragraph bounds");
-        eprintln!("DEBUG list={list:?} row0={row0:?} row={last_row:?} para={paragraph:?}");
-
+        assert!(
+            row0.bottom() <= last_row.top(),
+            "first list row overlaps last row: row0={row0:?} row={last_row:?}"
+        );
         assert!(
             paragraph.top() >= list.bottom(),
             "paragraph overlaps list block: list={list:?} paragraph={paragraph:?}"

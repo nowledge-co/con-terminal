@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.80` - unreleased
+
+### Added
+
+**Editor**
+
+- Added an in-place Markdown preview for editor tabs, with live refresh,
+  rendered tables, code blocks, math, Mermaid diagrams, common inline HTML,
+  and local or remote images resolved from the document. _(PR
+  [#254](https://github.com/nowledge-co/con-terminal/pull/254) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.79` - 2026-07-25
 
 ### Changed

@@ -45,17 +45,13 @@ pub(crate) fn render_markdown_preview(
         .size_full()
         .overflow_y_scroll()
         .track_scroll(scroll_handle)
-        .child(
-            div()
-                .w_full()
-                .px(px(20.0))
-                .py(px(16.0))
-                .child(render_parsed_chat_markdown_file_preview(
-                    document,
-                    base_dir,
-                    theme,
-                    copy_namespace.to_string(),
-                )),
-        )
+        .child(div().w_full().px(px(20.0)).py(px(16.0)).child(
+            render_parsed_chat_markdown_file_preview(
+                document,
+                base_dir,
+                theme,
+                copy_namespace.to_string(),
+            ),
+        ))
         .into_any_element()
 }
