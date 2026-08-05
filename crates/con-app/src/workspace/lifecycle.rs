@@ -1,4 +1,7 @@
 use super::*;
+use crate::editor_tab_actions::reusable_editor_tab_index;
+use crate::file_tree_view::OpenFileInEditorTab;
+use super::tab_presentation::editor_tab_title;
 
 impl ConWorkspace {
     pub fn from_session(
@@ -229,6 +232,7 @@ impl ConWorkspace {
                 .iter()
                 .enumerate()
                 .map(|(i, tab)| {
+                    let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
                     let presentation = smart_tab_presentation(
                         tab.user_label.as_deref(),
                         tab.ai_label.as_deref(),
@@ -237,6 +241,7 @@ impl ConWorkspace {
                         Some(tab.title.as_str()),
                         None,
                         i,
+                        is_editor_only,
                     );
                     let pane_count = tab.pane_tree.pane_terminals().len();
                     SessionEntry {
@@ -437,6 +442,16 @@ impl ConWorkspace {
             window,
             |this, _search, event: &OpenFile, window, cx| {
                 this.open_path_in_active_editor(event.path.clone(), window, cx);
+            },
+        )
+        .detach();
+
+        // File tree: open file in a dedicated editor tab when user clicks "open in editor tab" button.
+        cx.subscribe_in(
+            &file_tree_entity,
+            window,
+            |this, _tree, event: &OpenFileInEditorTab, window, cx| {
+                this.open_path_in_editor_tab(event.path.clone(), window, cx);
             },
         )
         .detach();
@@ -672,6 +687,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab,
+            last_editor_tab: None,
             is_quick_terminal: false,
             terminal_font_family,
             ui_font_family,
@@ -865,6 +881,90 @@ impl ConWorkspace {
         editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);
         cx.notify();
+    }
+
+    /// Create a new EditorView with font_size and subscribe to ActiveFileChanged and EditorEmptied events.
+    pub(super) fn create_editor_view_subscribed(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<EditorView> {
+        let editor_font_size = self.font_size;
+        let editor_view = cx.new(|cx| EditorView::new_with_font_size(editor_font_size, cx));
+        cx.subscribe_in(
+            &editor_view,
+            window,
+            |this, editor, _event: &ActiveFileChanged, _window, cx| {
+                if let Some(tab_index) = this
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.pane_tree.pane_id_for_editor_view(editor).is_some())
+                {
+                    let active_file = editor.read(cx).active_path().map(Path::to_path_buf);
+                    this.tabs[tab_index].title = editor_tab_title(active_file.as_deref());
+                    this.sync_sidebar(cx);
+                    this.save_session(cx);
+                }
+                this.sync_file_tree_from_active_focus(cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &editor_view,
+            window,
+            |this, editor, _event: &EditorEmptied, window, cx| {
+                let Some((tab_index, pane_id)) =
+                    this.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+                        tab.pane_tree
+                            .pane_id_for_editor_view(editor)
+                            .map(|pane_id| (tab_index, pane_id))
+                    })
+                else {
+                    return;
+                };
+                if !this.close_pane_in_tab(tab_index, pane_id, window, cx) {
+                    this.close_tab_by_index(tab_index, window, cx);
+                }
+            },
+        )
+        .detach();
+        editor_view
+    }
+
+    /// Open a path in an editor tab, reusing existing editor tabs or creating a new one.
+    pub(super) fn open_path_in_editor_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_editor_tab: Vec<bool> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_tree.focused_pane_is_editor())
+            .collect();
+
+        let active_tab = self.active_tab;
+        if let Some(idx) =
+            reusable_editor_tab_index(&is_editor_tab, active_tab, self.last_editor_tab)
+        {
+            self.activate_tab(idx, window, cx);
+            let pane_id = self.tabs[idx].pane_tree.find_editor_pane().unwrap();
+            self.tabs[idx].pane_tree.focus_pane(pane_id);
+            let editor_view = self.tabs[idx]
+                .pane_tree
+                .editor_view_for_pane(pane_id)
+                .unwrap();
+            let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
+            editor_view.update(cx, |editor: &mut EditorView, cx| {
+                editor.open_file(path.clone(), cx);
+            });
+            editor_focus.focus(window, cx);
+            self.sync_file_tree_from_active_focus(cx);
+            self.save_session(cx);
+        } else {
+            self.new_editor_tab(path, window, cx);
+        }
     }
 
     pub(super) fn horizontal_tabs_visible(&self) -> bool {

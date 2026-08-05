@@ -576,6 +576,7 @@ fn tab_rename_initial_label_prefers_rendered_presentation_over_raw_title() {
             Some("ssh prod-1.example.com"),
             Some("/Users/sundy/src/con-terminal"),
             0,
+            false,
         ),
         "prod-1.example.com"
     );
@@ -589,6 +590,7 @@ fn tab_rename_initial_label_prefers_rendered_presentation_over_raw_title() {
             Some("zsh"),
             Some("/Users/sundy/src/con-terminal"),
             0,
+            false,
         ),
         "Deploy"
     );

@@ -57,6 +57,7 @@ mod editor_buffer;
 mod editor_lsp;
 mod editor_preview;
 mod editor_syntax;
+mod editor_tab_actions;
 mod editor_view;
 mod file_tree_view;
 mod input_bar;

@@ -133,6 +133,29 @@ editor tab bar (eye/code phosphor icon) and on `Cmd+Shift+V`
   `delete_*`, `cut_selection`, `undo`) no-op, and editor mouse hit-testing is
   skipped while a preview is showing.
 
+## Open in Editor Tab
+
+Each file row in the file explorer shows an "open in editor tab" icon (arrow-square-out phosphor icon) on hover. Directories do not show the icon — only files.
+
+Clicking the icon emits `OpenFileInEditorTab`, which is distinct from the regular `OpenFile` event emitted when clicking the row itself. This ensures the icon click never triggers a terminal pane file open.
+
+Editor-only tabs render with a file-code icon (distinct from terminal tabs) in both the horizontal tab strip and the vertical sidebar, and the tab title follows the active file name via the `ActiveFileChanged` subscription on each editor view.
+
+**Tab reuse logic** (`reusable_editor_tab_index`):
+
+- If the last active tab is an editor tab, reuse it.
+- Otherwise, scan tabs left-to-right from the active tab for an editor tab.
+- If found, activate that tab and open the file in its editor pane.
+- If none exists, create a new editor tab (`ConWorkspace::new_editor_tab`).
+
+**Multiple files**: Each subsequent "open in editor tab" action adds a new `EditorTab` to the active editor pane's tab bar. Clicking the same file twice while it is already open switches to that tab's page instead of reopening it (handled by `EditorView::open_file`).
+
+**File tree sync**: When an editor tab gains focus, `sync_file_tree_from_active_focus` updates the file explorer root to the editor's active file's parent directory, preserving the existing root if it already contains the file.
+
+**Fallback on last close**: When the last editor file in an editor pane is closed, the pane itself is closed, and focus falls back to the next available pane (typically the last active terminal tab).
+
+**Icon visibility**: The icon uses `opacity(0.0)` by default and `opacity(1.0)` on hover. It renders in the list item's muted foreground color and is visible in both light and dark themes.
+
 ## Focus and Keybindings
 
 Editor text-editing bindings are scoped to `EditorView` so terminal keys such as

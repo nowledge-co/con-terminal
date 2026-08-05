@@ -143,6 +143,8 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
+    /// Index of the last activated editor tab, used for "open in editor tab" reuse logic.
+    last_editor_tab: Option<usize>,
     /// True when this workspace is the singleton quick terminal,
     /// which must never be fully closed — closing the last tab
     /// should reinitialize a fresh tab and hide the window instead.

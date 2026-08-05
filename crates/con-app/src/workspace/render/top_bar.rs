@@ -378,6 +378,7 @@ impl ConWorkspace {
                 let tab_id = session_id;
                 let tab_color = tab.color;
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
+                let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
                 let (hostname_for_tab, title_for_tab, dir_for_tab) =
                     if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                         (
@@ -386,7 +387,7 @@ impl ConWorkspace {
                             terminal.current_dir(cx),
                         )
                     } else {
-                        (None, None, None)
+                        (None, Some(tab.title.clone()), None)
                     };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
@@ -396,6 +397,7 @@ impl ConWorkspace {
                     title_for_tab.as_deref(),
                     dir_for_tab.as_deref(),
                     index,
+                    is_editor_only,
                 );
                 let tab_icon = presentation.icon;
 

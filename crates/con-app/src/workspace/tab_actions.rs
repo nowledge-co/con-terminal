@@ -24,6 +24,10 @@ impl ConWorkspace {
         self.active_tab = index;
         self.tabs[index].needs_attention = false;
 
+        if self.tabs[index].pane_tree.focused_pane_is_editor() {
+            self.last_editor_tab = Some(index);
+        }
+
         // Show new tab's ghostty NSViews and focus active surface
         for terminal in self.tabs[index].pane_tree.all_terminals() {
             terminal.ensure_surface(window, cx);
@@ -739,6 +743,59 @@ impl ConWorkspace {
         if let Some(index) = self.tab_index_for_summary_id(tab_id) {
             self.duplicate_tab(index, window, cx);
         }
+    }
+
+    /// Create a new editor tab with the given file path.
+    pub(super) fn new_editor_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor_view = self.create_editor_view_subscribed(window, cx);
+        let pane_tree = PaneTree::new_editor(editor_view.clone());
+
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
+        let new_tab = Tab {
+            pane_tree,
+            title: editor_tab_title(None),
+            user_label: None,
+            ai_label: None,
+            ai_icon: None,
+            color: None,
+            summary_id,
+            summary_epoch: 0,
+            needs_attention: false,
+            session: AgentSession::new(),
+            agent_routing: AgentRoutingState::default(),
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
+            shell_history: HashMap::new(),
+        };
+
+        let active_tab = self.active_tab;
+        let insert_at = active_tab + 1;
+        self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
+        self.tabs.insert(insert_at, new_tab);
+        if self.active_tab >= insert_at {
+            self.active_tab += 1;
+        }
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
+        self.activate_tab(insert_at, window, cx);
+
+        let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
+        editor_view.update(cx, |editor: &mut EditorView, cx| {
+            editor.open_file(path, cx);
+        });
+        editor_focus.focus(window, cx);
+        self.sync_file_tree_from_active_focus(cx);
+        self.save_session(cx);
+        cx.notify();
     }
 
     /// Close all tabs except the one at `index`.
