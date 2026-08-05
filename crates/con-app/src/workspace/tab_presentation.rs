@@ -79,7 +79,26 @@ pub(super) fn smart_tab_presentation(
     title: Option<&str>,
     current_dir: Option<&str>,
     tab_index: usize,
+    is_editor_only: bool,
 ) -> VerticalTabPresentation {
+    // Editor-only tabs (no terminal panes): fixed file icon, name
+    // priority user label → AI label → tab title → "Editor".
+    if is_editor_only {
+        let name = user_label
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| ai_label.map(str::trim).filter(|s| !s.is_empty()))
+            .or_else(|| title.map(str::trim).filter(|s| !s.is_empty()))
+            .unwrap_or("Editor")
+            .to_string();
+        return VerticalTabPresentation {
+            name,
+            subtitle: None,
+            icon: "phosphor/file-code.svg",
+            is_ssh: false,
+        };
+    }
+
     let is_ssh_session = hostname.map(|h| !h.trim().is_empty()).unwrap_or(false);
 
     // Helper: pick the heuristic icon (used when no AI / SSH signal).
@@ -195,6 +214,7 @@ pub(super) fn tab_rename_initial_label(
     title: Option<&str>,
     current_dir: Option<&str>,
     tab_index: usize,
+    is_editor_only: bool,
 ) -> String {
     if let Some(label) = user_label.filter(|label| !label.trim().is_empty()) {
         label.to_string()
@@ -207,6 +227,7 @@ pub(super) fn tab_rename_initial_label(
             title,
             current_dir,
             tab_index,
+            is_editor_only,
         )
         .name
     }
@@ -292,6 +313,101 @@ pub(super) fn parse_focused_process(title: &str) -> Option<(String, &'static str
         "git" | "lazygit" | "tig" | "gh" => Some((trimmed.to_string(), "phosphor/file-code.svg")),
 
         _ => Some((trimmed.to_string(), "phosphor/terminal.svg")),
+    }
+}
+
+/// Derive a display title for an editor tab.
+///
+/// - `Some(path)` → `path.file_name()` as string
+/// - `None` → `"Editor"`
+pub(crate) fn editor_tab_title(active_file: Option<&std::path::Path>) -> String {
+    match active_file.and_then(|p| p.file_name()) {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => "Editor".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests_editor_tab_title {
+    use super::*;
+
+    #[test]
+    fn test_basename_extraction() {
+        let path = std::path::Path::new("/a/b/main.rs");
+        assert_eq!(editor_tab_title(Some(path)), "main.rs");
+    }
+
+    #[test]
+    fn test_file_without_extension() {
+        let path = std::path::Path::new("/a/b/Makefile");
+        assert_eq!(editor_tab_title(Some(path)), "Makefile");
+    }
+
+    #[test]
+    fn test_none_returns_editor() {
+        assert_eq!(editor_tab_title(None), "Editor");
+    }
+
+    #[test]
+    fn test_path_ending_with_slash_returns_dir_name() {
+        // Trailing slash means file_name() returns the directory name ("b"), not empty
+        let path = std::path::Path::new("/a/b/");
+        assert_eq!(editor_tab_title(Some(path)), "b");
+    }
+
+    #[test]
+    fn test_root_path() {
+        let path = std::path::Path::new("/");
+        assert_eq!(editor_tab_title(Some(path)), "Editor");
+    }
+
+    #[test]
+    fn test_hidden_file() {
+        let path = std::path::Path::new("/a/b/.gitignore");
+        assert_eq!(editor_tab_title(Some(path)), ".gitignore");
+    }
+}
+
+#[cfg(test)]
+mod tests_smart_tab_presentation_editor_only {
+    use super::*;
+
+    #[test]
+    fn editor_only_tab_uses_file_code_icon_and_title() {
+        let p = smart_tab_presentation(None, None, None, None, Some("main.rs"), None, 0, true);
+        assert_eq!(p.icon, "phosphor/file-code.svg");
+        assert_eq!(p.name, "main.rs");
+        assert_eq!(p.subtitle, None);
+        assert!(!p.is_ssh);
+    }
+
+    #[test]
+    fn editor_only_tab_falls_back_to_editor_name() {
+        let p = smart_tab_presentation(None, None, None, None, None, None, 2, true);
+        assert_eq!(p.icon, "phosphor/file-code.svg");
+        assert_eq!(p.name, "Editor");
+    }
+
+    #[test]
+    fn editor_only_tab_respects_user_label() {
+        let p = smart_tab_presentation(
+            Some("My Notes"),
+            None,
+            None,
+            None,
+            Some("main.rs"),
+            None,
+            0,
+            true,
+        );
+        assert_eq!(p.name, "My Notes");
+        assert_eq!(p.icon, "phosphor/file-code.svg");
+    }
+
+    #[test]
+    fn terminal_tab_keeps_terminal_icon_when_editor_only_flag_false() {
+        let p = smart_tab_presentation(None, None, None, None, None, None, 0, false);
+        assert_eq!(p.icon, "phosphor/terminal.svg");
     }
 }
 

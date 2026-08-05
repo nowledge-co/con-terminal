@@ -264,6 +264,22 @@ impl PaneTree {
         }
     }
 
+    /// Construct a PaneTree with a single editor pane as the root.
+    pub fn new_editor(editor_view: Entity<EditorView>) -> Self {
+        Self {
+            root: PaneNode::Leaf {
+                id: 0,
+                content: PaneContent::Editor { view: editor_view },
+            },
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 1,
+            next_split_id: 0,
+            dragging: None,
+        }
+    }
+
     pub fn from_state(
         layout: &PaneLayoutState,
         focused_pane_id: Option<PaneId>,

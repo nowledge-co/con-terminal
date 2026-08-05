@@ -16,7 +16,7 @@ use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -40,6 +40,13 @@ pub struct OpenFile {
 }
 
 impl EventEmitter<OpenFile> for FileTreeView {}
+
+/// Emitted when the user clicks the "open in editor tab" button on a file row.
+pub struct OpenFileInEditorTab {
+    pub path: PathBuf,
+}
+
+impl EventEmitter<OpenFileInEditorTab> for FileTreeView {}
 
 pub struct FileTreeView {
     root: Option<PathBuf>,
@@ -81,6 +88,10 @@ impl FileTreeView {
 
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
+    }
+
+    pub fn active_path(&self) -> Option<&Path> {
+        self.active_path.as_deref()
     }
 
     /// Toggle expand/collapse for a directory entry.
@@ -188,6 +199,10 @@ fn remove_descendants(entries: &mut Vec<FileEntry>, parent_index: usize) {
     entries.drain(remove_start..remove_end);
 }
 
+fn row_has_open_button(entry: &FileEntry) -> bool {
+    !entry.is_dir
+}
+
 /// Build a flat entry list for `dir` at `depth`. Only one level deep
 /// (children of expanded dirs are inserted lazily by `toggle_dir`).
 fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry> {
@@ -253,7 +268,7 @@ impl Render for FileTreeView {
                 .into_any_element();
         }
 
-        let active_path = self.active_path.clone();
+        let active_path = self.active_path().map(Path::to_path_buf);
         let accent_bg = theme
             .primary
             .opacity(if theme.is_dark() { 0.12 } else { 0.075 });
@@ -362,6 +377,47 @@ impl Render for FileTreeView {
                                 .font_family(list_theme.font_family.clone())
                                 .child(name),
                         )
+                        .child({
+                            if !row_has_open_button(&entry) {
+                                div().size(px(ICON_SIZE)).flex_shrink_0().into_any_element()
+                            } else {
+                                let path = path.clone();
+                                let weak = weak.clone();
+                                div()
+                                    .id(("file-open-in-editor", idx))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(ICON_SIZE))
+                                    .flex_shrink_0()
+                                    .cursor_pointer()
+                                    .opacity(if is_active { 0.4 } else { 0.0 })
+                                    .hover(move |s| s.opacity(1.0))
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::new("Open in Editor Tab").build(window, cx)
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        move |_: &MouseDownEvent, _window, cx| {
+                                            cx.stop_propagation();
+                                            if let Some(view) = weak.upgrade() {
+                                                view.update(cx, |_this, cx| {
+                                                    cx.emit(OpenFileInEditorTab {
+                                                        path: path.clone(),
+                                                    });
+                                                });
+                                            }
+                                        },
+                                    )
+                                    .child(
+                                        svg()
+                                            .path("phosphor/arrow-square-out.svg")
+                                            .size(px(ICON_SIZE))
+                                            .text_color(list_theme.muted_foreground),
+                                    )
+                                    .into_any_element()
+                            }
+                        })
                         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx| {
                             if let Some(view) = weak.upgrade() {
                                 view.update(cx, |this, cx| {
@@ -520,5 +576,27 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[1].path, src);
         assert_eq!(entries[2].path, sibling);
+    }
+
+    #[test]
+    fn row_has_open_button_returns_true_only_for_files() {
+        let root = temp_tree();
+        let entries = build_root_entries(&root);
+
+        for entry in entries {
+            if entry.is_dir {
+                assert!(
+                    !row_has_open_button(&entry),
+                    "Directory '{}' should not have open button",
+                    entry.name
+                );
+            } else {
+                assert!(
+                    row_has_open_button(&entry),
+                    "File '{}' should have open button",
+                    entry.name
+                );
+            }
+        }
     }
 }

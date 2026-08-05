@@ -318,6 +318,7 @@ impl ConWorkspace {
         // Seed from the rendered tab label so focus→blur without edits
         // preserves AI/SSH/CWD-derived naming instead of materializing the
         // raw terminal title as a new explicit label.
+        let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
         let (hostname, title, current_dir) =
             if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                 (
@@ -326,7 +327,7 @@ impl ConWorkspace {
                     terminal.current_dir(cx),
                 )
             } else {
-                (None, None, None)
+                (None, Some(tab.title.clone()), None)
             };
         let initial = tab_rename_initial_label(
             tab.user_label.as_deref(),
@@ -336,6 +337,7 @@ impl ConWorkspace {
             title.as_deref(),
             current_dir.as_deref(),
             index,
+            is_editor_only,
         );
 
         let input = cx.new(|cx| {
@@ -604,6 +606,7 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab)| {
+                let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
                 let (hostname, title, current_dir) =
                     if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                         (
@@ -612,7 +615,7 @@ impl ConWorkspace {
                             terminal.current_dir(cx),
                         )
                     } else {
-                        (None, None, None)
+                        (None, Some(tab.title.clone()), None)
                     };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
@@ -622,6 +625,7 @@ impl ConWorkspace {
                     title.as_deref(),
                     current_dir.as_deref(),
                     i,
+                    is_editor_only,
                 );
                 let pane_count = tab.pane_tree.pane_terminals().len();
                 SessionEntry {
