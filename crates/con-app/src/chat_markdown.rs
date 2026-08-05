@@ -526,12 +526,15 @@ pub fn render_parsed_chat_markdown_file_preview(
     // caches that early measurement — wrapped text then paints taller than
     // its slot and overlaps the next block. Block containers measure with
     // the definite width directly, so spacing is done with padding instead
-    // of flex gap.
+    // of flex gap. Each block sits in a single-child flex row so the
+    // content-width-capped blocks center horizontally in wide panes.
     div()
         .w_full()
         .children(document.blocks.iter().enumerate().map(|(idx, block)| {
             div()
                 .w_full()
+                .flex()
+                .justify_center()
                 .pb(if idx + 1 == block_count {
                     px(0.0)
                 } else {
@@ -1995,13 +1998,19 @@ fn render_blockquote_children(
                 .gap(px(9.0))
                 .child(
                     div()
+                        .flex_none()
                         .w(px(3.0))
                         .h_full()
                         .min_h(px(18.0))
                         .bg(style.quote_tint),
                 )
                 .child(
+                    // flex_1 + min_w_0: without them the column sizes to the
+                    // text's intrinsic (unwrapped) width and long quote lines
+                    // overflow instead of wrapping.
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(style.inner_gap)
@@ -4141,6 +4150,48 @@ mod tests {
         assert!(
             last_row.bottom() <= paragraph.top(),
             "last list row overlaps paragraph: row={last_row:?} paragraph={paragraph:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn blockquote_content_wraps_within_container(cx: &mut gpui::TestAppContext) {
+        // Long quote text must wrap to multiple lines (taller than one line
+        // plus padding) instead of overflowing the container horizontally.
+        let (_view, cx) = cx.add_window_view(|_window, _cx| PreviewLayoutTestView {
+            source: "> 微服务架构风格这种开发方法，是以开发一组小型服务的方式来开发一个独立的应用系统。其中每个小型服务都运行在自己的进程中，并通过轻量级的机制互相通信，通常是 HTTP 资源接口。\n",
+            scroll: None,
+        });
+        let quote = cx
+            .debug_bounds("chat-md-block-0")
+            .expect("quote block bounds");
+        assert!(
+            quote.size.height > px(50.0),
+            "blockquote did not wrap (single-line height): {quote:?}"
+        );
+        assert!(
+            quote.size.width <= px(720.0),
+            "blockquote exceeded the content width cap: {quote:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn preview_content_centers_within_wide_panes(cx: &mut gpui::TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_window, _cx| PreviewLayoutTestView {
+            source: "plain paragraph text that stays on one line\n",
+            scroll: None,
+        });
+        let viewport = cx.update(|window, _cx| window.viewport_size());
+        let block = cx.debug_bounds("chat-md-block-0").expect("block bounds");
+
+        assert!(
+            block.size.width <= px(720.0),
+            "content column not capped: {block:?}"
+        );
+        let expected_left = (viewport.width - block.size.width) / 2.0;
+        let diff: f32 = (block.left() - expected_left).into();
+        assert!(
+            diff.abs() < 2.0,
+            "content column not centered: block={block:?} viewport={viewport:?}"
         );
     }
 }
