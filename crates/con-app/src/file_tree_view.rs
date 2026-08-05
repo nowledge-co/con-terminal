@@ -16,7 +16,7 @@ use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
 };
-use gpui_component::{tooltip::Tooltip, ActiveTheme};
+use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -396,14 +396,19 @@ impl Render for FileTreeView {
                                     .tooltip(move |window, cx| {
                                         Tooltip::new("Open in Editor Tab").build(window, cx)
                                     })
-                                    .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx| {
-                                        cx.stop_propagation();
-                                        if let Some(view) = weak.upgrade() {
-                                            view.update(cx, |_this, cx| {
-                                                cx.emit(OpenFileInEditorTab { path: path.clone() });
-                                            });
-                                        }
-                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        move |_: &MouseDownEvent, _window, cx| {
+                                            cx.stop_propagation();
+                                            if let Some(view) = weak.upgrade() {
+                                                view.update(cx, |_this, cx| {
+                                                    cx.emit(OpenFileInEditorTab {
+                                                        path: path.clone(),
+                                                    });
+                                                });
+                                            }
+                                        },
+                                    )
                                     .child(
                                         svg()
                                             .path("phosphor/arrow-square-out.svg")

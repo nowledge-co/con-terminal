@@ -24,8 +24,8 @@ impl ConWorkspace {
         self.active_tab = index;
         self.tabs[index].needs_attention = false;
 
-        if self.tabs[index].pane_tree.focused_pane_is_editor() {
-            self.last_editor_tab = Some(index);
+        if self.tabs[index].pane_tree.pane_terminals().is_empty() {
+            self.last_editor_tab_id = Some(self.tabs[index].summary_id);
         }
 
         // Show new tab's ghostty NSViews and focus active surface

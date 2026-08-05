@@ -143,10 +143,15 @@ Editor-only tabs render with a file-code icon (distinct from terminal tabs) in b
 
 **Tab reuse logic** (`reusable_editor_tab_index`):
 
-- If the last active tab is an editor tab, reuse it.
-- Otherwise, scan tabs left-to-right from the active tab for an editor tab.
-- If found, activate that tab and open the file in its editor pane.
-- If none exists, create a new editor tab (`ConWorkspace::new_editor_tab`).
+- If the last active editor-only tab still exists, reuse it by stable tab id.
+- Otherwise, if the active tab is editor-only, reuse it.
+- Otherwise, scan from the active tab forward, wrapping around, and reuse the
+  first editor-only tab.
+- If no editor-only tab exists, create a new editor tab
+  (`ConWorkspace::new_editor_tab`).
+
+Editor-only means the tab has no terminal panes. A normal terminal tab with an
+embedded editor pane from row-click is intentionally not reused by this action.
 
 **Multiple files**: Each subsequent "open in editor tab" action adds a new `EditorTab` to the active editor pane's tab bar. Clicking the same file twice while it is already open switches to that tab's page instead of reopening it (handled by `EditorView::open_file`).
 

@@ -1,7 +1,7 @@
+use super::tab_presentation::editor_tab_title;
 use super::*;
 use crate::editor_tab_actions::reusable_editor_tab_index;
 use crate::file_tree_view::OpenFileInEditorTab;
-use super::tab_presentation::editor_tab_title;
 
 impl ConWorkspace {
     pub fn from_session(
@@ -687,7 +687,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab,
-            last_editor_tab: None,
+            last_editor_tab_id: None,
             is_quick_terminal: false,
             terminal_font_family,
             ui_font_family,
@@ -938,16 +938,20 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let tab_ids: Vec<u64> = self.tabs.iter().map(|tab| tab.summary_id).collect();
         let is_editor_tab: Vec<bool> = self
             .tabs
             .iter()
-            .map(|tab| tab.pane_tree.focused_pane_is_editor())
+            .map(|tab| tab.pane_tree.pane_terminals().is_empty())
             .collect();
 
         let active_tab = self.active_tab;
-        if let Some(idx) =
-            reusable_editor_tab_index(&is_editor_tab, active_tab, self.last_editor_tab)
-        {
+        if let Some(idx) = reusable_editor_tab_index(
+            &tab_ids,
+            &is_editor_tab,
+            active_tab,
+            self.last_editor_tab_id,
+        ) {
             self.activate_tab(idx, window, cx);
             let pane_id = self.tabs[idx].pane_tree.find_editor_pane().unwrap();
             self.tabs[idx].pane_tree.focus_pane(pane_id);

@@ -280,26 +280,6 @@ impl PaneTree {
         }
     }
 
-    /// Returns true if the focused pane is an Editor pane.
-    pub fn focused_pane_is_editor(&self) -> bool {
-        Self::focused_pane_is_editor_node(&self.root, self.focused_pane_id)
-    }
-
-    fn focused_pane_is_editor_node(node: &PaneNode, focused_pane_id: PaneId) -> bool {
-        match node {
-            PaneNode::Leaf {
-                id,
-                content: PaneContent::Editor { .. },
-                ..
-            } if *id == focused_pane_id => true,
-            PaneNode::Leaf { .. } => false,
-            PaneNode::Split { first, second, .. } => {
-                Self::focused_pane_is_editor_node(first, focused_pane_id)
-                    || Self::focused_pane_is_editor_node(second, focused_pane_id)
-            }
-        }
-    }
-
     pub fn from_state(
         layout: &PaneLayoutState,
         focused_pane_id: Option<PaneId>,
@@ -3423,30 +3403,6 @@ mod tests {
         assert!(tree.is_noop_pane_move(1, 0, SplitDirection::Vertical, SplitPlacement::After,));
         assert!(tree.is_noop_pane_move(0, 1, SplitDirection::Vertical, SplitPlacement::Before,));
         assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
-    }
-
-    #[::core::prelude::v1::test]
-    fn new_editor_creates_editor_pane_tree() {
-        // We can't easily construct an Entity<EditorView> in a unit test without
-        // the full GPUI App context, so we verify the structure by checking that
-        // PaneTree::new(terminal) is NOT an editor tree.
-        // The actual new_editor() constructor is tested via the integration test
-        // infrastructure that can create EditorView entities.
-    }
-
-    #[::core::prelude::v1::test]
-    fn new_editor_focused_pane_is_editor_is_false_for_terminal_tree() {
-        // Verify that a terminal-based tree reports focused_pane_is_editor == false
-        let tree = PaneTree {
-            root: empty_leaf(0),
-            focused_pane_id: 0,
-            zoomed_pane_id: None,
-            next_id: 1,
-            next_surface_id: 0,
-            next_split_id: 0,
-            dragging: None,
-        };
-        assert!(!tree.focused_pane_is_editor());
     }
 
     #[::core::prelude::v1::test]

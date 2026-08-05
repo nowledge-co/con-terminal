@@ -374,9 +374,7 @@ mod tests_smart_tab_presentation_editor_only {
 
     #[test]
     fn editor_only_tab_uses_file_code_icon_and_title() {
-        let p = smart_tab_presentation(
-            None, None, None, None, Some("main.rs"), None, 0, true,
-        );
+        let p = smart_tab_presentation(None, None, None, None, Some("main.rs"), None, 0, true);
         assert_eq!(p.icon, "phosphor/file-code.svg");
         assert_eq!(p.name, "main.rs");
         assert_eq!(p.subtitle, None);
@@ -393,7 +391,14 @@ mod tests_smart_tab_presentation_editor_only {
     #[test]
     fn editor_only_tab_respects_user_label() {
         let p = smart_tab_presentation(
-            Some("My Notes"), None, None, None, Some("main.rs"), None, 0, true,
+            Some("My Notes"),
+            None,
+            None,
+            None,
+            Some("main.rs"),
+            None,
+            0,
+            true,
         );
         assert_eq!(p.name, "My Notes");
         assert_eq!(p.icon, "phosphor/file-code.svg");

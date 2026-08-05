@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.81` - unreleased
+
+### Added
+
+**Editor**
+
+- Added a file-tree affordance to open files in a dedicated editor tab. The
+  editor tab is reused for additional files, keeps terminal pane layouts
+  untouched, and remains separate from the existing row-click behavior. _(PR
+  [#257](https://github.com/nowledge-co/con-terminal/pull/257) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.80` - 2026-08-05
 
 ### Added
