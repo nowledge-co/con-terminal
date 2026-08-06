@@ -876,15 +876,7 @@ impl ChatMarkdownBlockView {
         table_scroll_handle: Option<&ScrollHandle>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let mut wrapper = div().w_full();
-        if !matches!(
-            block,
-            MarkdownBlock::CodeBlock { .. }
-                | MarkdownBlock::Mermaid { .. }
-                | MarkdownBlock::Table { .. }
-        ) {
-            wrapper = wrapper.max_w(style.content_width);
-        }
+        let wrapper = div().w_full().max_w(style.content_width);
 
         wrapper
             .child(self.render_block(block, index, style, table_scroll_handle, cx))
@@ -1953,17 +1945,10 @@ fn render_block_with_width(
     table_scroll_handle: Option<&ScrollHandle>,
     copy_namespace: &str,
 ) -> AnyElement {
-    let mut wrapper = div()
+    let wrapper = div()
         .w_full()
+        .max_w(style.content_width)
         .debug_selector(move || format!("chat-md-block-{index}"));
-    if !matches!(
-        block,
-        MarkdownBlock::CodeBlock { .. }
-            | MarkdownBlock::Mermaid { .. }
-            | MarkdownBlock::Table { .. }
-    ) {
-        wrapper = wrapper.max_w(style.content_width);
-    }
 
     wrapper
         .child(render_block(
@@ -2234,7 +2219,7 @@ fn render_code_block(
                 .child(header_label),
         )
         .child(div().h(px(1.0)).flex_1().bg(style.rule_color.opacity(0.36)))
-        .child(Clipboard::new(copy_id).value(SharedString::from(code.to_string())));
+        .child(Clipboard::new(copy_id.clone()).value(SharedString::from(code.to_string())));
 
     let block = div()
         .w_full()
@@ -2263,7 +2248,7 @@ fn render_code_block(
     let (code_text, code_runs) =
         cached_highlighted_code_runs(code, language, highlight_cache, style);
     let code_column = div()
-        .w_full()
+        .whitespace_nowrap()
         .font_family(style.theme.mono_font_family.clone())
         .text_size(style.code_font_size)
         .line_height(style.code_line_height)
@@ -2273,7 +2258,14 @@ fn render_code_block(
     block
         .child(
             div().px(px(10.0)).pb(px(10.0)).child(
+                // Stateful scroll container (id + overflow_x_scroll like the
+                // table) so long lines scroll horizontally; the nowrap column
+                // sizes to its intrinsic width and becomes the scroll extent.
                 div()
+                    .id((SharedString::from(copy_id), 0))
+                    .w_full()
+                    .flex()
+                    .overflow_x_scroll()
                     .rounded(px(10.0))
                     .bg(style.code_block_body_background.opacity(0.985))
                     .px(px(12.0))
@@ -4194,4 +4186,28 @@ mod tests {
             "content column not centered: block={block:?} viewport={viewport:?}"
         );
     }
+
+    #[gpui::test]
+    fn code_block_aligns_with_prose_column(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_view, cx) = cx.add_window_view(|_window, _cx| PreviewLayoutTestView {
+            source: "plain paragraph text that stays on one line\n\n```rust\nfn main() {}\n```\n",
+            scroll: None,
+        });
+        let paragraph = cx
+            .debug_bounds("chat-md-block-0")
+            .expect("paragraph bounds");
+        let code = cx.debug_bounds("chat-md-block-1").expect("code bounds");
+
+        assert!(
+            code.size.width <= px(720.0),
+            "code block not capped to content width: {code:?}"
+        );
+        let diff: f32 = (paragraph.left() - code.left()).into();
+        assert!(
+            diff.abs() < 2.0,
+            "code block left edge differs from prose column: paragraph={paragraph:?} code={code:?}"
+        );
+    }
+
 }
