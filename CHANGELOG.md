@@ -16,6 +16,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#257](https://github.com/nowledge-co/con-terminal/pull/257) by
   [@sunny0826](https://github.com/sunny0826))_
 
+### Fixed
+
+**Editor**
+
+- Fixed Markdown preview alignment in wide editor panes: code blocks, tables,
+  and Mermaid diagrams now share the centered content column instead of
+  spanning the pane edge, and long code lines scroll horizontally. _(PR
+  [#258](https://github.com/nowledge-co/con-terminal/pull/258) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ---
 
 ## `v0.1.0-beta.80` - 2026-08-05
