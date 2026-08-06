@@ -2248,6 +2248,7 @@ fn render_code_block(
     let (code_text, code_runs) =
         cached_highlighted_code_runs(code, language, highlight_cache, style);
     let code_column = div()
+        .debug_selector(|| "chat-md-code-text".into())
         .whitespace_nowrap()
         .font_family(style.theme.mono_font_family.clone())
         .text_size(style.code_font_size)
@@ -2263,6 +2264,7 @@ fn render_code_block(
                 // sizes to its intrinsic width and becomes the scroll extent.
                 div()
                     .id((SharedString::from(copy_id), 0))
+                    .debug_selector(|| "chat-md-code-scroll".into())
                     .w_full()
                     .flex()
                     .overflow_x_scroll()
@@ -4116,6 +4118,84 @@ mod tests {
         }
     }
 
+    struct BlockLayoutTestView {
+        source: &'static str,
+        block_index: usize,
+    }
+
+    impl Render for BlockLayoutTestView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let document = Arc::new(ParsedChatMarkdown::parse(self.source));
+            let block_index = self.block_index;
+            let view = cx.new(|_| {
+                ChatMarkdownBlockView::new(
+                    document,
+                    block_index,
+                    ChatMarkdownTone::Message,
+                    "layout-test",
+                )
+            });
+            div().size_full().child(view)
+        }
+    }
+
+    const LONG_CODE_LINE: &str = "const deeply_nested_value = client.workspace().panes().active().terminal().selection().unwrap_or_default().replace(\"alpha\", \"omega\");";
+
+    fn assert_code_block_layout(cx: &mut gpui::VisualTestContext, prose_selector: &'static str) {
+        let prose = cx.debug_bounds(prose_selector).expect("prose bounds");
+        let code = cx.debug_bounds("chat-md-block-1").expect("code bounds");
+        let scroll = cx
+            .debug_bounds("chat-md-code-scroll")
+            .expect("code scroll bounds");
+        let code_text = cx
+            .debug_bounds("chat-md-code-text")
+            .expect("code text bounds");
+
+        assert!(
+            code.size.width <= px(720.0),
+            "code block not capped to content width: {code:?}"
+        );
+        let diff: f32 = (prose.left() - code.left()).into();
+        assert!(
+            diff.abs() < 2.0,
+            "code block left edge differs from prose column: prose={prose:?} code={code:?}"
+        );
+        assert!(
+            code_text.size.width > scroll.size.width,
+            "long code line did not create horizontal overflow: text={code_text:?} scroll={scroll:?}"
+        );
+        assert!(
+            code_text.size.height < px(32.0),
+            "long code line wrapped instead of staying on one line: {code_text:?}"
+        );
+    }
+
+    fn assert_code_block_overflows_horizontally(cx: &mut gpui::VisualTestContext) {
+        let scroll = cx
+            .debug_bounds("chat-md-code-scroll")
+            .expect("code scroll bounds");
+        let code_text = cx
+            .debug_bounds("chat-md-code-text")
+            .expect("code text bounds");
+
+        assert!(
+            scroll.size.width <= px(720.0),
+            "code scroll not capped to content width: {scroll:?}"
+        );
+        assert!(
+            code_text.size.width > scroll.size.width,
+            "long code line did not create horizontal overflow: text={code_text:?} scroll={scroll:?}"
+        );
+        assert!(
+            code_text.size.height < px(32.0),
+            "long code line wrapped instead of staying on one line: {code_text:?}"
+        );
+    }
+
     #[gpui::test]
     fn list_tail_and_paragraph_do_not_overlap(cx: &mut gpui::TestAppContext) {
         let (_view, cx) = cx.add_window_view(|_window, _cx| PreviewLayoutTestView {
@@ -4190,24 +4270,32 @@ mod tests {
     #[gpui::test]
     fn code_block_aligns_with_prose_column(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
+        let source = Box::leak(
+            format!(
+                "plain paragraph text that stays on one line\n\n```rust\n{LONG_CODE_LINE}\n```\n"
+            )
+            .into_boxed_str(),
+        );
         let (_view, cx) = cx.add_window_view(|_window, _cx| PreviewLayoutTestView {
-            source: "plain paragraph text that stays on one line\n\n```rust\nfn main() {}\n```\n",
+            source,
             scroll: None,
         });
-        let paragraph = cx
-            .debug_bounds("chat-md-block-0")
-            .expect("paragraph bounds");
-        let code = cx.debug_bounds("chat-md-block-1").expect("code bounds");
-
-        assert!(
-            code.size.width <= px(720.0),
-            "code block not capped to content width: {code:?}"
-        );
-        let diff: f32 = (paragraph.left() - code.left()).into();
-        assert!(
-            diff.abs() < 2.0,
-            "code block left edge differs from prose column: paragraph={paragraph:?} code={code:?}"
-        );
+        assert_code_block_layout(cx, "chat-md-block-0");
     }
 
+    #[gpui::test]
+    fn block_view_code_block_aligns_and_scrolls_long_lines(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let source = Box::leak(
+            format!(
+                "plain paragraph text that stays on one line\n\n```rust\n{LONG_CODE_LINE}\n```\n"
+            )
+            .into_boxed_str(),
+        );
+        let (_view, cx) = cx.add_window_view(|_window, _cx| BlockLayoutTestView {
+            source,
+            block_index: 1,
+        });
+        assert_code_block_overflows_horizontally(cx);
+    }
 }
