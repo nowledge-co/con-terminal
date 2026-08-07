@@ -972,7 +972,9 @@ impl Render for ConWorkspace {
         let show_compact_top_bar_separator =
             cfg!(not(target_os = "macos")) && top_bar_height > 0.5 && tab_strip_progress <= 0.01;
 
-        let theme = cx.theme();
+        // Owned clone: `theme` outlives the sidebar overlay update below,
+        // which mutably borrows `cx` (the `&Theme` borrow would conflict).
+        let theme = cx.theme().clone();
         let mut root = div()
             .relative()
             .flex()
@@ -1289,6 +1291,16 @@ impl Render for ConWorkspace {
             );
         }
         root = root.child(main_area);
+
+        // Vertical-tab rail hover card — composed here as a root overlay
+        // (window coordinates) so it paints above the terminal and is not
+        // clipped by the sidebar's overflow-hidden container.
+        if let Some(hover_card) = self
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.render_hover_card_overlay(window, cx))
+        {
+            root = root.child(hover_card);
+        }
 
         if let Some(preview) = self
             .tab_drag_preview
