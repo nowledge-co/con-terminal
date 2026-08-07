@@ -4,6 +4,32 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.82` - unreleased
+
+### Changed
+
+**Markdown**
+
+- Updated the Mermaid renderer and HTML parser stack used by rich Markdown so
+  diagram and inline HTML previews stay aligned with current upstream fixes.
+  _(PR [#263](https://github.com/nowledge-co/con-terminal/pull/263) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Sidebar**
+
+- Fixed pinned sidebar tab clicks so selecting the active tab no longer
+  collapses the panel, preserving drag reorder and double-click rename flows.
+  _(PR [#261](https://github.com/nowledge-co/con-terminal/pull/261) by
+  [@sunny0826](https://github.com/sunny0826))_
+- Fixed vertical-tab hover cards so they render as workspace overlays, stay
+  inside the window, and clear stale hover state when the rail is hidden. _(PR
+  [#262](https://github.com/nowledge-co/con-terminal/pull/262) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.81` - 2026-08-06
 
 ### Added
