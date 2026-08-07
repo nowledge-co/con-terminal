@@ -443,6 +443,14 @@ impl SessionSidebar {
         self.active_tool_slot = active_slot;
     }
 
+    /// Clear lingering rail hover state. Called by the workspace when the
+    /// rail leaves the layout (panel hidden / vertical tabs off) — an
+    /// unmounted rail cannot deliver the hover-leave event, so without this
+    /// the hover card could persist or reappear once the rail is restored.
+    pub fn clear_hovered_rail(&mut self) {
+        self.hovered_rail = None;
+    }
+
     pub fn show_rail_only_preserving_pinned(&mut self, cx: &mut Context<Self>) {
         if matches!(self.mode, PanelMode::Collapsed) {
             self.hovered_rail = None;
@@ -1097,7 +1105,10 @@ impl SessionSidebar {
     /// computing the rail layout from this side, which is brittle —
     /// the cursor IS the icon, and "follow the cursor" is the
     /// established Apple tooltip pattern (Finder, Mail, Safari).
-    #[allow(dead_code)]
+    ///
+    /// Composed by the workspace as a root overlay (window coordinates)
+    /// so it paints above the terminal and is not clipped by the
+    /// sidebar's overflow-hidden container.
     pub fn render_hover_card_overlay(
         &mut self,
         window: &mut Window,
@@ -1118,13 +1129,21 @@ impl SessionSidebar {
         // Anchor the card vertically on the cursor — its row IS the
         // icon under the cursor by construction.
         let cursor = window.mouse_position();
+        // Rendered card heights (px) — keep in sync with the layout below:
+        //   no subtitle: py 8*2 + name 16 + meta (mt 2 + 13) = 47
+        //   subtitle:    py 8*2 + name 16 + sub (mt 2 + 14) + meta (mt 4 + 13) = 65
         let card_height = if session.subtitle.is_some() {
-            64.0
+            65.0
         } else {
-            44.0
+            47.0
         };
         let min_top = self.leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT + 8.0;
-        let top = (f32::from(cursor.y) - card_height / 2.0).max(min_top);
+        let top = hover_card_top_for_cursor(
+            f32::from(cursor.y),
+            card_height,
+            min_top,
+            window.viewport_size().height.as_f32(),
+        );
 
         let name_color = theme.foreground;
         let sub_color = theme.muted_foreground.opacity(0.65);
@@ -1795,16 +1814,13 @@ impl Render for SessionSidebar {
         let _progress = self.width_motion.value(window);
 
         if self.tools_panel_open || self.rail_only_override {
-            let mut rail = div()
+            return div()
                 .relative()
                 .h_full()
                 .w(px(RAIL_WIDTH))
                 .flex_shrink_0()
-                .child(self.render_rail(window, cx));
-            if let Some(hover_card) = self.render_hover_card_overlay(window, cx) {
-                rail = rail.child(hover_card);
-            }
-            return rail.into_any_element();
+                .child(self.render_rail(window, cx))
+                .into_any_element();
         }
 
         match self.mode {
@@ -1830,18 +1846,13 @@ impl Render for SessionSidebar {
                     )
                     .into_any_element()
             }
-            PanelMode::Collapsed => {
-                let mut rail = div()
-                    .relative()
-                    .h_full()
-                    .w(px(RAIL_WIDTH))
-                    .flex_shrink_0()
-                    .child(self.render_rail(window, cx));
-                if let Some(hover_card) = self.render_hover_card_overlay(window, cx) {
-                    rail = rail.child(hover_card);
-                }
-                rail.into_any_element()
-            }
+            PanelMode::Collapsed => div()
+                .relative()
+                .h_full()
+                .w(px(RAIL_WIDTH))
+                .flex_shrink_0()
+                .child(self.render_rail(window, cx))
+                .into_any_element(),
         }
     }
 }
@@ -1900,6 +1911,21 @@ fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>
         && p.x < b.origin.x + b.size.width
         && p.y >= b.origin.y
         && p.y < b.origin.y + b.size.height
+}
+
+/// Clamp the hover card's top edge so the card stays inside the
+/// window: at least `min_top` from the top, and never closer to
+/// the bottom than an 8px margin. Degenerate small windows fall
+/// back to `min_top` (`max_top < min_top` can never reach clamp,
+/// which requires min <= max).
+fn hover_card_top_for_cursor(
+    cursor_y: f32,
+    card_height: f32,
+    min_top: f32,
+    viewport_height: f32,
+) -> f32 {
+    let max_top = (viewport_height - card_height - 8.0).max(min_top);
+    (cursor_y - card_height / 2.0).clamp(min_top, max_top)
 }
 
 /// Map the cursor's y-position during a rail drag to a drop slot
@@ -2401,5 +2427,26 @@ mod tests {
             reopened,
             active_generation
         ));
+    }
+
+    #[test]
+    fn hover_card_top_mid_window_unclamped() {
+        assert_eq!(hover_card_top_for_cursor(400.0, 64.0, 100.0, 800.0), 368.0);
+    }
+
+    #[test]
+    fn hover_card_top_clamps_to_min_top() {
+        assert_eq!(hover_card_top_for_cursor(20.0, 64.0, 100.0, 800.0), 100.0);
+    }
+
+    #[test]
+    fn hover_card_top_clamps_to_bottom_margin() {
+        // cursor near the bottom: 800 - 64 - 8 = 728
+        assert_eq!(hover_card_top_for_cursor(790.0, 64.0, 100.0, 800.0), 728.0);
+    }
+
+    #[test]
+    fn hover_card_top_degenerate_small_window_uses_min_top() {
+        assert_eq!(hover_card_top_for_cursor(100.0, 64.0, 100.0, 120.0), 100.0);
     }
 }
