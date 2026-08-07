@@ -63,8 +63,8 @@ sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 rust-i18n = "3"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 unicode-width = "0.2"
-html5ever = "0.27.0"
-markup5ever_rcdom = "0.3.0"
+html5ever = "0.39.0"
+markup5ever_rcdom = "=0.39.0"
 
 # Utilities
 anyhow = "1"
@@ -84,7 +84,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 http = "1"
 url = "2"
 rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
-mermaid-rs-renderer = { version = "0.2.2", default-features = false }
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
 mathjax-svg-rs = "0.4.0"
 
 [workspace.lints.clippy]
