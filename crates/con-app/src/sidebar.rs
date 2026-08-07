@@ -1665,13 +1665,7 @@ impl SessionSidebar {
             })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    if is_active && this.is_pinned() {
-                        this.toggle_pinned(cx);
-                    } else {
-                        cx.emit(SidebarSelect { index: i });
-                    }
-                }),
+                cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })),
             )
             .on_mouse_down(
                 MouseButton::Middle,
