@@ -443,6 +443,14 @@ impl SessionSidebar {
         self.active_tool_slot = active_slot;
     }
 
+    /// Clear lingering rail hover state. Called by the workspace when the
+    /// rail leaves the layout (panel hidden / vertical tabs off) — an
+    /// unmounted rail cannot deliver the hover-leave event, so without this
+    /// the hover card could persist or reappear once the rail is restored.
+    pub fn clear_hovered_rail(&mut self) {
+        self.hovered_rail = None;
+    }
+
     pub fn show_rail_only_preserving_pinned(&mut self, cx: &mut Context<Self>) {
         if matches!(self.mode, PanelMode::Collapsed) {
             self.hovered_rail = None;
@@ -1121,10 +1129,13 @@ impl SessionSidebar {
         // Anchor the card vertically on the cursor — its row IS the
         // icon under the cursor by construction.
         let cursor = window.mouse_position();
+        // Rendered card heights (px) — keep in sync with the layout below:
+        //   no subtitle: py 8*2 + name 16 + meta (mt 2 + 13) = 47
+        //   subtitle:    py 8*2 + name 16 + sub (mt 2 + 14) + meta (mt 4 + 13) = 65
         let card_height = if session.subtitle.is_some() {
-            64.0
+            65.0
         } else {
-            44.0
+            47.0
         };
         let min_top = self.leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT + 8.0;
         let top = hover_card_top_for_cursor(
