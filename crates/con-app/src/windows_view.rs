@@ -152,6 +152,9 @@ pub struct GhosttyView {
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
     terminal_mouse_sequence_active: bool,
+    /// SGR button index of the in-flight terminal mouse sequence, so the
+    /// release/move-release report uses the same button as the press.
+    terminal_mouse_sequence_button: Option<u8>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -234,6 +237,7 @@ impl GhosttyView {
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
             terminal_mouse_sequence_active: false,
+            terminal_mouse_sequence_button: None,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
             hovered_link: None,
@@ -296,6 +300,7 @@ impl GhosttyView {
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
         self.terminal_mouse_sequence_active = false;
+        self.terminal_mouse_sequence_button = None;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
         self.mouse_down_link = None;
@@ -1658,8 +1663,12 @@ impl Render for GhosttyView {
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     // SGR button 2 = right; unconsumed when tracking is off.
-                    this.terminal_mouse_sequence_active =
-                        this.forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
+                    let active = this
+                        .forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
+                    this.terminal_mouse_sequence_active = active;
+                    if active {
+                        this.terminal_mouse_sequence_button = Some(2);
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1670,6 +1679,7 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     this.last_mouse_position = Some(event.position);
                     this.terminal_mouse_sequence_active = false;
+                    this.terminal_mouse_sequence_button = None;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1686,6 +1696,9 @@ impl Render for GhosttyView {
                     }
                     this.terminal_mouse_sequence_active =
                         this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
+                    if this.terminal_mouse_sequence_active {
+                        this.terminal_mouse_sequence_button = Some(0);
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1735,8 +1748,10 @@ impl Render for GhosttyView {
                         cx.notify();
                     }
                 } else if this.terminal_mouse_sequence_active {
-                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers), true);
+                    let button = this.terminal_mouse_sequence_button.unwrap_or(0);
+                    this.forward_mouse_up(button, event.position, mouse_mods_from(&event.modifiers), true);
                     this.terminal_mouse_sequence_active = false;
+                    this.terminal_mouse_sequence_button = None;
                     cx.notify();
                 } else if hover_changed {
                     cx.notify();
@@ -1767,14 +1782,16 @@ impl Render for GhosttyView {
                         return;
                     }
                     if had_terminal_mouse_sequence {
+                        let button = this.terminal_mouse_sequence_button.unwrap_or(0);
                         this.forward_mouse_up(
-                            0,
+                            button,
                             event.position,
                             mouse_mods_from(&event.modifiers),
                             true,
                         );
                     }
                     this.terminal_mouse_sequence_active = false;
+                    this.terminal_mouse_sequence_button = None;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
@@ -1784,13 +1801,15 @@ impl Render for GhosttyView {
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.last_mouse_position = Some(event.position);
                     if this.terminal_mouse_sequence_active {
+                        let button = this.terminal_mouse_sequence_button.unwrap_or(2);
                         this.forward_mouse_up(
-                            2,
+                            button,
                             event.position,
                             mouse_mods_from(&event.modifiers),
                             true,
                         );
                         this.terminal_mouse_sequence_active = false;
+                        this.terminal_mouse_sequence_button = None;
                     }
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();

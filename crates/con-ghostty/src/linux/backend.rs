@@ -367,7 +367,8 @@ impl LinuxGhosttyTerminal {
     /// 1=Middle, 2=Right). Shift bypasses reporting so the user can
     /// always select text with Shift+click.
     pub fn mouse_report(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
-        let Some(session) = self.inner.lock().as_ref() else {
+        let inner = self.inner.lock();
+        let Some(session) = inner.as_ref() else {
             return false;
         };
         if !session.mouse_tracking_active() || shift {
@@ -386,7 +387,8 @@ impl LinuxGhosttyTerminal {
     /// sequence, gated on the same mouse-reporting mode as
     /// [`Self::mouse_report`].
     pub fn mouse_release(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
-        let Some(session) = self.inner.lock().as_ref() else {
+        let inner = self.inner.lock();
+        let Some(session) = inner.as_ref() else {
             return false;
         };
         if !session.mouse_tracking_active() || shift {
