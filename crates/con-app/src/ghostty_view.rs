@@ -1447,11 +1447,22 @@ impl GhosttyView {
             return false;
         }
 
+        let mods = gpui_mods_to_ghostty(&keystroke.modifiers);
+        let key_name = keystroke.key.as_str();
+
         // Try to map GPUI key name to macOS virtual keycode.
-        if let Some(payload) = gpui_key_payload(keystroke) {
-            let cstr = payload
-                .text
-                .and_then(|text| std::ffi::CString::new(text).ok());
+        if let Some((keycode, unshifted_codepoint)) = gpui_key_to_keycode(key_name) {
+            // Only key_char represents actual text translation. The key-name
+            // fallback must not consume Shift.
+            let translated_text = keystroke.key_char.as_deref();
+            let text_string = translated_text.or_else(|| {
+                if key_name.len() == 1 {
+                    Some(key_name)
+                } else {
+                    None
+                }
+            });
+            let cstr = text_string.and_then(|text| std::ffi::CString::new(text).ok());
             let text_ptr = cstr
                 .as_ref()
                 .map(|c| c.as_ptr())
@@ -1459,11 +1470,11 @@ impl GhosttyView {
 
             let key_event = ffi::ghostty_input_key_s {
                 action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
-                mods: payload.mods,
-                consumed_mods: payload.consumed_mods,
-                keycode: payload.keycode,
+                mods,
+                consumed_mods: gpui_consumed_mods_to_ghostty(&keystroke.modifiers, translated_text),
+                keycode,
                 text: text_ptr,
-                unshifted_codepoint: payload.unshifted_codepoint,
+                unshifted_codepoint,
                 composing: false,
             };
 
@@ -1479,8 +1490,8 @@ impl GhosttyView {
                 return true;
             }
         }
-        if keystroke.key.len() == 1 {
-            terminal.send_text(&keystroke.key);
+        if key_name.len() == 1 {
+            terminal.send_text(key_name);
             return true;
         }
         false
@@ -1654,33 +1665,6 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
         m |= ffi::GHOSTTY_MODS_SUPER;
     }
     m
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct GhosttyKeyPayload<'a> {
-    mods: i32,
-    consumed_mods: i32,
-    keycode: u32,
-    text: Option<&'a str>,
-    unshifted_codepoint: u32,
-}
-
-/// Convert a GPUI keystroke into stable value fields and borrowed text for a
-/// Ghostty key event. The caller turns `text` into a temporary C string before
-/// the FFI call so the pointer cannot outlive its backing storage.
-fn gpui_key_payload<'a>(keystroke: &'a Keystroke) -> Option<GhosttyKeyPayload<'a>> {
-    let key_name = keystroke.key.as_str();
-    let (keycode, unshifted_codepoint) = gpui_key_to_keycode(key_name)?;
-    let translated_text = keystroke.key_char.as_deref();
-    let text = translated_text.or_else(|| (key_name.len() == 1).then_some(key_name));
-
-    Some(GhosttyKeyPayload {
-        mods: gpui_mods_to_ghostty(&keystroke.modifiers),
-        consumed_mods: gpui_consumed_mods_to_ghostty(&keystroke.modifiers, translated_text),
-        keycode,
-        text,
-        unshifted_codepoint,
-    })
 }
 
 /// Return the Shift modifier safely inferred as consumed by text translation.
@@ -2187,11 +2171,9 @@ impl Render for GhosttyView {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        gpui_consumed_mods_to_ghostty, gpui_key_payload, should_send_ime_insert_as_key_event,
-    };
+    use super::{gpui_consumed_mods_to_ghostty, should_send_ime_insert_as_key_event};
     use con_ghostty::ffi;
-    use gpui::{Keystroke, Modifiers};
+    use gpui::Modifiers;
 
     #[test]
     fn direct_ascii_ime_commits_use_key_event_path() {
@@ -2200,30 +2182,6 @@ mod tests {
         assert!(!should_send_ime_insert_as_key_event(""));
         assert!(!should_send_ime_insert_as_key_event("hello\n"));
         assert!(!should_send_ime_insert_as_key_event("你好"));
-    }
-
-    #[test]
-    fn shifted_printable_key_payload_marks_shift_consumed() {
-        let keystroke = Keystroke {
-            modifiers: Modifiers::shift(),
-            key: "p".into(),
-            key_char: Some("P".into()),
-        };
-
-        let payload = gpui_key_payload(&keystroke).expect("p has a macOS keycode mapping");
-        assert_eq!(payload.text, Some("P"));
-        assert_eq!(payload.mods, ffi::GHOSTTY_MODS_SHIFT);
-        assert_eq!(payload.consumed_mods, ffi::GHOSTTY_MODS_SHIFT);
-        assert_eq!(payload.keycode, 0x23);
-        assert_eq!(payload.unshifted_codepoint, 'p' as u32);
-
-        let fallback_keystroke = Keystroke {
-            key_char: None,
-            ..keystroke
-        };
-        let fallback = gpui_key_payload(&fallback_keystroke).expect("p stays mapped");
-        assert_eq!(fallback.text, Some("p"));
-        assert_eq!(fallback.consumed_mods, 0);
     }
 
     #[test]
