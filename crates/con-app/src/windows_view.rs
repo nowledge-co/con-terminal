@@ -1923,7 +1923,8 @@ impl Render for GhosttyView {
                     let Some(terminal) = view.read(cx).terminal() else {
                         return false;
                     };
-                    let inner = terminal.inner().lock();
+                    let binding = terminal.inner();
+                    let inner = binding.lock();
                     inner
                         .as_ref()
                         .is_some_and(RenderSession::mouse_tracking_active)
