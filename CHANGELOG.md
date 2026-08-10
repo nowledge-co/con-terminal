@@ -15,6 +15,10 @@ con is still pre-release, so entries may group related beta work while the produ
   shell right-clicks. _(PR
   [#266](https://github.com/nowledge-co/con-terminal/pull/266) by
   [@sunny0826](https://github.com/sunny0826))_
+- Fixed shifted text input in macOS terminal applications such as LazyGit, so
+  `Shift+P` reaches apps as uppercase `P` instead of triggering lowercase `p`
+  actions. _(PR [#264](https://github.com/nowledge-co/con-terminal/pull/264) by
+  [@Eric-Song-Nop](https://github.com/Eric-Song-Nop))_
 
 ---
 
