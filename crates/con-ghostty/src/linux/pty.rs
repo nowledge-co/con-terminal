@@ -388,6 +388,14 @@ impl LinuxPtySession {
         self.shared.screen.is_decckm()
     }
 
+    /// True when the child app has enabled terminal mouse reporting
+    /// (DECSET 1000/1002/1003). View mouse handlers gate SGR reports on
+    /// this so clicks don't leak escape sequences into shells that
+    /// didn't ask for them.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.shared.screen.mouse_tracking_active()
+    }
+
     pub fn set_dark_mode(&self, dark: bool) {
         self.shared.screen.set_dark_mode(dark);
         // Same shape as `set_theme` / `resize`: a parser-state mutation

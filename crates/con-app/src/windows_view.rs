@@ -864,12 +864,17 @@ impl GhosttyView {
         )
     }
 
-    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) -> bool {
+    fn forward_mouse_down(
+        &self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+    ) -> bool {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_down(col, row, mods);
+                    session.mouse_down(button, col, row, mods);
                     return true;
                 }
             }
@@ -893,7 +898,13 @@ impl GhosttyView {
         }
     }
 
-    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+    fn forward_mouse_up(
+        &self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+        clamp: bool,
+    ) {
         let cell = if clamp {
             self.clamped_cell_from_event_position(pos)
         } else {
@@ -903,7 +914,7 @@ impl GhosttyView {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_up(col, row, mods);
+                    session.mouse_up(button, col, row, mods);
                 }
             }
         }
@@ -1539,6 +1550,7 @@ impl Render for GhosttyView {
             terminal_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
+        let menu_entity = entity.clone();
         let mut terminal_children = self.image_children(terminal_background);
         if let Some(overlay) = self.render_link_cursor_overlay() {
             terminal_children.push(overlay);
@@ -1642,10 +1654,12 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&context_focus, cx);
                     this.last_mouse_position = Some(event.position);
-                    this.terminal_mouse_sequence_active = false;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
+                    // SGR button 2 = right; unconsumed when tracking is off.
+                    this.terminal_mouse_sequence_active =
+                        this.forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1671,7 +1685,7 @@ impl Render for GhosttyView {
                         return;
                     }
                     this.terminal_mouse_sequence_active =
-                        this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
+                        this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1754,12 +1768,30 @@ impl Render for GhosttyView {
                     }
                     if had_terminal_mouse_sequence {
                         this.forward_mouse_up(
+                            0,
                             event.position,
                             mouse_mods_from(&event.modifiers),
                             true,
                         );
                     }
                     this.terminal_mouse_sequence_active = false;
+                    let _ = this.update_hovered_link(&event.modifiers);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.last_mouse_position = Some(event.position);
+                    if this.terminal_mouse_sequence_active {
+                        this.forward_mouse_up(
+                            2,
+                            event.position,
+                            mouse_mods_from(&event.modifiers),
+                            true,
+                        );
+                        this.terminal_mouse_sequence_active = false;
+                    }
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
@@ -1866,6 +1898,16 @@ impl Render for GhosttyView {
                     ),
             )
             .context_menu(move |menu, window, cx| {
+                // Empty PopupMenu renders nothing; suppress con's menu while
+                // mouse reporting is active (right-click went to the app).
+                let mouse_tracking_active = menu_entity
+                    .upgrade()
+                    .and_then(|view| view.read(cx).terminal())
+                    .and_then(|terminal| terminal.inner().lock().as_ref())
+                    .is_some_and(RenderSession::mouse_tracking_active);
+                if mouse_tracking_active {
+                    return menu;
+                }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
                     window,

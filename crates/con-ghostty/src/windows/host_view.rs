@@ -415,18 +415,24 @@ impl RenderSession {
         self.request_low_latency_present();
     }
 
-    /// Mouse-left-down at the given cell.
+    /// Mouse-down at the given cell.
     ///
     /// Xterm convention: Shift bypasses mouse tracking so the user can
     /// always select text, even when a TUI has `set mouse=a` on. When
     /// tracking is off or Shift is held, we drive local selection;
     /// otherwise we emit an SGR button-press report and leave selection
     /// alone. Shift+click with an existing selection extends from the
-    /// original anchor (matches every other terminal).
-    pub fn mouse_down(&self, col: u16, row: u16, mods: MouseEventMods) {
+    /// original anchor (matches every other terminal). `button` follows
+    /// the SGR button index (0=Left, 1=Middle, 2=Right).
+    pub fn mouse_down(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
-            self.report_sgr_button(0, col, row, mods, true);
+            self.report_sgr_button(button, col, row, mods, true);
+            return;
+        }
+        if button != 0 {
+            // Non-left buttons never drive local selection; when tracking
+            // is off the click is simply not consumed by the terminal.
             return;
         }
         self.request_low_latency_present();
@@ -448,7 +454,7 @@ impl RenderSession {
         }));
     }
 
-    /// Mouse-moved at the given cell while left button is held.
+    /// Mouse-moved at the given cell while a button is held.
     ///
     /// When mouse tracking is active and the shell requested motion
     /// (BUTTON / ANY mode), we emit an SGR motion report with the
@@ -470,16 +476,20 @@ impl RenderSession {
         }
     }
 
-    /// Mouse-left-up at the given cell.
+    /// Mouse-up at the given cell.
     ///
     /// Emits an SGR release when mouse tracking is active (unless Shift
     /// is held to keep selection). Otherwise clears a transient 1-cell
     /// selection — a click without drag shouldn't leave a lone cell
-    /// highlighted.
-    pub fn mouse_up(&self, col: u16, row: u16, mods: MouseEventMods) {
+    /// highlighted. `button` follows the SGR button index (0=Left,
+    /// 1=Middle, 2=Right).
+    pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
-            self.report_sgr_button(0, col, row, mods, false);
+            self.report_sgr_button(button, col, row, mods, false);
+            return;
+        }
+        if button != 0 {
             return;
         }
         self.request_low_latency_present();

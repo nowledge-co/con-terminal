@@ -351,6 +351,56 @@ impl LinuxGhosttyTerminal {
     pub fn send_mouse_pos(&self, _x: f64, _y: f64, _mods: i32) {}
     pub fn send_mouse_scroll(&self, _x: f64, _y: f64, _mods: i32) {}
 
+    /// True when the child app has enabled terminal mouse reporting
+    /// (DECSET 1000/1002/1003). The Linux view gates its SGR reports on
+    /// this so clicks don't leak escape sequences into plain shells.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::mouse_tracking_active)
+    }
+
+    /// Report a mouse button press/release to the child as an SGR
+    /// (1006) escape sequence, but only when the child has enabled
+    /// mouse reporting. `button` is the SGR button index (0=Left,
+    /// 1=Middle, 2=Right). Shift bypasses reporting so the user can
+    /// always select text with Shift+click.
+    pub fn mouse_report(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
+        let Some(session) = self.inner.lock().as_ref() else {
+            return false;
+        };
+        if !session.mouse_tracking_active() || shift {
+            return false;
+        }
+        let col = col.saturating_add(1);
+        let row = row.saturating_add(1);
+        let seq = format!("\x1b[<{button};{col};{row}M");
+        if let Err(err) = session.write_input(seq.as_bytes()) {
+            log::debug!("linux pty mouse report write failed: {err:#}");
+        }
+        true
+    }
+
+    /// Report a mouse button release to the child as an SGR (1006)
+    /// sequence, gated on the same mouse-reporting mode as
+    /// [`Self::mouse_report`].
+    pub fn mouse_release(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
+        let Some(session) = self.inner.lock().as_ref() else {
+            return false;
+        };
+        if !session.mouse_tracking_active() || shift {
+            return false;
+        }
+        let col = col.saturating_add(1);
+        let row = row.saturating_add(1);
+        let seq = format!("\x1b[<{button};{col};{row}m");
+        if let Err(err) = session.write_input(seq.as_bytes()) {
+            log::debug!("linux pty mouse release write failed: {err:#}");
+        }
+        true
+    }
+
     pub fn request_close(&self) {
         *self.inner.lock() = None;
     }

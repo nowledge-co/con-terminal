@@ -1027,6 +1027,7 @@ impl Render for GhosttyView {
         let menu_focus = focus.clone();
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
+        let menu_entity = entity.clone();
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = cell_height_px(font_size_px);
         let cell_width_px = cell_width_px(font_size_px);
@@ -1272,6 +1273,12 @@ impl Render for GhosttyView {
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
+                    // SGR button 2 = right; suppressed when tracking is off.
+                    if let Some(terminal) = this.terminal() {
+                        if let Some((col, row)) = this.cell_from_event_position(event.position) {
+                            terminal.mouse_report(2, col, row, event.modifiers.shift);
+                        }
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1357,6 +1364,17 @@ impl Render for GhosttyView {
                     }
                 }),
             )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                    this.last_mouse_position = Some(event.position);
+                    if let Some(terminal) = this.terminal() {
+                        if let Some((col, row)) = this.cell_from_event_position(event.position) {
+                            terminal.mouse_release(2, col, row, event.modifiers.shift);
+                        }
+                    }
+                }),
+            )
             .child(
                 div()
                     .relative()
@@ -1398,6 +1416,15 @@ impl Render for GhosttyView {
                     ),
             )
             .context_menu(move |menu, window, cx| {
+                // Empty PopupMenu renders nothing; suppress con's menu while
+                // mouse reporting is active (right-click went to the app).
+                let mouse_tracking_active = menu_entity
+                    .upgrade()
+                    .and_then(|view| view.read(cx).terminal())
+                    .is_some_and(|terminal| terminal.mouse_tracking_active());
+                if mouse_tracking_active {
+                    return menu;
+                }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
                     window,
