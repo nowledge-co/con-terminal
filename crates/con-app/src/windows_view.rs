@@ -1919,11 +1919,15 @@ impl Render for GhosttyView {
             .context_menu(move |menu, window, cx| {
                 // Empty PopupMenu renders nothing; suppress con's menu while
                 // mouse reporting is active (right-click went to the app).
-                let mouse_tracking_active = menu_entity
-                    .upgrade()
-                    .and_then(|view| view.read(cx).terminal())
-                    .and_then(|terminal| terminal.inner().lock().as_ref())
-                    .is_some_and(RenderSession::mouse_tracking_active);
+                let mouse_tracking_active = menu_entity.upgrade().is_some_and(|view| {
+                    let Some(terminal) = view.read(cx).terminal() else {
+                        return false;
+                    };
+                    let inner = terminal.inner().lock();
+                    inner
+                        .as_ref()
+                        .is_some_and(RenderSession::mouse_tracking_active)
+                });
                 if mouse_tracking_active {
                     return menu;
                 }
