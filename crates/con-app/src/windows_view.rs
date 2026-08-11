@@ -152,6 +152,7 @@ pub struct GhosttyView {
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
     terminal_mouse_sequence_active: bool,
+    terminal_mouse_sequence_shift: bool,
     /// SGR button index of the in-flight terminal mouse sequence, so the
     /// release/move-release report uses the same button as the press.
     terminal_mouse_sequence_button: Option<u8>,
@@ -243,6 +244,7 @@ impl GhosttyView {
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
             terminal_mouse_sequence_active: false,
+            terminal_mouse_sequence_shift: false,
             terminal_mouse_sequence_button: None,
             terminal_mouse_right_consumed: None,
             terminal_mouse_right_shift: false,
@@ -308,6 +310,7 @@ impl GhosttyView {
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
         self.terminal_mouse_sequence_active = false;
+        self.terminal_mouse_sequence_shift = false;
         self.terminal_mouse_sequence_button = None;
         self.terminal_mouse_right_consumed = None;
         self.ime_marked_text = None;
@@ -1709,6 +1712,7 @@ impl Render for GhosttyView {
                     let _ = this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
                     if this.terminal().is_some() && this.cell_from_event_position(event.position).is_some() {
                         this.terminal_mouse_sequence_active = true;
+                        this.terminal_mouse_sequence_shift = event.modifiers.shift;
                         this.terminal_mouse_sequence_button = Some(0);
                     }
                     cx.emit(GhosttyFocusChanged);
@@ -1753,7 +1757,10 @@ impl Render for GhosttyView {
                         this.forward_mouse_drag(
                             0,
                             event.position,
-                            mouse_mods_from(&event.modifiers),
+                            MouseEventMods {
+                                shift: this.terminal_mouse_sequence_shift,
+                                ..mouse_mods_from(&event.modifiers)
+                            },
                             true,
                         );
                         cx.notify();
@@ -1781,12 +1788,19 @@ impl Render for GhosttyView {
                             shift: this.terminal_mouse_right_shift,
                             ..release_mods
                         }
+                    } else if button == 0 {
+                        MouseEventMods {
+                            shift: this.terminal_mouse_sequence_shift,
+                            ..release_mods
+                        }
                     } else {
                         release_mods
                     };
                     this.forward_mouse_up(button, event.position, release_mods, true);
                     if button == 2 {
                         this.terminal_mouse_right_shift = false;
+                    } else if button == 0 {
+                        this.terminal_mouse_sequence_shift = false;
                     }
                     this.terminal_mouse_sequence_active = false;
                     this.terminal_mouse_sequence_button = None;
@@ -1824,11 +1838,15 @@ impl Render for GhosttyView {
                         this.forward_mouse_up(
                             button,
                             event.position,
-                            mouse_mods_from(&event.modifiers),
+                            MouseEventMods {
+                                shift: this.terminal_mouse_sequence_shift,
+                                ..mouse_mods_from(&event.modifiers)
+                            },
                             true,
                         );
                     }
                     this.terminal_mouse_sequence_active = false;
+                    this.terminal_mouse_sequence_shift = false;
                     this.terminal_mouse_sequence_button = None;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();

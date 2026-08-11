@@ -551,4 +551,12 @@ mod tests {
         assert_eq!(sgr_mouse_sequence(0, 3, 7, true), "\x1b[<0;4;8M");
         assert_eq!(sgr_mouse_sequence(0, 3, 7, false), "\x1b[<0;4;8m");
     }
+
+    #[test]
+    fn sgr_coordinates_saturate_without_wrapping() {
+        assert_eq!(
+            sgr_mouse_sequence(0, u16::MAX, u16::MAX, true),
+            "\x1b[<0;65535;65535M"
+        );
+    }
 }
