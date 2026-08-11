@@ -388,6 +388,22 @@ impl LinuxPtySession {
         self.shared.screen.is_decckm()
     }
 
+    /// True when the child app has enabled terminal mouse reporting
+    /// (DECSET 1000/1002/1003). View mouse handlers gate SGR reports on
+    /// this so clicks don't leak escape sequences into shells that
+    /// didn't ask for them.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.shared.screen.mouse_tracking_active()
+    }
+
+    /// True when the child app enabled the SGR (1006) extended mouse
+    /// encoding. The SGR report format (`ESC[<b;x;yM`) is only valid in
+    /// this mode; the legacy X10 encoding is not implemented, so callers
+    /// should skip reporting when this is false.
+    pub fn is_sgr_mouse(&self) -> bool {
+        self.shared.screen.is_sgr_mouse()
+    }
+
     pub fn set_dark_mode(&self, dark: bool) {
         self.shared.screen.set_dark_mode(dark);
         // Same shape as `set_theme` / `resize`: a parser-state mutation
@@ -590,9 +606,9 @@ mod tests {
                 .needs_render
                 .load(std::sync::atomic::Ordering::Acquire)
         );
-        let finished = shared
-            .finished_signal
-            .lock()
+        let signal_guard = shared.finished_signal.lock();
+        let finished = signal_guard
+            .as_ref()
             .expect("exit signal should be backfilled");
         assert_eq!(finished.exit_code, Some(7));
         assert_eq!(finished.duration, Duration::from_millis(20));

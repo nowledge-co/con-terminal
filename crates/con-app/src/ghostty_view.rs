@@ -15,6 +15,7 @@ use std::cell::Cell;
 use std::ops::Range;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 #[cfg(target_os = "macos")]
@@ -176,6 +177,8 @@ pub struct GhosttyView {
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
+    /// Whether the current right-button press was consumed by libghostty.
+    right_click_consumed: Rc<Cell<bool>>,
     ime_marked_text: Option<String>,
 }
 
@@ -238,6 +241,7 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
                 .fetch_add(1, Ordering::Relaxed),
+            right_click_consumed: Rc::new(Cell::new(false)),
             ime_marked_text: None,
         }
     }
@@ -1785,6 +1789,7 @@ impl Render for GhosttyView {
         let input_focus = focus.clone();
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
+        let right_click_consumed = self.right_click_consumed.clone();
         let ui_font = cx.theme().font_family.clone();
         let mono_font = cx.theme().mono_font_family.clone();
         let mono_font_size = cx.theme().mono_font_size;
@@ -1952,11 +1957,25 @@ impl Render for GhosttyView {
             }))
             .on_mouse_down(
                 gpui::MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&context_focus, cx);
-                    this.last_mouse_position = Some(event.position);
-                    cx.emit(GhosttyFocusChanged);
-                    cx.notify();
+                cx.listener({
+                    let right_click_consumed = right_click_consumed.clone();
+                    move |this, event: &MouseDownEvent, window, cx| {
+                        window.focus(&context_focus, cx);
+                        this.last_mouse_position = Some(event.position);
+                        // Reset first so a click without a terminal can't
+                        // carry a stale consumed state into the menu gate.
+                        right_click_consumed.set(false);
+                        if let Some(ref terminal) = this.terminal {
+                            let (x, y) = this.view_local_pos(event.position);
+                            let mods = gpui_mods_to_ghostty(&event.modifiers);
+                            terminal.send_mouse_pos(x, y, mods);
+                            let consumed =
+                                terminal.send_mouse_button(true, MouseButton::Right, mods);
+                            right_click_consumed.set(consumed);
+                        }
+                        cx.emit(GhosttyFocusChanged);
+                        cx.notify();
+                    }
                 }),
             )
             .on_mouse_down(
@@ -1987,6 +2006,42 @@ impl Render for GhosttyView {
                     let changed = this.drain_surface_state(true, cx);
                     if changed {
                         cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Right,
+                cx.listener({
+                    let right_click_consumed = right_click_consumed.clone();
+                    move |this, event: &MouseUpEvent, _window, _cx| {
+                        this.last_mouse_position = Some(event.position);
+                        if right_click_consumed.get() {
+                            if let Some(ref terminal) = this.terminal {
+                                let (x, y) = this.view_local_pos(event.position);
+                                let mods = gpui_mods_to_ghostty(&event.modifiers);
+                                terminal.send_mouse_pos(x, y, mods);
+                                terminal.send_mouse_button(false, MouseButton::Right, mods);
+                            }
+                            right_click_consumed.set(false);
+                        }
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                gpui::MouseButton::Right,
+                cx.listener({
+                    let right_click_consumed = right_click_consumed.clone();
+                    move |this, event: &MouseUpEvent, _window, _cx| {
+                        this.last_mouse_position = Some(event.position);
+                        if right_click_consumed.get() {
+                            if let Some(ref terminal) = this.terminal {
+                                let (x, y) = this.view_local_pos(event.position);
+                                let mods = gpui_mods_to_ghostty(&event.modifiers);
+                                terminal.send_mouse_pos(x, y, mods);
+                                terminal.send_mouse_button(false, MouseButton::Right, mods);
+                            }
+                            right_click_consumed.set(false);
+                        }
                     }
                 }),
             )
@@ -2072,6 +2127,12 @@ impl Render for GhosttyView {
             )
             .children(preedit_overlay)
             .context_menu(move |menu, window, cx| {
+                // An empty PopupMenu renders nothing (ContextMenu checks
+                // `is_empty`), so suppress con's menu when the terminal app
+                // consumed the right-click via mouse reporting.
+                if right_click_consumed.get() {
+                    return menu;
+                }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
                     window,

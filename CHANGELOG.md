@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.83` - unreleased
+
+### Fixed
+
+**Terminal**
+
+- Forward right-clicks to terminal apps that enabled mouse reporting, so TUI
+  menus work as expected while Con's context menu still appears for ordinary
+  shell right-clicks. _(PR
+  [#266](https://github.com/nowledge-co/con-terminal/pull/266) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.82` - 2026-08-07
 
 ### Changed

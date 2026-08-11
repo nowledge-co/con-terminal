@@ -115,6 +115,13 @@ pub struct GhosttyView {
     last_mouse_position: Option<Point<Pixels>>,
     selection: Option<TerminalSelection>,
     drag_anchor: Option<(u16, u64)>,
+    /// Whether the most recent right-button press was consumed by the
+    /// terminal app (an SGR report emitted). The context-menu builder
+    /// suppresses con's menu only when this is true.
+    terminal_mouse_right_consumed: Option<bool>,
+    /// Shift state at the right-button press, reused for the matching
+    /// release so a modifier change in between doesn't break pairing.
+    terminal_mouse_right_shift: bool,
 }
 
 pub fn init(cx: &mut App) {
@@ -195,6 +202,8 @@ impl GhosttyView {
             last_mouse_position: None,
             selection: None,
             drag_anchor: None,
+            terminal_mouse_right_consumed: None,
+            terminal_mouse_right_shift: false,
         }
     }
 
@@ -292,6 +301,8 @@ impl GhosttyView {
         self.last_mouse_position = None;
         self.selection = None;
         self.drag_anchor = None;
+        self.terminal_mouse_right_consumed = None;
+        self.terminal_mouse_right_shift = false;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
@@ -1027,6 +1038,7 @@ impl Render for GhosttyView {
         let menu_focus = focus.clone();
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
+        let menu_entity = entity.clone();
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = cell_height_px(font_size_px);
         let cell_width_px = cell_width_px(font_size_px);
@@ -1272,6 +1284,20 @@ impl Render for GhosttyView {
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
+                    // SGR button 2 = right; unconsumed when tracking is off.
+                    // Record the press shift state so the matching release
+                    // isn't rejected if Shift changes between press/release.
+                    let shift_at_press = event.modifiers.shift;
+                    this.terminal_mouse_right_consumed = if let Some(terminal) = this.terminal() {
+                        if let Some((col, row)) = this.cell_from_event_position(event.position) {
+                            Some(terminal.mouse_report(2, col, row, shift_at_press))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    this.terminal_mouse_right_shift = shift_at_press;
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1357,6 +1383,29 @@ impl Render for GhosttyView {
                     }
                 }),
             )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                    this.last_mouse_position = Some(event.position);
+                    // Only release when the press was consumed by the app, so
+                    // plain right-clicks (menu path) never emit a stray release.
+                    if this.terminal_mouse_right_consumed == Some(true) {
+                        if let Some(terminal) = this.terminal() {
+                            if let Some((col, row)) =
+                                this.clamped_cell_from_event_position(event.position)
+                            {
+                                terminal.mouse_release(
+                                    2,
+                                    col,
+                                    row,
+                                    this.terminal_mouse_right_shift,
+                                );
+                            }
+                        }
+                        this.terminal_mouse_right_consumed = None;
+                    }
+                }),
+            )
             .child(
                 div()
                     .relative()
@@ -1398,6 +1447,14 @@ impl Render for GhosttyView {
                     ),
             )
             .context_menu(move |menu, window, cx| {
+                // Empty PopupMenu renders nothing; suppress con's menu only
+                // when the terminal app consumed the right-button press.
+                let right_consumed = menu_entity.upgrade().is_some_and(|view| {
+                    view.read(cx).terminal_mouse_right_consumed.unwrap_or(false)
+                });
+                if right_consumed {
+                    return menu;
+                }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
                     window,

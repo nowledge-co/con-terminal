@@ -351,6 +351,61 @@ impl LinuxGhosttyTerminal {
     pub fn send_mouse_pos(&self, _x: f64, _y: f64, _mods: i32) {}
     pub fn send_mouse_scroll(&self, _x: f64, _y: f64, _mods: i32) {}
 
+    /// True when the child app has enabled terminal mouse reporting
+    /// (DECSET 1000/1002/1003). The Linux view gates its SGR reports on
+    /// this so clicks don't leak escape sequences into plain shells.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::mouse_tracking_active)
+    }
+
+    /// Report a mouse button press/release to the child as an SGR
+    /// (1006) escape sequence, but only when the child has enabled SGR
+    /// mouse reporting. `button` is the SGR button index (0=Left,
+    /// 1=Middle, 2=Right). Shift bypasses reporting so the user can
+    /// always select text with Shift+click. Returns `true` when the
+    /// report was emitted (i.e. the click was consumed by the app).
+    pub fn mouse_report(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
+        let inner = self.inner.lock();
+        let Some(session) = inner.as_ref() else {
+            return false;
+        };
+        if !session.mouse_tracking_active() || !session.is_sgr_mouse() || shift {
+            return false;
+        }
+        let seq = sgr_mouse_sequence(button, col, row, true);
+        match session.write_input(seq.as_bytes()) {
+            Ok(()) => true,
+            Err(err) => {
+                log::debug!("linux pty mouse report write failed: {err:#}");
+                false
+            }
+        }
+    }
+
+    /// Report a mouse button release to the child as an SGR (1006)
+    /// sequence, gated on the same mouse-reporting mode as
+    /// [`Self::mouse_report`].
+    pub fn mouse_release(&self, button: u8, col: u16, row: u16, shift: bool) -> bool {
+        let inner = self.inner.lock();
+        let Some(session) = inner.as_ref() else {
+            return false;
+        };
+        if !session.mouse_tracking_active() || !session.is_sgr_mouse() || shift {
+            return false;
+        }
+        let seq = sgr_mouse_sequence(button, col, row, false);
+        match session.write_input(seq.as_bytes()) {
+            Ok(()) => true,
+            Err(err) => {
+                log::debug!("linux pty mouse release write failed: {err:#}");
+                false
+            }
+        }
+    }
+
     pub fn request_close(&self) {
         *self.inner.lock() = None;
     }
@@ -470,3 +525,38 @@ impl Default for LinuxGhosttyTerminal {
 
 unsafe impl Send for LinuxGhosttyTerminal {}
 unsafe impl Sync for LinuxGhosttyTerminal {}
+
+/// Build an SGR (1006) mouse report escape sequence for the given
+/// 0-based cell coordinates. `pressed` selects the press (`M`) or
+/// release (`m`) terminator.
+fn sgr_mouse_sequence(button: u8, col: u16, row: u16, pressed: bool) -> String {
+    let col = col.saturating_add(1);
+    let row = row.saturating_add(1);
+    let terminator = if pressed { 'M' } else { 'm' };
+    format!("\x1b[<{button};{col};{row}{terminator}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sgr_mouse_sequence;
+
+    #[test]
+    fn sgr_right_press_uses_button_2_and_one_based_coords() {
+        assert_eq!(sgr_mouse_sequence(2, 0, 0, true), "\x1b[<2;1;1M");
+        assert_eq!(sgr_mouse_sequence(2, 5, 9, true), "\x1b[<2;6;10M");
+    }
+
+    #[test]
+    fn sgr_left_press_and_release_terminators() {
+        assert_eq!(sgr_mouse_sequence(0, 3, 7, true), "\x1b[<0;4;8M");
+        assert_eq!(sgr_mouse_sequence(0, 3, 7, false), "\x1b[<0;4;8m");
+    }
+
+    #[test]
+    fn sgr_coordinates_saturate_without_wrapping() {
+        assert_eq!(
+            sgr_mouse_sequence(0, u16::MAX, u16::MAX, true),
+            "\x1b[<0;65535;65535M"
+        );
+    }
+}
