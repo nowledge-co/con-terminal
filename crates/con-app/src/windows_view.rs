@@ -159,6 +159,8 @@ pub struct GhosttyView {
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
     terminal_mouse_right_consumed: Option<bool>,
+    /// Shift state at the right-button press, reused for its release.
+    terminal_mouse_right_shift: bool,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -243,6 +245,7 @@ impl GhosttyView {
             terminal_mouse_sequence_active: false,
             terminal_mouse_sequence_button: None,
             terminal_mouse_right_consumed: None,
+            terminal_mouse_right_shift: false,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
             hovered_link: None,
@@ -1671,6 +1674,7 @@ impl Render for GhosttyView {
                     let consumed = this
                         .forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
                     this.terminal_mouse_right_consumed = Some(consumed);
+                    this.terminal_mouse_right_shift = event.modifiers.shift;
                     this.terminal_mouse_sequence_active = consumed;
                     if consumed {
                         this.terminal_mouse_sequence_button = Some(2);
@@ -1771,7 +1775,19 @@ impl Render for GhosttyView {
                     cx.notify();
                 } else if event.pressed_button.is_none() && this.terminal_mouse_sequence_active {
                     let button = this.terminal_mouse_sequence_button.unwrap_or(0);
-                    this.forward_mouse_up(button, event.position, mouse_mods_from(&event.modifiers), true);
+                    let release_mods = mouse_mods_from(&event.modifiers);
+                    let release_mods = if button == 2 {
+                        MouseEventMods {
+                            shift: this.terminal_mouse_right_shift,
+                            ..release_mods
+                        }
+                    } else {
+                        release_mods
+                    };
+                    this.forward_mouse_up(button, event.position, release_mods, true);
+                    if button == 2 {
+                        this.terminal_mouse_right_shift = false;
+                    }
                     this.terminal_mouse_sequence_active = false;
                     this.terminal_mouse_sequence_button = None;
                     cx.notify();
@@ -1827,12 +1843,16 @@ impl Render for GhosttyView {
                         this.forward_mouse_up(
                             button,
                             event.position,
-                            mouse_mods_from(&event.modifiers),
+                            MouseEventMods {
+                                shift: this.terminal_mouse_right_shift,
+                                ..mouse_mods_from(&event.modifiers)
+                            },
                             true,
                         );
                         this.terminal_mouse_sequence_active = false;
                         this.terminal_mouse_sequence_button = None;
                     }
+                    this.terminal_mouse_right_shift = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),

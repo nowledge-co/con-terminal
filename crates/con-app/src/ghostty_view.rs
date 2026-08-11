@@ -177,6 +177,8 @@ pub struct GhosttyView {
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
+    /// Whether the current right-button press was consumed by libghostty.
+    right_click_consumed: Rc<Cell<bool>>,
     ime_marked_text: Option<String>,
 }
 
@@ -239,6 +241,7 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
                 .fetch_add(1, Ordering::Relaxed),
+            right_click_consumed: Rc::new(Cell::new(false)),
             ime_marked_text: None,
         }
     }
@@ -1786,10 +1789,7 @@ impl Render for GhosttyView {
         let input_focus = focus.clone();
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
-        // Set by the Right mouse-down handler when libghostty consumed the
-        // click (mouse reporting active); read by the context-menu builder
-        // to suppress con's menu. Mirrors Ghostty's AppKit host.
-        let right_click_consumed = Rc::new(Cell::new(false));
+        let right_click_consumed = self.right_click_consumed.clone();
         let ui_font = cx.theme().font_family.clone();
         let mono_font = cx.theme().mono_font_family.clone();
         let mono_font_size = cx.theme().mono_font_size;
