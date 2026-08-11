@@ -1883,11 +1883,17 @@ impl Render for GhosttyView {
                     event.delta,
                     mouse_mods_from(&event.modifiers),
                 );
-                if scrolled_viewport && this.terminal_mouse_sequence_active {
+                if scrolled_viewport
+                    && this.terminal_mouse_sequence_active
+                    && this.terminal_mouse_sequence_button == Some(0)
+                {
                     this.forward_mouse_drag(
                         0,
                         event.position,
-                        mouse_mods_from(&event.modifiers),
+                        MouseEventMods {
+                            shift: this.terminal_mouse_sequence_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
                         true,
                     );
                 }
