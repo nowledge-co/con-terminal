@@ -1450,9 +1450,7 @@ impl Render for GhosttyView {
                 // Empty PopupMenu renders nothing; suppress con's menu only
                 // when the terminal app consumed the right-button press.
                 let right_consumed = menu_entity.upgrade().is_some_and(|view| {
-                    view.read(cx)
-                        .terminal_mouse_right_consumed
-                        .unwrap_or(false)
+                    view.read(cx).terminal_mouse_right_consumed.unwrap_or(false)
                 });
                 if right_consumed {
                     return menu;

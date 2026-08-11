@@ -389,6 +389,17 @@ impl RenderSession {
         self.vt.mouse_tracking_active()
     }
 
+    fn mouse_release_reporting_active(&self) -> bool {
+        self.vt.mode_active(crate::vt::MODE_NORMAL_MOUSE)
+            || self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
+            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE)
+    }
+
+    fn mouse_motion_reporting_active(&self) -> bool {
+        self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
+            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE)
+    }
+
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) {
@@ -468,12 +479,14 @@ impl RenderSession {
     /// `button` follows the SGR button index (0=Left, 1=Middle,
     /// 2=Right); the motion bit (+32) is added inside.
     pub fn mouse_drag(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
-        let motion_reporting = self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
-            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE);
+        let motion_reporting = self.mouse_motion_reporting_active();
         if motion_reporting && !mods.shift {
             self.request_low_latency_after_next_generation();
             // Button + 32 = motion-with-button bit per SGR spec.
             self.report_sgr_button(button.saturating_add(32), col, row, mods, true);
+            return;
+        }
+        if button != 0 {
             return;
         }
         self.request_low_latency_present();
@@ -495,7 +508,7 @@ impl RenderSession {
     /// 1=Middle, 2=Right). Returns `true` when the release was consumed
     /// by the terminal app (an SGR report was emitted).
     pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
-        if self.vt.mouse_tracking_active() && !mods.shift {
+        if self.mouse_release_reporting_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
             return self.report_sgr_button(button, col, row, mods, false);
         }
@@ -878,14 +891,8 @@ mod tests {
     #[test]
     fn sgr_right_button_press_and_release() {
         let mods = MouseEventMods::default();
-        assert_eq!(
-            sgr_button_sequence(2, 0, 0, mods, true),
-            "\x1b[<2;1;1M"
-        );
-        assert_eq!(
-            sgr_button_sequence(2, 5, 9, mods, false),
-            "\x1b[<2;6;10m"
-        );
+        assert_eq!(sgr_button_sequence(2, 0, 0, mods, true), "\x1b[<2;1;1M");
+        assert_eq!(sgr_button_sequence(2, 5, 9, mods, false), "\x1b[<2;6;10m");
     }
 
     #[test]

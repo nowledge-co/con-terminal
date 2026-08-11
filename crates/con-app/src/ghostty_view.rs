@@ -13,9 +13,9 @@
 
 use std::cell::Cell;
 use std::ops::Range;
-use std::rc::Rc;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 #[cfg(target_os = "macos")]

@@ -881,12 +881,7 @@ impl GhosttyView {
         )
     }
 
-    fn forward_mouse_down(
-        &self,
-        button: u8,
-        pos: Point<Pixels>,
-        mods: MouseEventMods,
-    ) -> bool {
+    fn forward_mouse_down(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods) -> bool {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
@@ -898,7 +893,27 @@ impl GhosttyView {
         false
     }
 
-    fn forward_mouse_drag(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+    fn terminal_mouse_tracking_active_at(&self, pos: Point<Pixels>) -> bool {
+        if self.cell_from_event_position(pos).is_none() {
+            return false;
+        }
+        let Some(terminal) = &self.terminal else {
+            return false;
+        };
+        let inner = terminal.inner();
+        inner
+            .lock()
+            .as_ref()
+            .is_some_and(|session| session.mouse_tracking_active())
+    }
+
+    fn forward_mouse_drag(
+        &self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+        clamp: bool,
+    ) {
         let cell = if clamp {
             self.clamped_cell_from_event_position(pos)
         } else {
@@ -914,13 +929,7 @@ impl GhosttyView {
         }
     }
 
-    fn forward_mouse_up(
-        &self,
-        button: u8,
-        pos: Point<Pixels>,
-        mods: MouseEventMods,
-        clamp: bool,
-    ) {
+    fn forward_mouse_up(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
         let cell = if clamp {
             self.clamped_cell_from_event_position(pos)
         } else {
@@ -1674,8 +1683,11 @@ impl Render for GhosttyView {
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     // SGR button 2 = right; unconsumed when tracking is off.
-                    let consumed = this
-                        .forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
+                    let consumed = this.forward_mouse_down(
+                        2,
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                    );
                     this.terminal_mouse_right_consumed = Some(consumed);
                     this.terminal_mouse_right_shift = event.modifiers.shift;
                     this.terminal_mouse_sequence_active = consumed;
@@ -1707,10 +1719,19 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    // Left button: keep the sequence flag tied to session
-                    // presence (local drag selection), not SGR consumption.
-                    let _ = this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
-                    if this.terminal().is_some() && this.cell_from_event_position(event.position).is_some() {
+                    // Left button has two valid continuation modes: local
+                    // selection when mouse tracking is off/Shift-bypassed, or
+                    // terminal SGR reporting when the press was actually
+                    // written. Do not continue an SGR sequence after a failed
+                    // PTY write.
+                    let mods = mouse_mods_from(&event.modifiers);
+                    let tracking_active = this.terminal_mouse_tracking_active_at(event.position);
+                    let consumed = this.forward_mouse_down(0, event.position, mods);
+                    if consumed
+                        || (!tracking_active
+                            && this.terminal().is_some()
+                            && this.cell_from_event_position(event.position).is_some())
+                    {
                         this.terminal_mouse_sequence_active = true;
                         this.terminal_mouse_sequence_shift = event.modifiers.shift;
                         this.terminal_mouse_sequence_button = Some(0);
@@ -1990,9 +2011,7 @@ impl Render for GhosttyView {
                 // Empty PopupMenu renders nothing; suppress con's menu only
                 // when the terminal app consumed the right-button press.
                 let right_consumed = menu_entity.upgrade().is_some_and(|view| {
-                    view.read(cx)
-                        .terminal_mouse_right_consumed
-                        .unwrap_or(false)
+                    view.read(cx).terminal_mouse_right_consumed.unwrap_or(false)
                 });
                 if right_consumed {
                     return menu;
