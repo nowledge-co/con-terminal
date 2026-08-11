@@ -460,13 +460,17 @@ impl RenderSession {
 
     /// Mouse-moved at the given cell while a button is held.
     ///
-    /// When mouse tracking is active and the shell requested motion
-    /// (BUTTON / ANY mode), we emit an SGR motion report with the
-    /// motion bit (+32) set. Otherwise we extend the local left-button
-    /// drag selection. `button` follows the SGR button index (0=Left,
-    /// 1=Middle, 2=Right); the motion bit is added inside.
+    /// Emits an SGR motion-with-button report only when the shell
+    /// requested motion reporting (DECSET 1002 button-event or 1003
+    /// any-event); plain button-event tracking (1000) reports presses
+    /// and releases but no motion. When motion reporting is off or
+    /// Shift is held we extend the local left-button drag selection.
+    /// `button` follows the SGR button index (0=Left, 1=Middle,
+    /// 2=Right); the motion bit (+32) is added inside.
     pub fn mouse_drag(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
-        if self.vt.mouse_tracking_active() && !mods.shift {
+        let motion_reporting = self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
+            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE);
+        if motion_reporting && !mods.shift {
             self.request_low_latency_after_next_generation();
             // Button + 32 = motion-with-button bit per SGR spec.
             self.report_sgr_button(button.saturating_add(32), col, row, mods, true);
