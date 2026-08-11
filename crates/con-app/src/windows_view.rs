@@ -1776,7 +1776,10 @@ impl Render for GhosttyView {
                     this.forward_mouse_drag(
                         2,
                         event.position,
-                        mouse_mods_from(&event.modifiers),
+                        MouseEventMods {
+                            shift: this.terminal_mouse_right_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
                         true,
                     );
                     cx.notify();

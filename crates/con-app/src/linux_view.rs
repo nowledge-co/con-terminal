@@ -301,6 +301,8 @@ impl GhosttyView {
         self.last_mouse_position = None;
         self.selection = None;
         self.drag_anchor = None;
+        self.terminal_mouse_right_consumed = None;
+        self.terminal_mouse_right_shift = false;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
