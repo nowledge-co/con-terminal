@@ -390,14 +390,18 @@ impl RenderSession {
     }
 
     fn mouse_release_reporting_active(&self) -> bool {
-        self.vt.mode_active(crate::vt::MODE_NORMAL_MOUSE)
-            || self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
-            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE)
+        mouse_release_reporting_active_for_modes(
+            self.vt.mode_active(crate::vt::MODE_NORMAL_MOUSE),
+            self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE),
+            self.vt.mode_active(crate::vt::MODE_ANY_MOUSE),
+        )
     }
 
     fn mouse_motion_reporting_active(&self) -> bool {
-        self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE)
-            || self.vt.mode_active(crate::vt::MODE_ANY_MOUSE)
+        mouse_motion_reporting_active_for_modes(
+            self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE),
+            self.vt.mode_active(crate::vt::MODE_ANY_MOUSE),
+        )
     }
 
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
@@ -486,7 +490,7 @@ impl RenderSession {
             self.report_sgr_button(button.saturating_add(32), col, row, mods, true);
             return;
         }
-        if button != 0 {
+        if !mouse_drag_updates_local_selection(button, motion_reporting, mods.shift) {
             return;
         }
         self.request_low_latency_present();
@@ -802,6 +806,22 @@ fn sgr_button_sequence(
     format!("\x1b[<{cb};{col};{row}{terminator}")
 }
 
+fn mouse_release_reporting_active_for_modes(
+    normal_tracking: bool,
+    button_tracking: bool,
+    any_tracking: bool,
+) -> bool {
+    normal_tracking || button_tracking || any_tracking
+}
+
+fn mouse_motion_reporting_active_for_modes(button_tracking: bool, any_tracking: bool) -> bool {
+    button_tracking || any_tracking
+}
+
+fn mouse_drag_updates_local_selection(button: u8, motion_reporting: bool, shift: bool) -> bool {
+    button == 0 && (!motion_reporting || shift)
+}
+
 fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
     match rows.cmp(&0) {
         std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
@@ -913,5 +933,31 @@ mod tests {
         assert_eq!(sgr_button_sequence(34, 1, 2, mods, true), "\x1b[<34;2;3M");
         // Left-button drag: 0 + 32 = 32.
         assert_eq!(sgr_button_sequence(32, 1, 2, mods, true), "\x1b[<32;2;3M");
+    }
+
+    #[test]
+    fn release_reporting_excludes_x10_press_only_mode() {
+        assert!(!mouse_release_reporting_active_for_modes(
+            false, false, false
+        ));
+        assert!(mouse_release_reporting_active_for_modes(true, false, false));
+        assert!(mouse_release_reporting_active_for_modes(false, true, false));
+        assert!(mouse_release_reporting_active_for_modes(false, false, true));
+    }
+
+    #[test]
+    fn motion_reporting_requires_button_or_any_mode() {
+        assert!(!mouse_motion_reporting_active_for_modes(false, false));
+        assert!(mouse_motion_reporting_active_for_modes(true, false));
+        assert!(mouse_motion_reporting_active_for_modes(false, true));
+    }
+
+    #[test]
+    fn only_left_drag_updates_local_selection() {
+        assert!(mouse_drag_updates_local_selection(0, false, false));
+        assert!(mouse_drag_updates_local_selection(0, true, true));
+        assert!(!mouse_drag_updates_local_selection(0, true, false));
+        assert!(!mouse_drag_updates_local_selection(2, false, false));
+        assert!(!mouse_drag_updates_local_selection(2, true, true));
     }
 }
