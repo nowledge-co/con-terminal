@@ -1377,10 +1377,17 @@ impl Render for GhosttyView {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
                     this.last_mouse_position = Some(event.position);
-                    if let Some(terminal) = this.terminal() {
-                        if let Some((col, row)) = this.cell_from_event_position(event.position) {
-                            terminal.mouse_release(2, col, row, event.modifiers.shift);
+                    // Only release when the press was consumed by the app, so
+                    // plain right-clicks (menu path) never emit a stray release.
+                    if this.terminal_mouse_right_consumed == Some(true) {
+                        if let Some(terminal) = this.terminal() {
+                            if let Some((col, row)) =
+                                this.clamped_cell_from_event_position(event.position)
+                            {
+                                terminal.mouse_release(2, col, row, event.modifiers.shift);
+                            }
                         }
+                        this.terminal_mouse_right_consumed = None;
                     }
                 }),
             )

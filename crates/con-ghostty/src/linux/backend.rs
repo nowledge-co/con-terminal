@@ -376,10 +376,13 @@ impl LinuxGhosttyTerminal {
             return false;
         }
         let seq = sgr_mouse_sequence(button, col, row, true);
-        if let Err(err) = session.write_input(seq.as_bytes()) {
-            log::debug!("linux pty mouse report write failed: {err:#}");
+        match session.write_input(seq.as_bytes()) {
+            Ok(()) => true,
+            Err(err) => {
+                log::debug!("linux pty mouse report write failed: {err:#}");
+                false
+            }
         }
-        true
     }
 
     /// Report a mouse button release to the child as an SGR (1006)
@@ -394,10 +397,13 @@ impl LinuxGhosttyTerminal {
             return false;
         }
         let seq = sgr_mouse_sequence(button, col, row, false);
-        if let Err(err) = session.write_input(seq.as_bytes()) {
-            log::debug!("linux pty mouse release write failed: {err:#}");
+        match session.write_input(seq.as_bytes()) {
+            Ok(()) => true,
+            Err(err) => {
+                log::debug!("linux pty mouse release write failed: {err:#}");
+                false
+            }
         }
-        true
     }
 
     pub fn request_close(&self) {
