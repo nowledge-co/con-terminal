@@ -1962,6 +1962,9 @@ impl Render for GhosttyView {
                     move |this, event: &MouseDownEvent, window, cx| {
                         window.focus(&context_focus, cx);
                         this.last_mouse_position = Some(event.position);
+                        // Reset first so a click without a terminal can't
+                        // carry a stale consumed state into the menu gate.
+                        right_click_consumed.set(false);
                         if let Some(ref terminal) = this.terminal {
                             let (x, y) = this.view_local_pos(event.position);
                             let mods = gpui_mods_to_ghostty(&event.modifiers);

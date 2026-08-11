@@ -119,6 +119,9 @@ pub struct GhosttyView {
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
     terminal_mouse_right_consumed: Option<bool>,
+    /// Shift state at the right-button press, reused for the matching
+    /// release so a modifier change in between doesn't break pairing.
+    terminal_mouse_right_shift: bool,
 }
 
 pub fn init(cx: &mut App) {
@@ -200,6 +203,7 @@ impl GhosttyView {
             selection: None,
             drag_anchor: None,
             terminal_mouse_right_consumed: None,
+            terminal_mouse_right_shift: false,
         }
     }
 
@@ -1279,15 +1283,19 @@ impl Render for GhosttyView {
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     // SGR button 2 = right; unconsumed when tracking is off.
+                    // Record the press shift state so the matching release
+                    // isn't rejected if Shift changes between press/release.
+                    let shift_at_press = event.modifiers.shift;
                     this.terminal_mouse_right_consumed = if let Some(terminal) = this.terminal() {
                         if let Some((col, row)) = this.cell_from_event_position(event.position) {
-                            Some(terminal.mouse_report(2, col, row, event.modifiers.shift))
+                            Some(terminal.mouse_report(2, col, row, shift_at_press))
                         } else {
                             None
                         }
                     } else {
                         None
                     };
+                    this.terminal_mouse_right_shift = shift_at_press;
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1384,7 +1392,12 @@ impl Render for GhosttyView {
                             if let Some((col, row)) =
                                 this.clamped_cell_from_event_position(event.position)
                             {
-                                terminal.mouse_release(2, col, row, event.modifiers.shift);
+                                terminal.mouse_release(
+                                    2,
+                                    col,
+                                    row,
+                                    this.terminal_mouse_right_shift,
+                                );
                             }
                         }
                         this.terminal_mouse_right_consumed = None;
