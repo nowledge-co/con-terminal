@@ -2027,6 +2027,24 @@ impl Render for GhosttyView {
                     }
                 }),
             )
+            .on_mouse_up_out(
+                gpui::MouseButton::Right,
+                cx.listener({
+                    let right_click_consumed = right_click_consumed.clone();
+                    move |this, event: &MouseUpEvent, _window, _cx| {
+                        this.last_mouse_position = Some(event.position);
+                        if right_click_consumed.get() {
+                            if let Some(ref terminal) = this.terminal {
+                                let (x, y) = this.view_local_pos(event.position);
+                                let mods = gpui_mods_to_ghostty(&event.modifiers);
+                                terminal.send_mouse_pos(x, y, mods);
+                                terminal.send_mouse_button(false, MouseButton::Right, mods);
+                            }
+                            right_click_consumed.set(false);
+                        }
+                    }
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
                 this.last_mouse_position = Some(event.position);
                 if let Some(ref terminal) = this.terminal {
