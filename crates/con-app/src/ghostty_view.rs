@@ -2208,6 +2208,7 @@ mod tests {
         );
         assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("\n")), 0);
         assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("\t")), 0);
+        assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("")), 0);
         assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, None), 0);
     }
 }
