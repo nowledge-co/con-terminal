@@ -423,17 +423,20 @@ impl RenderSession {
     /// otherwise we emit an SGR button-press report and leave selection
     /// alone. Shift+click with an existing selection extends from the
     /// original anchor (matches every other terminal). `button` follows
-    /// the SGR button index (0=Left, 1=Middle, 2=Right).
-    pub fn mouse_down(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
+    /// the SGR button index (0=Left, 1=Middle, 2=Right). Returns `true`
+    /// when the event was consumed by the terminal app (an SGR report
+    /// was emitted) — the view uses this to suppress its own context
+    /// menu on right-click.
+    pub fn mouse_down(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
             self.report_sgr_button(button, col, row, mods, true);
-            return;
+            return true;
         }
         if button != 0 {
             // Non-left buttons never drive local selection; when tracking
             // is off the click is simply not consumed by the terminal.
-            return;
+            return false;
         }
         self.request_low_latency_present();
         let point = self.selection_point(col, row);
@@ -445,13 +448,14 @@ impl RenderSession {
                 anchor: existing_anchor,
                 extent: point,
             }));
-            return;
+            return false;
         }
         *self.drag_anchor.lock() = Some(point);
         self.renderer.lock().set_selection(Some(Selection {
             anchor: point,
             extent: point,
         }));
+        false
     }
 
     /// Mouse-moved at the given cell while a button is held.
@@ -482,15 +486,16 @@ impl RenderSession {
     /// is held to keep selection). Otherwise clears a transient 1-cell
     /// selection — a click without drag shouldn't leave a lone cell
     /// highlighted. `button` follows the SGR button index (0=Left,
-    /// 1=Middle, 2=Right).
-    pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
+    /// 1=Middle, 2=Right). Returns `true` when the release was consumed
+    /// by the terminal app (an SGR report was emitted).
+    pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
             self.report_sgr_button(button, col, row, mods, false);
-            return;
+            return true;
         }
         if button != 0 {
-            return;
+            return false;
         }
         self.request_low_latency_present();
         let anchor = self.drag_anchor.lock().take();
@@ -499,6 +504,7 @@ impl RenderSession {
         {
             self.renderer.lock().set_selection(None);
         }
+        false
     }
 
     fn selection_point(&self, col: u16, row: u16) -> (u16, u64) {
@@ -514,17 +520,7 @@ impl RenderSession {
         mods: MouseEventMods,
         pressed: bool,
     ) {
-        let col = col.saturating_add(1);
-        let row = row.saturating_add(1);
-        let mut cb = base_button;
-        if mods.alt {
-            cb |= 0x08;
-        }
-        if mods.control {
-            cb |= 0x10;
-        }
-        let terminator = if pressed { 'M' } else { 'm' };
-        let seq = format!("\x1b[<{cb};{col};{row}{terminator}");
+        let seq = sgr_button_sequence(base_button, col, row, mods, pressed);
         let _ = self.conpty.write(seq.as_bytes());
     }
 
@@ -764,6 +760,30 @@ fn sgr_wheel_button_for_delta(delta_y: f32) -> u8 {
     if delta_y > 0.0 { 64 } else { 65 }
 }
 
+/// Build an SGR (1006) mouse button report escape sequence for the
+/// given 0-based cell coordinates. Alt (0x08) and Ctrl (0x10) bits are
+/// folded into the button byte per the SGR spec; `pressed` selects the
+/// press (`M`) or release (`m`) terminator.
+fn sgr_button_sequence(
+    base_button: u8,
+    col: u16,
+    row: u16,
+    mods: MouseEventMods,
+    pressed: bool,
+) -> String {
+    let col = col.saturating_add(1);
+    let row = row.saturating_add(1);
+    let mut cb = base_button;
+    if mods.alt {
+        cb |= 0x08;
+    }
+    if mods.control {
+        cb |= 0x10;
+    }
+    let terminator = if pressed { 'M' } else { 'm' };
+    format!("\x1b[<{cb};{col};{row}{terminator}")
+}
+
 fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
     match rows.cmp(&0) {
         std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
@@ -848,5 +868,29 @@ mod tests {
         assert_eq!(viewport_delta_for_scroll_rows(3), -3);
         assert_eq!(viewport_delta_for_scroll_rows(-3), 3);
         assert_eq!(viewport_delta_for_scroll_rows(0), 0);
+    }
+
+    #[test]
+    fn sgr_right_button_press_and_release() {
+        let mods = MouseEventMods::default();
+        assert_eq!(
+            sgr_button_sequence(2, 0, 0, mods, true),
+            "\x1b[<2;1;1M"
+        );
+        assert_eq!(
+            sgr_button_sequence(2, 5, 9, mods, false),
+            "\x1b[<2;6;10m"
+        );
+    }
+
+    #[test]
+    fn sgr_button_sequence_folds_alt_and_ctrl_bits() {
+        let mods = MouseEventMods {
+            alt: true,
+            control: true,
+            shift: false,
+        };
+        // base 0 (left) | alt 0x08 | ctrl 0x10 = 0x18
+        assert_eq!(sgr_button_sequence(0, 3, 7, mods, true), "\x1b[<24;4;8M");
     }
 }

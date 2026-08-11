@@ -115,6 +115,10 @@ pub struct GhosttyView {
     last_mouse_position: Option<Point<Pixels>>,
     selection: Option<TerminalSelection>,
     drag_anchor: Option<(u16, u64)>,
+    /// Whether the most recent right-button press was consumed by the
+    /// terminal app (an SGR report emitted). The context-menu builder
+    /// suppresses con's menu only when this is true.
+    terminal_mouse_right_consumed: Option<bool>,
 }
 
 pub fn init(cx: &mut App) {
@@ -195,6 +199,7 @@ impl GhosttyView {
             last_mouse_position: None,
             selection: None,
             drag_anchor: None,
+            terminal_mouse_right_consumed: None,
         }
     }
 
@@ -1273,12 +1278,16 @@ impl Render for GhosttyView {
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
-                    // SGR button 2 = right; suppressed when tracking is off.
-                    if let Some(terminal) = this.terminal() {
+                    // SGR button 2 = right; unconsumed when tracking is off.
+                    this.terminal_mouse_right_consumed = if let Some(terminal) = this.terminal() {
                         if let Some((col, row)) = this.cell_from_event_position(event.position) {
-                            terminal.mouse_report(2, col, row, event.modifiers.shift);
+                            Some(terminal.mouse_report(2, col, row, event.modifiers.shift))
+                        } else {
+                            None
                         }
-                    }
+                    } else {
+                        None
+                    };
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1416,13 +1425,14 @@ impl Render for GhosttyView {
                     ),
             )
             .context_menu(move |menu, window, cx| {
-                // Empty PopupMenu renders nothing; suppress con's menu while
-                // mouse reporting is active (right-click went to the app).
-                let mouse_tracking_active = menu_entity
-                    .upgrade()
-                    .and_then(|view| view.read(cx).terminal())
-                    .is_some_and(|terminal| terminal.mouse_tracking_active());
-                if mouse_tracking_active {
+                // Empty PopupMenu renders nothing; suppress con's menu only
+                // when the terminal app consumed the right-button press.
+                let right_consumed = menu_entity.upgrade().is_some_and(|view| {
+                    view.read(cx)
+                        .terminal_mouse_right_consumed
+                        .unwrap_or(false)
+                });
+                if right_consumed {
                     return menu;
                 }
                 crate::terminal_context_menu::terminal_context_menu(

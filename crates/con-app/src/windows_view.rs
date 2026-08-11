@@ -155,6 +155,10 @@ pub struct GhosttyView {
     /// SGR button index of the in-flight terminal mouse sequence, so the
     /// release/move-release report uses the same button as the press.
     terminal_mouse_sequence_button: Option<u8>,
+    /// Whether the most recent right-button press was consumed by the
+    /// terminal app (an SGR report emitted). The context-menu builder
+    /// suppresses con's menu only when this is true.
+    terminal_mouse_right_consumed: Option<bool>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -238,6 +242,7 @@ impl GhosttyView {
             scrollbar_drag: None,
             terminal_mouse_sequence_active: false,
             terminal_mouse_sequence_button: None,
+            terminal_mouse_right_consumed: None,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
             hovered_link: None,
@@ -301,6 +306,7 @@ impl GhosttyView {
         self.scrollbar_drag = None;
         self.terminal_mouse_sequence_active = false;
         self.terminal_mouse_sequence_button = None;
+        self.terminal_mouse_right_consumed = None;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
         self.mouse_down_link = None;
@@ -879,8 +885,7 @@ impl GhosttyView {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_down(button, col, row, mods);
-                    return true;
+                    return session.mouse_down(button, col, row, mods);
                 }
             }
         }
@@ -1663,10 +1668,11 @@ impl Render for GhosttyView {
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     // SGR button 2 = right; unconsumed when tracking is off.
-                    let active = this
+                    let consumed = this
                         .forward_mouse_down(2, event.position, mouse_mods_from(&event.modifiers));
-                    this.terminal_mouse_sequence_active = active;
-                    if active {
+                    this.terminal_mouse_right_consumed = Some(consumed);
+                    this.terminal_mouse_sequence_active = consumed;
+                    if consumed {
                         this.terminal_mouse_sequence_button = Some(2);
                     }
                     cx.emit(GhosttyFocusChanged);
@@ -1694,9 +1700,11 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.terminal_mouse_sequence_active =
-                        this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
-                    if this.terminal_mouse_sequence_active {
+                    // Left button: keep the sequence flag tied to session
+                    // presence (local drag selection), not SGR consumption.
+                    let _ = this.forward_mouse_down(0, event.position, mouse_mods_from(&event.modifiers));
+                    if this.terminal().is_some() && this.cell_from_event_position(event.position).is_some() {
+                        this.terminal_mouse_sequence_active = true;
                         this.terminal_mouse_sequence_button = Some(0);
                     }
                     cx.emit(GhosttyFocusChanged);
@@ -1917,19 +1925,14 @@ impl Render for GhosttyView {
                     ),
             )
             .context_menu(move |menu, window, cx| {
-                // Empty PopupMenu renders nothing; suppress con's menu while
-                // mouse reporting is active (right-click went to the app).
-                let mouse_tracking_active = menu_entity.upgrade().is_some_and(|view| {
-                    let Some(terminal) = view.read(cx).terminal() else {
-                        return false;
-                    };
-                    let binding = terminal.inner();
-                    let inner = binding.lock();
-                    inner
-                        .as_ref()
-                        .is_some_and(RenderSession::mouse_tracking_active)
+                // Empty PopupMenu renders nothing; suppress con's menu only
+                // when the terminal app consumed the right-button press.
+                let right_consumed = menu_entity.upgrade().is_some_and(|view| {
+                    view.read(cx)
+                        .terminal_mouse_right_consumed
+                        .unwrap_or(false)
                 });
-                if mouse_tracking_active {
+                if right_consumed {
                     return menu;
                 }
                 crate::terminal_context_menu::terminal_context_menu(
