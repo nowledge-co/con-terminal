@@ -1452,16 +1452,17 @@ impl GhosttyView {
 
         // Try to map GPUI key name to macOS virtual keycode.
         if let Some((keycode, unshifted_codepoint)) = gpui_key_to_keycode(key_name) {
-            // Build the text field: the character this key produces (if printable).
-            // For non-printable keys (arrows, F-keys), text is null.
-            let text_string = keystroke.key_char.as_deref().or_else(|| {
+            // Only key_char represents actual text translation. The key-name
+            // fallback must not consume Shift.
+            let translated_text = keystroke.key_char.as_deref();
+            let text_string = translated_text.or_else(|| {
                 if key_name.len() == 1 {
                     Some(key_name)
                 } else {
                     None
                 }
             });
-            let cstr = text_string.and_then(|s| std::ffi::CString::new(s).ok());
+            let cstr = text_string.and_then(|text| std::ffi::CString::new(text).ok());
             let text_ptr = cstr
                 .as_ref()
                 .map(|c| c.as_ptr())
@@ -1470,7 +1471,7 @@ impl GhosttyView {
             let key_event = ffi::ghostty_input_key_s {
                 action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
                 mods,
-                consumed_mods: 0,
+                consumed_mods: gpui_consumed_mods_to_ghostty(&keystroke.modifiers, translated_text),
                 keycode,
                 text: text_ptr,
                 unshifted_codepoint,
@@ -1664,6 +1665,32 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
         m |= ffi::GHOSTTY_MODS_SUPER;
     }
     m
+}
+
+/// Return the Shift modifier safely inferred as consumed by text translation.
+///
+/// GPUI keeps the produced text in `Keystroke::key_char`, but does not expose
+/// AppKit's translation modifiers separately. A printable `key_char` plus an
+/// active Shift is enough to recover the casing modifier used by text
+/// translation. Option is intentionally left effective because Ghostty's
+/// `macos-option-as-alt` setting controls whether it participates in text
+/// translation, and GPUI does not expose that surface-adjusted modifier state.
+/// Control characters stay on the key-event path, where modifiers such as
+/// Shift must remain effective (for example, Shift+Enter in the Kitty keyboard
+/// protocol).
+fn gpui_consumed_mods_to_ghostty(mods: &Modifiers, text: Option<&str>) -> i32 {
+    let Some(text) = text else {
+        return 0;
+    };
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return 0;
+    }
+
+    if mods.shift {
+        ffi::GHOSTTY_MODS_SHIFT
+    } else {
+        0
+    }
 }
 
 fn gpui_scroll_mods_to_ghostty(delta: &ScrollDelta) -> i32 {
@@ -2144,7 +2171,9 @@ impl Render for GhosttyView {
 
 #[cfg(test)]
 mod tests {
-    use super::should_send_ime_insert_as_key_event;
+    use super::{gpui_consumed_mods_to_ghostty, should_send_ime_insert_as_key_event};
+    use con_ghostty::ffi;
+    use gpui::Modifiers;
 
     #[test]
     fn direct_ascii_ime_commits_use_key_event_path() {
@@ -2153,5 +2182,33 @@ mod tests {
         assert!(!should_send_ime_insert_as_key_event(""));
         assert!(!should_send_ime_insert_as_key_event("hello\n"));
         assert!(!should_send_ime_insert_as_key_event("你好"));
+    }
+
+    #[test]
+    fn printable_text_translation_consumes_shift_only() {
+        let modifiers = Modifiers {
+            control: true,
+            alt: true,
+            shift: true,
+            platform: true,
+            function: true,
+        };
+
+        assert_eq!(
+            gpui_consumed_mods_to_ghostty(&Modifiers::shift(), Some("P")),
+            ffi::GHOSTTY_MODS_SHIFT
+        );
+        assert_eq!(
+            gpui_consumed_mods_to_ghostty(&modifiers, Some("P")),
+            ffi::GHOSTTY_MODS_SHIFT
+        );
+        assert_eq!(
+            gpui_consumed_mods_to_ghostty(&Modifiers::alt(), Some("å")),
+            0
+        );
+        assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("\n")), 0);
+        assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("\t")), 0);
+        assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, Some("")), 0);
+        assert_eq!(gpui_consumed_mods_to_ghostty(&modifiers, None), 0);
     }
 }
