@@ -419,19 +419,19 @@ impl RenderSession {
     ///
     /// Xterm convention: Shift bypasses mouse tracking so the user can
     /// always select text, even when a TUI has `set mouse=a` on. When
-    /// tracking is off or Shift is held, we drive local selection;
-    /// otherwise we emit an SGR button-press report and leave selection
-    /// alone. Shift+click with an existing selection extends from the
-    /// original anchor (matches every other terminal). `button` follows
-    /// the SGR button index (0=Left, 1=Middle, 2=Right). Returns `true`
-    /// when the event was consumed by the terminal app (an SGR report
-    /// was emitted) — the view uses this to suppress its own context
-    /// menu on right-click.
+    /// tracking is off or Shift is held, we drive local selection (left
+    /// button only — non-left buttons never drive selection); otherwise
+    /// we emit an SGR button-press report and leave selection alone.
+    /// Shift+click with an existing selection extends from the original
+    /// anchor (matches every other terminal). `button` follows the SGR
+    /// button index (0=Left, 1=Middle, 2=Right). Returns `true` when the
+    /// event was consumed by the terminal app (an SGR report emitted) —
+    /// the view uses this to suppress its own context menu on
+    /// right-click.
     pub fn mouse_down(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
-            self.report_sgr_button(button, col, row, mods, true);
-            return true;
+            return self.report_sgr_button(button, col, row, mods, true);
         }
         if button != 0 {
             // Non-left buttons never drive local selection; when tracking
@@ -462,12 +462,14 @@ impl RenderSession {
     ///
     /// When mouse tracking is active and the shell requested motion
     /// (BUTTON / ANY mode), we emit an SGR motion report with the
-    /// motion bit (+32) set. Otherwise we extend the local drag.
-    pub fn mouse_drag(&self, col: u16, row: u16, mods: MouseEventMods) {
+    /// motion bit (+32) set. Otherwise we extend the local left-button
+    /// drag selection. `button` follows the SGR button index (0=Left,
+    /// 1=Middle, 2=Right); the motion bit is added inside.
+    pub fn mouse_drag(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
-            // Button 0 (LMB) + 32 = motion-with-button bit per SGR spec.
-            self.report_sgr_button(32, col, row, mods, true);
+            // Button + 32 = motion-with-button bit per SGR spec.
+            self.report_sgr_button(button.saturating_add(32), col, row, mods, true);
             return;
         }
         self.request_low_latency_present();
@@ -491,8 +493,7 @@ impl RenderSession {
     pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.request_low_latency_after_next_generation();
-            self.report_sgr_button(button, col, row, mods, false);
-            return true;
+            return self.report_sgr_button(button, col, row, mods, false);
         }
         if button != 0 {
             return false;
@@ -519,9 +520,9 @@ impl RenderSession {
         row: u16,
         mods: MouseEventMods,
         pressed: bool,
-    ) {
+    ) -> bool {
         let seq = sgr_button_sequence(base_button, col, row, mods, pressed);
-        let _ = self.conpty.write(seq.as_bytes());
+        self.conpty.write(seq.as_bytes()).is_ok()
     }
 
     /// Cancel any in-flight drag (used on focus loss).
@@ -892,5 +893,14 @@ mod tests {
         };
         // base 0 (left) | alt 0x08 | ctrl 0x10 = 0x18
         assert_eq!(sgr_button_sequence(0, 3, 7, mods, true), "\x1b[<24;4;8M");
+    }
+
+    #[test]
+    fn sgr_drag_motion_uses_button_plus_32() {
+        // Right-button drag: 2 + 32 = 34.
+        let mods = MouseEventMods::default();
+        assert_eq!(sgr_button_sequence(34, 1, 2, mods, true), "\x1b[<34;2;3M");
+        // Left-button drag: 0 + 32 = 32.
+        assert_eq!(sgr_button_sequence(32, 1, 2, mods, true), "\x1b[<32;2;3M");
     }
 }

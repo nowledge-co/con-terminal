@@ -892,7 +892,7 @@ impl GhosttyView {
         false
     }
 
-    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+    fn forward_mouse_drag(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
         let cell = if clamp {
             self.clamped_cell_from_event_position(pos)
         } else {
@@ -902,7 +902,7 @@ impl GhosttyView {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_drag(col, row, mods);
+                    session.mouse_drag(button, col, row, mods);
                 }
             }
         }
@@ -1747,6 +1747,7 @@ impl Render for GhosttyView {
                 if event.pressed_button == Some(MouseButton::Left) {
                     if this.terminal_mouse_sequence_active {
                         this.forward_mouse_drag(
+                            0,
                             event.position,
                             mouse_mods_from(&event.modifiers),
                             true,
@@ -1755,7 +1756,20 @@ impl Render for GhosttyView {
                     } else if hover_changed {
                         cx.notify();
                     }
-                } else if this.terminal_mouse_sequence_active {
+                } else if event.pressed_button == Some(MouseButton::Right)
+                    && this.terminal_mouse_sequence_active
+                {
+                    // Right button is held and the sequence is active: keep
+                    // reporting motion (button 2 + 32) instead of treating
+                    // this as a release.
+                    this.forward_mouse_drag(
+                        2,
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                        true,
+                    );
+                    cx.notify();
+                } else if event.pressed_button.is_none() && this.terminal_mouse_sequence_active {
                     let button = this.terminal_mouse_sequence_button.unwrap_or(0);
                     this.forward_mouse_up(button, event.position, mouse_mods_from(&event.modifiers), true);
                     this.terminal_mouse_sequence_active = false;
@@ -1833,6 +1847,7 @@ impl Render for GhosttyView {
                 );
                 if scrolled_viewport && this.terminal_mouse_sequence_active {
                     this.forward_mouse_drag(
+                        0,
                         event.position,
                         mouse_mods_from(&event.modifiers),
                         true,
