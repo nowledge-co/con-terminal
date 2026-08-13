@@ -88,14 +88,22 @@ struct ImageMetadata {
 impl ImageMetadata {
     fn inspect(path: &Path) -> Self {
         let file_size = image_file_size(path);
-        let dimensions = image_dimensions(path, file_size);
+        let dimension_probe = image_dimension_probe(path, file_size);
+        let dimensions = dimension_probe.dimensions;
         Self {
             file_size,
             dimensions,
             too_large: image_exceeds_size_limit(file_size)
+                || dimension_probe.unsafe_to_decode
                 || dimensions.is_some_and(image_dimensions_exceed_limit),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageDimensionProbe {
+    dimensions: Option<ImageDimensions>,
+    unsafe_to_decode: bool,
 }
 
 /// Cached file size for image tabs. Missing or unreadable files return `None`;
@@ -109,7 +117,7 @@ fn image_exceeds_size_limit(size: Option<u64>) -> bool {
     size.is_some_and(|size| size > IMAGE_SIZE_LIMIT)
 }
 
-fn image_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageDimensions> {
+fn image_dimension_probe(path: &Path, file_size: Option<u64>) -> ImageDimensionProbe {
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -118,10 +126,13 @@ fn image_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageDimensio
         return svg_declared_dimensions(path, file_size);
     }
 
-    imagesize::size(path).ok().map(|size| ImageDimensions {
-        width: size.width,
-        height: size.height,
-    })
+    ImageDimensionProbe {
+        dimensions: imagesize::size(path).ok().map(|size| ImageDimensions {
+            width: size.width,
+            height: size.height,
+        }),
+        unsafe_to_decode: false,
+    }
 }
 
 fn image_dimensions_exceed_limit(dimensions: ImageDimensions) -> bool {
@@ -133,20 +144,38 @@ fn image_dimensions_exceed_limit(dimensions: ImageDimensions) -> bool {
             .is_none_or(|pixels| pixels > IMAGE_MAX_DECODED_PIXELS)
 }
 
-fn svg_declared_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageDimensions> {
+fn svg_declared_dimensions(path: &Path, file_size: Option<u64>) -> ImageDimensionProbe {
     if image_exceeds_size_limit(file_size) {
-        return None;
+        return ImageDimensionProbe {
+            dimensions: None,
+            unsafe_to_decode: false,
+        };
     }
     use std::io::Read as _;
     let mut buffer =
         Vec::with_capacity(SVG_HEADER_PROBE_BYTES.min(file_size.unwrap_or(0) as usize));
-    let mut file = std::fs::File::open(path).ok()?;
-    file.by_ref()
+    let Some(mut file) = std::fs::File::open(path).ok() else {
+        return ImageDimensionProbe {
+            dimensions: None,
+            unsafe_to_decode: false,
+        };
+    };
+    if file
+        .by_ref()
         .take(SVG_HEADER_PROBE_BYTES as u64)
         .read_to_end(&mut buffer)
-        .ok()?;
+        .is_err()
+    {
+        return ImageDimensionProbe {
+            dimensions: None,
+            unsafe_to_decode: false,
+        };
+    }
     let svg = String::from_utf8_lossy(&buffer);
-    parse_svg_declared_dimensions(&svg)
+    ImageDimensionProbe {
+        dimensions: parse_svg_declared_dimensions(&svg),
+        unsafe_to_decode: svg.find("<svg").is_none(),
+    }
 }
 
 fn parse_svg_declared_dimensions(svg: &str) -> Option<ImageDimensions> {
@@ -2905,6 +2934,24 @@ mod tests {
         );
         let huge_dimensions = parse_svg_declared_dimensions(huge).unwrap();
         assert!(image_dimensions_exceed_limit(huge_dimensions));
+    }
+
+    #[test]
+    fn svg_root_missing_from_probe_is_refused_before_decode() {
+        let dir =
+            std::env::temp_dir().join(format!("con-editor-svg-probe-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hidden-root.svg");
+        let mut svg = " ".repeat(SVG_HEADER_PROBE_BYTES + 1);
+        svg.push_str(r#"<svg viewBox="0 0 100000 100000"></svg>"#);
+        std::fs::write(&path, svg).unwrap();
+
+        let metadata = ImageMetadata::inspect(&path);
+
+        assert_eq!(metadata.dimensions, None);
+        assert!(metadata.too_large);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn png_with_ihdr_dimensions(width: u32, height: u32) -> Vec<u8> {
