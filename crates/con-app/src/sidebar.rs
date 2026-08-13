@@ -49,8 +49,14 @@ const RAIL_ICON_SIZE: f32 = 32.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
-const RAIL_TOP_CONTROLS_HEIGHT: f32 =
-    28.0 + RAIL_ICON_GAP + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
+const RAIL_BUTTON_SIZE: f32 = 28.0;
+const RAIL_DIVIDER_HEIGHT: f32 = 5.0;
+const RAIL_TOP_CONTROL_COUNT: f32 = 4.0;
+const RAIL_TOP_DIVIDER_COUNT: f32 = 2.0;
+const RAIL_TOP_GAP_COUNT_BEFORE_SESSIONS: f32 = 6.0;
+const RAIL_TOP_CONTROLS_HEIGHT: f32 = RAIL_BUTTON_SIZE * RAIL_TOP_CONTROL_COUNT
+    + RAIL_DIVIDER_HEIGHT * RAIL_TOP_DIVIDER_COUNT
+    + RAIL_ICON_GAP * RAIL_TOP_GAP_COUNT_BEFORE_SESSIONS;
 
 /// Cubic ease-out feel for the panel width animation.
 #[cfg(not(target_os = "macos"))]
@@ -1998,10 +2004,8 @@ fn rail_slot_from_local_y(
     }
     // Mirror the rail layout in render_rail:
     //   pt(leading_top_pad)
-    //   + expand button (28 px) + RAIL_ICON_GAP
-    //   + new-tab button (28 px) + RAIL_ICON_GAP
-    //   + separator h(1) + my(2)*2 = 5 px + RAIL_ICON_GAP
-    //   + i * (RAIL_ICON_SIZE + RAIL_ICON_GAP)
+    //   + top controls (expand, files, search, new, two dividers, gaps)
+    //   + scrollable session list rows
     let header = leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT;
     let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
     if local_y < header {
@@ -2327,11 +2331,11 @@ fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PanelMode, RailModeButtonAction, SessionSidebar, SidebarDragPreviewState,
-        begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
+        PanelMode, RAIL_ICON_SIZE, RAIL_TOP_CONTROLS_HEIGHT, RailModeButtonAction, SessionSidebar,
+        SidebarDragPreviewState, begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
         blur_should_commit_for_lifecycle, cancel_rename_lifecycle, hover_card_top_for_cursor,
-        normalize_sidebar_rename_label, vertical_drag_overlay_probe_position,
-        vertical_slot_from_bounds,
+        normalize_sidebar_rename_label, rail_slot_from_local_y,
+        vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -2363,6 +2367,22 @@ mod tests {
         assert_eq!(vertical_slot_from_bounds(px(90.0), &bounds, 2), Some(0));
         assert_eq!(vertical_slot_from_bounds(px(121.0), &bounds, 2), Some(1));
         assert_eq!(vertical_slot_from_bounds(px(180.0), &bounds, 2), Some(2));
+    }
+
+    #[test]
+    fn rail_slot_from_local_y_starts_after_fixed_controls() {
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT - 1.0, 3, 0.0),
+            Some(0)
+        );
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT, 3, 0.0),
+            Some(0)
+        );
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + RAIL_ICON_SIZE * 0.75, 3, 0.0),
+            Some(1)
+        );
     }
 
     #[test]

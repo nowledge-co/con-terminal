@@ -18,6 +18,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#270](https://github.com/nowledge-co/con-terminal/pull/270) by
   [@sunny0826](https://github.com/sunny0826))_
 
+### Fixed
+
+**Sidebar**
+
+- Fixed sidebar rail icons and file-search result icons stretching when the
+  window is compressed. The session rail now keeps controls fixed and scrolls
+  the session list instead of shrinking icon boxes. _(PR
+  [#272](https://github.com/nowledge-co/con-terminal/pull/272) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ---
 
 ## `v0.1.0-beta.83` - 2026-08-11
