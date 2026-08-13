@@ -2300,8 +2300,9 @@ mod tests {
     use super::{
         PanelMode, RailModeButtonAction, SessionSidebar, SidebarDragPreviewState,
         begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
-        blur_should_commit_for_lifecycle, cancel_rename_lifecycle, normalize_sidebar_rename_label,
-        vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
+        blur_should_commit_for_lifecycle, cancel_rename_lifecycle, hover_card_top_for_cursor,
+        normalize_sidebar_rename_label, vertical_drag_overlay_probe_position,
+        vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
 

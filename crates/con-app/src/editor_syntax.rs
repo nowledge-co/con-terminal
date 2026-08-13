@@ -40,6 +40,23 @@ pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Image extensions routed to the read-only image viewer. Keeps in sync with
+/// the formats GPUI's `img` element can decode (`Img::extensions`), trimmed to
+/// the ones commonly found in code repositories.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "tiff", "tif", "tga", "ico",
+];
+
+/// Returns true when `path` has a known image extension (case-insensitive).
+/// This is a purely path-based check — a directory literally named `foo.png`
+/// matches too. Used to route files to the read-only image viewer instead of
+/// the text editor.
+pub(crate) fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|extension| IMAGE_EXTENSIONS.contains(&extension.as_str()))
+}
+
 pub(crate) fn highlighted_line_runs(
     text: &str,
     lines: &[String],
@@ -205,6 +222,35 @@ mod tests {
         ] {
             assert_eq!(language_for_path(Path::new(path)), Some(language));
         }
+    }
+
+    #[test]
+    fn is_image_path_recognizes_image_extensions_case_insensitively() {
+        for extension in [
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "tiff", "tif", "tga", "ico",
+        ] {
+            assert!(is_image_path(Path::new(&format!("screenshot.{extension}"))));
+        }
+        assert!(is_image_path(Path::new("/tmp/screenshot.PNG")));
+        assert!(is_image_path(Path::new("/tmp/Screenshot.Jpeg")));
+    }
+
+    #[test]
+    fn is_image_path_rejects_non_images() {
+        assert!(!is_image_path(Path::new("notes.md")));
+        assert!(!is_image_path(Path::new("src/main.rs")));
+        assert!(!is_image_path(Path::new("archive.png.tar")));
+        assert!(!is_image_path(Path::new("no_extension")));
+        assert!(!is_image_path(Path::new(".gitignore")));
+    }
+
+    #[test]
+    fn is_image_path_is_path_based_not_file_type_based() {
+        // A directory named `foo.png` matches too — the check never stats the
+        // filesystem, it only looks at the extension.
+        assert!(is_image_path(Path::new("assets/logo.png")));
+        assert!(!is_image_path(Path::new("images")));
+        assert!(!is_image_path(Path::new("images/")));
     }
 
     #[test]

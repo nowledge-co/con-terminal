@@ -65,6 +65,7 @@ ropey.workspace = true
 mermaid-rs-renderer.workspace = true
 mathjax-svg-rs.workspace = true
 regex = "1"
+imagesize = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "=0.26.0"
