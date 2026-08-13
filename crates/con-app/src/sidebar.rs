@@ -49,8 +49,14 @@ const RAIL_ICON_SIZE: f32 = 32.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
-const RAIL_TOP_CONTROLS_HEIGHT: f32 =
-    28.0 + RAIL_ICON_GAP + 28.0 + RAIL_ICON_GAP + 5.0 + RAIL_ICON_GAP;
+const RAIL_BUTTON_SIZE: f32 = 28.0;
+const RAIL_DIVIDER_HEIGHT: f32 = 5.0;
+const RAIL_TOP_CONTROL_COUNT: f32 = 4.0;
+const RAIL_TOP_DIVIDER_COUNT: f32 = 2.0;
+const RAIL_TOP_GAP_COUNT_BEFORE_SESSIONS: f32 = 6.0;
+const RAIL_TOP_CONTROLS_HEIGHT: f32 = RAIL_BUTTON_SIZE * RAIL_TOP_CONTROL_COUNT
+    + RAIL_DIVIDER_HEIGHT * RAIL_TOP_DIVIDER_COUNT
+    + RAIL_ICON_GAP * RAIL_TOP_GAP_COUNT_BEFORE_SESSIONS;
 
 /// Cubic ease-out feel for the panel width animation.
 #[cfg(not(target_os = "macos"))]
@@ -205,6 +211,7 @@ impl Render for DraggedTab {
                 svg()
                     .path(self.icon)
                     .size(px(12.0))
+                    .flex_shrink_0()
                     .text_color(theme.foreground),
             )
             .child(div().truncate().child(self.label.clone()))
@@ -759,7 +766,7 @@ impl SessionSidebar {
             theme.muted_foreground
         };
         self.tab_bounds.borrow_mut().clear();
-        let mut rail = div()
+        let rail = div()
             .id("tab-sidebar-rail")
             .relative()
             .w(px(RAIL_WIDTH))
@@ -969,6 +976,22 @@ impl SessionSidebar {
                 cx.listener(|_, _, _, cx| cx.emit(NewSession)),
             ));
 
+        // Session pill list — the only vertically scrollable region of
+        // the rail. The control buttons and dividers above stay fixed:
+        // when the window is short or there are many sessions, this area
+        // absorbs the vertical deficit (flex_1 + min_h_0) and scrolls
+        // instead of compressing the 32px pills.
+        let mut pill_list = div()
+            .id("tab-sidebar-rail-scroll")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(RAIL_ICON_GAP))
+            .overflow_y_scroll();
+
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
             let active_bg = elevated_surface(theme, self.ui_opacity);
@@ -1007,6 +1030,7 @@ impl SessionSidebar {
                 .items_center()
                 .justify_center()
                 .size(px(RAIL_ICON_SIZE))
+                .flex_shrink_0()
                 .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(pill_bg)
@@ -1048,6 +1072,7 @@ impl SessionSidebar {
                     svg()
                         .path(session.icon)
                         .size(px(16.0))
+                        .flex_shrink_0()
                         .text_color(if is_active {
                             theme.foreground
                         } else {
@@ -1089,10 +1114,10 @@ impl SessionSidebar {
                 pill = pill.child(rail_drop_indicator(theme, false));
             }
 
-            rail = rail.child(pill);
+            pill_list = pill_list.child(pill);
         }
 
-        rail.child(div().flex_1())
+        rail.child(pill_list)
     }
 
     /// Floating hover card shown next to the hovered rail icon.
@@ -1784,6 +1809,7 @@ impl SessionSidebar {
                     .flex()
                     .items_center()
                     .gap(px(2.0))
+                    .flex_shrink_0()
                     .child(rename_btn)
                     .child(close_btn),
             );
@@ -1978,10 +2004,8 @@ fn rail_slot_from_local_y(
     }
     // Mirror the rail layout in render_rail:
     //   pt(leading_top_pad)
-    //   + expand button (28 px) + RAIL_ICON_GAP
-    //   + new-tab button (28 px) + RAIL_ICON_GAP
-    //   + separator h(1) + my(2)*2 = 5 px + RAIL_ICON_GAP
-    //   + i * (RAIL_ICON_SIZE + RAIL_ICON_GAP)
+    //   + top controls (expand, files, search, new, two dividers, gaps)
+    //   + scrollable session list rows
     let header = leading_top_pad + RAIL_TOP_CONTROLS_HEIGHT;
     let stride = RAIL_ICON_SIZE + RAIL_ICON_GAP;
     if local_y < header {
@@ -2015,13 +2039,20 @@ where
     div()
         .id(id)
         .size(px(28.0))
+        .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(6.0))
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
-        .child(svg().path(icon).size(px(14.0)).text_color(icon_color))
+        .child(
+            svg()
+                .path(icon)
+                .size(px(14.0))
+                .flex_shrink_0()
+                .text_color(icon_color),
+        )
         .on_mouse_down(MouseButton::Left, handler)
 }
 
@@ -2149,6 +2180,7 @@ where
     div()
         .id(id)
         .size(px(20.0))
+        .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
@@ -2159,6 +2191,7 @@ where
             svg()
                 .path(icon)
                 .size(px(11.0))
+                .flex_shrink_0()
                 .text_color(theme.muted_foreground.opacity(0.72)),
         )
         .on_mouse_down(MouseButton::Left, handler)
@@ -2298,11 +2331,11 @@ fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PanelMode, RailModeButtonAction, SessionSidebar, SidebarDragPreviewState,
-        begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
+        PanelMode, RAIL_ICON_SIZE, RAIL_TOP_CONTROLS_HEIGHT, RailModeButtonAction, SessionSidebar,
+        SidebarDragPreviewState, begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
         blur_should_commit_for_lifecycle, cancel_rename_lifecycle, hover_card_top_for_cursor,
-        normalize_sidebar_rename_label, vertical_drag_overlay_probe_position,
-        vertical_slot_from_bounds,
+        normalize_sidebar_rename_label, rail_slot_from_local_y,
+        vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -2334,6 +2367,22 @@ mod tests {
         assert_eq!(vertical_slot_from_bounds(px(90.0), &bounds, 2), Some(0));
         assert_eq!(vertical_slot_from_bounds(px(121.0), &bounds, 2), Some(1));
         assert_eq!(vertical_slot_from_bounds(px(180.0), &bounds, 2), Some(2));
+    }
+
+    #[test]
+    fn rail_slot_from_local_y_starts_after_fixed_controls() {
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT - 1.0, 3, 0.0),
+            Some(0)
+        );
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT, 3, 0.0),
+            Some(0)
+        );
+        assert_eq!(
+            rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + RAIL_ICON_SIZE * 0.75, 3, 0.0),
+            Some(1)
+        );
     }
 
     #[test]
