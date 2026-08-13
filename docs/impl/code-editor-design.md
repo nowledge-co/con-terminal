@@ -148,24 +148,27 @@ inline images use, so a file shown in both places decodes once.
 - The viewer body centers the image with `object_fit(Contain)` capped at the
   viewport (`max_w_full`/`max_h_full`), with loading/error placeholders while
   the asset is fetched.
-- Large images are refused up front: `open_file` stats the file
-  (`fs::metadata`) before creating the tab, and files over 20 MB
-  (`IMAGE_SIZE_LIMIT`) open with an `image_too_large` flag — the body shows a
-  "Image too large" placeholder instead of handing the file to GPUI, which
-  would decode at full resolution and keep a `w×h×4` RGBA buffer in memory
-  regardless of the on-screen size. (A thumbnail/downsample path via the
-  `image` crate is deliberately not done: it is not a direct dependency of
-  `con-app` on macOS/Linux, so the size cap keeps the project dependency-free.)
+- Large images are refused up front: `open_file` caches file size plus
+  header-declared dimensions before creating the tab. Files over 20 MB
+  (`IMAGE_SIZE_LIMIT`), over 16,384 px on either axis, or over ~64 MP total
+  open with an `image_too_large` flag — the body shows a "Image too large"
+  placeholder instead of handing the file to GPUI, which would decode at full
+  resolution and keep a `w×h×4` RGBA buffer in memory regardless of the
+  on-screen size. Raster dimensions come from header-only `imagesize` probing;
+  SVG dimensions are read from the root `viewBox` / `width` / `height`
+  declaration.
 - Image files dragged onto the editor pane open in the viewer, mirroring the
   terminal's drop handling in `ghostty_view.rs` (`drag_over::<ExternalPaths>`
   + `on_drop`). Non-image drops keep their existing behavior (the editor
   ignores them; the terminal pane pastes shell-escaped paths).
 - Image tabs are inert: text mutations, undo, cut, save, and the markdown
   preview toggle are all no-ops (the same guard used by preview mode); LSP is
-  skipped (`ensure_lsp_for_path` bails on image paths); the cursor blink task
-  skips re-renders for the active image tab.
-- The status bar shows the file size (`fs::metadata`, computed lazily at
-  render) instead of line/cursor position.
+  skipped (`ensure_lsp_for_path` bails on image paths); text hit-testing and
+  cursor/selection dragging are skipped; the cursor blink task skips re-renders
+  for the active image tab.
+- The status bar shows the image file size and declared dimensions cached when
+  the tab opens instead of line/cursor position, keeping image-tab renders
+  side-effect-free.
 - The file explorer shows a dedicated image icon (`phosphor/image.svg`) for
   image files.
 - The viewer never edits the file: no save button, no dirty state, closing

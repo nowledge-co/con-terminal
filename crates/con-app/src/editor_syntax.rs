@@ -227,8 +227,7 @@ mod tests {
     #[test]
     fn is_image_path_recognizes_image_extensions_case_insensitively() {
         for extension in [
-            "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "tiff", "tif", "tga",
-            "ico",
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "bmp", "tiff", "tif", "tga", "ico",
         ] {
             assert!(is_image_path(Path::new(&format!("screenshot.{extension}"))));
         }

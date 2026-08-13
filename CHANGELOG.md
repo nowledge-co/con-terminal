@@ -4,6 +4,22 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.84` - unreleased
+
+### Added
+
+**Editor**
+
+- Added a read-only image viewer for local image files opened from the file
+  tree, sidebar search, or drag-and-drop. Images fit the editor pane without
+  entering text-edit mode, and oversized files show a safe placeholder instead
+  of being decoded at full resolution; the guard checks both file size and
+  declared image dimensions before previewing. _(PR
+  [#270](https://github.com/nowledge-co/con-terminal/pull/270) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.83` - 2026-08-11
 
 ### Fixed

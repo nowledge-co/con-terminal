@@ -1290,6 +1290,7 @@ dependencies = [
  "gpui_platform",
  "html5ever 0.39.0",
  "image",
+ "imagesize",
  "log",
  "markdown",
  "markup5ever_rcdom 0.39.0+unofficial",

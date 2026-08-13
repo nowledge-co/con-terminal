@@ -63,19 +63,152 @@ const fn editor_char_width(font_size: f32) -> f32 {
 /// regardless of the on-screen size (a 4000×3000 PNG alone is ~48 MB), so
 /// oversized files are shown as a "too large" placeholder instead.
 const IMAGE_SIZE_LIMIT: u64 = 20 * 1024 * 1024;
+/// Decoded RGBA memory budget for the image viewer. Header-only dimension
+/// probing keeps tiny compressed images with absurd dimensions from being
+/// handed to GPUI's decoder.
+const IMAGE_MAX_DECODED_PIXELS: usize = 64 * 1024 * 1024;
+const IMAGE_MAX_DIMENSION: usize = 16_384;
 
-/// Returns true when the file at `path` is strictly larger than `limit` bytes.
-/// Missing or unreadable files return false — the image element's own fallback
-/// (or the read-error path) already covers those.
-fn file_size_exceeds(path: &Path, limit: u64) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.len() > limit)
-        .unwrap_or(false)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageDimensions {
+    width: usize,
+    height: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageMetadata {
+    file_size: Option<u64>,
+    dimensions: Option<ImageDimensions>,
+    too_large: bool,
+}
+
+impl ImageMetadata {
+    fn inspect(path: &Path) -> Self {
+        let file_size = image_file_size(path);
+        let dimensions = image_dimensions(path, file_size);
+        Self {
+            file_size,
+            dimensions,
+            too_large: image_exceeds_size_limit(file_size)
+                || dimensions.is_some_and(image_dimensions_exceed_limit),
+        }
+    }
+}
+
+/// Cached file size for image tabs. Missing or unreadable files return `None`;
+/// the image element's own fallback already covers those at render time.
+fn image_file_size(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|metadata| metadata.len())
 }
 
 /// Returns true when an image at `path` should be refused by the viewer.
-fn image_exceeds_size_limit(path: &Path) -> bool {
-    file_size_exceeds(path, IMAGE_SIZE_LIMIT)
+fn image_exceeds_size_limit(size: Option<u64>) -> bool {
+    size.is_some_and(|size| size > IMAGE_SIZE_LIMIT)
+}
+
+fn image_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageDimensions> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+    {
+        return svg_declared_dimensions(path, file_size);
+    }
+
+    imagesize::size(path).ok().map(|size| ImageDimensions {
+        width: size.width,
+        height: size.height,
+    })
+}
+
+fn image_dimensions_exceed_limit(dimensions: ImageDimensions) -> bool {
+    dimensions.width > IMAGE_MAX_DIMENSION
+        || dimensions.height > IMAGE_MAX_DIMENSION
+        || dimensions
+            .width
+            .checked_mul(dimensions.height)
+            .is_none_or(|pixels| pixels > IMAGE_MAX_DECODED_PIXELS)
+}
+
+fn svg_declared_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageDimensions> {
+    if image_exceeds_size_limit(file_size) {
+        return None;
+    }
+    let svg = std::fs::read_to_string(path).ok()?;
+    parse_svg_declared_dimensions(&svg)
+}
+
+fn parse_svg_declared_dimensions(svg: &str) -> Option<ImageDimensions> {
+    let start = svg.find("<svg")?;
+    let tag = &svg[start..start + svg[start..].find('>')?];
+    if let Some(view_box) = svg_attribute(tag, "viewBox").or_else(|| svg_attribute(tag, "viewbox"))
+        && let Some(dimensions) = parse_svg_view_box_dimensions(view_box)
+    {
+        return Some(dimensions);
+    }
+
+    let width = svg_attribute(tag, "width").and_then(parse_svg_length)?;
+    let height = svg_attribute(tag, "height").and_then(parse_svg_length)?;
+    Some(ImageDimensions { width, height })
+}
+
+fn svg_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let mut rest = tag;
+    while let Some(index) = rest.find(name) {
+        let before = rest[..index].chars().next_back();
+        let after = rest[index + name.len()..].chars().next();
+        if before.is_none_or(|ch| ch.is_whitespace() || ch == '<')
+            && after.is_some_and(|ch| ch.is_whitespace() || ch == '=')
+        {
+            let mut value = rest[index + name.len()..].trim_start();
+            value = value.strip_prefix('=')?.trim_start();
+            let quote = value.chars().next()?;
+            if quote == '"' || quote == '\'' {
+                let value = &value[quote.len_utf8()..];
+                let end = value.find(quote)?;
+                return Some(&value[..end]);
+            }
+            let end = value.find(char::is_whitespace).unwrap_or(value.len());
+            return Some(&value[..end]);
+        }
+        rest = &rest[index + name.len()..];
+    }
+    None
+}
+
+fn parse_svg_view_box_dimensions(value: &str) -> Option<ImageDimensions> {
+    let numbers = value
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse::<f64>().ok())
+        .collect::<Vec<_>>();
+    if numbers.len() != 4 {
+        return None;
+    }
+    positive_dimension(numbers[2])
+        .zip(positive_dimension(numbers[3]))
+        .map(|(width, height)| ImageDimensions { width, height })
+}
+
+fn parse_svg_length(value: &str) -> Option<usize> {
+    let value = value.trim();
+    if value.ends_with('%') {
+        return None;
+    }
+    let number_end = value
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-' | 'e' | 'E'))
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()?;
+    positive_dimension(value[..number_end].parse::<f64>().ok()?)
+}
+
+fn positive_dimension(value: f64) -> Option<usize> {
+    value
+        .is_finite()
+        .then_some(value)
+        .filter(|value| *value > 0.0)
+        .map(|value| value.ceil() as usize)
 }
 
 /// Human-readable byte size for the image viewer status bar.
@@ -89,6 +222,10 @@ fn format_file_size(bytes: u64) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+fn format_image_dimensions(dimensions: ImageDimensions) -> String {
+    format!("{}×{}", dimensions.width, dimensions.height)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -137,6 +274,10 @@ pub struct EditorTab {
     /// Set when the image file exceeds [`IMAGE_SIZE_LIMIT`]: the viewer shows a
     /// "too large" placeholder instead of asking GPUI to decode the file.
     image_too_large: bool,
+    /// Cached at open time to keep image-tab rendering side-effect-free.
+    image_file_size: Option<u64>,
+    /// Header-declared dimensions cached at open time, before full decode.
+    image_dimensions: Option<ImageDimensions>,
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
     save_enabled: bool,
@@ -166,6 +307,8 @@ struct EditorRenderCacheKey {
 #[derive(Clone)]
 struct EditorRenderSnapshot {
     path: PathBuf,
+    image_file_size: Option<u64>,
+    image_dimensions: Option<ImageDimensions>,
     lines: Arc<Vec<String>>,
     syntax_runs: Arc<Vec<Vec<gpui::TextRun>>>,
     widest_line_index: usize,
@@ -188,6 +331,8 @@ impl EditorTab {
             path,
             kind: EditorTabKind::Text,
             image_too_large: false,
+            image_file_size: None,
+            image_dimensions: None,
             buffer,
             render_cache: EditorRenderCache::default(),
             save_enabled: true,
@@ -199,12 +344,16 @@ impl EditorTab {
     /// Create a read-only image tab. The file is never read into the text
     /// buffer — GPUI's `img` element streams it from disk through the shared
     /// asset cache (async decode + global cache handled by the framework).
-    /// `too_large` refuses decoding for files over [`IMAGE_SIZE_LIMIT`].
-    fn image(path: PathBuf, too_large: bool) -> Self {
+    /// `metadata` is cached so status and placeholders do not stat or probe
+    /// headers on every repaint. Oversized or over-dimensioned files are
+    /// refused before GPUI decodes them.
+    fn image(path: PathBuf, metadata: ImageMetadata) -> Self {
         Self {
             path,
             kind: EditorTabKind::Image,
-            image_too_large: too_large,
+            image_too_large: metadata.too_large,
+            image_file_size: metadata.file_size,
+            image_dimensions: metadata.dimensions,
             buffer: EditorBuffer::from_text(String::new()),
             render_cache: EditorRenderCache::default(),
             save_enabled: false,
@@ -218,6 +367,8 @@ impl EditorTab {
             path,
             kind: EditorTabKind::Text,
             image_too_large: false,
+            image_file_size: None,
+            image_dimensions: None,
             buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
             render_cache: EditorRenderCache::default(),
             save_enabled: false,
@@ -274,6 +425,8 @@ impl EditorTab {
         let lines = self.render_cache.lines.clone();
         EditorRenderSnapshot {
             path: self.path.clone(),
+            image_file_size: self.image_file_size,
+            image_dimensions: self.image_dimensions,
             line_count: lines.len().max(1),
             lines,
             syntax_runs: self.render_cache.syntax_runs.clone(),
@@ -372,8 +525,8 @@ impl EditorView {
         // Images open in a read-only viewer: no text read, no LSP, no save.
         // GPUI's `img` element loads the file lazily through the asset cache,
         // so the tab can be created synchronously. Files over
-        // `IMAGE_SIZE_LIMIT` are refused up front (see `image_exceeds_size_limit`)
-        // so GPUI never decodes a multi-hundred-MB buffer at full resolution.
+        // `IMAGE_SIZE_LIMIT`, or images whose headers declare too many pixels,
+        // are refused up front so GPUI never decodes a huge RGBA buffer.
         if editor_syntax::is_image_path(&path) {
             let apply = self.open_file_from_image_with_activation(path, true);
             if apply.active_file_changed {
@@ -446,14 +599,14 @@ impl EditorView {
         path: PathBuf,
         activate: bool,
     ) -> LoadedFileApply {
-        let too_large = image_exceeds_size_limit(&path);
+        let metadata = ImageMetadata::inspect(&path);
         let apply = Self::apply_loaded_file_tab(
             &mut self.tabs,
             &mut self.active_tab,
             path,
             activate,
             false,
-            |path| EditorTab::image(path, too_large),
+            |path| EditorTab::image(path, metadata),
         );
         if apply.activated {
             self.dirty_close_blocked_tab = None;
@@ -1640,8 +1793,8 @@ impl Render for EditorView {
             tab_bar = tab_bar.child(tab_el);
         }
 
-        let preview_available = !image_tab
-            && editor_syntax::language_for_path(&active.path) == Some("markdown");
+        let preview_available =
+            !image_tab && editor_syntax::language_for_path(&active.path) == Some("markdown");
         let preview_toggle = preview_available.then(|| {
             let icon = if preview_active {
                 "phosphor/code.svg"
@@ -1683,10 +1836,19 @@ impl Render for EditorView {
             format!(" — {diagnostic_count} issues")
         };
         let status_text: SharedString = if image_tab {
-            let size_label = std::fs::metadata(&active.path)
-                .map(|metadata| format_file_size(metadata.len()))
-                .unwrap_or_else(|_| "unknown size".to_string());
-            format!("{size_label} — {}", active.path.display()).into()
+            let size_label = active
+                .image_file_size
+                .map(format_file_size)
+                .unwrap_or_else(|| "unknown size".to_string());
+            let dimensions_label = active
+                .image_dimensions
+                .map(format_image_dimensions)
+                .unwrap_or_else(|| "unknown dimensions".to_string());
+            format!(
+                "{size_label} — {dimensions_label} — {}",
+                active.path.display()
+            )
+            .into()
         } else {
             format!(
                 "{} lines — Ln {}, Col {}{} — {}",
@@ -1919,10 +2081,16 @@ impl Render for EditorView {
                 // Refuse to decode oversized files: GPUI's `img` element keeps a
                 // full-resolution RGBA buffer in memory regardless of display
                 // size, so a large file is shown as a hint instead.
-                let size_label = std::fs::metadata(&path)
-                    .map(|metadata| format_file_size(metadata.len()))
-                    .unwrap_or_else(|_| "unknown size".to_string());
+                let size_label = self.tabs[active_index]
+                    .image_file_size
+                    .map(format_file_size)
+                    .unwrap_or_else(|| "unknown size".to_string());
+                let dimensions_label = self.tabs[active_index]
+                    .image_dimensions
+                    .map(format_image_dimensions)
+                    .unwrap_or_else(|| "unknown dimensions".to_string());
                 let limit_mb = IMAGE_SIZE_LIMIT / (1024 * 1024);
+                let decoded_mb = IMAGE_MAX_DECODED_PIXELS * 4 / (1024 * 1024);
                 div()
                     .flex_1()
                     .min_h_0()
@@ -1946,7 +2114,7 @@ impl Render for EditorView {
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground.opacity(0.6))
                             .child(format!(
-                                "{size_label} exceeds the {limit_mb} MB preview limit"
+                                "{size_label} / {dimensions_label}. Limits: {limit_mb} MB on disk or ~{decoded_mb} MB decoded"
                             )),
                     )
                     .into_any_element()
@@ -2045,7 +2213,7 @@ impl Render for EditorView {
                         return;
                     }
                     this.focus_handle.focus(window, cx);
-                    if this.preview_active() {
+                    if this.preview_active() || this.active_tab_is_image() {
                         window.prevent_default();
                         cx.notify();
                         return;
@@ -2057,6 +2225,7 @@ impl Render for EditorView {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 if this.preview_active()
+                    || this.active_tab_is_image()
                     || this.point_hits_scrollbar(event.position)
                     || !this.point_in_content_bounds(event.position)
                 {
@@ -2069,7 +2238,7 @@ impl Render for EditorView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    if this.preview_active() {
+                    if this.preview_active() || this.active_tab_is_image() {
                         return;
                     }
                     if this.point_hits_scrollbar(event.position) {
@@ -2596,21 +2765,47 @@ mod tests {
 
     #[test]
     fn image_tab_has_empty_buffer_and_no_save() {
-        let tab = EditorTab::image(PathBuf::from("logo.png"), false);
+        let tab = EditorTab::image(
+            PathBuf::from("logo.png"),
+            ImageMetadata {
+                file_size: Some(1024),
+                dimensions: Some(ImageDimensions {
+                    width: 640,
+                    height: 480,
+                }),
+                too_large: false,
+            },
+        );
 
         assert_eq!(tab.kind, EditorTabKind::Image);
         assert!(!tab.save_enabled);
         assert!(!tab.preview);
+        assert_eq!(tab.image_file_size, Some(1024));
+        assert_eq!(
+            tab.image_dimensions,
+            Some(ImageDimensions {
+                width: 640,
+                height: 480
+            })
+        );
         assert!(!tab.buffer.is_dirty());
         assert_eq!(tab.buffer.text(), "");
     }
 
     #[test]
     fn oversized_image_tab_refuses_decode() {
-        let tab = EditorTab::image(PathBuf::from("huge.png"), true);
+        let tab = EditorTab::image(
+            PathBuf::from("huge.png"),
+            ImageMetadata {
+                file_size: Some(IMAGE_SIZE_LIMIT + 1),
+                dimensions: None,
+                too_large: true,
+            },
+        );
 
         assert_eq!(tab.kind, EditorTabKind::Image);
         assert!(tab.image_too_large);
+        assert_eq!(tab.image_file_size, Some(IMAGE_SIZE_LIMIT + 1));
         assert!(!tab.save_enabled);
         assert_eq!(tab.buffer.text(), "");
     }
@@ -2621,7 +2816,7 @@ mod tests {
     }
 
     #[test]
-    fn file_size_exceeds_compares_against_limit() {
+    fn image_file_size_caches_metadata_once() {
         let dir = std::env::temp_dir().join(format!(
             "con-editor-size-test-{}-{}",
             std::process::id(),
@@ -2639,12 +2834,58 @@ mod tests {
             .set_len(1024)
             .unwrap();
 
-        assert!(!file_size_exceeds(&small, 8)); // 4 < 8
-        assert!(!file_size_exceeds(&boundary, 8)); // exactly at the limit
-        assert!(file_size_exceeds(&large, 8)); // 1024 > 8
-        assert!(!file_size_exceeds(&dir.join("missing.png"), 8));
+        assert_eq!(image_file_size(&small), Some(4));
+        assert_eq!(image_file_size(&boundary), Some(8));
+        assert_eq!(image_file_size(&large), Some(1024));
+        assert_eq!(image_file_size(&dir.join("missing.png")), None);
+        assert!(!image_exceeds_size_limit(Some(IMAGE_SIZE_LIMIT)));
+        assert!(image_exceeds_size_limit(Some(IMAGE_SIZE_LIMIT + 1)));
+        assert!(!image_exceeds_size_limit(None));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn huge_png_dimensions_are_refused_before_decode() {
+        let dir =
+            std::env::temp_dir().join(format!("con-editor-png-dim-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("huge-dimensions.png");
+        let mut png = vec![0; 24];
+        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        png[16..20].copy_from_slice(&(IMAGE_MAX_DIMENSION as u32 + 1).to_be_bytes());
+        png[20..24].copy_from_slice(&(16_u32).to_be_bytes());
+        std::fs::write(&path, png).unwrap();
+
+        let metadata = ImageMetadata::inspect(&path);
+
+        assert_eq!(metadata.file_size, Some(24));
+        assert_eq!(
+            metadata.dimensions,
+            Some(ImageDimensions {
+                width: IMAGE_MAX_DIMENSION + 1,
+                height: 16
+            })
+        );
+        assert!(metadata.too_large);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn svg_declared_dimensions_are_guarded() {
+        let normal = r#"<svg width="320px" height="200"></svg>"#;
+        let huge = r#"<svg viewBox="0 0 100000 100000"></svg>"#;
+
+        assert_eq!(
+            parse_svg_declared_dimensions(normal),
+            Some(ImageDimensions {
+                width: 320,
+                height: 200
+            })
+        );
+        let huge_dimensions = parse_svg_declared_dimensions(huge).unwrap();
+        assert!(image_dimensions_exceed_limit(huge_dimensions));
     }
 
     #[gpui::test]
@@ -2664,10 +2905,7 @@ mod tests {
 
     #[gpui::test]
     fn open_file_refuses_oversized_images(cx: &mut gpui::TestAppContext) {
-        let dir = std::env::temp_dir().join(format!(
-            "con-editor-huge-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("con-editor-huge-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let huge = dir.join("huge.png");
         // Sparse file: length is IMAGE_SIZE_LIMIT + 1, nothing on disk.
@@ -2740,7 +2978,10 @@ mod tests {
         let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
         view.update(cx, |view, cx| {
             let opened = view.open_dropped_paths(
-                &[PathBuf::from("/tmp/notes.md"), PathBuf::from("/tmp/main.rs")],
+                &[
+                    PathBuf::from("/tmp/notes.md"),
+                    PathBuf::from("/tmp/main.rs"),
+                ],
                 cx,
             );
 
