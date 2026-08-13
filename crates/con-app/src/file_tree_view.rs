@@ -8,10 +8,12 @@
 //! ---
 //! - Row height: 24 px.
 //! - Indent: 12 px per depth level.
-//! - Icons: phosphor/folder.svg, phosphor/folder-open.svg, phosphor/file-text.svg.
+//! - Icons: phosphor/folder.svg, phosphor/folder-open.svg, phosphor/file-text.svg,
+//!   phosphor/image.svg for image files.
 //! - Active (open) file row gets a subtle accent bg.
 //! - No borders — surface separation via bg opacity.
 
+use crate::editor_syntax;
 use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
@@ -309,6 +311,8 @@ impl Render for FileTreeView {
                         } else {
                             "phosphor/folder.svg"
                         }
+                    } else if editor_syntax::is_image_path(&path) {
+                        "phosphor/image.svg"
                     } else {
                         "phosphor/file-text.svg"
                     };

@@ -11,11 +11,11 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use gpui::{
-    App, Bounds, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle,
-    ScrollStrategy, SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div,
-    px, svg, uniform_list,
+    App, Bounds, Context, CursorStyle, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    FontWeight, Hsla, InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render,
+    ScrollHandle, ScrollStrategy, SharedString, Styled, StyledImage, StyledText, Task,
+    UniformListScrollHandle, Window, div, img, px, svg, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Theme,
@@ -58,6 +58,39 @@ const fn editor_char_width(font_size: f32) -> f32 {
     font_size * 0.6
 }
 
+/// Files larger than this are not decoded by the image viewer. GPUI's `img`
+/// element decodes at full resolution and keeps the RGBA buffer in memory
+/// regardless of the on-screen size (a 4000×3000 PNG alone is ~48 MB), so
+/// oversized files are shown as a "too large" placeholder instead.
+const IMAGE_SIZE_LIMIT: u64 = 20 * 1024 * 1024;
+
+/// Returns true when the file at `path` is strictly larger than `limit` bytes.
+/// Missing or unreadable files return false — the image element's own fallback
+/// (or the read-error path) already covers those.
+fn file_size_exceeds(path: &Path, limit: u64) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() > limit)
+        .unwrap_or(false)
+}
+
+/// Returns true when an image at `path` should be refused by the viewer.
+fn image_exceeds_size_limit(path: &Path) -> bool {
+    file_size_exceeds(path, IMAGE_SIZE_LIMIT)
+}
+
+/// Human-readable byte size for the image viewer status bar.
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct EditorMetrics {
     font_size: f32,
@@ -89,9 +122,21 @@ pub struct EditorEmptied;
 impl EventEmitter<ActiveFileChanged> for EditorView {}
 impl EventEmitter<EditorEmptied> for EditorView {}
 
+/// How a tab's content is presented. Image tabs open in a read-only viewer
+/// instead of the text buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorTabKind {
+    Text,
+    Image,
+}
+
 #[derive(Clone)]
 pub struct EditorTab {
     pub path: PathBuf,
+    kind: EditorTabKind,
+    /// Set when the image file exceeds [`IMAGE_SIZE_LIMIT`]: the viewer shows a
+    /// "too large" placeholder instead of asking GPUI to decode the file.
+    image_too_large: bool,
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
     save_enabled: bool,
@@ -141,6 +186,8 @@ impl EditorTab {
     fn new(path: PathBuf, buffer: EditorBuffer) -> Self {
         Self {
             path,
+            kind: EditorTabKind::Text,
+            image_too_large: false,
             buffer,
             render_cache: EditorRenderCache::default(),
             save_enabled: true,
@@ -149,9 +196,28 @@ impl EditorTab {
         }
     }
 
+    /// Create a read-only image tab. The file is never read into the text
+    /// buffer — GPUI's `img` element streams it from disk through the shared
+    /// asset cache (async decode + global cache handled by the framework).
+    /// `too_large` refuses decoding for files over [`IMAGE_SIZE_LIMIT`].
+    fn image(path: PathBuf, too_large: bool) -> Self {
+        Self {
+            path,
+            kind: EditorTabKind::Image,
+            image_too_large: too_large,
+            buffer: EditorBuffer::from_text(String::new()),
+            render_cache: EditorRenderCache::default(),
+            save_enabled: false,
+            preview: false,
+            preview_cache: None,
+        }
+    }
+
     fn read_error(path: PathBuf, error: std::io::Error) -> Self {
         Self {
             path,
+            kind: EditorTabKind::Text,
+            image_too_large: false,
             buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
             render_cache: EditorRenderCache::default(),
             save_enabled: false,
@@ -303,6 +369,20 @@ impl EditorView {
             return;
         }
 
+        // Images open in a read-only viewer: no text read, no LSP, no save.
+        // GPUI's `img` element loads the file lazily through the asset cache,
+        // so the tab can be created synchronously. Files over
+        // `IMAGE_SIZE_LIMIT` are refused up front (see `image_exceeds_size_limit`)
+        // so GPUI never decodes a multi-hundred-MB buffer at full resolution.
+        if editor_syntax::is_image_path(&path) {
+            let apply = self.open_file_from_image_with_activation(path, true);
+            if apply.active_file_changed {
+                cx.emit(ActiveFileChanged);
+            }
+            cx.notify();
+            return;
+        }
+
         cx.spawn(async move |this, cx| {
             let path_for_read = path.clone();
             let content = cx
@@ -353,6 +433,27 @@ impl EditorView {
             activate,
             false,
             |path| EditorTab::new(path, EditorBuffer::from_text(content)),
+        );
+        if apply.activated {
+            self.dirty_close_blocked_tab = None;
+            self.scroll_handle = UniformListScrollHandle::new();
+        }
+        apply
+    }
+
+    fn open_file_from_image_with_activation(
+        &mut self,
+        path: PathBuf,
+        activate: bool,
+    ) -> LoadedFileApply {
+        let too_large = image_exceeds_size_limit(&path);
+        let apply = Self::apply_loaded_file_tab(
+            &mut self.tabs,
+            &mut self.active_tab,
+            path,
+            activate,
+            false,
+            |path| EditorTab::image(path, too_large),
         );
         if apply.activated {
             self.dirty_close_blocked_tab = None;
@@ -415,6 +516,21 @@ impl EditorView {
             active_file_changed: old_active_path
                 != tabs.get(*active_tab).map(|tab| tab.path.clone()),
         }
+    }
+
+    /// Open dropped external paths. Only image files open in the editor —
+    /// non-image drops keep their existing behavior (the editor ignores them;
+    /// only the terminal pane consumes them, as shell-escaped paths). Returns
+    /// true when at least one image was opened so the caller can focus.
+    fn open_dropped_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) -> bool {
+        let mut opened_any = false;
+        for path in paths {
+            if editor_syntax::is_image_path(path) {
+                self.open_file(path.clone(), cx);
+                opened_any = true;
+            }
+        }
+        opened_any
     }
 
     pub fn tab_count(&self) -> usize {
@@ -969,6 +1085,9 @@ impl EditorView {
     }
 
     fn ensure_lsp_for_path(&mut self, path: &Path) {
+        if editor_syntax::is_image_path(path) {
+            return;
+        }
         let path = path.to_path_buf();
         if self.lsp_clients.contains_key(&path) {
             return;
@@ -1051,7 +1170,7 @@ impl EditorView {
     }
 
     pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1062,7 +1181,7 @@ impl EditorView {
     }
 
     pub fn insert_newline(&mut self, cx: &mut Context<Self>) {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1073,7 +1192,7 @@ impl EditorView {
     }
 
     pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1084,7 +1203,7 @@ impl EditorView {
     }
 
     pub fn delete_forward(&mut self, cx: &mut Context<Self>) {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return;
         }
         if let Some(tab) = self.active_tab_mut() {
@@ -1095,7 +1214,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return false;
         }
         let undid = self.active_tab_mut().is_some_and(|tab| tab.buffer.undo());
@@ -1216,6 +1335,10 @@ impl EditorView {
             let Some(tab) = self.active_tab_mut() else {
                 return Ok(None);
             };
+            if tab.kind == EditorTabKind::Image {
+                // Image tabs are read-only and persist nothing.
+                return Ok(None);
+            }
             if !tab.save_enabled {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -1230,7 +1353,7 @@ impl EditorView {
     }
 
     pub fn cut_selection(&mut self, cx: &mut Context<Self>) -> Option<String> {
-        if self.preview_active() {
+        if self.preview_active() || self.active_tab_is_image() {
             return None;
         }
         let text = self
@@ -1245,6 +1368,15 @@ impl EditorView {
 
     pub fn active_tab_ref(&self) -> Option<&EditorTab> {
         self.tabs.get(self.active_tab)
+    }
+
+    /// Returns true when the active tab is the read-only image viewer. Image
+    /// tabs have no editable text: editing, saving, LSP, and the markdown
+    /// preview toggle are all no-ops for them.
+    fn active_tab_is_image(&self) -> bool {
+        self.tabs
+            .get(self.active_tab)
+            .is_some_and(|tab| tab.kind == EditorTabKind::Image)
     }
 
     pub fn selected_text(&self) -> Option<String> {
@@ -1309,6 +1441,11 @@ impl Render for EditorView {
                         .timer(Duration::from_millis(550))
                         .await;
                     let _ = this.update(cx, |this, cx| {
+                        if this.active_tab_is_image() {
+                            // The image viewer has no cursor to blink; skip the
+                            // redundant re-render.
+                            return;
+                        }
                         this.cursor_visible = !this.cursor_visible;
                         cx.notify();
                     });
@@ -1376,6 +1513,7 @@ impl Render for EditorView {
         let gutter_bg = theme.muted.opacity(0.04);
         let gutter_color = theme.muted_foreground.opacity(0.42);
         let preview_active = self.preview_active();
+        let image_tab = self.tabs[active_index].kind == EditorTabKind::Image;
         if preview_active {
             let cache_stale = match &self.tabs[active_index].preview_cache {
                 Some((revision, _)) => *revision != self.tabs[active_index].buffer.revision(),
@@ -1502,7 +1640,8 @@ impl Render for EditorView {
             tab_bar = tab_bar.child(tab_el);
         }
 
-        let preview_available = editor_syntax::language_for_path(&active.path) == Some("markdown");
+        let preview_available = !image_tab
+            && editor_syntax::language_for_path(&active.path) == Some("markdown");
         let preview_toggle = preview_available.then(|| {
             let icon = if preview_active {
                 "phosphor/code.svg"
@@ -1543,15 +1682,22 @@ impl Render for EditorView {
         } else {
             format!(" — {diagnostic_count} issues")
         };
-        let status_text: SharedString = format!(
-            "{} lines — Ln {}, Col {}{} — {}",
-            line_count,
-            cursor.row + 1,
-            cursor_visual_column + 1,
-            diagnostics_label,
-            active.path.display()
-        )
-        .into();
+        let status_text: SharedString = if image_tab {
+            let size_label = std::fs::metadata(&active.path)
+                .map(|metadata| format_file_size(metadata.len()))
+                .unwrap_or_else(|_| "unknown size".to_string());
+            format!("{size_label} — {}", active.path.display()).into()
+        } else {
+            format!(
+                "{} lines — Ln {}, Col {}{} — {}",
+                line_count,
+                cursor.row + 1,
+                cursor_visual_column + 1,
+                diagnostics_label,
+                active.path.display()
+            )
+            .into()
+        };
         let dirty_close_blocked = self.dirty_close_blocked_tab == Some(active_index);
         let mut status_bar = div()
             .h(px(22.0))
@@ -1752,7 +1898,77 @@ impl Render for EditorView {
             .child(list)
             .child(Scrollbar::new(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always));
 
-        let body = if preview_active {
+        let body = if image_tab {
+            let path = active.path.clone();
+            let bg = theme.background;
+            let placeholder_fg = theme.muted_foreground.opacity(0.6);
+            let placeholder_font = ui_font.clone();
+            let make_placeholder = move |label: SharedString| {
+                let label = label.clone();
+                let font = placeholder_font.clone();
+                move || {
+                    div()
+                        .font_family(font.clone())
+                        .text_size(px(12.0))
+                        .text_color(placeholder_fg)
+                        .child(label.clone())
+                        .into_any_element()
+                }
+            };
+            if self.tabs[active_index].image_too_large {
+                // Refuse to decode oversized files: GPUI's `img` element keeps a
+                // full-resolution RGBA buffer in memory regardless of display
+                // size, so a large file is shown as a hint instead.
+                let size_label = std::fs::metadata(&path)
+                    .map(|metadata| format_file_size(metadata.len()))
+                    .unwrap_or_else(|_| "unknown size".to_string());
+                let limit_mb = IMAGE_SIZE_LIMIT / (1024 * 1024);
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.0))
+                    .bg(bg)
+                    .child(
+                        div()
+                            .font_family(ui_font.clone())
+                            .text_size(px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(fg.opacity(0.85))
+                            .child("Image too large"),
+                    )
+                    .child(
+                        div()
+                            .font_family(ui_font.clone())
+                            .text_size(px(11.0))
+                            .text_color(theme.muted_foreground.opacity(0.6))
+                            .child(format!(
+                                "{size_label} exceeds the {limit_mb} MB preview limit"
+                            )),
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(bg)
+                    .child(
+                        img(path)
+                            .object_fit(ObjectFit::Contain)
+                            .max_w_full()
+                            .max_h_full()
+                            .with_loading(make_placeholder("Loading image…".into()))
+                            .with_fallback(make_placeholder("Failed to load image".into())),
+                    )
+                    .into_any_element()
+            }
+        } else if preview_active {
             match preview_document {
                 Some(document) => {
                     let base_dir = active
@@ -1794,8 +2010,22 @@ impl Render for EditorView {
             .flex()
             .flex_col()
             .bg(theme.background)
-            .cursor(CursorStyle::IBeam)
+            .cursor(if image_tab {
+                CursorStyle::Arrow
+            } else {
+                CursorStyle::IBeam
+            })
             .track_focus(&self.focus_handle)
+            .drag_over::<ExternalPaths>(|style, _, _, _| style)
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                // Images dropped onto the editor pane open in the viewer;
+                // non-image drops are ignored (the terminal pane consumes
+                // those, pasting shell-escaped paths). Same pattern as the
+                // terminal's drop handler in ghostty_view.rs.
+                if this.open_dropped_paths(paths.paths(), cx) {
+                    window.focus(&this.focus_handle, cx);
+                }
+            }))
             .key_context("EditorView")
             .on_children_prepainted(move |bounds_list, _window, cx| {
                 let Some(bounds) = bounds_list.get(1).copied() else {
@@ -2362,6 +2592,171 @@ mod tests {
 
         assert!(!tab.save_enabled);
         assert!(tab.buffer.text().contains("Error reading file:"));
+    }
+
+    #[test]
+    fn image_tab_has_empty_buffer_and_no_save() {
+        let tab = EditorTab::image(PathBuf::from("logo.png"), false);
+
+        assert_eq!(tab.kind, EditorTabKind::Image);
+        assert!(!tab.save_enabled);
+        assert!(!tab.preview);
+        assert!(!tab.buffer.is_dirty());
+        assert_eq!(tab.buffer.text(), "");
+    }
+
+    #[test]
+    fn oversized_image_tab_refuses_decode() {
+        let tab = EditorTab::image(PathBuf::from("huge.png"), true);
+
+        assert_eq!(tab.kind, EditorTabKind::Image);
+        assert!(tab.image_too_large);
+        assert!(!tab.save_enabled);
+        assert_eq!(tab.buffer.text(), "");
+    }
+
+    #[test]
+    fn image_size_limit_is_20_mb() {
+        assert_eq!(IMAGE_SIZE_LIMIT, 20 * 1024 * 1024);
+    }
+
+    #[test]
+    fn file_size_exceeds_compares_against_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "con-editor-size-test-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("")
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("small.png");
+        let boundary = dir.join("boundary.png");
+        let large = dir.join("large.png");
+        std::fs::write(&small, [0u8; 4]).unwrap();
+        std::fs::write(&boundary, [0u8; 8]).unwrap();
+        // Sparse file: length says 1024 bytes, nothing is written to disk.
+        std::fs::File::create(&large)
+            .unwrap()
+            .set_len(1024)
+            .unwrap();
+
+        assert!(!file_size_exceeds(&small, 8)); // 4 < 8
+        assert!(!file_size_exceeds(&boundary, 8)); // exactly at the limit
+        assert!(file_size_exceeds(&large, 8)); // 1024 > 8
+        assert!(!file_size_exceeds(&dir.join("missing.png"), 8));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn open_file_routes_images_to_read_only_viewer(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_file(PathBuf::from("/tmp/con-test-photo.png"), cx);
+
+            assert_eq!(view.tabs.len(), 1);
+            assert_eq!(view.tabs[0].path, PathBuf::from("/tmp/con-test-photo.png"));
+            assert_eq!(view.tabs[0].kind, EditorTabKind::Image);
+            assert!(!view.tabs[0].image_too_large);
+            assert!(view.active_tab_is_image());
+            assert!(view.save_active().unwrap().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn open_file_refuses_oversized_images(cx: &mut gpui::TestAppContext) {
+        let dir = std::env::temp_dir().join(format!(
+            "con-editor-huge-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let huge = dir.join("huge.png");
+        // Sparse file: length is IMAGE_SIZE_LIMIT + 1, nothing on disk.
+        std::fs::File::create(&huge)
+            .unwrap()
+            .set_len(IMAGE_SIZE_LIMIT + 1)
+            .unwrap();
+
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_file(huge.clone(), cx);
+
+            assert_eq!(view.tabs.len(), 1);
+            assert_eq!(view.tabs[0].kind, EditorTabKind::Image);
+            assert!(view.tabs[0].image_too_large);
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn image_tab_rejects_text_edits_and_preview_toggle(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            let apply = view.open_file_from_image_with_activation(PathBuf::from("photo.png"), true);
+            assert!(apply.activated);
+            assert!(view.active_tab_is_image());
+
+            view.insert_text("changed", cx);
+            view.insert_newline(cx);
+            view.delete_backward(cx);
+            view.delete_forward(cx);
+            assert!(!view.undo(cx));
+            assert!(view.cut_selection(cx).is_none());
+            assert!(!view.tabs[0].buffer.is_dirty());
+            assert_eq!(view.tabs[0].buffer.revision(), 0);
+
+            // The markdown preview toggle is a no-op for image tabs.
+            view.toggle_preview(cx);
+            assert!(!view.preview_active());
+        });
+    }
+
+    #[gpui::test]
+    fn dropped_image_paths_open_in_editor(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            let opened = view.open_dropped_paths(
+                &[
+                    PathBuf::from("/tmp/drop-photo.png"),
+                    PathBuf::from("/tmp/notes.md"), // non-image → ignored
+                    PathBuf::from("/tmp/drop-logo.svg"),
+                ],
+                cx,
+            );
+
+            assert!(opened);
+            assert_eq!(view.tabs.len(), 2);
+            assert_eq!(view.tabs[0].path, PathBuf::from("/tmp/drop-photo.png"));
+            assert_eq!(view.tabs[1].path, PathBuf::from("/tmp/drop-logo.svg"));
+            assert_eq!(view.tabs[0].kind, EditorTabKind::Image);
+            assert_eq!(view.tabs[1].kind, EditorTabKind::Image);
+            // The last dropped image becomes the active tab.
+            assert_eq!(view.active_path(), Some(Path::new("/tmp/drop-logo.svg")));
+        });
+    }
+
+    #[gpui::test]
+    fn dropped_text_paths_do_not_open_tabs(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            let opened = view.open_dropped_paths(
+                &[PathBuf::from("/tmp/notes.md"), PathBuf::from("/tmp/main.rs")],
+                cx,
+            );
+
+            assert!(!opened);
+            assert_eq!(view.tabs.len(), 0);
+        });
+    }
+
+    #[test]
+    fn format_file_size_renders_human_readable() {
+        assert_eq!(format_file_size(0), "0 B");
+        assert_eq!(format_file_size(1023), "1023 B");
+        assert_eq!(format_file_size(1024), "1.0 KB");
+        assert_eq!(format_file_size(1536), "1.5 KB");
+        assert_eq!(format_file_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_file_size(5 * 1024 * 1024), "5.0 MB");
     }
 
     #[test]

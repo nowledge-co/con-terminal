@@ -133,6 +133,44 @@ editor tab bar (eye/code phosphor icon) and on `Cmd+Shift+V`
   `delete_*`, `cut_selection`, `undo`) no-op, and editor mouse hit-testing is
   skipped while a preview is showing.
 
+## Image Viewer
+
+Files with an image extension (`png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,
+`avif`, `bmp`, `tiff`, `tif`, `tga`, `ico` — `editor_syntax::is_image_path`)
+open in a read-only viewer instead of the text editor. `open_file` routes by
+extension before the text read: image tabs are created synchronously with an
+empty buffer and `save_enabled = false`; the file itself is never read up
+front. GPUI's `img` element streams it from disk through the shared asset
+cache (`Resource::Path`), which decodes raster + SVG on the background
+executor and caches by path hash — the same pipeline the markdown preview's
+inline images use, so a file shown in both places decodes once.
+
+- The viewer body centers the image with `object_fit(Contain)` capped at the
+  viewport (`max_w_full`/`max_h_full`), with loading/error placeholders while
+  the asset is fetched.
+- Large images are refused up front: `open_file` stats the file
+  (`fs::metadata`) before creating the tab, and files over 20 MB
+  (`IMAGE_SIZE_LIMIT`) open with an `image_too_large` flag — the body shows a
+  "Image too large" placeholder instead of handing the file to GPUI, which
+  would decode at full resolution and keep a `w×h×4` RGBA buffer in memory
+  regardless of the on-screen size. (A thumbnail/downsample path via the
+  `image` crate is deliberately not done: it is not a direct dependency of
+  `con-app` on macOS/Linux, so the size cap keeps the project dependency-free.)
+- Image files dragged onto the editor pane open in the viewer, mirroring the
+  terminal's drop handling in `ghostty_view.rs` (`drag_over::<ExternalPaths>`
+  + `on_drop`). Non-image drops keep their existing behavior (the editor
+  ignores them; the terminal pane pastes shell-escaped paths).
+- Image tabs are inert: text mutations, undo, cut, save, and the markdown
+  preview toggle are all no-ops (the same guard used by preview mode); LSP is
+  skipped (`ensure_lsp_for_path` bails on image paths); the cursor blink task
+  skips re-renders for the active image tab.
+- The status bar shows the file size (`fs::metadata`, computed lazily at
+  render) instead of line/cursor position.
+- The file explorer shows a dedicated image icon (`phosphor/image.svg`) for
+  image files.
+- The viewer never edits the file: no save button, no dirty state, closing
+  follows the normal tab flow.
+
 ## Open in Editor Tab
 
 Each file row in the file explorer shows an "open in editor tab" icon (arrow-square-out phosphor icon) on hover. Directories do not show the icon — only files.
@@ -193,7 +231,7 @@ crates/con-app/src/editor_view.rs
   Multi-file editor pane, tabs, hit-testing, scrolling, rendering, LSP events.
 
 crates/con-app/src/editor_syntax.rs
-  File type detection and syntax highlight runs.
+  File type detection, image-path detection, and syntax highlight runs.
 
 crates/con-app/src/editor_lsp.rs
   Best-effort language-server process integration and diagnostics parsing.
