@@ -155,8 +155,8 @@ inline images use, so a file shown in both places decodes once.
   placeholder instead of handing the file to GPUI, which would decode at full
   resolution and keep a `w×h×4` RGBA buffer in memory regardless of the
   on-screen size. Raster dimensions come from header-only `imagesize` probing;
-  SVG dimensions are read from the root `viewBox` / `width` / `height`
-  declaration.
+  SVG dimensions are read from a bounded prefix containing the root `viewBox` /
+  `width` / `height` declaration.
 - Image files dragged onto the editor pane open in the viewer, mirroring the
   terminal's drop handling in `ghostty_view.rs` (`drag_over::<ExternalPaths>`
   + `on_drop`). Non-image drops keep their existing behavior (the editor

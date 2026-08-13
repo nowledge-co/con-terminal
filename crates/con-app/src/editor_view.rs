@@ -26,7 +26,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -68,6 +68,9 @@ const IMAGE_SIZE_LIMIT: u64 = 20 * 1024 * 1024;
 /// handed to GPUI's decoder.
 const IMAGE_MAX_DECODED_PIXELS: usize = 64 * 1024 * 1024;
 const IMAGE_MAX_DIMENSION: usize = 16_384;
+/// SVG dimensions are declared on the root `<svg>` tag. Reading a bounded
+/// prefix avoids pulling a large SVG file into memory on the UI thread.
+const SVG_HEADER_PROBE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ImageDimensions {
@@ -134,7 +137,15 @@ fn svg_declared_dimensions(path: &Path, file_size: Option<u64>) -> Option<ImageD
     if image_exceeds_size_limit(file_size) {
         return None;
     }
-    let svg = std::fs::read_to_string(path).ok()?;
+    use std::io::Read as _;
+    let mut buffer =
+        Vec::with_capacity(SVG_HEADER_PROBE_BYTES.min(file_size.unwrap_or(0) as usize));
+    let mut file = std::fs::File::open(path).ok()?;
+    file.by_ref()
+        .take(SVG_HEADER_PROBE_BYTES as u64)
+        .read_to_end(&mut buffer)
+        .ok()?;
+    let svg = String::from_utf8_lossy(&buffer);
     parse_svg_declared_dimensions(&svg)
 }
 
@@ -195,12 +206,19 @@ fn parse_svg_length(value: &str) -> Option<usize> {
     if value.ends_with('%') {
         return None;
     }
-    let number_end = value
-        .char_indices()
-        .take_while(|(_, ch)| ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-' | 'e' | 'E'))
-        .map(|(index, ch)| index + ch.len_utf8())
-        .last()?;
-    positive_dimension(value[..number_end].parse::<f64>().ok()?)
+    static SVG_LENGTH_NUMBER: OnceLock<regex::Regex> = OnceLock::new();
+    let regex = SVG_LENGTH_NUMBER.get_or_init(|| {
+        regex::Regex::new(r"^([+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?)")
+            .expect("valid SVG length regex")
+    });
+    positive_dimension(
+        regex
+            .captures(value)?
+            .get(1)?
+            .as_str()
+            .parse::<f64>()
+            .ok()?,
+    )
 }
 
 fn positive_dimension(value: f64) -> Option<usize> {
@@ -226,6 +244,17 @@ fn format_file_size(bytes: u64) -> String {
 
 fn format_image_dimensions(dimensions: ImageDimensions) -> String {
     format!("{}×{}", dimensions.width, dimensions.height)
+}
+
+fn image_labels(file_size: Option<u64>, dimensions: Option<ImageDimensions>) -> (String, String) {
+    (
+        file_size
+            .map(format_file_size)
+            .unwrap_or_else(|| "unknown size".to_string()),
+        dimensions
+            .map(format_image_dimensions)
+            .unwrap_or_else(|| "unknown dimensions".to_string()),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1836,14 +1865,8 @@ impl Render for EditorView {
             format!(" — {diagnostic_count} issues")
         };
         let status_text: SharedString = if image_tab {
-            let size_label = active
-                .image_file_size
-                .map(format_file_size)
-                .unwrap_or_else(|| "unknown size".to_string());
-            let dimensions_label = active
-                .image_dimensions
-                .map(format_image_dimensions)
-                .unwrap_or_else(|| "unknown dimensions".to_string());
+            let (size_label, dimensions_label) =
+                image_labels(active.image_file_size, active.image_dimensions);
             format!(
                 "{size_label} — {dimensions_label} — {}",
                 active.path.display()
@@ -2081,14 +2104,10 @@ impl Render for EditorView {
                 // Refuse to decode oversized files: GPUI's `img` element keeps a
                 // full-resolution RGBA buffer in memory regardless of display
                 // size, so a large file is shown as a hint instead.
-                let size_label = self.tabs[active_index]
-                    .image_file_size
-                    .map(format_file_size)
-                    .unwrap_or_else(|| "unknown size".to_string());
-                let dimensions_label = self.tabs[active_index]
-                    .image_dimensions
-                    .map(format_image_dimensions)
-                    .unwrap_or_else(|| "unknown dimensions".to_string());
+                let (size_label, dimensions_label) = image_labels(
+                    self.tabs[active_index].image_file_size,
+                    self.tabs[active_index].image_dimensions,
+                );
                 let limit_mb = IMAGE_SIZE_LIMIT / (1024 * 1024);
                 let decoded_mb = IMAGE_MAX_DECODED_PIXELS * 4 / (1024 * 1024);
                 div()
@@ -2816,7 +2835,7 @@ mod tests {
     }
 
     #[test]
-    fn image_file_size_caches_metadata_once() {
+    fn image_file_size_and_limit_boundaries() {
         let dir = std::env::temp_dir().join(format!(
             "con-editor-size-test-{}-{}",
             std::process::id(),
@@ -2851,15 +2870,15 @@ mod tests {
             std::env::temp_dir().join(format!("con-editor-png-dim-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("huge-dimensions.png");
-        let mut png = vec![0; 24];
-        png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
-        png[16..20].copy_from_slice(&(IMAGE_MAX_DIMENSION as u32 + 1).to_be_bytes());
-        png[20..24].copy_from_slice(&(16_u32).to_be_bytes());
-        std::fs::write(&path, png).unwrap();
+        std::fs::write(
+            &path,
+            png_with_ihdr_dimensions(IMAGE_MAX_DIMENSION as u32 + 1, 16),
+        )
+        .unwrap();
 
         let metadata = ImageMetadata::inspect(&path);
 
-        assert_eq!(metadata.file_size, Some(24));
+        assert_eq!(metadata.file_size, Some(33));
         assert_eq!(
             metadata.dimensions,
             Some(ImageDimensions {
@@ -2874,7 +2893,7 @@ mod tests {
 
     #[test]
     fn svg_declared_dimensions_are_guarded() {
-        let normal = r#"<svg width="320px" height="200"></svg>"#;
+        let normal = r#"<svg width="320em" height="200ex"></svg>"#;
         let huge = r#"<svg viewBox="0 0 100000 100000"></svg>"#;
 
         assert_eq!(
@@ -2886,6 +2905,32 @@ mod tests {
         );
         let huge_dimensions = parse_svg_declared_dimensions(huge).unwrap();
         assert!(image_dimensions_exceed_limit(huge_dimensions));
+    }
+
+    fn png_with_ihdr_dimensions(width: u32, height: u32) -> Vec<u8> {
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        png.extend_from_slice(&13_u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&width.to_be_bytes());
+        png.extend_from_slice(&height.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+        let crc = crc32(&png[12..29]);
+        png.extend_from_slice(&crc.to_be_bytes());
+        png
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffff_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = 0_u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        !crc
     }
 
     #[gpui::test]
