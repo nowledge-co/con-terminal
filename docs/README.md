@@ -42,6 +42,7 @@ Start with the page that matches what you are trying to do.
 | Need | Read |
 | --- | --- |
 | Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
+| Pair a spectator phone (Build Remote Agent, gbr/1) | [Build Remote Agent](gbr.md) |
 
 ## Platform status
 
