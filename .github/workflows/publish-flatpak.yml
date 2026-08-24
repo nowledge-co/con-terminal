@@ -18,6 +18,8 @@ on:
         options:
           - unstable
           - stable
+          - beta
+          - dev
           - nightly
 
 permissions:
@@ -62,7 +64,12 @@ jobs:
           elif [[ "${{ github.ref_type }}" == "tag" ]]; then
             # Extract version from tag (e.g., v0.1.2 -> 0.1.2)
             version="${GITHUB_REF_NAME#v}"
-            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            case "$GITHUB_REF_NAME" in
+              v*-beta.*) channel="beta" ;;
+              v*-dev.*)  channel="dev" ;;
+              *)         channel="stable" ;;
+            esac
+            echo "channel=$channel" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.ref_name }}" == "main" ]]; then
             # Main branch build -> unstable

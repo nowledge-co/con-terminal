@@ -207,13 +207,18 @@ linux-install channel=channel arch=arch: (linux-release channel arch)
 
 # [Linux] Build a Flatpak bundle using AetherPak Zero-Manifest mode
 # Output: dist/co.nowledge.con.flatpak
-flatpak-build channel=channel:
+flatpak-build channel=channel arch=arch:
     #!/usr/bin/env bash
     set -euo pipefail
     resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m)"
     fi
+    case "${resolved_arch}" in
+        arm64|aarch64) resolved_arch="aarch64" ;;
+        amd64|x86_64) resolved_arch="x86_64" ;;
+        *) echo "Unsupported Flatpak architecture: ${resolved_arch}" >&2; exit 1 ;;
+    esac
     aetherpak_cmd="aetherpak"
     if ! command -v aetherpak &>/dev/null; then
         if [[ -x "$HOME/workspace/aetherpak/cli/bin/aetherpak" ]]; then
