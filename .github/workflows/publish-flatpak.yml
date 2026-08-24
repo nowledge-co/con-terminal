@@ -96,6 +96,11 @@ jobs:
           set -euo pipefail
           tool_dir="$RUNNER_TEMP/con-zig-tools"
           mkdir -p "$tool_dir"
+          case "${{ matrix.arch }}" in
+            x86_64) zig_target="x86_64-linux-gnu.2.38" ;;
+            aarch64) zig_target="aarch64-linux-gnu.2.38" ;;
+            *) echo "unsupported Flatpak architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
 
           # The AetherPak builder intentionally stays minimal and does not
           # provide a host C compiler. Keep native C build scripts (for
@@ -103,13 +108,28 @@ jobs:
           # toolchain to the image.
           cat > "$tool_dir/cc" <<'EOF'
           #!/usr/bin/env bash
-          exec zig cc "$@"
+          args=()
+          for arg in "$@"; do
+            case "$arg" in
+              --target=*-unknown-linux-gnu) args+=("--target=$zig_target") ;;
+              *) args+=("$arg") ;;
+            esac
+          done
+          exec zig cc "${args[@]}"
           EOF
           cat > "$tool_dir/c++" <<'EOF'
           #!/usr/bin/env bash
-          exec zig c++ "$@"
+          args=()
+          for arg in "$@"; do
+            case "$arg" in
+              --target=*-unknown-linux-gnu) args+=("--target=$zig_target") ;;
+              *) args+=("$arg") ;;
+            esac
+          done
+          exec zig c++ "${args[@]}"
           EOF
           chmod +x "$tool_dir/cc" "$tool_dir/c++"
+          sed -i "s/\$zig_target/${zig_target}/g" "$tool_dir/cc" "$tool_dir/c++"
           ln -sf cc "$tool_dir/clang"
           ln -sf c++ "$tool_dir/clang++"
 
