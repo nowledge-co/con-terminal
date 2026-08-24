@@ -42,3 +42,9 @@ docs/**/*.webp
 docs/**/*.mp4
 docs/**/*.mov
 .worktrees/
+
+# Flatpak and AetherPak output directories
+_preview
+_site
+records
+

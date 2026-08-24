@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=con
+GenericName=Terminal
+Comment=GPU-accelerated terminal emulator with a built-in AI agent harness
+Exec=con %U
+Icon=co.nowledge.con
+Terminal=false
+Categories=System;TerminalEmulator;Utility;Development;
+Keywords=terminal;shell;command;cli;ai;agent;
+StartupWMClass=co.nowledge.con
+StartupNotify=true
+MimeType=x-scheme-handler/terminal;

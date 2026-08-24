@@ -1061,7 +1061,7 @@ fn shell_aliases() -> &'static HashSet<String> {
     static CACHE: OnceLock<HashSet<String>> = OnceLock::new();
     CACHE.get_or_init(|| {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        let output = std::process::Command::new(&shell)
+        let output = con_paths::host_command(&shell)
             .args(["-ic", "alias"])
             .stderr(std::process::Stdio::null())
             .output()
@@ -1259,7 +1259,7 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
 
             let agents_md = std::fs::read_to_string(cwd_path.join("AGENTS.md")).ok();
 
-            let git_branch = std::process::Command::new("git")
+            let git_branch = con_paths::host_command("git")
                 .args(["rev-parse", "--abbrev-ref", "HEAD"])
                 .current_dir(cwd_path)
                 .output()
@@ -1268,7 +1268,7 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
             let git_diff = {
-                let stat = std::process::Command::new("git")
+                let stat = con_paths::host_command("git")
                     .args(["diff", "--stat"])
                     .current_dir(cwd_path)
                     .output()
@@ -1280,7 +1280,7 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
                 if stat.trim().is_empty() {
                     None
                 } else {
-                    let diff = std::process::Command::new("git")
+                    let diff = con_paths::host_command("git")
                         .args(["diff"])
                         .current_dir(cwd_path)
                         .output()
@@ -1309,7 +1309,7 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
             };
 
             let project_structure = {
-                let output = std::process::Command::new("git")
+                let output = con_paths::host_command("git")
                     .args(["ls-files", "--cached", "--others", "--exclude-standard"])
                     .current_dir(cwd_path)
                     .output()
@@ -1318,7 +1318,7 @@ async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) ->
                     .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
 
                 let listing = output.or_else(|| {
-                    std::process::Command::new("find")
+                    con_paths::host_command("find")
                         .args([
                             ".",
                             "-maxdepth",

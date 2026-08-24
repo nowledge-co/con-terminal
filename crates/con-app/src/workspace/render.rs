@@ -1298,12 +1298,13 @@ impl Render for ConWorkspace {
         // while the rail is actually in the layout; when it is not, clear
         // stale hover state (an unmounted rail cannot deliver hover-leave).
         if !show_vertical_tabs {
-            self.sidebar.update(cx, |sidebar, _cx| sidebar.clear_hovered_rail());
+            self.sidebar
+                .update(cx, |sidebar, _cx| sidebar.clear_hovered_rail());
         }
         if show_vertical_tabs
-            && let Some(hover_card) = self
-                .sidebar
-                .update(cx, |sidebar, cx| sidebar.render_hover_card_overlay(window, cx))
+            && let Some(hover_card) = self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.render_hover_card_overlay(window, cx)
+            })
         {
             root = root.child(hover_card);
         }

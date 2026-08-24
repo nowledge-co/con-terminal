@@ -293,7 +293,7 @@ impl Tool for ShellExecTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut cmd = std::process::Command::new(&shell);
+        let mut cmd = con_paths::host_command(&shell);
         cmd.arg("-c").arg(&args.command);
         if let Some(dir) = &args.working_dir {
             cmd.current_dir(dir);
@@ -572,7 +572,7 @@ impl Tool for ListFilesTool {
         let max_depth = args.max_depth.unwrap_or(3);
 
         // Try git ls-files first (respects .gitignore, fast)
-        let git_listing = std::process::Command::new("git")
+        let git_listing = con_paths::host_command("git")
             .args(["ls-files", "--cached", "--others", "--exclude-standard"])
             .current_dir(&dir)
             .output()
@@ -602,7 +602,7 @@ impl Tool for ListFilesTool {
                 filtered.join("\n")
             }
             None => {
-                let mut cmd = std::process::Command::new("find");
+                let mut cmd = con_paths::host_command("find");
                 cmd.arg(&dir);
                 cmd.args(["-maxdepth", &max_depth.to_string()]);
                 cmd.args(["-not", "-path", "*/.git/*"]);
@@ -698,7 +698,7 @@ impl Tool for SearchTool {
             None => self.allowed_root.clone(),
         };
 
-        let mut cmd = std::process::Command::new("grep");
+        let mut cmd = con_paths::host_command("grep");
         cmd.args(["-rn", "--max-count=100"]);
         if let Some(ref fp) = args.file_pattern {
             cmd.args(["--include", fp]);

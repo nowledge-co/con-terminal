@@ -20,6 +20,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: con-gh-pages-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build linux-x86_64

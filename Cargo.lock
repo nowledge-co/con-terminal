@@ -1351,6 +1351,7 @@ dependencies = [
  "clap",
  "con-agent",
  "con-core",
+ "portable-pty",
  "serde",
  "serde_json",
  "tokio",
@@ -1382,6 +1383,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cc",
+ "con-paths",
  "core-foundation 0.10.0",
  "dispatch",
  "etagere",
@@ -1392,6 +1394,7 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "unicode-width",
+ "uuid",
  "windows 0.61.3",
  "windows-numerics 0.2.0",
 ]

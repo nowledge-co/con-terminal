@@ -1,0 +1,28 @@
+name: Prune Flatpak Container Registry
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # Run at 02:00 UTC daily (after midnight nightly builds)
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry run mode (only list versions without deleting)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  prune:
+    name: Prune GHCR Flatpak Versions
+    uses: aetherpak/actions/.github/workflows/prune-github-container-registry.yml@v3
+    with:
+      registry: ghcr.io
+      oci-repository: nowledge-co/con-terminal
+      pages-url: https://con-releases.nowledge.co
+      dry-run: ${{ inputs.dry-run || false }}
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

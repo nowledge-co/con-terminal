@@ -2087,21 +2087,24 @@ mod tests {
     #[test]
     fn editor_shortcuts_stay_editor_only() {
         let specs = default_specs();
-        for (name, scopes) in [
+        let mut cases = vec![
             (
                 "EditorInsertNewline",
                 scope_names(&specs_for_action::<EditorInsertNewline>(&specs)),
-            ),
-            (
-                "EditorMoveLineEnd",
-                scope_names(&specs_for_action::<EditorMoveLineEnd>(&specs)),
             ),
             (
                 "EditorDeleteBackward",
                 scope_names(&specs_for_action::<EditorDeleteBackward>(&specs)),
             ),
             ("Undo", scope_names(&specs_for_action::<Undo>(&specs))),
-        ] {
+        ];
+        #[cfg(target_os = "macos")]
+        cases.push((
+            "EditorMoveLineEnd",
+            scope_names(&specs_for_action::<EditorMoveLineEnd>(&specs)),
+        ));
+
+        for (name, scopes) in cases {
             assert_eq!(
                 scopes,
                 vec![Some("EditorView")],
@@ -2303,7 +2306,6 @@ fn install_seh_filter() {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn inherit_shell_env() {
     use std::io::Read;
-    use std::process::Command;
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
@@ -2311,7 +2313,7 @@ fn inherit_shell_env() {
     // -l : login shell — sources /etc/profile, ~/.zprofile, ~/.bash_profile …
     //      (no -i: avoids interactive-only rc noise and TTY hangs)
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-    let mut child = match Command::new(&shell)
+    let mut child = match con_paths::host_command(&shell)
         .args(["-l", "-c", "env"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -2514,8 +2516,14 @@ fn main() {
     // SAFETY: single-threaded at this point in startup; no other threads spawned yet.
     unsafe { config.network.apply_to_env() };
 
+    let quit_mode = if cfg!(target_os = "macos") {
+        QuitMode::Explicit
+    } else {
+        QuitMode::LastWindowClosed
+    };
+
     let app = gpui_platform::application()
-        .with_quit_mode(QuitMode::Explicit)
+        .with_quit_mode(quit_mode)
         .with_assets(assets::ConAssets)
         // Real HTTP client so markdown preview can fetch remote images;
         // gpui's default NullHttpClient fails every request. reqwest picks

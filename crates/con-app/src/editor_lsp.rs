@@ -3,7 +3,7 @@ use serde_json::json;
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicI32, Ordering},
@@ -115,7 +115,7 @@ impl LspClient {
             return Ok(None);
         };
 
-        let mut command = Command::new(spec.command);
+        let mut command = con_paths::host_command(spec.command);
         command
             .args(spec.args)
             .stdin(Stdio::piped())
