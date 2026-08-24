@@ -7,8 +7,11 @@ repo_title: "con Flatpak Repository"
 repo_homepage: https://con.nowledge.co/
 
 channel_mappings:
-  "v*-beta.*": "beta"
-  "v*-dev.*": "dev"
+  # Keep dots out of mapping keys: Viper treats dots in map keys as
+  # hierarchical separators, while these glob patterns only need to
+  # distinguish the channel prefix.
+  "v*-beta*": "beta"
+  "v*-dev*": "dev"
   "v*": "stable"
   "main": "unstable"
   "nightly": "nightly"
