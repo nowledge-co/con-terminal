@@ -69,6 +69,28 @@ launcher, and refreshes the app icon. You can also download the Linux tarball
 from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
+### Flatpak (Official Repository)
+
+You can install con from the official self-hosted Flatpak repository:
+
+```sh
+# Add the remote (with signature verification for Flatpak >= 1.17)
+flatpak remote-add --user \
+  --signature-lookaside=https://con-releases.nowledge.co/flatpak/sigs \
+  con-terminal https://con-releases.nowledge.co/flatpak/con-terminal.flatpakrepo
+
+# Install con terminal
+flatpak install --user con-terminal co.nowledge.con
+```
+
+For older Flatpak clients (< 1.17):
+
+```sh
+flatpak remote-add --if-not-exists --user --no-gpg-verify \
+  con-terminal oci+https://con-releases.nowledge.co/flatpak
+flatpak install --user con-terminal co.nowledge.con
+```
+
 ### Arch Linux / AUR
 
 Arch users can install the community AUR package:
