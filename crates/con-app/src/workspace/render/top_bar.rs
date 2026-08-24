@@ -157,6 +157,22 @@ impl ConWorkspace {
                 });
         }
 
+        #[cfg(target_os = "linux")]
+        {
+            if linux_client_decorated(window) {
+                top_bar = top_bar
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                        window.start_window_move();
+                    })
+                    .on_click(|event, window, _cx| {
+                        if event.click_count() == 2 {
+                            window.titlebar_double_click();
+                        }
+                    });
+            }
+        }
+
         #[cfg(target_os = "windows")]
         {
             top_bar = top_bar
