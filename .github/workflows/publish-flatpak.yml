@@ -73,7 +73,7 @@ jobs:
             echo "version=$version" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.ref_name }}" == "main" ]]; then
             # Main branch build -> unstable
-            short_sha="$(git rev-parse --short HEAD)"
+            short_sha="${GITHUB_SHA:0:7}"
             echo "channel=unstable" >> "$GITHUB_OUTPUT"
             echo "version=0.1.0-unstable-${short_sha}" >> "$GITHUB_OUTPUT"
           else
