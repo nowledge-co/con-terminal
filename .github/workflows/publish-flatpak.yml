@@ -1,0 +1,160 @@
+name: Publish Flatpak Repo
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  schedule:
+    - cron: "0 0 * * *" # Run at midnight UTC every day for nightly builds
+  workflow_dispatch: # Allow manual runs
+    inputs:
+      channel:
+        description: "Release channel"
+        required: false
+        default: "unstable"
+        type: choice
+        options:
+          - unstable
+          - stable
+          - nightly
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-flatpak:
+    name: Build Flatpak (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/aetherpak/cli:v0.33.2-builder
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm # Native GitHub Actions ARM64 runner
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "channel=nightly" >> "$GITHUB_OUTPUT"
+            echo "version=0.1.0-nightly-$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # Extract version from tag (e.g., v0.1.2 -> 0.1.2)
+            version="${GITHUB_REF_NAME#v}"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            # Main branch build -> unstable
+            short_sha="$(git rev-parse --short HEAD)"
+            echo "channel=unstable" >> "$GITHUB_OUTPUT"
+            echo "version=0.1.0-unstable-${short_sha}" >> "$GITHUB_OUTPUT"
+          else
+            channel="${{ inputs.channel || 'unstable' }}"
+            echo "channel=$channel" >> "$GITHUB_OUTPUT"
+            echo "version=0.1.0-${channel}-$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust and Cargo
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install Zig Compiler
+        uses: mitchellh/setup-zig@v1
+        with:
+          version: 0.15.2
+
+      - name: Compile Release Binaries
+        env:
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+          CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_LINUX_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          ./scripts/linux/release.sh
+
+      - name: Audit Dynamic Library Dependencies
+        run: |
+          set -euo pipefail
+          stage_dir="$(ls -td dist/con-*-linux-* 2>/dev/null | head -1 || true)"
+          if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
+            echo "==> Auditing dynamic library linkage in ${stage_dir}..."
+            for bin in "${stage_dir}/con" "${stage_dir}/con-cli"; do
+              if [[ -f "${bin}" ]]; then
+                echo "--- ldd ${bin} ---"
+                ldd "${bin}"
+                if ldd "${bin}" | grep -i "not found"; then
+                  echo "::error::Missing dynamic library dependency detected in ${bin}"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+
+      - name: Build Flatpak Bundle (Zero-Manifest)
+        id: build
+        uses: aetherpak/actions/build@v3
+        with:
+          config: packaging/flatpak/aetherpak.yaml
+          app-id: co.nowledge.con
+          arch: ${{ matrix.arch }}
+          branch: ${{ steps.meta.outputs.channel }}
+          run-linter: true
+          upload-bundle: true
+
+      - name: Smoke Test Flatpak Bundle
+        run: |
+          set -euo pipefail
+          echo "==> Installing bundle into local test environment..."
+          flatpak install --user -y "${{ steps.build.outputs.bundle-path }}"
+          echo "==> Verifying Flatpak registration and metadata..."
+          flatpak info co.nowledge.con
+          echo "==> Verifying CLI execution inside Flatpak sandbox..."
+          flatpak run --command=con-cli co.nowledge.con --help
+
+  publish-repo:
+    name: Publish Repository
+    needs: build-flatpak
+    uses: aetherpak/actions/.github/workflows/publish.yml@v3
+    with:
+      config: packaging/flatpak/aetherpak.yaml
+      prebuilt-bundle-artifact: flatpak-bundle-{app-id}-{arch}
+      pages-url: https://con-releases.nowledge.co
+      site-subpath: flatpak
+      deploy: false
+      signing: auto
+    secrets:
+      gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+      gpg-private-key-passphrase: ${{ secrets.GPG_PRIVATE_KEY_PASSPHRASE }}
+
+  deploy-site:
+    name: Deploy to gh-pages
+    needs: publish-repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download site artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: aetherpak-site
+          path: _site
+
+      - name: Deploy Flatpak Repo to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: _site/flatpak
+          destination_dir: flatpak
+          keep_files: true
