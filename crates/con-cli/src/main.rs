@@ -10,6 +10,9 @@ use con_core::{
 };
 use serde_json::{Value, json};
 
+mod pty_bridge;
+use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
+
 #[derive(Parser)]
 #[command(name = "con-cli", about = "CLI control surface for a running con app")]
 struct Cli {
@@ -46,6 +49,7 @@ enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    PtyBridge(PtyBridgeArgs),
 }
 
 #[derive(Subcommand)]
@@ -681,6 +685,7 @@ fn main() -> Result<()> {
                 print_result(&result, cli.json, render_pretty_json)?;
             }
         },
+        Command::PtyBridge(args) => run_pty_bridge(args)?,
     }
 
     Ok(())

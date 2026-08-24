@@ -1018,10 +1018,25 @@ impl Drop for ControlSocketHandle {
 }
 
 pub fn control_socket_path() -> PathBuf {
-    match env::var("CON_SOCKET_PATH") {
-        Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
-        _ => PathBuf::from(DEFAULT_SOCKET_PATH),
+    if let Ok(value) = env::var("CON_SOCKET_PATH") {
+        if !value.trim().is_empty() {
+            return PathBuf::from(value);
+        }
     }
+    #[cfg(unix)]
+    {
+        if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
+            if !runtime_dir.trim().is_empty() {
+                let socket_name = if cfg!(debug_assertions) {
+                    "con-debug.sock"
+                } else {
+                    "con.sock"
+                };
+                return PathBuf::from(runtime_dir).join("con").join(socket_name);
+            }
+        }
+    }
+    PathBuf::from(DEFAULT_SOCKET_PATH)
 }
 
 #[cfg(unix)]
@@ -1257,8 +1272,14 @@ async fn handle_json_rpc_request(
 #[cfg(unix)]
 fn prepare_socket_path(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = std::fs::Permissions::from_mode(0o700);
+            let _ = std::fs::set_permissions(parent, permissions);
+        }
     }
+
 
     if path.exists() {
         match std::os::unix::net::UnixStream::connect(path) {

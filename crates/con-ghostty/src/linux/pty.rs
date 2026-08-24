@@ -53,10 +53,21 @@ fn theme_colors_to_vt(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
 }
 
+enum LinuxPtyBackend {
+    Local {
+        master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
+        writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    },
+    HostBridge {
+        stream_writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
+        socket_path: PathBuf,
+        child: Mutex<std::process::Child>,
+    },
+}
+
 pub struct LinuxPtySession {
-    master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    backend: LinuxPtyBackend,
     shared: Arc<SessionShared>,
     size: Mutex<SurfaceSize>,
     title: Option<String>,
@@ -154,90 +165,11 @@ impl SessionShared {
 
 impl LinuxPtySession {
     pub fn spawn(options: LinuxPtyOptions) -> Result<Self> {
-        let pty_system = native_pty_system();
-        let pty_size = pty_size_from_surface(&options.size);
-        let pair = pty_system
-            .openpty(pty_size)
-            .context("failed to open linux pty")?;
-
-        let mut command = match options.program.as_ref() {
-            Some(program) => {
-                let mut command = CommandBuilder::new(program);
-                configure_shell_startup(program, &mut command);
-                command
-            }
-            None => CommandBuilder::new_default_prog(),
-        };
-        command.env("TERM", "xterm-256color");
-        if let Some(cwd) = options.cwd.as_ref() {
-            command.cwd(cwd);
+        if con_paths::is_flatpak() {
+            spawn_host_bridge(options)
+        } else {
+            spawn_local(options)
         }
-
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .context("failed to clone linux pty reader")?;
-        let writer = Arc::new(Mutex::new(
-            pair.master
-                .take_writer()
-                .context("failed to take linux pty writer")?,
-        ));
-        let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
-        let screen = Arc::new(
-            VtScreen::new_with_write_pty(
-                options.size.columns.max(1),
-                options.size.rows.max(1),
-                theme_owned.as_ref(),
-                Some({
-                    let writer = writer.clone();
-                    Arc::new(move |data: &[u8]| {
-                        if let Err(err) = writer.lock().write_all(data) {
-                            log::debug!("linux vt write_pty failed: {err:#}");
-                        }
-                    })
-                }),
-            )
-            .context("failed to create linux vt screen")?,
-        );
-        if let Some(output) = options
-            .initial_output
-            .as_deref()
-            .filter(|output| !output.is_empty())
-        {
-            screen.feed(output);
-        }
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .context("failed to spawn shell in linux pty")?;
-
-        let shared = Arc::new(SessionShared::new(
-            screen,
-            options.wake_generation,
-            options.wake_callback,
-        ));
-        if let Some(output) = options.initial_output.as_deref()
-            && let Ok(text) = std::str::from_utf8(output)
-        {
-            shared.transcript.lock().push(text);
-        }
-        let started_at = Instant::now();
-        spawn_reader_thread(reader, shared.clone(), started_at);
-
-        Ok(Self {
-            master: Mutex::new(pair.master),
-            writer,
-            child: Mutex::new(child),
-            shared,
-            size: Mutex::new(options.size),
-            title: Some(default_title(
-                options.cwd.as_deref(),
-                options.program.as_deref(),
-            )),
-            current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
-            input_generation: AtomicU64::new(0),
-            started_at,
-        })
     }
 
     pub fn size(&self) -> SurfaceSize {
@@ -257,10 +189,31 @@ impl LinuxPtySession {
                 size.cell_height_px.max(1),
             )
             .context("failed to resize linux vt screen")?;
-        self.master
-            .lock()
-            .resize(pty_size_from_surface(&size))
-            .context("failed to resize linux pty")?;
+
+        match &self.backend {
+            LinuxPtyBackend::Local { master, .. } => {
+                master
+                    .lock()
+                    .resize(pty_size_from_surface(&size))
+                    .context("failed to resize linux pty")?;
+            }
+            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
+                let cols = size.columns.max(1);
+                let rows = size.rows.max(1);
+                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
+                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
+                let mut buf = [0u8; 9];
+                buf[0] = 0x01; // TAG_RESIZE
+                buf[1..3].copy_from_slice(&cols.to_be_bytes());
+                buf[3..5].copy_from_slice(&rows.to_be_bytes());
+                buf[5..7].copy_from_slice(&wp.to_be_bytes());
+                buf[7..9].copy_from_slice(&hp.to_be_bytes());
+                let mut guard = stream_writer.lock();
+                let _ = guard.write_all(&buf);
+                let _ = guard.flush();
+            }
+        }
+
         self.mark_needs_render();
         Ok(())
     }
@@ -276,20 +229,37 @@ impl LinuxPtySession {
                 size.cell_height_px.max(1),
             )
             .context("failed to resize linux vt screen")?;
-        self.master
-            .lock()
-            .resize(pty_size_from_surface(&size))
-            .context("failed to resize linux pty")?;
+
+        match &self.backend {
+            LinuxPtyBackend::Local { master, .. } => {
+                master
+                    .lock()
+                    .resize(pty_size_from_surface(&size))
+                    .context("failed to resize linux pty")?;
+            }
+            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
+                let cols = size.columns.max(1);
+                let rows = size.rows.max(1);
+                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
+                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
+                let mut buf = [0u8; 9];
+                buf[0] = 0x01; // TAG_RESIZE
+                buf[1..3].copy_from_slice(&cols.to_be_bytes());
+                buf[3..5].copy_from_slice(&rows.to_be_bytes());
+                buf[5..7].copy_from_slice(&wp.to_be_bytes());
+                buf[7..9].copy_from_slice(&hp.to_be_bytes());
+                let mut guard = stream_writer.lock();
+                let _ = guard.write_all(&buf);
+                let _ = guard.flush();
+            }
+        }
+
         self.mark_needs_render();
         Ok(())
     }
 
     /// Stamp the shared `needs_render` flag and wake the workspace
-    /// loop so the next pump tick re-fetches a fresh snapshot. Used
-    /// after resize / theme / mode changes that mutate the parser
-    /// state without going through a PTY-output path. Without this,
-    /// idle-shell resizes silently keep painting the previous grid
-    /// dimensions until new shell output arrives.
+    /// loop so the next pump tick re-fetches a fresh snapshot.
     fn mark_needs_render(&self) {
         self.shared.needs_render.store(true, Ordering::Release);
         self.shared.wake();
@@ -297,10 +267,22 @@ impl LinuxPtySession {
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
         self.scroll_viewport_to_bottom();
-        self.writer
-            .lock()
-            .write_all(data)
-            .context("failed to write to linux pty")?;
+        match &self.backend {
+            LinuxPtyBackend::Local { writer, .. } => {
+                writer
+                    .lock()
+                    .write_all(data)
+                    .context("failed to write to linux pty")?;
+            }
+            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
+                let len = data.len() as u32;
+                let mut guard = stream_writer.lock();
+                guard.write_all(&[0x00]).context("failed to write data tag")?;
+                guard.write_all(&len.to_be_bytes()).context("failed to write data len")?;
+                guard.write_all(data).context("failed to write data payload")?;
+                guard.flush().context("failed to flush socket")?;
+            }
+        }
         self.input_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -360,8 +342,7 @@ impl LinuxPtySession {
     }
 
     /// Drive the libghostty-vt render-state pipeline once and return a
-    /// fresh `ScreenSnapshot`. Used by the GPUI-owned Linux paint
-    /// path to access per-cell fg/bg/attrs alongside the codepoint.
+    /// fresh `ScreenSnapshot`.
     pub fn snapshot(&self) -> ScreenSnapshot {
         self.shared.screen.snapshot()
     }
@@ -388,29 +369,16 @@ impl LinuxPtySession {
         self.shared.screen.is_decckm()
     }
 
-    /// True when the child app has enabled terminal mouse reporting
-    /// (DECSET 1000/1002/1003). View mouse handlers gate SGR reports on
-    /// this so clicks don't leak escape sequences into shells that
-    /// didn't ask for them.
     pub fn mouse_tracking_active(&self) -> bool {
         self.shared.screen.mouse_tracking_active()
     }
 
-    /// True when the child app enabled the SGR (1006) extended mouse
-    /// encoding. The SGR report format (`ESC[<b;x;yM`) is only valid in
-    /// this mode; the legacy X10 encoding is not implemented, so callers
-    /// should skip reporting when this is false.
     pub fn is_sgr_mouse(&self) -> bool {
         self.shared.screen.is_sgr_mouse()
     }
 
     pub fn set_dark_mode(&self, dark: bool) {
         self.shared.screen.set_dark_mode(dark);
-        // Same shape as `set_theme` / `resize`: a parser-state mutation
-        // that doesn't go through a PTY-output path. Without
-        // `mark_needs_render` the next pump tick won't re-fetch a
-        // snapshot and Linux panes can keep painting the previous
-        // mode-derived colors until new shell output arrives.
         self.mark_needs_render();
     }
 
@@ -419,25 +387,339 @@ impl LinuxPtySession {
             return;
         }
 
-        let Ok(Some(status)) = self.child.lock().try_wait() else {
-            return;
-        };
-
-        let exit_code = i32::try_from(status.exit_code()).unwrap_or(i32::MAX);
-        self.shared
-            .mark_exited(Some(exit_code), self.started_at.elapsed());
+        match &self.backend {
+            LinuxPtyBackend::Local { child, .. } => {
+                let Ok(Some(status)) = child.lock().try_wait() else {
+                    return;
+                };
+                let exit_code = i32::try_from(status.exit_code()).unwrap_or(i32::MAX);
+                self.shared
+                    .mark_exited(Some(exit_code), self.started_at.elapsed());
+            }
+            LinuxPtyBackend::HostBridge { child, .. } => {
+                let Ok(Some(status)) = child.lock().try_wait() else {
+                    return;
+                };
+                let exit_code = status.code().unwrap_or(i32::MAX);
+                self.shared
+                    .mark_exited(Some(exit_code), self.started_at.elapsed());
+            }
+        }
     }
 }
 
 impl Drop for LinuxPtySession {
     fn drop(&mut self) {
-        if let Err(err) = self.child.lock().kill() {
-            log::debug!("failed to terminate linux pty child during drop: {err}");
+        match &self.backend {
+            LinuxPtyBackend::Local { child, .. } => {
+                if let Err(err) = child.lock().kill() {
+                    log::debug!("failed to terminate linux pty child during drop: {err}");
+                }
+            }
+            LinuxPtyBackend::HostBridge { child, socket_path, .. } => {
+                if let Err(err) = child.lock().kill() {
+                    log::debug!("failed to terminate host pty bridge child during drop: {err}");
+                }
+                let _ = std::fs::remove_file(socket_path);
+            }
         }
         self.shared.alive.store(false, Ordering::Release);
         self.shared.needs_render.store(true, Ordering::Release);
         self.shared.wake();
     }
+}
+
+fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
+    let pty_system = native_pty_system();
+    let pty_size = pty_size_from_surface(&options.size);
+    let pair = pty_system
+        .openpty(pty_size)
+        .context("failed to open linux pty")?;
+
+    let target_program = options
+        .program
+        .clone()
+        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
+
+    let mut command = CommandBuilder::new(&target_program);
+    configure_shell_startup(&target_program, &mut command);
+    command.env("TERM", "xterm-256color");
+
+    if let Some(cwd) = options.cwd.as_ref() {
+        command.cwd(cwd);
+    }
+
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .context("failed to clone linux pty reader")?;
+    let writer = Arc::new(Mutex::new(
+        pair.master
+            .take_writer()
+            .context("failed to take linux pty writer")?,
+    ));
+    let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
+    let screen = Arc::new(
+        VtScreen::new_with_write_pty(
+            options.size.columns.max(1),
+            options.size.rows.max(1),
+            theme_owned.as_ref(),
+            Some({
+                let writer = writer.clone();
+                Arc::new(move |data: &[u8]| {
+                    if let Err(err) = writer.lock().write_all(data) {
+                        log::debug!("linux vt write_pty failed: {err:#}");
+                    }
+                })
+            }),
+        )
+        .context("failed to create linux vt screen")?,
+    );
+    if let Some(output) = options
+        .initial_output
+        .as_deref()
+        .filter(|output| !output.is_empty())
+    {
+        screen.feed(output);
+    }
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .context("failed to spawn linux pty child process")?;
+
+    let shared = Arc::new(SessionShared::new(
+        screen,
+        options.wake_generation,
+        options.wake_callback,
+    ));
+    if let Some(output) = options.initial_output.as_deref()
+        && let Ok(text) = std::str::from_utf8(output)
+    {
+        shared.transcript.lock().push(text);
+    }
+    let started_at = Instant::now();
+    spawn_reader_thread(reader, shared.clone(), started_at);
+
+    Ok(LinuxPtySession {
+        backend: LinuxPtyBackend::Local {
+            master: Mutex::new(pair.master),
+            writer,
+            child: Mutex::new(child),
+        },
+        shared,
+        size: Mutex::new(options.size),
+        title: Some(default_title(
+            options.cwd.as_deref(),
+            options.program.as_deref(),
+        )),
+        current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
+        input_generation: AtomicU64::new(0),
+        started_at,
+    })
+}
+
+fn resolve_host_socket_dir() -> PathBuf {
+    let runtime_dir = con_paths::runtime_dir().join("con");
+    if std::fs::create_dir_all(&runtime_dir).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o700));
+        }
+        return runtime_dir;
+    }
+
+    let cache_dir = con_paths::app_cache_dir();
+    let _ = std::fs::create_dir_all(&cache_dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    cache_dir
+}
+
+fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
+    use std::os::unix::net::UnixListener;
+
+    let socket_dir = resolve_host_socket_dir();
+    let session_id = uuid::Uuid::new_v4();
+    let socket_path = socket_dir.join(format!("pty-{session_id}.sock"));
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    let listener = UnixListener::bind(&socket_path)
+        .with_context(|| format!("failed to bind pty socket at {}", socket_path.display()))?;
+
+    let mut cmd = std::process::Command::new("flatpak-spawn");
+    cmd.arg("--host");
+    cmd.arg("--unset-env=FLATPAK_ID");
+    cmd.arg("--unset-env=container");
+
+    let host_cli_probe = con_paths::host_command("con-cli").arg("--help").output();
+    let use_con_cli = host_cli_probe.map(|o| o.status.success()).unwrap_or(false);
+
+    if use_con_cli {
+        cmd.arg("con-cli");
+        cmd.arg("pty-bridge");
+        cmd.arg("--socket").arg(&socket_path);
+        cmd.arg("--cols").arg(options.size.columns.max(1).to_string());
+        cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
+        if let Some(cwd) = &options.cwd {
+            cmd.arg("--cwd").arg(cwd);
+        }
+        if let Some(prog) = &options.program {
+            cmd.arg("--program").arg(prog);
+        }
+    } else {
+        cmd.arg("python3");
+        cmd.arg("-c");
+        cmd.arg(EMBEDDED_PYTHON_BRIDGE);
+        cmd.arg("--socket").arg(&socket_path);
+        cmd.arg("--cols").arg(options.size.columns.max(1).to_string());
+        cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
+        if let Some(cwd) = &options.cwd {
+            cmd.arg("--cwd").arg(cwd);
+        }
+        if let Some(prog) = &options.program {
+            cmd.arg("--program").arg(prog);
+        }
+    }
+
+    log::info!("spawn_host_bridge: executing flatpak host pty bridge (socket={})", socket_path.display());
+    let child = cmd.spawn().context("failed to spawn host pty bridge")?;
+
+    listener.set_nonblocking(true)?;
+    let connect_deadline = Instant::now() + Duration::from_secs(5);
+    let mut stream: Option<std::os::unix::net::UnixStream> = None;
+    while Instant::now() < connect_deadline {
+        match listener.accept() {
+            Ok((s, _)) => {
+                s.set_nonblocking(false)?;
+                stream = Some(s);
+                break;
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(e).context("error waiting for pty bridge connection"),
+        }
+    }
+
+    let stream = stream
+        .ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
+    let stream_writer = stream.try_clone().context("clone socket writer")?;
+    let stream_reader = stream.try_clone().context("clone socket reader")?;
+    let stream_writer_mutex = Arc::new(Mutex::new(stream_writer));
+    let writer_for_vt = stream_writer_mutex.clone();
+
+    let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
+    let screen = Arc::new(
+        VtScreen::new_with_write_pty(
+            options.size.columns.max(1),
+            options.size.rows.max(1),
+            theme_owned.as_ref(),
+            Some(Arc::new(move |data: &[u8]| {
+                let len = data.len() as u32;
+                let mut guard = writer_for_vt.lock();
+                let _ = guard.write_all(&[0x00]);
+                let _ = guard.write_all(&len.to_be_bytes());
+                let _ = guard.write_all(data);
+                let _ = guard.flush();
+            })),
+        )
+        .context("failed to create linux vt screen")?,
+    );
+
+    if let Some(output) = options
+        .initial_output
+        .as_deref()
+        .filter(|output| !output.is_empty())
+    {
+        screen.feed(output);
+    }
+
+    let shared = Arc::new(SessionShared::new(
+        screen,
+        options.wake_generation,
+        options.wake_callback,
+    ));
+    if let Some(output) = options.initial_output.as_deref()
+        && let Ok(text) = std::str::from_utf8(output)
+    {
+        shared.transcript.lock().push(text);
+    }
+    let started_at = Instant::now();
+    spawn_bridge_reader_thread(stream_reader, shared.clone(), started_at);
+
+    Ok(LinuxPtySession {
+        backend: LinuxPtyBackend::HostBridge {
+            stream_writer: stream_writer_mutex,
+            socket_path,
+            child: Mutex::new(child),
+        },
+        shared,
+        size: Mutex::new(options.size),
+        title: Some(default_title(
+            options.cwd.as_deref(),
+            options.program.as_deref(),
+        )),
+        current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
+        input_generation: AtomicU64::new(0),
+        started_at,
+    })
+}
+
+fn spawn_bridge_reader_thread(
+    mut stream_reader: std::os::unix::net::UnixStream,
+    shared: Arc<SessionShared>,
+    started_at: Instant,
+) {
+    std::thread::Builder::new()
+        .name("con-linux-pty-bridge-reader".into())
+        .spawn(move || {
+            loop {
+                let mut tag = [0u8; 1];
+                if stream_reader.read_exact(&mut tag).is_err() {
+                    shared.mark_exited(None, started_at.elapsed());
+                    break;
+                }
+                match tag[0] {
+                    0x00 => {
+                        let mut len_bytes = [0u8; 4];
+                        if stream_reader.read_exact(&mut len_bytes).is_err() {
+                            shared.mark_exited(None, started_at.elapsed());
+                            break;
+                        }
+                        let len = u32::from_be_bytes(len_bytes) as usize;
+                        let mut payload = vec![0u8; len];
+                        if stream_reader.read_exact(&mut payload).is_err() {
+                            shared.mark_exited(None, started_at.elapsed());
+                            break;
+                        }
+                        shared.screen.feed(&payload);
+                        let chunk = String::from_utf8_lossy(&payload);
+                        shared.push_output(chunk.as_ref());
+                    }
+                    0x02 => {
+                        let mut code_bytes = [0u8; 4];
+                        let code = if stream_reader.read_exact(&mut code_bytes).is_ok() {
+                            Some(i32::from_be_bytes(code_bytes))
+                        } else {
+                            None
+                        };
+                        shared.mark_exited(code, started_at.elapsed());
+                        break;
+                    }
+                    _ => {
+                        shared.mark_exited(None, started_at.elapsed());
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn linux pty bridge reader thread");
 }
 
 fn spawn_reader_thread(
@@ -502,31 +784,177 @@ fn configure_shell_startup(program: &str, command: &mut CommandBuilder) {
 
     match shell {
         "fish" => {
+            command.arg("--login");
             command.arg("--interactive");
         }
         "pwsh" => {
             command.arg("-NoLogo");
         }
-        "sh" | "dash" | "ksh" | "mksh" | "xonsh" | "nu" => {
-            if let Some(flag) = interactive_shell_flag(program) {
-                command.arg(flag);
-            }
+        "xonsh" => {
+            command.arg("-i");
+        }
+        "nu" => {
+            command.arg("--interactive");
+        }
+        "bash" | "zsh" | "sh" | "dash" | "ksh" | "mksh" => {
+            command.arg("-l");
         }
         _ => {
-            if let Some(flag) = interactive_shell_flag(program) {
-                command.arg(flag);
-            }
+            // Do not pass arbitrary flags to unknown binaries
         }
     }
 }
 
-fn interactive_shell_flag(program: &str) -> Option<&'static str> {
-    let shell = Path::new(program).file_name()?.to_str()?;
-    match shell {
-        "bash" | "sh" | "zsh" | "dash" | "ksh" | "mksh" | "nu" | "xonsh" => Some("-i"),
-        _ => None,
-    }
-}
+
+const EMBEDDED_PYTHON_BRIDGE: &str = r#"
+import argparse, fcntl, os, pty, select, socket, struct, sys, termios
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--socket', required=True)
+    parser.add_argument('--cols', type=int, default=80)
+    parser.add_argument('--rows', type=int, default=24)
+    parser.add_argument('--cwd')
+    parser.add_argument('--program')
+    args, remaining = parser.parse_known_args()
+
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(args.socket)
+    except Exception as e:
+        sys.stderr.write(f"failed to connect to socket {args.socket}: {e}\n")
+        sys.exit(1)
+
+    master, slave = pty.openpty()
+    ws = struct.pack('HHHH', max(args.rows, 1), max(args.cols, 1), 0, 0)
+    try:
+        fcntl.ioctl(master, termios.TIOCSWINSZ, ws)
+    except OSError:
+        pass
+
+    pid = os.fork()
+    if pid == 0:
+        os.close(master)
+        os.setsid()
+        try:
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
+        os.dup2(slave, 0)
+        os.dup2(slave, 1)
+        os.dup2(slave, 2)
+        if slave > 2:
+            os.close(slave)
+        if args.cwd:
+            try:
+                os.chdir(args.cwd)
+            except OSError:
+                pass
+        os.environ['TERM'] = 'xterm-256color'
+        prog = args.program or os.environ.get('SHELL') or '/bin/bash'
+        argv = [prog]
+        if not remaining:
+            shell_name = os.path.basename(prog)
+            if shell_name in ('bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh'):
+                argv.append('-l')
+            elif shell_name == 'fish':
+                argv.extend(['--login', '--interactive'])
+            elif shell_name == 'pwsh':
+                argv.append('-NoLogo')
+            elif shell_name == 'nu':
+                argv.append('--interactive')
+            elif shell_name == 'xonsh':
+                argv.append('-i')
+        else:
+            argv.extend(remaining)
+        try:
+            os.execvp(prog, argv)
+        except Exception as e:
+            sys.stderr.write(f"failed to exec {prog}: {e}\n")
+            sys.exit(127)
+
+    os.close(slave)
+
+    while True:
+        try:
+            r, _, _ = select.select([sock, master], [], [])
+        except (OSError, select.error):
+            break
+
+        if sock in r:
+            try:
+                tag = sock.recv(1)
+            except OSError:
+                break
+            if not tag:
+                break
+            if tag[0] == 0:
+                raw_len = b''
+                while len(raw_len) < 4:
+                    chunk = sock.recv(4 - len(raw_len))
+                    if not chunk:
+                        break
+                    raw_len += chunk
+                if len(raw_len) < 4:
+                    break
+                payload_len = struct.unpack('>I', raw_len)[0]
+                payload = b''
+                while len(payload) < payload_len:
+                    chunk = sock.recv(payload_len - len(payload))
+                    if not chunk:
+                        break
+                    payload += chunk
+                try:
+                    os.write(master, payload)
+                except OSError:
+                    break
+            elif tag[0] == 1:
+                buf = b''
+                while len(buf) < 8:
+                    chunk = sock.recv(8 - len(buf))
+                    if not chunk:
+                        break
+                    buf += chunk
+                if len(buf) == 8:
+                    cols, rows, wp, hp = struct.unpack('>HHHH', buf)
+                    ws = struct.pack('HHHH', max(rows, 1), max(cols, 1), wp, hp)
+                    try:
+                        fcntl.ioctl(master, termios.TIOCSWINSZ, ws)
+                    except OSError:
+                        pass
+        if master in r:
+            try:
+                data = os.read(master, 8192)
+            except OSError:
+                break
+            if not data:
+                break
+            frame = bytes([0]) + struct.pack('>I', len(data)) + data
+            try:
+                sock.sendall(frame)
+            except OSError:
+                break
+
+    try:
+        _, status = os.waitpid(pid, 0)
+        exit_code = os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else (status >> 8)
+    except OSError:
+        exit_code = 0
+
+    try:
+        frame = bytes([2]) + struct.pack('>i', exit_code)
+        sock.sendall(frame)
+    except OSError:
+        pass
+
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+if __name__ == '__main__':
+    main()
+"#;
 
 fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
     PtySize {

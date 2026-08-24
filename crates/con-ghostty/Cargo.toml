@@ -6,6 +6,7 @@ version.workspace = true
 build = "build.rs"
 
 [dependencies]
+con-paths.workspace = true
 anyhow.workspace = true
 log.workspace = true
 parking_lot.workspace = true
@@ -60,3 +61,4 @@ unicode-width.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 portable-pty = "0.9"
+uuid.workspace = true
