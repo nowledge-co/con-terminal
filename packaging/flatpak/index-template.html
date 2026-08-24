@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{if .RepoTitle}}{{.RepoTitle}}{{else}}con Flatpak Repository{{end}}</title>
   <meta name="description" content="Official Flatpak repository for con terminal emulator.">
-  <link rel="icon" href="/assets/icon_con_192.png">
+  <link rel="icon" href="{{if .FaviconURL}}{{.FaviconURL}}{{else}}assets/icon_con_192.png{{end}}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">

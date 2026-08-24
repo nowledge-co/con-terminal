@@ -100,23 +100,28 @@ done
 
 if [[ -n "$zig_bin" ]]; then
   zig_target=""
+  linker_wrapper=""
   case "$art_arch" in
     x86_64)
       zig_target="x86_64-linux-gnu.2.38"
-      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="/tmp/zig-linker-$art_arch.sh"
       ;;
     arm64)
       zig_target="aarch64-linux-gnu.2.38"
-      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="/tmp/zig-linker-$art_arch.sh"
       ;;
   esac
 
   if [[ -n "$zig_target" ]]; then
-    cat > "/tmp/zig-linker-$art_arch.sh" <<EOF
+    linker_wrapper="$(mktemp "${TMPDIR:-/tmp}/con-zig-linker-${art_arch}.XXXXXX")"
+    trap 'rm -f "$linker_wrapper"' EXIT
+    case "$art_arch" in
+      x86_64) export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$linker_wrapper" ;;
+      arm64) export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="$linker_wrapper" ;;
+    esac
+    cat > "$linker_wrapper" <<EOF
 #!/bin/bash
 exec "$zig_bin" cc -target "$zig_target" -L"$repo_root/target/syslibs" "\$@"
 EOF
-    chmod +x "/tmp/zig-linker-$art_arch.sh"
+    chmod +x "$linker_wrapper"
   fi
 fi
 
