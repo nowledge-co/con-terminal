@@ -137,6 +137,14 @@ jobs:
           echo "CC=$tool_dir/cc" >> "$GITHUB_ENV"
           echo "CXX=$tool_dir/c++" >> "$GITHUB_ENV"
 
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev
+
       - name: Compile Release Binaries
         env:
           CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
