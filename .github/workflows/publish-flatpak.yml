@@ -229,6 +229,10 @@ jobs:
     uses: aetherpak/actions/.github/workflows/publish.yml@v3
     with:
       config: packaging/flatpak/aetherpak.yaml
+      # The binaries are built by this workflow and passed in as prebuilt
+      # bundles. Do not let AetherPak's source-change detector skip importing
+      # them when only release metadata or channel configuration changed.
+      force-all: true
       prebuilt-bundle-artifact: flatpak-bundle-{app-id}-{arch}
       pages-url: https://con-releases.nowledge.co
       site-subpath: flatpak
