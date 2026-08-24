@@ -69,15 +69,56 @@ echo "    arch    : ${art_arch}"
 echo "    tarball : ${tarball}"
 echo
 
-# ── Build ───────────────────────────────────────────────────────────────────
-
 # Match the Windows + macOS pipelines: bake version + channel into
 # the binary at compile time so option_env!() in
-# crates/con-core/src/release_channel.rs picks them up. The Linux
-# updater (added alongside this script) reads the channel to decide
-# which Sparkle-shaped appcast to poll.
+# crates/con-core/src/release_channel.rs picks them up.
 export CON_RELEASE_VERSION="${version}"
 export CON_RELEASE_CHANNEL="${channel}"
+
+# Optional Zig-based cross-linker wrapper to target GLIBC 2.38 for
+# backward compatibility and Flatpak runtime compatibility.
+zig_bin=""
+if command -v zig >/dev/null 2>&1; then
+  zig_bin="$(command -v zig)"
+elif [[ -n "${CON_ZIG_BIN:-}" && -x "${CON_ZIG_BIN:-}" ]]; then
+  zig_bin="${CON_ZIG_BIN}"
+else
+  # Check common install locations
+  zig_candidate="$(ls -d "$HOME"/.local/zig-*-linux-*/zig /tmp/zig-*-linux-*/zig /tmp/zig-*/zig 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$zig_candidate" && -x "$zig_candidate" ]]; then
+    zig_bin="$zig_candidate"
+  fi
+fi
+
+# Setup helper lib symlinks if missing (e.g. libxkbcommon-x11.so on systems without -devel)
+mkdir -p target/syslibs
+for libpath in /usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu; do
+  if [[ -f "${libpath}/libxkbcommon-x11.so.0" && ! -f "target/syslibs/libxkbcommon-x11.so" ]]; then
+    ln -sf "${libpath}/libxkbcommon-x11.so.0" "target/syslibs/libxkbcommon-x11.so"
+  fi
+done
+
+if [[ -n "$zig_bin" ]]; then
+  zig_target=""
+  case "$art_arch" in
+    x86_64)
+      zig_target="x86_64-linux-gnu.2.38"
+      export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="/tmp/zig-linker-$art_arch.sh"
+      ;;
+    arm64)
+      zig_target="aarch64-linux-gnu.2.38"
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="/tmp/zig-linker-$art_arch.sh"
+      ;;
+  esac
+
+  if [[ -n "$zig_target" ]]; then
+    cat > "/tmp/zig-linker-$art_arch.sh" <<EOF
+#!/bin/bash
+exec "$zig_bin" cc -target "$zig_target" -L"$repo_root/target/syslibs" "\$@"
+EOF
+    chmod +x "/tmp/zig-linker-$art_arch.sh"
+  fi
+fi
 
 echo "==> cargo build -p con -p con-cli --release"
 cargo build -p con -p con-cli --release

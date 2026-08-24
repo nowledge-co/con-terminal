@@ -4,6 +4,23 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.85` - unreleased
+
+### Added
+
+**Packaging**
+
+- Added Flatpak packaging and automated AetherPak repository deployment to GitHub Pages (`https://con-releases.nowledge.co/flatpak`), supporting both `x86_64` and `aarch64` architectures. _(by [@abn](https://github.com/abn))_
+- Added automatic container detection and host shell forwarding in the Linux PTY backend using `flatpak-spawn --host`. _(by [@abn](https://github.com/abn))_
+
+### Fixed
+
+**Linux**
+
+- Fixed top bar window decorations to support drag-to-move across Linux window managers. _(by [@abn](https://github.com/abn))_
+
+---
+
 ## `v0.1.0-beta.84` - 2026-08-13
 
 ### Added

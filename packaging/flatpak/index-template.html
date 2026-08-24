@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{if .RepoTitle}}{{.RepoTitle}}{{else}}con Flatpak Repository{{end}}</title>
+  <meta name="description" content="Official Flatpak repository for con terminal emulator.">
+  <link rel="icon" href="/assets/icon_con_192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* Ground & Ambience */
+      --bg-ink: #0b0b0d;
+      --bg-gradient: linear-gradient(180deg, #17110f 0%, #0d0b0b 42%, #09090b 100%);
+      --bg-glow: radial-gradient(ellipse 600px 300px at 80% -50px, rgba(255, 199, 152, 0.07), transparent 70%);
+
+      /* Cream Text Alpha Ladder */
+      --cream: #f7f1ea;
+      --cream-88: rgba(247, 241, 234, 0.88);
+      --cream-82: rgba(247, 241, 234, 0.82);
+      --cream-70: rgba(247, 241, 234, 0.70);
+      --cream-64: rgba(247, 241, 234, 0.64);
+      --cream-55: rgba(247, 241, 234, 0.55);
+      --cream-38: rgba(247, 241, 234, 0.38);
+
+      /* White Fills & Hairline Alpha Ladder */
+      --white: #ffffff;
+      --white-04: rgba(255, 255, 255, 0.04);
+      --white-07: rgba(255, 255, 255, 0.07);
+      --white-08: rgba(255, 255, 255, 0.08);
+      --white-13: rgba(255, 255, 255, 0.13);
+      --white-14: rgba(255, 255, 255, 0.14);
+
+      /* Sunset Peach Accent Family */
+      --peach: #ffc798;
+      --peach-light: #ffe1c6;
+      --peach-11: rgba(255, 199, 152, 0.11);
+      --peach-18: rgba(255, 199, 152, 0.18);
+      --peach-ring: rgba(255, 199, 152, 0.70);
+      --link-underline: rgba(255, 199, 152, 0.25);
+
+      /* Status Signals */
+      --green-live: #86d197;
+      --green-live-glow: rgba(134, 209, 151, 0.45);
+
+      /* Typography */
+      --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-display: 'Instrument Serif', 'Times New Roman', serif;
+      --font-mono: 'JetBrains Mono', monospace;
+
+      /* Motion Easings */
+      --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+      --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+      --maxw: 860px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg-ink) var(--bg-gradient) no-repeat;
+      color: var(--cream-88);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-feature-settings: 'ss01', 'cv11';
+      line-height: 1.55;
+      padding: 0 24px 80px;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    body::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 360px;
+      background: var(--bg-glow);
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--peach-ring);
+      outline-offset: 3px;
+    }
+
+    a {
+      color: var(--peach);
+      text-decoration: none;
+      border-bottom: 1px solid var(--link-underline);
+      transition: color 0.15s var(--ease-out-quart), border-bottom-color 0.15s var(--ease-out-quart);
+    }
+    a:hover {
+      color: var(--peach-light);
+      border-bottom-color: var(--peach);
+    }
+
+    .wrap { max-width: var(--maxw); margin: 0 auto; }
+
+    header.nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 72px;
+      border-bottom: 1px solid var(--white-08);
+      margin-bottom: 48px;
+      position: relative;
+      z-index: 1;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--cream);
+      border-bottom: none;
+    }
+    .brand:hover { border-bottom: none; color: var(--white); }
+    .brand img { width: 24px; height: 24px; border-radius: 6px; }
+    .brand-tag {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--cream-55);
+      background: var(--white-07);
+      padding: 2px 8px;
+      border-radius: 9999px;
+      border: 1px solid var(--white-08);
+      margin-left: 2px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .nav-links a { color: var(--cream-70); border-bottom: none; }
+    .nav-links a:hover { color: var(--cream); border-bottom: none; }
+
+    .hero { margin-bottom: 48px; position: relative; z-index: 1; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--cream-55);
+      margin-bottom: 16px;
+    }
+    .eyebrow .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green-live);
+      box-shadow: 0 0 10px var(--green-live-glow);
+    }
+    .hero h1 {
+      font-size: clamp(32px, 5vw, 44px);
+      font-weight: 500;
+      line-height: 1.05;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+      color: var(--cream);
+    }
+    .hero h1 em {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 400;
+      color: var(--cream);
+    }
+    .hero p {
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--cream-70);
+      max-width: 620px;
+    }
+
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--cream-64);
+      background: var(--white-04);
+      border: 1px solid var(--white-08);
+      padding: 5px 12px;
+      border-radius: 9999px;
+    }
+    .badge code { font-family: var(--font-mono); color: var(--cream); }
+    .badge.signed {
+      color: var(--green-live);
+      border-color: rgba(134, 209, 151, 0.25);
+      background: rgba(134, 209, 151, 0.06);
+    }
+    .badge .check { width: 13px; height: 13px; }
+
+    section { margin-bottom: 40px; position: relative; z-index: 1; }
+    .section-eyebrow {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--cream-38);
+      margin-bottom: 6px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 500;
+      color: var(--cream);
+      margin-bottom: 16px;
+      letter-spacing: -0.01em;
+    }
+
+    /* Glass Elevation Recipe */
+    .card {
+      background: rgba(15, 12, 10, 0.40);
+      border: 1px solid var(--white-08);
+      border-radius: 20px;
+      padding: 28px;
+      margin-bottom: 24px;
+      backdrop-filter: blur(40px) saturate(1.4);
+      -webkit-backdrop-filter: blur(40px) saturate(1.4);
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.28), inset 0 1px 0 var(--white-08);
+    }
+    
+    .step { display: grid; gap: 10px; }
+    .step + .step { margin-top: 24px; }
+    .step .label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--cream);
+    }
+    .step .label .n {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--peach);
+      color: #0b0b0d;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      display: grid;
+      place-items: center;
+      flex: none;
+    }
+    .note { font-size: 13.5px; color: var(--cream-64); line-height: 1.5; }
+    .note code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--white-08);
+      padding: 2px 6px;
+      border-radius: 5px;
+      color: var(--peach);
+    }
+
+    .code-box {
+      position: relative;
+      background: rgba(0, 0, 0, 0.38);
+      border: 1px solid var(--white-08);
+      border-radius: 8px;
+      padding: 14px 60px 14px 16px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: #e8e2dc;
+    }
+    .code-box code { white-space: pre; font-family: inherit; }
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--cream-64);
+      background: var(--white-07);
+      border: 1px solid var(--white-08);
+      border-radius: 7px;
+      padding: 4px 9px;
+      transition: all 0.15s var(--ease-out-quart);
+      line-height: 1.2;
+    }
+    .copy-btn:hover {
+      color: var(--cream);
+      background: var(--white-13);
+      transform: translateY(-1px);
+    }
+    .copy-btn.ok {
+      color: var(--green-live);
+      border-color: rgba(134, 209, 151, 0.4);
+      background: rgba(134, 209, 151, 0.08);
+    }
+
+    /* Button System */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      font-size: 13.5px;
+      cursor: pointer;
+      padding: 9px 18px;
+      border-radius: 9999px;
+      border: 1px solid transparent;
+      transition: all 0.15s var(--ease-out-quart);
+      text-decoration: none;
+      line-height: 1.2;
+    }
+    .btn:hover { text-decoration: none; border-bottom: 1px solid transparent; }
+    .btn.primary {
+      background: var(--cream);
+      color: #0b0b0d;
+      border-color: var(--cream);
+    }
+    .btn.primary:hover {
+      background: var(--white);
+      border-color: var(--white);
+      color: #0b0b0d;
+      transform: translateY(-1px);
+    }
+    .btn.ghost {
+      background: var(--white-07);
+      border-color: var(--white-08);
+      color: var(--cream-88);
+    }
+    .btn.ghost:hover {
+      background: var(--white-14);
+      border-color: rgba(255, 255, 255, 0.16);
+      color: var(--white);
+      transform: translateY(-1px);
+    }
+    .btn.subtle-accent {
+      background: var(--peach-11);
+      border-color: rgba(255, 199, 152, 0.2);
+      color: var(--peach);
+    }
+    .btn.subtle-accent:hover {
+      background: var(--peach-18);
+      border-color: rgba(255, 199, 152, 0.35);
+      color: var(--peach-light);
+      transform: translateY(-1px);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .setup-actions { margin-top: 20px; }
+
+    /* App & Releases */
+    .app-head { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+    .app-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 10px;
+      flex: none;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      background: var(--white-04) center / contain no-repeat;
+      border: 1px solid var(--white-08);
+    }
+    .app-name { font-size: 18px; font-weight: 500; color: var(--cream); letter-spacing: -0.01em; }
+    .app-id { font-family: var(--font-mono); font-size: 12px; color: var(--cream-55); margin-top: 2px; }
+    .app-summary { color: var(--cream-70); font-size: 14px; line-height: 1.55; margin-bottom: 20px; }
+
+    .releases {
+      border-left: 2px solid var(--white-08);
+      padding-left: 18px;
+      margin-left: 6px;
+      display: grid;
+      gap: 24px;
+    }
+    .release { position: relative; }
+    .release::before {
+      content: '';
+      position: absolute;
+      left: -24px;
+      top: 6px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--peach);
+      box-shadow: 0 0 0 3px #0d0b0b;
+    }
+    .release.old::before { background: var(--cream-38); }
+    .release-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+    .pill {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--cream-64);
+      background: var(--white-07);
+      border: 1px solid var(--white-08);
+      padding: 2px 9px;
+      border-radius: 9999px;
+    }
+    .pill.primary {
+      color: #0b0b0d;
+      background: var(--peach);
+      border-color: var(--peach);
+    }
+    .release-date { margin-left: auto; font-size: 12px; color: var(--cream-55); font-family: var(--font-mono); }
+    .release-meta { font-family: var(--font-mono); font-size: 12px; color: var(--cream-55); margin: 8px 0; }
+    .release .actions { margin: 12px 0 10px; }
+
+    .empty { text-align: center; padding: 48px 24px; color: var(--cream-55); }
+    
+    footer {
+      border-top: 1px solid var(--white-08);
+      margin-top: 64px;
+      padding-top: 28px;
+      font-size: 13px;
+      color: var(--cream-55);
+      position: relative;
+      z-index: 1;
+    }
+    footer .wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    footer a { color: var(--cream-64); border-bottom: none; }
+    footer a:hover { color: var(--cream); border-bottom: none; }
+    footer .links { display: flex; gap: 20px; align-items: center; }
+    footer .tagline { color: var(--cream-38); font-style: normal; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="nav">
+      <a class="brand" href="{{if .RepoHomepage}}{{.RepoHomepage}}{{else}}https://con.nowledge.co/{{end}}">
+        {{if .Branding.LogoURL}}<img src="{{.Branding.LogoURL}}" alt="con logo">{{else}}<img src="/assets/icon_con_192.png" alt="con logo">{{end}}
+        <span>con</span>
+        <span class="brand-tag">flatpak</span>
+      </a>
+      <nav class="nav-links">
+        <a href="https://con.nowledge.co/">Home</a>
+        <a href="https://con.nowledge.co/docs/">Docs</a>
+        <a href="https://con.nowledge.co/docs/install/">Install</a>
+        <a href="https://github.com/nowledge-co/con-terminal" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <span class="eyebrow"><span class="dot"></span> Official Flatpak repository</span>
+        <h1>con: GPU fast. <em>Agent built in.</em></h1>
+        <p>Official Flatpak repository for con terminal emulator. A fast, humane terminal for the agent era with native AI harness and developer workflows.</p>
+        <div class="badges">
+          {{if .Signing.Enabled}}<span class="badge signed"><svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> GPG signed &amp; verified</span>{{end}}
+          <span class="badge">Remote: <code>{{.RemoteName}}</code></span>
+          {{if .Apps}}<span class="badge">{{len .Apps}} app{{if gt (len .Apps) 1}}s{{end}}</span>{{end}}
+        </div>
+      </section>
+
+      <section id="setup">
+        <span class="section-eyebrow">Setup</span>
+        <h2>Add this repository</h2>
+        <div class="card">
+          {{if .Signing.Enabled}}
+          <div class="step">
+            <span class="label"><span class="n">1</span> Add the signed remote (flatpak &ge; 1.17)</span>
+            <div class="code-box"><button class="copy-btn">Copy</button><code>flatpak remote-add --user \
+  --signature-lookaside={{.PagesURL}}/{{.Signing.Lookaside}} \
+  {{.RemoteName}} \
+  {{.PagesURL}}/{{.RemoteName}}.flatpakrepo</code></div>
+            <p class="note">The <code>.flatpakrepo</code> file configures the remote and imports the public GPG key automatically.</p>
+          </div>
+          <div class="step">
+            <span class="label"><span class="n">2</span> Install con terminal</span>
+            <p class="note">Select a release channel below or install via terminal command.</p>
+          </div>
+          <div class="actions setup-actions">
+            <a class="btn primary" href="{{.RemoteName}}.flatpakrepo" download>Download .flatpakrepo</a>
+            <a class="btn ghost" href="index/static" target="_blank" rel="noopener">View OCI index</a>
+            <a class="btn ghost" href="{{.Signing.PublicKey}}" download>Public key</a>
+          </div>
+          <p class="note" style="margin-top:20px;">For older graphical clients, signature verification needs to be configured manually after setup:</p>
+          <div class="code-box"><button class="copy-btn">Copy</button><code>flatpak remote-modify --user \
+  --signature-lookaside={{.PagesURL}}/{{.Signing.Lookaside}} \
+  {{.RemoteName}}</code></div>
+          {{else}}
+          <div class="step">
+            <span class="label"><span class="n">1</span> Add the remote (unsigned)</span>
+            <div class="code-box"><button class="copy-btn">Copy</button><code>flatpak remote-add --if-not-exists --user --no-gpg-verify \
+  {{.RemoteName}} \
+  oci+{{.PagesURL}}</code></div>
+          </div>
+          <div class="actions setup-actions">
+            <a class="btn primary" href="{{.RemoteName}}.flatpakrepo" download>Download .flatpakrepo</a>
+            <a class="btn ghost" href="index/static" target="_blank" rel="noopener">View OCI index</a>
+          </div>
+          {{end}}
+        </div>
+      </section>
+
+      <section id="apps">
+        <span class="section-eyebrow">Catalog</span>
+        <h2>Applications</h2>
+        {{if .Apps}}
+        <div class="apps-list">
+          {{range .Apps}}
+          <article class="card">
+            <div class="app-head">
+              <span class="app-icon" role="img" aria-label="{{.Name}} icon">
+                {{if .Icon}}
+                  <i class="ic" hidden>{{.Icon}}</i>
+                {{else}}
+                  💻
+                {{end}}
+              </span>
+              <div>
+                <div class="app-name">{{.Name}}</div>
+                <div class="app-id">{{.ID}}</div>
+              </div>
+            </div>
+            {{if .Summary}}<p class="app-summary">{{.Summary}}</p>{{end}}
+            <div class="releases">
+              {{range $i, $b := .Branches}}
+              <div class="release {{if $i}}old{{end}}">
+                <div class="release-head">
+                  <span class="pill primary">{{$b.Branch}}</span>
+                  {{range $b.Arches}}<span class="pill">{{.}}</span>{{end}}
+                  <span class="release-date">{{if $i}}{{else}}latest{{if $b.FormattedDate}} &bull; {{end}}{{end}}{{if $b.FormattedDate}}released {{$b.FormattedDate}}{{end}}</span>
+                </div>
+                <div class="release-meta">{{formatSize $b.InstalledSize}} installed &bull; {{formatSize $b.DownloadSize}} download{{if $b.Commit}} &bull; {{printf "%.10s" $b.Commit}}{{end}}</div>
+                <div class="actions">
+                  <a class="btn primary" href="{{$b.RefFile}}" download>Install ({{$b.Branch}})</a>
+                </div>
+                <div class="code-box"><button class="copy-btn">Copy</button><code>{{$b.InstallCmd}}</code></div>
+              </div>
+              {{end}}
+            </div>
+          </article>
+          {{end}}
+        </div>
+        {{else}}
+        <div class="card empty">
+          <h3>No applications published</h3>
+          <p>Apps will show up here automatically when builds are published.</p>
+        </div>
+        {{end}}
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <div>
+          <span>{{if .FooterText}}{{.FooterText}}{{else}}&copy; 2026 Nowledge Labs{{end}}</span>
+          <span class="tagline">&mdash; we build the knowledge layer.</span>
+        </div>
+        <div class="links">
+          <a href="https://con.nowledge.co/">con</a>
+          <a href="https://con.nowledge.co/docs/">docs</a>
+          <a href="https://github.com/nowledge-co/con-terminal" target="_blank" rel="noopener">GitHub</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    document.querySelectorAll('.app-icon .ic').forEach(function (ic) {
+      var src = ic.textContent.trim();
+      var el = ic.parentElement;
+      if (!src) return;
+      var img = new Image();
+      img.onload = function () {
+        el.textContent = '';
+        el.style.backgroundImage = 'url("' + src + '")';
+      };
+      img.src = src;
+    });
+
+    document.querySelectorAll('.copy-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var code = btn.parentElement.querySelector('code');
+        if (!code || !navigator.clipboard) return;
+        navigator.clipboard.writeText(code.textContent).then(function () {
+          var prev = btn.textContent;
+          btn.textContent = 'Copied';
+          btn.classList.add('ok');
+          setTimeout(function () { btn.textContent = prev; btn.classList.remove('ok'); }, 1400);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

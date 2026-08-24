@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>co.nowledge.con</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>con</name>
+  <summary>GPU-accelerated terminal emulator with a built-in AI agent harness</summary>
+  <description>
+    <p>
+      con is a modern, GPU-accelerated terminal emulator and developer workspace equipped with a built-in AI agent harness, multi-pane multiplexing, seamless tmux control, and integrated editor and preview surfaces.
+    </p>
+    <p>Key features include:</p>
+    <ul>
+      <li>GPU-accelerated terminal rendering backed by libghostty-vt and GPUI</li>
+      <li>Built-in AI agent harness with context-aware tool execution and assistance</li>
+      <li>Native multi-pane layout, split surfaces, and bidirectional tmux integration</li>
+      <li>Integrated file tree, lightweight code editor with LSP support, and markdown preview</li>
+      <li>Scriptable CLI control surface via con-cli</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">co.nowledge.con.desktop</launchable>
+  <url type="homepage">https://con.nowledge.co/</url>
+  <url type="bugtracker">https://github.com/nowledge-co/con-terminal/issues</url>
+  <developer id="co.nowledge">
+    <name>Nowledge Labs</name>
+  </developer>
+  <provides>
+    <binary>con</binary>
+    <binary>con-cli</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+    <category>Utility</category>
+    <category>Development</category>
+  </categories>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://con.nowledge.co/assets/screenshot-main.png</image>
+      <caption>con GPU-accelerated terminal emulator and AI workspace</caption>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-08-21">
+      <description>
+        <p>Initial stable release of con terminal emulator.</p>
+      </description>
+    </release>
+  </releases>
+</component>

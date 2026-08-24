@@ -205,6 +205,30 @@ linux-install channel=channel arch=arch: (linux-release channel arch)
         echo "Installed ${stage_dir}/con-cli → $HOME/.local/bin/con-cli"
     fi
 
+# [Linux] Build a Flatpak bundle using AetherPak Zero-Manifest mode
+# Output: dist/co.nowledge.con.flatpak
+flatpak-build channel=channel:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    resolved_arch="{{ arch }}"
+    if [[ -z "${resolved_arch}" ]]; then
+        resolved_arch="$(uname -m)"
+    fi
+    aetherpak_cmd="aetherpak"
+    if ! command -v aetherpak &>/dev/null; then
+        if [[ -x "$HOME/workspace/aetherpak/cli/bin/aetherpak" ]]; then
+            aetherpak_cmd="$HOME/workspace/aetherpak/cli/bin/aetherpak"
+        else
+            echo "Error: aetherpak CLI not found on PATH or under ~/workspace/aetherpak/cli/bin/aetherpak" >&2
+            exit 1
+        fi
+    fi
+    "$aetherpak_cmd" build --config packaging/flatpak/aetherpak.yaml \
+        --arch "${resolved_arch}" \
+        --branch "{{ channel }}" \
+        --bundle \
+        --output-dir dist
+
 # ── Windows (run from Developer Command Prompt for VS 2022) ───────────────────
 
 # [Windows] Debug build (con-app.exe — CON is a reserved DOS device name)

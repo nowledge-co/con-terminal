@@ -1,0 +1,75 @@
+# AetherPak Flatpak Repository Configuration for con-terminal
+registry: ghcr.io
+pages_url: https://con-releases.nowledge.co
+oci_repository: nowledge-co/con-terminal
+remote_name: con-terminal
+repo_title: "con Flatpak Repository"
+repo_homepage: https://con.nowledge.co/
+
+channel_mappings:
+  "v*": "stable"
+  "main": "unstable"
+  "nightly": "nightly"
+
+branding:
+  logo_url: "https://con.nowledge.co/assets/icon_con_192.png"
+  favicon_url: "https://con.nowledge.co/assets/icon_con_192.png"
+  accent_color: "#ffc798"
+  footer_text: "&copy; 2026 Nowledge Labs"
+  index_template: "packaging/flatpak/index-template.html"
+
+apps:
+  - id: co.nowledge.con
+    runtime: org.freedesktop.Platform
+    runtime_version: "25.08"
+    command: con
+    arches: [x86_64, aarch64]
+    finish_args:
+      # Windowing & Display
+      - --socket=wayland
+      - --socket=fallback-x11
+      - --share=ipc
+      - --device=dri
+
+      # Host Execution & Sandboxing
+      - --allow=devel
+      - --talk-name=org.freedesktop.Flatpak
+      - --filesystem=host
+
+      # Audio
+      - --socket=pulseaudio
+
+      # Network
+      - --share=network
+
+      # Authentication, Keys & Sockets
+      - --socket=ssh-auth
+      - --socket=gpg-agent
+      - --filesystem=xdg-run/gnupg:ro
+      - --filesystem=xdg-run/keyring
+      - --filesystem=xdg-run/con
+      - --talk-name=org.freedesktop.secrets
+      - --talk-name=org.kde.kwalletd5
+      - --talk-name=org.kde.kwalletd6
+
+      # Desktop Integration & Notifications
+      - --talk-name=org.freedesktop.Notifications
+      - --system-talk-name=org.freedesktop.ColorManager
+
+    linter:
+      strict: false
+      exceptions:
+        - finish-args-flatpak-spawn-access
+        - finish-args-has-socket-ssh-auth
+        - finish-args-host-filesystem-access
+        - finish-args-has-socket-gpg-agent
+        - appstream-missing-screenshots
+    sources:
+      binaries:
+        - path: target/release/con
+          dest: /app/bin/con
+        - path: target/release/con-cli
+          dest: /app/bin/con-cli
+      desktop: packaging/flatpak/co.nowledge.con.desktop
+      metainfo: packaging/flatpak/co.nowledge.con.metainfo.xml
+      icons: assets/Con-macOS-Dark-256x256@2x.png
