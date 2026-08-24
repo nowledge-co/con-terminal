@@ -119,7 +119,17 @@ if [[ -n "$zig_bin" ]]; then
     esac
     cat > "$linker_wrapper" <<EOF
 #!/bin/bash
-exec "$zig_bin" cc -target "$zig_target" -L"$repo_root/target/syslibs" "\$@"
+args=()
+for arg in "\$@"; do
+  # Rust's aarch64 target adds this GNU ld workaround by default. Zig's
+  # lld does not implement it; dropping only this optional flag keeps the
+  # rest of the linker invocation and ABI unchanged.
+  if [[ "\$arg" == "-Wl,--fix-cortex-a53-843419" ]]; then
+    continue
+  fi
+  args+=("\$arg")
+done
+exec "$zig_bin" cc -target "$zig_target" -L"$repo_root/target/syslibs" "\${args[@]}"
 EOF
     chmod +x "$linker_wrapper"
   fi
