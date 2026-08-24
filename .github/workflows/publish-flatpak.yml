@@ -24,6 +24,12 @@ permissions:
   contents: write
   packages: write
 
+# Flatpak, appcast, and release-finalization jobs all update the same
+# gh-pages branch. Serialize those writers to avoid losing an update.
+concurrency:
+  group: con-gh-pages-publish
+  cancel-in-progress: false
+
 jobs:
   build-flatpak:
     name: Build Flatpak (${{ matrix.arch }})
@@ -41,7 +47,7 @@ jobs:
             runner: ubuntu-24.04-arm # Native GitHub Actions ARM64 runner
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -146,7 +152,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download site artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v5
         with:
           name: aetherpak-site
           path: _site

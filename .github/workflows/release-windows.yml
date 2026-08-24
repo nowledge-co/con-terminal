@@ -17,6 +17,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: con-gh-pages-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build windows-x86_64

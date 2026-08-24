@@ -1272,14 +1272,19 @@ async fn handle_json_rpc_request(
 #[cfg(unix)]
 fn prepare_socket_path(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
+        if parent.exists() && !parent.is_dir() {
+            anyhow::bail!(
+                "control socket parent is not a directory: {}",
+                parent.display()
+            );
+        }
         if !parent.exists() {
             std::fs::create_dir_all(parent)?;
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o700);
-            let _ = std::fs::set_permissions(parent, permissions);
         }
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(parent, permissions)?;
     }
-
 
     if path.exists() {
         match std::os::unix::net::UnixStream::connect(path) {

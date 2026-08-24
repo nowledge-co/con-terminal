@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
@@ -14,6 +14,7 @@ use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
+const MAX_BRIDGE_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -275,11 +276,20 @@ impl LinuxPtySession {
                     .context("failed to write to linux pty")?;
             }
             LinuxPtyBackend::HostBridge { stream_writer, .. } => {
+                if data.len() > MAX_BRIDGE_FRAME_BYTES {
+                    bail!("host PTY input frame is too large");
+                }
                 let len = data.len() as u32;
                 let mut guard = stream_writer.lock();
-                guard.write_all(&[0x00]).context("failed to write data tag")?;
-                guard.write_all(&len.to_be_bytes()).context("failed to write data len")?;
-                guard.write_all(data).context("failed to write data payload")?;
+                guard
+                    .write_all(&[0x00])
+                    .context("failed to write data tag")?;
+                guard
+                    .write_all(&len.to_be_bytes())
+                    .context("failed to write data len")?;
+                guard
+                    .write_all(data)
+                    .context("failed to write data payload")?;
                 guard.flush().context("failed to flush socket")?;
             }
         }
@@ -416,7 +426,9 @@ impl Drop for LinuxPtySession {
                     log::debug!("failed to terminate linux pty child during drop: {err}");
                 }
             }
-            LinuxPtyBackend::HostBridge { child, socket_path, .. } => {
+            LinuxPtyBackend::HostBridge {
+                child, socket_path, ..
+            } => {
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate host pty bridge child during drop: {err}");
                 }
@@ -564,7 +576,8 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         cmd.arg("con-cli");
         cmd.arg("pty-bridge");
         cmd.arg("--socket").arg(&socket_path);
-        cmd.arg("--cols").arg(options.size.columns.max(1).to_string());
+        cmd.arg("--cols")
+            .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
         if let Some(cwd) = &options.cwd {
             cmd.arg("--cwd").arg(cwd);
@@ -577,7 +590,8 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         cmd.arg("-c");
         cmd.arg(EMBEDDED_PYTHON_BRIDGE);
         cmd.arg("--socket").arg(&socket_path);
-        cmd.arg("--cols").arg(options.size.columns.max(1).to_string());
+        cmd.arg("--cols")
+            .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
         if let Some(cwd) = &options.cwd {
             cmd.arg("--cwd").arg(cwd);
@@ -587,7 +601,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         }
     }
 
-    log::info!("spawn_host_bridge: executing flatpak host pty bridge (socket={})", socket_path.display());
+    log::info!(
+        "spawn_host_bridge: executing flatpak host pty bridge (socket={})",
+        socket_path.display()
+    );
     let child = cmd.spawn().context("failed to spawn host pty bridge")?;
 
     listener.set_nonblocking(true)?;
@@ -607,8 +624,8 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         }
     }
 
-    let stream = stream
-        .ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
+    let stream =
+        stream.ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
     let stream_writer = stream.try_clone().context("clone socket writer")?;
     let stream_reader = stream.try_clone().context("clone socket reader")?;
     let stream_writer_mutex = Arc::new(Mutex::new(stream_writer));
@@ -621,6 +638,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             options.size.rows.max(1),
             theme_owned.as_ref(),
             Some(Arc::new(move |data: &[u8]| {
+                if data.len() > MAX_BRIDGE_FRAME_BYTES {
+                    log::warn!("dropping oversized host PTY input frame");
+                    return;
+                }
                 let len = data.len() as u32;
                 let mut guard = writer_for_vt.lock();
                 let _ = guard.write_all(&[0x00]);
@@ -693,6 +714,10 @@ fn spawn_bridge_reader_thread(
                             break;
                         }
                         let len = u32::from_be_bytes(len_bytes) as usize;
+                        if len > MAX_BRIDGE_FRAME_BYTES {
+                            shared.mark_exited(None, started_at.elapsed());
+                            break;
+                        }
                         let mut payload = vec![0u8; len];
                         if stream_reader.read_exact(&mut payload).is_err() {
                             shared.mark_exited(None, started_at.elapsed());
@@ -804,7 +829,6 @@ fn configure_shell_startup(program: &str, command: &mut CommandBuilder) {
         }
     }
 }
-
 
 const EMBEDDED_PYTHON_BRIDGE: &str = r#"
 import argparse, fcntl, os, pty, select, socket, struct, sys, termios

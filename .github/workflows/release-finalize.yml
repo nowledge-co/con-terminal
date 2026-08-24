@@ -70,7 +70,7 @@ permissions:
 # this also avoids two concurrent runs racing to compute the
 # "all green?" result with a stale cache.
 concurrency:
-  group: release-finalize-${{ github.event.workflow_run.head_branch }}
+  group: con-gh-pages-publish
   cancel-in-progress: false
 
 jobs:

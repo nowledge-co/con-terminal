@@ -1,6 +1,8 @@
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 
 #[derive(Args, Clone, Debug)]
@@ -17,6 +19,31 @@ pub struct PtyBridgeArgs {
     pub program: Option<String>,
     #[arg(trailing_var_arg = true)]
     pub args: Vec<String>,
+}
+
+#[cfg(unix)]
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+#[cfg(unix)]
+fn configure_shell_startup(program: &str, command: &mut portable_pty::CommandBuilder) {
+    let Some(shell) = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+    else {
+        return;
+    };
+
+    match shell {
+        "fish" => {
+            command.arg("--login");
+            command.arg("--interactive");
+        }
+        "pwsh" => command.arg("-NoLogo"),
+        "xonsh" => command.arg("-i"),
+        "nu" => command.arg("--interactive"),
+        "bash" | "zsh" | "sh" | "dash" | "ksh" | "mksh" => command.arg("-l"),
+        _ => {}
+    }
 }
 
 #[cfg(unix)]
@@ -39,16 +66,20 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
         .openpty(pty_size)
         .context("failed to open host pty")?;
 
-    let program = args.program.unwrap_or_else(|| {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
-    });
+    let program = args
+        .program
+        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
 
     let mut cmd = CommandBuilder::new(&program);
     if let Some(cwd) = &args.cwd {
         cmd.cwd(cwd);
     }
-    for arg in &args.args {
-        cmd.arg(arg);
+    if args.args.is_empty() {
+        configure_shell_startup(&program, &mut cmd);
+    } else {
+        for arg in &args.args {
+            cmd.arg(arg);
+        }
     }
     cmd.env("TERM", "xterm-256color");
 
@@ -111,6 +142,9 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
                         break;
                     }
                     let len = u32::from_be_bytes(len_bytes) as usize;
+                    if len > MAX_FRAME_BYTES {
+                        break;
+                    }
                     let mut payload = vec![0u8; len];
                     if socket_reader.read_exact(&mut payload).is_err() {
                         break;
@@ -150,14 +184,18 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let _ = reader_thread.join();
     let _ = socket_reader_thread.join();
 
-    if let Ok(status) = status {
-        let code = status.exit_code() as i32;
-        let mut exit_frame = [0u8; 5];
-        exit_frame[0] = 0x02; // TAG_EXIT
-        exit_frame[1..5].copy_from_slice(&code.to_be_bytes());
-        let _ = exit_writer.write_all(&exit_frame);
-        let _ = exit_writer.flush();
-    }
+    let code = match status {
+        Ok(status) => status.exit_code() as i32,
+        Err(err) => {
+            eprintln!("host pty child wait failed: {err}");
+            -1
+        }
+    };
+    let mut exit_frame = [0u8; 5];
+    exit_frame[0] = 0x02; // TAG_EXIT
+    exit_frame[1..5].copy_from_slice(&code.to_be_bytes());
+    let _ = exit_writer.write_all(&exit_frame);
+    let _ = exit_writer.flush();
 
     Ok(())
 }

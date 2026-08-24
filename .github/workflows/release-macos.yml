@@ -9,6 +9,10 @@ permissions:
   contents: write
   pages: write
 
+concurrency:
+  group: con-gh-pages-publish
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build ${{ matrix.arch }}
