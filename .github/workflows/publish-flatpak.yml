@@ -33,8 +33,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-channel:
+    name: Resolve release channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - name: Resolve channel
+        id: channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            channel="nightly"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            case "$GITHUB_REF_NAME" in
+              v*-beta.*) channel="beta" ;;
+              v*-dev.*) channel="dev" ;;
+              *)         channel="stable" ;;
+            esac
+          elif [[ "${{ github.ref_name }}" == "main" ]]; then
+            channel="unstable"
+          else
+            channel="unstable"
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
   build-flatpak:
     name: Build Flatpak (${{ matrix.arch }})
+    needs: release-channel
     runs-on: ${{ matrix.runner }}
     container:
       image: ghcr.io/aetherpak/cli:v0.33.2-builder
@@ -225,10 +252,11 @@ jobs:
 
   publish-repo:
     name: Publish Repository
-    needs: build-flatpak
+    needs: [release-channel, build-flatpak]
     uses: aetherpak/actions/.github/workflows/publish.yml@v3
     with:
-      config: packaging/flatpak/aetherpak.yaml
+      config: packaging/flatpak/aetherpak-publish.yaml
+      branch: ${{ needs.release-channel.outputs.channel }}
       # The binaries are built by this workflow and passed in as prebuilt
       # bundles. Do not let AetherPak's source-change detector skip importing
       # them when only release metadata or channel configuration changed.

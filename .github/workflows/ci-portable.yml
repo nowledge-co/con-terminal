@@ -18,6 +18,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-portable.yml"
+      - ".github/workflows/publish-flatpak.yml"
       - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"
@@ -29,6 +30,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/ci-portable.yml"
+      - ".github/workflows/publish-flatpak.yml"
       - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"

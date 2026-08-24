@@ -1,0 +1,39 @@
+# Repository-side view of the Flatpak publication.
+#
+# The release workflow builds and smoke-tests the bundles in a separate native
+# job, then passes them to AetherPak through `prebuilt-bundle-artifact`. The
+# reusable publisher still requires URL/checksum fields to plan a bundle
+# matrix, so these values are deliberately inert placeholders: that workflow
+# input always supplies the local, verified bundle and the URLs are never
+# fetched. Keep this file separate from aetherpak.yaml, which is the build
+# configuration used to assemble the bundles.
+registry: ghcr.io
+pages_url: https://con-releases.nowledge.co
+oci_repository: nowledge-co/con-terminal
+remote_name: con-terminal
+repo_title: "con Flatpak Repository"
+repo_homepage: https://con.nowledge.co/
+
+channel_mappings:
+  "v*-beta*": "beta"
+  "v*-dev*": "dev"
+  "v*": "stable"
+  "main": "unstable"
+  "nightly": "nightly"
+
+branding:
+  logo_url: "https://con.nowledge.co/assets/icon_con_192.png"
+  favicon_url: "https://con.nowledge.co/assets/icon_con_192.png"
+  accent_color: "#ffc798"
+  footer_text: "&copy; 2026 Nowledge Labs"
+  index_template: "packaging/flatpak/index-template.html"
+
+apps:
+  - id: co.nowledge.con
+    bundles:
+      x86_64:
+        url: "https://github.com/nowledge-co/con-terminal/actions"
+        sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      aarch64:
+        url: "https://github.com/nowledge-co/con-terminal/actions"
+        sha256: "0000000000000000000000000000000000000000000000000000000000000000"
