@@ -1,0 +1,5 @@
+[Flatpak Repo]
+Title=con Flatpak Repository
+Url=oci+https://con-releases.nowledge.co/flatpak
+Homepage=https://con.nowledge.co/
+Comment=Flatpak repository powered by AetherPak (Pages index + OCI registry blobs)

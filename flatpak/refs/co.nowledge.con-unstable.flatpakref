@@ -1,0 +1,8 @@
+[Flatpak Ref]
+Title=con
+Name=co.nowledge.con
+Branch=unstable
+Url=oci+https://ghcr.io/nowledge-co/con-terminal
+IsRuntime=false
+SuggestRemoteName=con-terminal
+RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
