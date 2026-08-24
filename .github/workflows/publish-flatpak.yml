@@ -86,7 +86,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Install Zig Compiler
-        uses: mitchellh/setup-zig@v1
+        uses: mlugg/setup-zig@v2.2.1
         with:
           version: 0.15.2
 
@@ -102,7 +102,7 @@ jobs:
       - name: Audit Dynamic Library Dependencies
         run: |
           set -euo pipefail
-          stage_dir="$(ls -td dist/con-*-linux-* 2>/dev/null | head -1 || true)"
+          stage_dir="$(find dist -maxdepth 1 -type d -name 'con-*-linux-*' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
           if [[ -n "${stage_dir}" && -d "${stage_dir}" ]]; then
             echo "==> Auditing dynamic library linkage in ${stage_dir}..."
             for bin in "${stage_dir}/con" "${stage_dir}/con-cli"; do
