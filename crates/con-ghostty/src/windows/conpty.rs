@@ -101,6 +101,98 @@ impl Drop for OwnedHandle {
     }
 }
 
+struct PendingPseudoConsole(Option<HPCON>);
+
+impl PendingPseudoConsole {
+    fn new(handle: HPCON) -> Self {
+        Self(Some(handle))
+    }
+
+    fn handle(&self) -> HPCON {
+        self.0.expect("pending pseudo-console handle was taken")
+    }
+
+    fn take(&mut self) -> HPCON {
+        self.0
+            .take()
+            .expect("pending pseudo-console handle was already taken")
+    }
+}
+
+impl Drop for PendingPseudoConsole {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            // SAFETY: this guard exclusively owns the HPCON until a
+            // successfully-created ConPty takes it.
+            unsafe { ClosePseudoConsole(handle) }
+        }
+    }
+}
+
+/// Cloneable write-only view of the host side of ConPTY's input pipe.
+///
+/// libghostty-vt callbacks receive this instead of the full `ConPty` so
+/// terminal replies cannot re-enter `RenderSession` while the VT lock is
+/// held. The shared mutex also keeps user input and terminal-generated
+/// replies from interleaving within a pipe write.
+#[derive(Clone)]
+pub(crate) struct ConPtyWriter {
+    inner: Arc<Mutex<OwnedHandle>>,
+}
+
+impl ConPtyWriter {
+    pub(crate) fn write_all(&self, mut bytes: &[u8]) -> io::Result<()> {
+        let guard = self.inner.lock();
+        while !bytes.is_empty() {
+            let mut written = 0u32;
+            // SAFETY: the mutex guard keeps the pipe handle valid and
+            // exclusively borrowed for the duration of the write.
+            unsafe {
+                WriteFile(guard.as_handle(), Some(bytes), Some(&mut written), None)
+                    .map_err(|e| io::Error::other(e.message()))?;
+            }
+            if written == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "ConPTY input pipe accepted zero bytes",
+                ));
+            }
+            bytes = &bytes[written as usize..];
+        }
+        Ok(())
+    }
+}
+
+/// Pipe endpoints created before the child process starts.
+///
+/// This two-phase construction lets the VT capture a `ConPtyWriter` before
+/// the shell can emit its first query or output byte.
+pub(crate) struct PreparedConPty {
+    input_read: OwnedHandle,
+    input_writer: ConPtyWriter,
+    output_read: OwnedHandle,
+    output_write: OwnedHandle,
+}
+
+impl PreparedConPty {
+    pub(crate) fn writer(&self) -> ConPtyWriter {
+        self.input_writer.clone()
+    }
+
+    pub(crate) fn spawn<F>(
+        self,
+        command_line: &str,
+        cwd: Option<&Path>,
+        size: PtySize,
+        on_output: F,
+    ) -> Result<ConPty>
+    where
+        F: FnMut(&[u8]) + Send + 'static,
+    {
+        ConPty::spawn_prepared(self, command_line, cwd, size, on_output)
+    }
+}
+
 /// A live ConPTY session.
 pub struct ConPty {
     /// Pseudo-console handle, shared with the exit-watcher thread.
@@ -109,7 +201,7 @@ pub struct ConPty {
     /// skips. See `close_hpcon_slot`.
     pcon: Arc<Mutex<Option<HPCON>>>,
     /// Host end of the pipe the child reads from.
-    input_write: Arc<Mutex<OwnedHandle>>,
+    input_writer: ConPtyWriter,
     /// Process handle (kept so callers can `WaitForSingleObject` for exit).
     process: OwnedHandle,
     /// Child thread handle.
@@ -132,6 +224,19 @@ pub struct PtySize {
 }
 
 impl ConPty {
+    pub(crate) fn prepare() -> Result<PreparedConPty> {
+        let (input_read, input_write) = create_pipe().context("input pipe")?;
+        let (output_read, output_write) = create_pipe().context("output pipe")?;
+        Ok(PreparedConPty {
+            input_read,
+            input_writer: ConPtyWriter {
+                inner: Arc::new(Mutex::new(input_write)),
+            },
+            output_read,
+            output_write,
+        })
+    }
+
     /// Spawn a child shell, wire up ConPTY, and start a background reader
     /// that calls `on_output` for each chunk of bytes the shell writes.
     pub fn spawn<F>(
@@ -143,8 +248,25 @@ impl ConPty {
     where
         F: FnMut(&[u8]) + Send + 'static,
     {
-        let (input_read, input_write) = create_pipe().context("input pipe")?;
-        let (output_read, output_write) = create_pipe().context("output pipe")?;
+        Self::prepare()?.spawn(command_line, cwd, size, on_output)
+    }
+
+    fn spawn_prepared<F>(
+        prepared: PreparedConPty,
+        command_line: &str,
+        cwd: Option<&Path>,
+        size: PtySize,
+        on_output: F,
+    ) -> Result<Self>
+    where
+        F: FnMut(&[u8]) + Send + 'static,
+    {
+        let PreparedConPty {
+            input_read,
+            input_writer,
+            output_read,
+            output_write,
+        } = prepared;
 
         let coord = COORD {
             X: size.cols as i16,
@@ -157,6 +279,7 @@ impl ConPty {
             CreatePseudoConsole(coord, input_read.as_handle(), output_write.as_handle(), 0)
         }
         .context("CreatePseudoConsole failed")?;
+        let mut pending_pcon = PendingPseudoConsole::new(hpcon);
 
         // Per Microsoft docs, after CreatePseudoConsole the captured
         // child-side ends should be closed by the host so only the
@@ -164,9 +287,7 @@ impl ConPty {
         drop(input_read);
         drop(output_write);
 
-        let pcon = Arc::new(Mutex::new(Some(hpcon)));
-
-        let (startup_info, attribute_buffer) = build_startup_info(hpcon)?;
+        let (startup_info, attribute_buffer) = build_startup_info(pending_pcon.handle())?;
 
         let mut command_line_w: Vec<u16> = OsString::from(command_line)
             .encode_wide()
@@ -236,7 +357,7 @@ impl ConPty {
         let process = OwnedHandle::from_handle(process_info.hProcess);
         let thread = OwnedHandle::from_handle(process_info.hThread);
 
-        let input_write = Arc::new(Mutex::new(input_write));
+        let pcon = Arc::new(Mutex::new(Some(pending_pcon.take())));
         let output_thread = spawn_output_reader(output_read, on_output);
 
         // Duplicate the process handle so the watcher thread can wait
@@ -294,7 +415,7 @@ impl ConPty {
 
         Ok(Self {
             pcon,
-            input_write,
+            input_writer,
             process,
             _thread: thread,
             output_thread: Some(output_thread),
@@ -303,14 +424,8 @@ impl ConPty {
     }
 
     pub fn write(&self, bytes: &[u8]) -> io::Result<usize> {
-        let guard = self.input_write.lock();
-        let mut written = 0u32;
-        // SAFETY: guard handle is a valid pipe.
-        unsafe {
-            WriteFile(guard.as_handle(), Some(bytes), Some(&mut written), None)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.message()))?;
-        }
-        Ok(written as usize)
+        self.input_writer.write_all(bytes)?;
+        Ok(bytes.len())
     }
 
     pub fn resize(&self, size: PtySize) -> Result<()> {

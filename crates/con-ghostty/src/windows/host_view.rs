@@ -164,9 +164,25 @@ impl RenderSession {
         let (cols, rows) = renderer.grid_for_dimensions(&renderer_config);
         log::info!("RenderSession: grid {cols}x{rows}");
 
+        let prepared_conpty = ConPty::prepare().context("prepare ConPTY pipes failed")?;
+        let vt_writer = prepared_conpty.writer();
+        let accept_vt_replies = Arc::new(AtomicBool::new(false));
+        let accept_vt_replies_in_callback = accept_vt_replies.clone();
         let vt = Arc::new(
-            VtScreen::new(cols, rows, renderer_config.theme.as_ref())
-                .context("VtScreen::new failed")?,
+            VtScreen::new_with_write_pty(
+                cols,
+                rows,
+                renderer_config.theme.as_ref(),
+                Some(Arc::new(move |bytes| {
+                    if !accept_vt_replies_in_callback.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if let Err(err) = vt_writer.write_all(bytes) {
+                        log::debug!("windows vt write_pty failed: {err}");
+                    }
+                })),
+            )
+            .context("VtScreen::new failed")?,
         );
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
@@ -177,6 +193,10 @@ impl RenderSession {
             let text = String::from_utf8_lossy(output);
             transcript.lock().push(text.as_ref());
         }
+        // Replaying a restored transcript must not inject stale query
+        // responses into the new shell. Enable replies only after replay,
+        // while the child process still cannot have emitted output.
+        accept_vt_replies.store(true, Ordering::Release);
 
         let vt_for_pty = vt.clone();
         let transcript_for_pty = transcript.clone();
@@ -184,18 +204,19 @@ impl RenderSession {
         let shell = super::conpty::default_shell_command();
         let shell_cwd = resolve_shell_cwd(cwd);
         log::info!("RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?}");
-        let conpty = ConPty::spawn(
-            &shell,
-            shell_cwd.as_deref(),
-            PtySize { cols, rows },
-            move |bytes| {
-                let text = String::from_utf8_lossy(bytes);
-                transcript_for_pty.lock().push(text.as_ref());
-                vt_for_pty.feed(bytes);
-                wake_for_pty();
-            },
-        )
-        .context("ConPty::spawn failed")?;
+        let conpty = prepared_conpty
+            .spawn(
+                &shell,
+                shell_cwd.as_deref(),
+                PtySize { cols, rows },
+                move |bytes| {
+                    let text = String::from_utf8_lossy(bytes);
+                    transcript_for_pty.lock().push(text.as_ref());
+                    vt_for_pty.feed(bytes);
+                    wake_for_pty();
+                },
+            )
+            .context("ConPty::spawn failed")?;
         let conpty = Arc::new(conpty);
 
         Ok(Self {
