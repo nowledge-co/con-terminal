@@ -15,6 +15,7 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
+use crate::vt::{VtKeyEvent, VtKeySend};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -225,6 +226,14 @@ impl WindowsGhosttyTerminal {
         if let Some(session) = self.inner.lock().as_ref() {
             session.write_input(text);
         }
+    }
+
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(VtKeySend::default());
+        };
+        session.send_key(event).map_err(|err| err.to_string())
     }
 
     pub fn send_mouse_button(&self, _pressed: bool, _button: MouseButton, _mods: i32) -> bool {

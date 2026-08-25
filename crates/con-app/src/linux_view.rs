@@ -13,9 +13,11 @@
 //! and layout state. The Windows D3D11 path remains the model for the
 //! eventual native renderer.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers};
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
     GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell, VtCursor,
@@ -31,7 +33,7 @@ use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
-use crate::terminal_restore::{key_down_may_write_terminal, restored_terminal_output};
+use crate::terminal_restore::restored_terminal_output;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const MIN_FONT_SIZE_PX: f32 = 12.0;
@@ -122,6 +124,7 @@ pub struct GhosttyView {
     /// Shift state at the right-button press, reused for the matching
     /// release so a modifier change in between doesn't break pairing.
     terminal_mouse_right_shift: bool,
+    keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
 }
 
 pub fn init(cx: &mut App) {
@@ -204,6 +207,7 @@ impl GhosttyView {
             drag_anchor: None,
             terminal_mouse_right_consumed: None,
             terminal_mouse_right_shift: false,
+            keys_awaiting_release: HashMap::new(),
         }
     }
 
@@ -278,6 +282,7 @@ impl GhosttyView {
     }
 
     pub fn shutdown_surface(&mut self) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -303,9 +308,13 @@ impl GhosttyView {
         self.drag_anchor = None;
         self.terminal_mouse_right_consumed = None;
         self.terminal_mouse_right_shift = false;
+        self.keys_awaiting_release.clear();
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
+        if !focused {
+            self.release_tracked_keys();
+        }
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
         }
@@ -702,6 +711,88 @@ impl GhosttyView {
         )
     }
 
+    fn send_vt_key(
+        &mut self,
+        tracking_key: &str,
+        event: &VtKeyEvent<'_>,
+    ) -> Result<con_ghostty::vt::VtKeySend, String> {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return Ok(con_ghostty::vt::VtKeySend::default());
+        };
+        let sent = terminal.send_key(event)?;
+        if sent.wrote {
+            self.clear_restored_screen_text();
+            self.clear_selection();
+            if sent.report_releases
+                && event.action != VtKeyAction::Release
+                && !self.keys_awaiting_release.contains_key(tracking_key)
+            {
+                self.keys_awaiting_release.insert(
+                    tracking_key.to_owned(),
+                    crate::terminal_keys::TrackedVtKey::from_press(event),
+                );
+            }
+        }
+        Ok(sent)
+    }
+
+    fn handle_key_up(&mut self, event: &KeyUpEvent) -> bool {
+        let Some(tracked) = self.keys_awaiting_release.remove(&event.keystroke.key) else {
+            return false;
+        };
+        let release =
+            tracked.release_with_modifiers(&event.keystroke.key, &event.keystroke.modifiers);
+        match self.send_vt_key(&event.keystroke.key, &release) {
+            Ok(sent) => sent.wrote,
+            Err(err) => {
+                // Preserve the press so focus loss can retry the release if
+                // this was a transient PTY write failure.
+                self.keys_awaiting_release
+                    .insert(event.keystroke.key.clone(), tracked);
+                log::debug!("linux terminal key release failed: {err}");
+                false
+            }
+        }
+    }
+
+    fn release_tracked_keys(&mut self) {
+        let tracked_keys = std::mem::take(&mut self.keys_awaiting_release);
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return;
+        };
+        for (key, tracked) in tracked_keys {
+            let release = tracked.release(&key);
+            if let Err(err) = terminal.send_key(&release) {
+                log::debug!("linux terminal key release failed: {err}");
+            }
+        }
+    }
+
+    fn send_tab_key(&mut self, shift: bool) -> bool {
+        let event = VtKeyEvent {
+            key: "tab",
+            text: "",
+            unshifted_codepoint: None,
+            action: if self.keys_awaiting_release.contains_key("tab") {
+                VtKeyAction::Repeat
+            } else {
+                VtKeyAction::Press
+            },
+            modifiers: VtKeyModifiers {
+                shift,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        match self.send_vt_key("tab", &event) {
+            Ok(sent) => sent.wrote,
+            Err(err) => {
+                log::debug!("linux terminal key encoding failed: {err}");
+                false
+            }
+        }
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -775,14 +866,11 @@ impl GhosttyView {
             }
         }
 
-        let decckm = terminal.is_decckm();
-        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
-            terminal.send_text(&bytes);
-            return true;
-        }
-
-        if event.prefer_character_input
-            && !keystroke.modifiers.control
+        // XKB compose and IME completion can arrive as a normal keydown
+        // while GPUI still owns marked text. Its InputHandler must commit
+        // the text and clear that state; encoding here would leave the
+        // preedit overlay stale even though the character reached the PTY.
+        if self.ime_marked_text.is_some()
             && keystroke
                 .key_char
                 .as_deref()
@@ -791,64 +879,16 @@ impl GhosttyView {
             return false;
         }
 
-        if keystroke.modifiers.control
-            && !keystroke.modifiers.alt
-            && (keystroke.key.len() == 1
-                || keystroke
-                    .key_char
-                    .as_deref()
-                    .is_some_and(|text| text.len() == 1))
-        {
-            if let Some(code) = crate::terminal_keys::ctrl_keystroke_to_c0(
-                &keystroke.key,
-                keystroke.key_char.as_deref(),
-                keystroke.modifiers.shift,
-            ) {
-                let control = [code];
-                let text = std::str::from_utf8(&control)
-                    .expect("terminal C0 control bytes are always valid UTF-8");
-                terminal.send_text(text);
-                return true;
+        let Some(vt_event) = crate::terminal_keys::vt_key_down_event(event) else {
+            return false;
+        };
+        match self.send_vt_key(&keystroke.key, &vt_event) {
+            Ok(sent) => sent.wrote,
+            Err(err) => {
+                log::debug!("linux terminal key encoding failed: {err}");
+                false
             }
         }
-
-        if keystroke.modifiers.alt && !keystroke.modifiers.control && !keystroke.modifiers.shift {
-            if let Some(ch) = keystroke.key_char.as_deref().filter(|ch| !ch.is_empty()) {
-                let mut out = String::with_capacity(1 + ch.len());
-                out.push('\x1b');
-                out.push_str(ch);
-                terminal.send_text(&out);
-                return true;
-            }
-        }
-
-        if let Some(text) = keystroke
-            .key_char
-            .as_deref()
-            .filter(|text| !text.is_empty())
-        {
-            if !keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.platform
-            {
-                return false;
-            }
-            terminal.send_text(text);
-            return true;
-        }
-
-        if keystroke.key.len() == 1 {
-            if !keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.platform
-            {
-                return false;
-            }
-            terminal.send_text(&keystroke.key);
-            return true;
-        }
-
-        false
     }
 
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -1193,10 +1233,7 @@ impl Render for GhosttyView {
                     return;
                 }
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\t");
-                }
+                this.send_tab_key(false);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, cx| {
@@ -1204,10 +1241,7 @@ impl Render for GhosttyView {
                     return;
                 }
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\x1b[Z");
-                }
+                this.send_tab_key(true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
@@ -1242,22 +1276,18 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                let special_key_writes =
-                    encode_special_key(&event.keystroke.key, &event.keystroke.modifiers, false)
-                        .is_some();
-                let clears_restore = key_down_may_write_terminal(event, special_key_writes);
-                let copy_shortcut = event.keystroke.modifiers.control
-                    && !event.keystroke.modifiers.alt
-                    && !event.keystroke.modifiers.platform
-                    && event.keystroke.key == "c";
                 let _ = this.ensure_session(cx);
-                if clears_restore {
-                    this.clear_restored_screen_text();
-                }
-                if clears_restore && !copy_shortcut {
-                    this.clear_selection();
-                }
                 if this.handle_key_down(event, window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if this.handle_key_up(event) {
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
@@ -1466,6 +1496,7 @@ impl Render for GhosttyView {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -1859,63 +1890,6 @@ fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
     let b = ((packed >> 8) & 0xFF) as f32 / 255.0;
     let a = a as f32 / 255.0;
     Some(Rgba { r, g, b, a }.into())
-}
-
-fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
-    let mask = u8::from(modifiers.shift)
-        | (u8::from(modifiers.alt) << 1)
-        | (u8::from(modifiers.control) << 2);
-    if mask == 0 { None } else { Some(1 + mask) }
-}
-
-fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
-    let m = xterm_modifier_param(modifiers);
-
-    let tilde = |code: u8| match m {
-        Some(m) => format!("\x1b[{};{}~", code, m),
-        None => format!("\x1b[{}~", code),
-    };
-
-    let csi1 = |final_byte: char, ss3_when_plain: bool, decckm_arrow: bool| match m {
-        Some(m) => format!("\x1b[1;{}{}", m, final_byte),
-        None if decckm_arrow && decckm => format!("\x1bO{}", final_byte),
-        None if ss3_when_plain => format!("\x1bO{}", final_byte),
-        None => format!("\x1b[{}", final_byte),
-    };
-
-    Some(match key {
-        "up" => csi1('A', false, true),
-        "down" => csi1('B', false, true),
-        "right" => csi1('C', false, true),
-        "left" => csi1('D', false, true),
-        "home" => csi1('H', false, false),
-        "end" => csi1('F', false, false),
-        "pageup" => tilde(5),
-        "pagedown" => tilde(6),
-        "insert" => tilde(2),
-        "delete" => tilde(3),
-        "f1" => csi1('P', true, false),
-        "f2" => csi1('Q', true, false),
-        "f3" => csi1('R', true, false),
-        "f4" => csi1('S', true, false),
-        "f5" => tilde(15),
-        "f6" => tilde(17),
-        "f7" => tilde(18),
-        "f8" => tilde(19),
-        "f9" => tilde(20),
-        "f10" => tilde(21),
-        "f11" => tilde(23),
-        "f12" => tilde(24),
-        "enter" | "return" => "\r".into(),
-        "escape" => "\x1b".into(),
-        "backspace" if modifiers.alt && !modifiers.control && !modifiers.platform => {
-            "\x1b\x7f".into()
-        }
-        "backspace" => "\x7f".into(),
-        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => "\x1b[Z".into(),
-        "tab" => "\t".into(),
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

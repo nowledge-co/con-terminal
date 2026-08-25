@@ -21,6 +21,8 @@ typedef void* GhosttyTerminal;
 typedef void* GhosttyRenderState;
 typedef void* GhosttyRowIterator;
 typedef void* GhosttyRowCells;
+typedef void* GhosttyKeyEncoder;
+typedef void* GhosttyKeyEvent;
 typedef int   GhosttyResult;
 
 union GhosttyTerminalScrollViewportValue {
@@ -85,6 +87,68 @@ GhosttyResult ghostty_terminal_get(
 ) {
     (void)terminal; (void)key; (void)out;
     return 1;
+}
+
+/* ── Key encoder ────────────────────────────────────────────────── */
+
+GhosttyResult ghostty_key_encoder_new(
+    const void* allocator, GhosttyKeyEncoder* out_encoder
+) {
+    (void)allocator;
+    if (out_encoder) { *out_encoder = (void*)(uintptr_t)5; }
+    return 0;
+}
+
+void ghostty_key_encoder_free(GhosttyKeyEncoder encoder) { (void)encoder; }
+
+void ghostty_key_encoder_setopt_from_terminal(
+    GhosttyKeyEncoder encoder, GhosttyTerminal terminal
+) {
+    (void)encoder; (void)terminal;
+}
+
+GhosttyResult ghostty_key_encoder_encode(
+    GhosttyKeyEncoder encoder, GhosttyKeyEvent event,
+    char* out_buf, size_t out_buf_size, size_t* out_len
+) {
+    (void)encoder; (void)event; (void)out_buf; (void)out_buf_size;
+    if (out_len) { *out_len = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_key_event_new(
+    const void* allocator, GhosttyKeyEvent* out_event
+) {
+    (void)allocator;
+    if (out_event) { *out_event = (void*)(uintptr_t)6; }
+    return 0;
+}
+
+void ghostty_key_event_free(GhosttyKeyEvent event) { (void)event; }
+void ghostty_key_event_set_action(GhosttyKeyEvent event, int action) {
+    (void)event; (void)action;
+}
+void ghostty_key_event_set_key(GhosttyKeyEvent event, int key) {
+    (void)event; (void)key;
+}
+void ghostty_key_event_set_mods(GhosttyKeyEvent event, uint16_t mods) {
+    (void)event; (void)mods;
+}
+void ghostty_key_event_set_consumed_mods(GhosttyKeyEvent event, uint16_t mods) {
+    (void)event; (void)mods;
+}
+void ghostty_key_event_set_composing(GhosttyKeyEvent event, bool composing) {
+    (void)event; (void)composing;
+}
+void ghostty_key_event_set_utf8(
+    GhosttyKeyEvent event, const char* utf8, size_t len
+) {
+    (void)event; (void)utf8; (void)len;
+}
+void ghostty_key_event_set_unshifted_codepoint(
+    GhosttyKeyEvent event, uint32_t codepoint
+) {
+    (void)event; (void)codepoint;
 }
 
 /* ── Cell accessor ──────────────────────────────────────────────── */

@@ -58,8 +58,19 @@ pub type GhosttyTerminal = *mut c_void;
 pub type GhosttyRenderState = *mut c_void;
 pub type GhosttyRowIterator = *mut c_void;
 pub type GhosttyRowCells = *mut c_void;
+pub type GhosttyKeyEncoder = *mut c_void;
+pub type GhosttyKeyEvent = *mut c_void;
 pub type GhosttyAllocator = c_void;
 pub type GhosttyResult = c_int;
+
+const GHOSTTY_SUCCESS: GhosttyResult = 0;
+const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
+
+const GHOSTTY_MODS_SHIFT: u16 = 1 << 0;
+const GHOSTTY_MODS_CTRL: u16 = 1 << 1;
+const GHOSTTY_MODS_ALT: u16 = 1 << 2;
+const GHOSTTY_MODS_SUPER: u16 = 1 << 3;
+const GHOSTTY_KITTY_KEY_REPORT_EVENTS: u8 = 1 << 1;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -78,6 +89,7 @@ pub enum GhosttyTerminalData {
     CursorPendingWrap = 5,
     ActiveScreen = 6,
     CursorVisible = 7,
+    KittyKeyboardFlags = 8,
     Scrollbar = 9,
     Title = 12,
     Pwd = 13,
@@ -468,6 +480,38 @@ unsafe extern "C" {
         out: *mut c_void,
     ) -> GhosttyResult;
 
+    // Key encoder (`key/{encoder,event}.h`). The encoder and reusable
+    // event live under `VtInner`'s mutex with the terminal whose mode
+    // state they snapshot.
+    pub fn ghostty_key_encoder_new(
+        allocator: *const GhosttyAllocator,
+        out_encoder: *mut GhosttyKeyEncoder,
+    ) -> GhosttyResult;
+    pub fn ghostty_key_encoder_free(encoder: GhosttyKeyEncoder);
+    pub fn ghostty_key_encoder_setopt_from_terminal(
+        encoder: GhosttyKeyEncoder,
+        terminal: GhosttyTerminal,
+    );
+    pub fn ghostty_key_encoder_encode(
+        encoder: GhosttyKeyEncoder,
+        event: GhosttyKeyEvent,
+        out_buf: *mut c_char,
+        out_buf_size: usize,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+    pub fn ghostty_key_event_new(
+        allocator: *const GhosttyAllocator,
+        out_event: *mut GhosttyKeyEvent,
+    ) -> GhosttyResult;
+    pub fn ghostty_key_event_free(event: GhosttyKeyEvent);
+    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent, action: c_int);
+    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: c_int);
+    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: u16);
+    pub fn ghostty_key_event_set_consumed_mods(event: GhosttyKeyEvent, mods: u16);
+    pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent, composing: bool);
+    pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: *const c_char, len: usize);
+    pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+
     // Render state (`render.h`)
     pub fn ghostty_render_state_new(
         allocator: *const GhosttyAllocator,
@@ -650,7 +694,42 @@ pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
 }
 
-pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) + Send + Sync + 'static>;
+pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync + 'static>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtKeyAction {
+    Release,
+    Press,
+    Repeat,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VtKeyModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    pub platform: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VtKeyEvent<'a> {
+    /// GPUI's normalized logical key name. Only unambiguous functional
+    /// names are promoted to a physical Ghostty key; printable keys stay
+    /// unidentified because GPUI doesn't expose a scan code/W3C code.
+    pub key: &'a str,
+    /// Layout-produced UTF-8 before Ctrl/Alt transformations.
+    pub text: &'a str,
+    pub unshifted_codepoint: Option<char>,
+    pub action: VtKeyAction,
+    pub modifiers: VtKeyModifiers,
+    pub consumed_modifiers: VtKeyModifiers,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VtKeySend {
+    pub wrote: bool,
+    pub report_releases: bool,
+}
 
 struct VtCallbackState {
     write_pty: PtyWriteCallback,
@@ -668,6 +747,8 @@ struct VtInner {
     render_state: GhosttyRenderState,
     row_iter: GhosttyRowIterator,
     row_cells: GhosttyRowCells,
+    key_encoder: GhosttyKeyEncoder,
+    key_event: GhosttyKeyEvent,
     callback_state: Option<Box<VtCallbackState>>,
     cols: u16,
     rows: u16,
@@ -680,6 +761,151 @@ struct VtInner {
 }
 
 unsafe impl Send for VtInner {}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy)]
+enum GhosttyKey {
+    Unidentified = 0,
+    AltLeft = 51,
+    AltRight = 52,
+    Backspace = 53,
+    CapsLock = 54,
+    ContextMenu = 55,
+    ControlLeft = 56,
+    ControlRight = 57,
+    Enter = 58,
+    MetaLeft = 59,
+    MetaRight = 60,
+    ShiftLeft = 61,
+    ShiftRight = 62,
+    Space = 63,
+    Tab = 64,
+    Delete = 68,
+    End = 69,
+    Help = 70,
+    Home = 71,
+    Insert = 72,
+    PageDown = 73,
+    PageUp = 74,
+    ArrowDown = 75,
+    ArrowLeft = 76,
+    ArrowRight = 77,
+    ArrowUp = 78,
+    Escape = 120,
+    F1 = 121,
+    F2 = 122,
+    F3 = 123,
+    F4 = 124,
+    F5 = 125,
+    F6 = 126,
+    F7 = 127,
+    F8 = 128,
+    F9 = 129,
+    F10 = 130,
+    F11 = 131,
+    F12 = 132,
+    F13 = 133,
+    F14 = 134,
+    F15 = 135,
+    F16 = 136,
+    F17 = 137,
+    F18 = 138,
+    F19 = 139,
+    F20 = 140,
+    F21 = 141,
+    F22 = 142,
+    F23 = 143,
+    F24 = 144,
+    F25 = 145,
+    PrintScreen = 148,
+    ScrollLock = 149,
+    Pause = 150,
+}
+
+fn ghostty_key_action(action: VtKeyAction) -> c_int {
+    match action {
+        VtKeyAction::Release => 0,
+        VtKeyAction::Press => 1,
+        VtKeyAction::Repeat => 2,
+    }
+}
+
+fn ghostty_modifiers(modifiers: VtKeyModifiers) -> u16 {
+    (u16::from(modifiers.shift) * GHOSTTY_MODS_SHIFT)
+        | (u16::from(modifiers.control) * GHOSTTY_MODS_CTRL)
+        | (u16::from(modifiers.alt) * GHOSTTY_MODS_ALT)
+        | (u16::from(modifiers.platform) * GHOSTTY_MODS_SUPER)
+}
+
+/// Map only key names whose physical identity is unambiguous in GPUI's
+/// logical event model. Printable keys intentionally remain UNIDENTIFIED:
+/// treating a layout-normalized `"a"` as the physical KeyA position would
+/// corrupt Kitty alternate-key reporting on non-US layouts.
+fn ghostty_key(key: &str) -> c_int {
+    (match key {
+        "alt" | "alt-left" => GhosttyKey::AltLeft,
+        "alt-right" => GhosttyKey::AltRight,
+        "backspace" => GhosttyKey::Backspace,
+        "capslock" | "caps-lock" => GhosttyKey::CapsLock,
+        "context-menu" => GhosttyKey::ContextMenu,
+        "control" | "ctrl" | "control-left" => GhosttyKey::ControlLeft,
+        "control-right" => GhosttyKey::ControlRight,
+        "enter" | "return" => GhosttyKey::Enter,
+        "meta" | "super" | "win" | "meta-left" => GhosttyKey::MetaLeft,
+        "meta-right" => GhosttyKey::MetaRight,
+        "shift" | "shift-left" => GhosttyKey::ShiftLeft,
+        "shift-right" => GhosttyKey::ShiftRight,
+        "space" => GhosttyKey::Space,
+        "tab" => GhosttyKey::Tab,
+        "delete" => GhosttyKey::Delete,
+        "end" => GhosttyKey::End,
+        "help" => GhosttyKey::Help,
+        "home" => GhosttyKey::Home,
+        "insert" => GhosttyKey::Insert,
+        "pagedown" | "page-down" => GhosttyKey::PageDown,
+        "pageup" | "page-up" => GhosttyKey::PageUp,
+        "down" | "arrow-down" => GhosttyKey::ArrowDown,
+        "left" | "arrow-left" => GhosttyKey::ArrowLeft,
+        "right" | "arrow-right" => GhosttyKey::ArrowRight,
+        "up" | "arrow-up" => GhosttyKey::ArrowUp,
+        "escape" => GhosttyKey::Escape,
+        "f1" => GhosttyKey::F1,
+        "f2" => GhosttyKey::F2,
+        "f3" => GhosttyKey::F3,
+        "f4" => GhosttyKey::F4,
+        "f5" => GhosttyKey::F5,
+        "f6" => GhosttyKey::F6,
+        "f7" => GhosttyKey::F7,
+        "f8" => GhosttyKey::F8,
+        "f9" => GhosttyKey::F9,
+        "f10" => GhosttyKey::F10,
+        "f11" => GhosttyKey::F11,
+        "f12" => GhosttyKey::F12,
+        "f13" => GhosttyKey::F13,
+        "f14" => GhosttyKey::F14,
+        "f15" => GhosttyKey::F15,
+        "f16" => GhosttyKey::F16,
+        "f17" => GhosttyKey::F17,
+        "f18" => GhosttyKey::F18,
+        "f19" => GhosttyKey::F19,
+        "f20" => GhosttyKey::F20,
+        "f21" => GhosttyKey::F21,
+        "f22" => GhosttyKey::F22,
+        "f23" => GhosttyKey::F23,
+        "f24" => GhosttyKey::F24,
+        "f25" => GhosttyKey::F25,
+        "printscreen" | "print-screen" => GhosttyKey::PrintScreen,
+        "scrolllock" | "scroll-lock" => GhosttyKey::ScrollLock,
+        "pause" => GhosttyKey::Pause,
+        _ => GhosttyKey::Unidentified,
+    }) as c_int
+}
+
+/// Whether Con's GPUI bridge can identify this logical name as a physical
+/// functional key without guessing a keyboard layout or key location.
+pub fn is_supported_functional_key(key: &str) -> bool {
+    ghostty_key(key) != GhosttyKey::Unidentified as c_int
+}
 
 fn default_device_attributes() -> GhosttyDeviceAttributes {
     let mut features = [0_u16; 64];
@@ -929,6 +1155,43 @@ impl VtScreen {
             );
         }
 
+        let mut key_encoder: GhosttyKeyEncoder = std::ptr::null_mut();
+        let rc = unsafe { ghostty_key_encoder_new(std::ptr::null(), &mut key_encoder) };
+        if rc != GHOSTTY_SUCCESS || key_encoder.is_null() {
+            unsafe {
+                if !row_cells.is_null() {
+                    ghostty_render_state_row_cells_free(row_cells);
+                }
+                if !row_iter.is_null() {
+                    ghostty_render_state_row_iterator_free(row_iter);
+                }
+                if !render_state.is_null() {
+                    ghostty_render_state_free(render_state);
+                }
+                ghostty_terminal_free(terminal);
+            }
+            anyhow::bail!("ghostty_key_encoder_new failed: rc={rc}");
+        }
+
+        let mut key_event: GhosttyKeyEvent = std::ptr::null_mut();
+        let rc = unsafe { ghostty_key_event_new(std::ptr::null(), &mut key_event) };
+        if rc != GHOSTTY_SUCCESS || key_event.is_null() {
+            unsafe {
+                ghostty_key_encoder_free(key_encoder);
+                if !row_cells.is_null() {
+                    ghostty_render_state_row_cells_free(row_cells);
+                }
+                if !row_iter.is_null() {
+                    ghostty_render_state_row_iterator_free(row_iter);
+                }
+                if !render_state.is_null() {
+                    ghostty_render_state_free(render_state);
+                }
+                ghostty_terminal_free(terminal);
+            }
+            anyhow::bail!("ghostty_key_event_new failed: rc={rc}");
+        }
+
         if let Some(theme) = theme {
             unsafe { apply_theme_to_terminal(terminal, theme) };
         }
@@ -939,6 +1202,8 @@ impl VtScreen {
                 render_state,
                 row_iter,
                 row_cells,
+                key_encoder,
+                key_event,
                 callback_state,
                 cols,
                 rows,
@@ -983,6 +1248,112 @@ impl VtScreen {
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
         inner.generation = inner.generation.wrapping_add(1);
+    }
+
+    /// Encode one platform key event against the terminal's current modes
+    /// and synchronously write the resulting bytes through WRITE_PTY.
+    ///
+    /// The mode snapshot, reusable encoder/event, and terminal are all
+    /// protected by one mutex so DECCKM/modifyOtherKeys/Kitty state cannot
+    /// change between parsing output and encoding the next key.
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> anyhow::Result<VtKeySend> {
+        let inner = self.inner.lock();
+        let Some(callback_state) = inner.callback_state.as_ref() else {
+            anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
+        };
+        let write_pty = callback_state.write_pty.clone();
+
+        let mut kitty_flags = 0_u8;
+        let kitty_flags_rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::KittyKeyboardFlags,
+                &mut kitty_flags as *mut _ as *mut c_void,
+            )
+        };
+        if kitty_flags_rc != GHOSTTY_SUCCESS {
+            kitty_flags = 0;
+        }
+
+        unsafe {
+            ghostty_key_encoder_setopt_from_terminal(inner.key_encoder, inner.terminal);
+            ghostty_key_event_set_action(inner.key_event, ghostty_key_action(event.action));
+            ghostty_key_event_set_key(inner.key_event, ghostty_key(event.key));
+            ghostty_key_event_set_mods(inner.key_event, ghostty_modifiers(event.modifiers));
+            ghostty_key_event_set_consumed_mods(
+                inner.key_event,
+                ghostty_modifiers(event.consumed_modifiers),
+            );
+            ghostty_key_event_set_composing(inner.key_event, false);
+            ghostty_key_event_set_utf8(
+                inner.key_event,
+                if event.text.is_empty() {
+                    std::ptr::null()
+                } else {
+                    event.text.as_ptr().cast()
+                },
+                event.text.len(),
+            );
+            ghostty_key_event_set_unshifted_codepoint(
+                inner.key_event,
+                event.unshifted_codepoint.map_or(0, u32::from),
+            );
+        }
+
+        let mut inline = [0_u8; 128];
+        let mut len = 0_usize;
+        let mut rc = unsafe {
+            ghostty_key_encoder_encode(
+                inner.key_encoder,
+                inner.key_event,
+                inline.as_mut_ptr().cast(),
+                inline.len(),
+                &mut len,
+            )
+        };
+
+        let mut overflow = Vec::new();
+        let bytes = if rc == GHOSTTY_OUT_OF_SPACE {
+            overflow.resize(len, 0);
+            rc = unsafe {
+                ghostty_key_encoder_encode(
+                    inner.key_encoder,
+                    inner.key_event,
+                    overflow.as_mut_ptr().cast(),
+                    overflow.len(),
+                    &mut len,
+                )
+            };
+            if rc != GHOSTTY_SUCCESS {
+                anyhow::bail!("ghostty_key_encoder_encode retry failed: rc={rc}");
+            }
+            if len > overflow.len() {
+                anyhow::bail!("ghostty key encoder exceeded its requested output size");
+            }
+            &overflow[..len]
+        } else {
+            if rc != GHOSTTY_SUCCESS {
+                anyhow::bail!("ghostty_key_encoder_encode failed: rc={rc}");
+            }
+            if len > inline.len() {
+                anyhow::bail!("ghostty key encoder returned an invalid output size");
+            }
+            &inline[..len]
+        };
+
+        // PTY writes may block. Keep the encoder and terminal mode snapshot
+        // serialized above, but release the VT mutex before entering host I/O
+        // so parser feeds and renderer snapshots cannot be stalled behind it.
+        drop(inner);
+        if !bytes.is_empty() {
+            write_pty(bytes)
+                .map_err(|err| anyhow::anyhow!("failed to write encoded key: {err}"))?;
+        }
+
+        Ok(VtKeySend {
+            wrote: !bytes.is_empty(),
+            report_releases: kitty_flags & GHOSTTY_KITTY_KEY_REPORT_EVENTS != 0,
+        })
     }
 
     pub fn clear_screen_and_scrollback(&self) {
@@ -1512,7 +1883,12 @@ unsafe extern "C" fn vt_write_pty_callback(
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-    (state.write_pty)(bytes);
+    if let Err(err) = (state.write_pty)(bytes) {
+        // The libghostty callback ABI cannot return an I/O error to the
+        // parser. Keep terminal-generated replies best-effort, while direct
+        // key encoding propagates the same callback error to its caller.
+        log::debug!("vt WRITE_PTY callback failed: {err}");
+    }
 }
 
 unsafe extern "C" fn vt_enquiry_callback(
@@ -1776,8 +2152,17 @@ impl Drop for VtScreen {
     fn drop(&mut self) {
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
-            // Free in reverse-creation order: cells, iter, state, terminal.
+            // Free in reverse-creation order: key event/encoder, render
+            // helpers, then terminal.
             // SAFETY: unique owner via Arc::get_mut.
+            if !inner.key_event.is_null() {
+                unsafe { ghostty_key_event_free(inner.key_event) };
+                inner.key_event = std::ptr::null_mut();
+            }
+            if !inner.key_encoder.is_null() {
+                unsafe { ghostty_key_encoder_free(inner.key_encoder) };
+                inner.key_encoder = std::ptr::null_mut();
+            }
             if !inner.row_cells.is_null() {
                 unsafe { ghostty_render_state_row_cells_free(inner.row_cells) };
                 inner.row_cells = std::ptr::null_mut();
@@ -1843,6 +2228,248 @@ mod tests {
             types["GhosttyTerminalData"]["values"]["MODE"].as_i64(),
             Some(GhosttyTerminalData::Mode as i64)
         );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["KITTY_KEYBOARD_FLAGS"].as_i64(),
+            Some(GhosttyTerminalData::KittyKeyboardFlags as i64)
+        );
+        assert_eq!(
+            types["GhosttyKittyKeyFlags"]["size"].as_u64(),
+            Some(std::mem::size_of::<u8>() as u64)
+        );
+        assert_eq!(
+            types["GhosttyKeyAction"]["values"]["RELEASE"].as_i64(),
+            Some(ghostty_key_action(VtKeyAction::Release) as i64)
+        );
+        assert_eq!(
+            types["GhosttyKeyAction"]["values"]["PRESS"].as_i64(),
+            Some(ghostty_key_action(VtKeyAction::Press) as i64)
+        );
+        assert_eq!(
+            types["GhosttyKeyAction"]["values"]["REPEAT"].as_i64(),
+            Some(ghostty_key_action(VtKeyAction::Repeat) as i64)
+        );
+
+        let keys = &types["GhosttyKey"]["values"];
+        for (name, key) in [
+            ("UNIDENTIFIED", GhosttyKey::Unidentified),
+            ("ALT_LEFT", GhosttyKey::AltLeft),
+            ("ALT_RIGHT", GhosttyKey::AltRight),
+            ("BACKSPACE", GhosttyKey::Backspace),
+            ("CAPS_LOCK", GhosttyKey::CapsLock),
+            ("CONTEXT_MENU", GhosttyKey::ContextMenu),
+            ("CONTROL_LEFT", GhosttyKey::ControlLeft),
+            ("CONTROL_RIGHT", GhosttyKey::ControlRight),
+            ("ENTER", GhosttyKey::Enter),
+            ("META_LEFT", GhosttyKey::MetaLeft),
+            ("META_RIGHT", GhosttyKey::MetaRight),
+            ("SHIFT_LEFT", GhosttyKey::ShiftLeft),
+            ("SHIFT_RIGHT", GhosttyKey::ShiftRight),
+            ("SPACE", GhosttyKey::Space),
+            ("TAB", GhosttyKey::Tab),
+            ("DELETE", GhosttyKey::Delete),
+            ("END", GhosttyKey::End),
+            ("HELP", GhosttyKey::Help),
+            ("HOME", GhosttyKey::Home),
+            ("INSERT", GhosttyKey::Insert),
+            ("PAGE_DOWN", GhosttyKey::PageDown),
+            ("PAGE_UP", GhosttyKey::PageUp),
+            ("ARROW_DOWN", GhosttyKey::ArrowDown),
+            ("ARROW_LEFT", GhosttyKey::ArrowLeft),
+            ("ARROW_RIGHT", GhosttyKey::ArrowRight),
+            ("ARROW_UP", GhosttyKey::ArrowUp),
+            ("ESCAPE", GhosttyKey::Escape),
+            ("F1", GhosttyKey::F1),
+            ("F2", GhosttyKey::F2),
+            ("F3", GhosttyKey::F3),
+            ("F4", GhosttyKey::F4),
+            ("F5", GhosttyKey::F5),
+            ("F6", GhosttyKey::F6),
+            ("F7", GhosttyKey::F7),
+            ("F8", GhosttyKey::F8),
+            ("F9", GhosttyKey::F9),
+            ("F10", GhosttyKey::F10),
+            ("F11", GhosttyKey::F11),
+            ("F12", GhosttyKey::F12),
+            ("F13", GhosttyKey::F13),
+            ("F14", GhosttyKey::F14),
+            ("F15", GhosttyKey::F15),
+            ("F16", GhosttyKey::F16),
+            ("F17", GhosttyKey::F17),
+            ("F18", GhosttyKey::F18),
+            ("F19", GhosttyKey::F19),
+            ("F20", GhosttyKey::F20),
+            ("F21", GhosttyKey::F21),
+            ("F22", GhosttyKey::F22),
+            ("F23", GhosttyKey::F23),
+            ("F24", GhosttyKey::F24),
+            ("F25", GhosttyKey::F25),
+            ("PRINT_SCREEN", GhosttyKey::PrintScreen),
+            ("SCROLL_LOCK", GhosttyKey::ScrollLock),
+            ("PAUSE", GhosttyKey::Pause),
+        ] {
+            assert_eq!(keys[name].as_i64(), Some(key as i64), "GhosttyKey::{key:?}");
+        }
+    }
+
+    #[test]
+    fn key_encoder_tracks_legacy_terminal_modes() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+
+        let ctrl_c = VtKeyEvent {
+            key: "c",
+            text: "c",
+            unshifted_codepoint: Some('c'),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                control: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(screen.send_key(&ctrl_c).expect("encode Ctrl-C").wrote);
+        assert_eq!(output.lock().as_slice(), b"\x03");
+
+        output.lock().clear();
+        screen.feed(b"\x1b[?1h");
+        let up = VtKeyEvent {
+            key: "up",
+            text: "",
+            unshifted_codepoint: None,
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers::default(),
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(screen.send_key(&up).expect("encode DECCKM up").wrote);
+        assert_eq!(output.lock().as_slice(), b"\x1bOA");
+
+        output.lock().clear();
+        let alt_backspace = VtKeyEvent {
+            key: "backspace",
+            text: "",
+            unshifted_codepoint: None,
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                alt: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(
+            screen
+                .send_key(&alt_backspace)
+                .expect("encode Alt-Backspace")
+                .wrote
+        );
+        assert_eq!(output.lock().as_slice(), b"\x1b\x7f");
+
+        output.lock().clear();
+        let shift_tab = VtKeyEvent {
+            key: "tab",
+            text: "",
+            unshifted_codepoint: None,
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                shift: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(screen.send_key(&shift_tab).expect("encode Shift-Tab").wrote);
+        assert_eq!(output.lock().as_slice(), b"\x1b[Z");
+
+        output.lock().clear();
+        let mut space = VtKeyEvent {
+            key: "space",
+            text: " ",
+            unshifted_codepoint: Some(' '),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers::default(),
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(screen.send_key(&space).expect("encode Space").wrote);
+        assert_eq!(output.lock().as_slice(), b" ");
+
+        output.lock().clear();
+        space.modifiers.control = true;
+        assert!(screen.send_key(&space).expect("encode Ctrl-Space").wrote);
+        assert_eq!(output.lock().as_slice(), b"\x00");
+    }
+
+    #[test]
+    fn key_encoder_handles_kitty_press_repeat_and_release() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+        screen.feed(b"\x1b[>3u");
+
+        for (action, expected) in [
+            (VtKeyAction::Press, b"a".as_slice()),
+            (VtKeyAction::Repeat, b"a".as_slice()),
+            (VtKeyAction::Release, b"\x1b[97;1:3u".as_slice()),
+        ] {
+            output.lock().clear();
+            let event = VtKeyEvent {
+                key: "a",
+                text: "a",
+                unshifted_codepoint: Some('a'),
+                action,
+                modifiers: VtKeyModifiers::default(),
+                consumed_modifiers: VtKeyModifiers::default(),
+            };
+            let sent = screen.send_key(&event).expect("encode Kitty key event");
+            assert!(sent.wrote);
+            assert!(sent.report_releases);
+            assert_eq!(output.lock().as_slice(), expected);
+        }
+    }
+
+    #[test]
+    fn key_encoder_propagates_pty_write_failures() {
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(|_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "test PTY is closed",
+                ))
+            })),
+        )
+        .expect("create vt screen");
+        let event = VtKeyEvent {
+            key: "c",
+            text: "c",
+            unshifted_codepoint: Some('c'),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers::default(),
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+
+        let err = screen
+            .send_key(&event)
+            .expect_err("surface write must fail");
+        assert!(err.to_string().contains("test PTY is closed"));
     }
 
     #[test]

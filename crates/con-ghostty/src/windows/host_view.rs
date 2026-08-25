@@ -30,7 +30,7 @@ use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
-use super::vt::{ScreenSnapshot, VtScreen};
+use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeySend, VtScreen};
 
 use super::render::CellMetrics;
 
@@ -175,11 +175,9 @@ impl RenderSession {
                 renderer_config.theme.as_ref(),
                 Some(Arc::new(move |bytes| {
                     if !accept_vt_replies_in_callback.load(Ordering::Acquire) {
-                        return;
+                        return Ok(());
                     }
-                    if let Err(err) = vt_writer.write_all(bytes) {
-                        log::debug!("windows vt write_pty failed: {err}");
-                    }
+                    vt_writer.write_all(bytes)
                 })),
             )
             .context("VtScreen::new failed")?,
@@ -436,6 +434,15 @@ impl RenderSession {
             std::borrow::Cow::Borrowed(text.as_bytes())
         };
         let _ = self.conpty.write(&bytes);
+    }
+
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend> {
+        let sent = self.vt.send_key(event)?;
+        if sent.wrote {
+            self.scroll_viewport_to_bottom();
+            self.request_low_latency_after_next_generation();
+        }
+        Ok(sent)
     }
 
     /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste

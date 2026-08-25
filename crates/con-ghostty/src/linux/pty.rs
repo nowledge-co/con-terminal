@@ -10,7 +10,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
-use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
+use crate::vt::{ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -297,6 +297,15 @@ impl LinuxPtySession {
         Ok(())
     }
 
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend> {
+        let sent = self.shared.screen.send_key(event)?;
+        if sent.wrote {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(sent)
+    }
+
     pub fn clear_screen_and_scrollback(&self) {
         self.shared.screen.clear_screen_and_scrollback();
         self.mark_needs_render();
@@ -478,11 +487,7 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             theme_owned.as_ref(),
             Some({
                 let writer = writer.clone();
-                Arc::new(move |data: &[u8]| {
-                    if let Err(err) = writer.lock().write_all(data) {
-                        log::debug!("linux vt write_pty failed: {err:#}");
-                    }
-                })
+                Arc::new(move |data: &[u8]| writer.lock().write_all(data))
             }),
         )
         .context("failed to create linux vt screen")?,
@@ -639,15 +644,17 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             theme_owned.as_ref(),
             Some(Arc::new(move |data: &[u8]| {
                 if data.len() > MAX_BRIDGE_FRAME_BYTES {
-                    log::warn!("dropping oversized host PTY input frame");
-                    return;
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "host PTY input frame is too large",
+                    ));
                 }
                 let len = data.len() as u32;
                 let mut guard = writer_for_vt.lock();
-                let _ = guard.write_all(&[0x00]);
-                let _ = guard.write_all(&len.to_be_bytes());
-                let _ = guard.write_all(data);
-                let _ = guard.flush();
+                guard.write_all(&[0x00])?;
+                guard.write_all(&len.to_be_bytes())?;
+                guard.write_all(data)?;
+                guard.flush()
             })),
         )
         .context("failed to create linux vt screen")?,

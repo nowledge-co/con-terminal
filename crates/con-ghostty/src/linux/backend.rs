@@ -10,7 +10,7 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
-use crate::vt::ScreenSnapshot;
+use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeySend};
 
 #[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
@@ -328,6 +328,14 @@ impl LinuxGhosttyTerminal {
 
     pub fn send_text(&self, text: &str) {
         self.write_to_pty(text.as_bytes());
+    }
+
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(VtKeySend::default());
+        };
+        session.send_key(event).map_err(|err| err.to_string())
     }
 
     pub fn is_bracketed_paste(&self) -> bool {
