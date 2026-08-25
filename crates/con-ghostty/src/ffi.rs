@@ -142,6 +142,11 @@ pub struct ghostty_surface_config_s {
     pub context: ghostty_surface_context_e,
 }
 
+#[cfg(con_ghostty_embedded_initial_output)]
+const _: [(); 96] = [(); std::mem::size_of::<ghostty_surface_config_s>()];
+#[cfg(not(con_ghostty_embedded_initial_output))]
+const _: [(); 88] = [(); std::mem::size_of::<ghostty_surface_config_s>()];
+
 #[repr(C)]
 pub struct ghostty_env_var_s {
     pub key: *const c_char,
@@ -270,70 +275,74 @@ pub struct ghostty_action_resize_split_s {
 #[allow(clippy::upper_case_acronyms)]
 pub enum ghostty_action_tag_e {
     GHOSTTY_ACTION_QUIT = 0,
-    GHOSTTY_ACTION_NEW_WINDOW,
-    GHOSTTY_ACTION_NEW_TAB,
-    GHOSTTY_ACTION_CLOSE_TAB,
-    GHOSTTY_ACTION_NEW_SPLIT,
-    GHOSTTY_ACTION_CLOSE_ALL_WINDOWS,
-    GHOSTTY_ACTION_TOGGLE_MAXIMIZE,
-    GHOSTTY_ACTION_TOGGLE_FULLSCREEN,
-    GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW,
-    GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS,
-    GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
-    GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
-    GHOSTTY_ACTION_TOGGLE_VISIBILITY,
-    GHOSTTY_ACTION_TOGGLE_BACKGROUND_OPACITY,
-    GHOSTTY_ACTION_MOVE_TAB,
-    GHOSTTY_ACTION_GOTO_TAB,
-    GHOSTTY_ACTION_GOTO_SPLIT,
-    GHOSTTY_ACTION_GOTO_WINDOW,
-    GHOSTTY_ACTION_RESIZE_SPLIT,
-    GHOSTTY_ACTION_EQUALIZE_SPLITS,
-    GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM,
-    GHOSTTY_ACTION_PRESENT_TERMINAL,
-    GHOSTTY_ACTION_SIZE_LIMIT,
-    GHOSTTY_ACTION_RESET_WINDOW_SIZE,
-    GHOSTTY_ACTION_INITIAL_SIZE,
-    GHOSTTY_ACTION_CELL_SIZE,
-    GHOSTTY_ACTION_SCROLLBAR,
-    GHOSTTY_ACTION_RENDER,
-    GHOSTTY_ACTION_INSPECTOR,
-    GHOSTTY_ACTION_SHOW_GTK_INSPECTOR,
-    GHOSTTY_ACTION_RENDER_INSPECTOR,
-    GHOSTTY_ACTION_DESKTOP_NOTIFICATION,
-    GHOSTTY_ACTION_SET_TITLE,
-    GHOSTTY_ACTION_SET_TAB_TITLE,
-    GHOSTTY_ACTION_PROMPT_TITLE,
-    GHOSTTY_ACTION_PWD,
-    GHOSTTY_ACTION_MOUSE_SHAPE,
-    GHOSTTY_ACTION_MOUSE_VISIBILITY,
-    GHOSTTY_ACTION_MOUSE_OVER_LINK,
-    GHOSTTY_ACTION_RENDERER_HEALTH,
-    GHOSTTY_ACTION_OPEN_CONFIG,
-    GHOSTTY_ACTION_QUIT_TIMER,
-    GHOSTTY_ACTION_FLOAT_WINDOW,
-    GHOSTTY_ACTION_SECURE_INPUT,
-    GHOSTTY_ACTION_KEY_SEQUENCE,
-    GHOSTTY_ACTION_KEY_TABLE,
-    GHOSTTY_ACTION_COLOR_CHANGE,
-    GHOSTTY_ACTION_RELOAD_CONFIG,
-    GHOSTTY_ACTION_CONFIG_CHANGE,
-    GHOSTTY_ACTION_CLOSE_WINDOW,
-    GHOSTTY_ACTION_RING_BELL,
-    GHOSTTY_ACTION_UNDO,
-    GHOSTTY_ACTION_REDO,
-    GHOSTTY_ACTION_CHECK_FOR_UPDATES,
-    GHOSTTY_ACTION_OPEN_URL,
-    GHOSTTY_ACTION_SHOW_CHILD_EXITED,
-    GHOSTTY_ACTION_PROGRESS_REPORT,
-    GHOSTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD,
-    GHOSTTY_ACTION_COMMAND_FINISHED,
-    GHOSTTY_ACTION_START_SEARCH,
-    GHOSTTY_ACTION_END_SEARCH,
-    GHOSTTY_ACTION_SEARCH_TOTAL,
-    GHOSTTY_ACTION_SEARCH_SELECTED,
-    GHOSTTY_ACTION_READONLY,
-    GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
+    GHOSTTY_ACTION_NEW_WINDOW = 1,
+    GHOSTTY_ACTION_NEW_TAB = 2,
+    GHOSTTY_ACTION_CLOSE_TAB = 3,
+    GHOSTTY_ACTION_NEW_SPLIT = 4,
+    GHOSTTY_ACTION_CLOSE_ALL_WINDOWS = 5,
+    GHOSTTY_ACTION_TOGGLE_MAXIMIZE = 6,
+    GHOSTTY_ACTION_TOGGLE_FULLSCREEN = 7,
+    GHOSTTY_ACTION_TOGGLE_TAB_OVERVIEW = 8,
+    GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS = 9,
+    GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL = 10,
+    GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE = 11,
+    GHOSTTY_ACTION_TOGGLE_VISIBILITY = 12,
+    GHOSTTY_ACTION_TOGGLE_BACKGROUND_OPACITY = 13,
+    GHOSTTY_ACTION_MOVE_TAB = 14,
+    GHOSTTY_ACTION_GOTO_TAB = 15,
+    GHOSTTY_ACTION_GOTO_SPLIT = 16,
+    GHOSTTY_ACTION_GOTO_WINDOW = 17,
+    GHOSTTY_ACTION_RESIZE_SPLIT = 18,
+    GHOSTTY_ACTION_EQUALIZE_SPLITS = 19,
+    GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM = 20,
+    GHOSTTY_ACTION_PRESENT_TERMINAL = 21,
+    GHOSTTY_ACTION_SIZE_LIMIT = 22,
+    GHOSTTY_ACTION_RESET_WINDOW_SIZE = 23,
+    GHOSTTY_ACTION_INITIAL_SIZE = 24,
+    GHOSTTY_ACTION_CELL_SIZE = 25,
+    GHOSTTY_ACTION_SCROLLBAR = 26,
+    GHOSTTY_ACTION_RENDER = 27,
+    GHOSTTY_ACTION_INSPECTOR = 28,
+    GHOSTTY_ACTION_SHOW_GTK_INSPECTOR = 29,
+    GHOSTTY_ACTION_RENDER_INSPECTOR = 30,
+    GHOSTTY_ACTION_EXPORT_TERMINAL_IO = 31,
+    GHOSTTY_ACTION_DESKTOP_NOTIFICATION = 32,
+    GHOSTTY_ACTION_SET_TITLE = 33,
+    GHOSTTY_ACTION_SET_TAB_TITLE = 34,
+    GHOSTTY_ACTION_SET_WINDOW_TITLE = 35,
+    GHOSTTY_ACTION_PROMPT_TITLE = 36,
+    GHOSTTY_ACTION_PWD = 37,
+    GHOSTTY_ACTION_MOUSE_SHAPE = 38,
+    GHOSTTY_ACTION_MOUSE_VISIBILITY = 39,
+    GHOSTTY_ACTION_MOUSE_OVER_LINK = 40,
+    GHOSTTY_ACTION_RENDERER_HEALTH = 41,
+    GHOSTTY_ACTION_OPEN_CONFIG = 42,
+    GHOSTTY_ACTION_QUIT_TIMER = 43,
+    GHOSTTY_ACTION_FLOAT_WINDOW = 44,
+    GHOSTTY_ACTION_SECURE_INPUT = 45,
+    GHOSTTY_ACTION_KEY_SEQUENCE = 46,
+    GHOSTTY_ACTION_KEY_TABLE = 47,
+    GHOSTTY_ACTION_COLOR_CHANGE = 48,
+    GHOSTTY_ACTION_RELOAD_CONFIG = 49,
+    GHOSTTY_ACTION_CONFIG_CHANGE = 50,
+    GHOSTTY_ACTION_CLOSE_WINDOW = 51,
+    GHOSTTY_ACTION_RING_BELL = 52,
+    GHOSTTY_ACTION_SELECTION_CHANGED = 53,
+    GHOSTTY_ACTION_UNDO = 54,
+    GHOSTTY_ACTION_REDO = 55,
+    GHOSTTY_ACTION_CHECK_FOR_UPDATES = 56,
+    GHOSTTY_ACTION_OPEN_URL = 57,
+    GHOSTTY_ACTION_SHOW_CHILD_EXITED = 58,
+    GHOSTTY_ACTION_PROGRESS_REPORT = 59,
+    GHOSTTY_ACTION_SHOW_ON_SCREEN_KEYBOARD = 60,
+    GHOSTTY_ACTION_COMMAND_FINISHED = 61,
+    GHOSTTY_ACTION_START_SEARCH = 62,
+    GHOSTTY_ACTION_END_SEARCH = 63,
+    GHOSTTY_ACTION_SEARCH_TOTAL = 64,
+    GHOSTTY_ACTION_SEARCH_SELECTED = 65,
+    GHOSTTY_ACTION_READONLY = 66,
+    GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD = 67,
+    GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW = 68,
 }
 
 /// Action payload for DESKTOP_NOTIFICATION (OSC 9 and OSC 777).
@@ -384,6 +393,7 @@ pub enum ghostty_action_open_url_kind_e {
     GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN = 0,
     GHOSTTY_ACTION_OPEN_URL_KIND_TEXT = 1,
     GHOSTTY_ACTION_OPEN_URL_KIND_HTML = 2,
+    GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 = 3,
 }
 
 /// Action payload for OPEN_URL.
@@ -393,6 +403,15 @@ pub struct ghostty_action_open_url_s {
     pub kind: ghostty_action_open_url_kind_e,
     pub url: *const c_char,
     pub len: usize,
+}
+
+/// Action payload for SHOW_CHILD_EXITED.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_surface_message_childexited_s {
+    pub exit_code: u32,
+    /// Runtime in milliseconds. The pinned C header calls this `timetime_ms`.
+    pub runtime_ms: u64,
 }
 
 /// Action union — only relevant fields are accessed based on tag.
@@ -407,6 +426,7 @@ pub union ghostty_action_u {
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,
     pub open_url: ghostty_action_open_url_s,
+    pub child_exited: ghostty_surface_message_childexited_s,
 }
 
 #[repr(C)]
@@ -418,6 +438,7 @@ pub struct ghostty_action_s {
 // The action is passed by value to ghostty_runtime_action_cb, so these sizes
 // must exactly match ghostty.h at the pinned Ghostty revision.
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_desktop_notification_s>()];
+const _: [(); 16] = [(); std::mem::size_of::<ghostty_surface_message_childexited_s>()];
 const _: [(); 24] = [(); std::mem::size_of::<ghostty_action_u>()];
 const _: [(); 32] = [(); std::mem::size_of::<ghostty_action_s>()];
 
@@ -428,12 +449,34 @@ const _: [(); 32] = [(); std::mem::size_of::<ghostty_action_s>()];
 pub enum ghostty_clipboard_e {
     GHOSTTY_CLIPBOARD_STANDARD = 0,
     GHOSTTY_CLIPBOARD_SELECTION = 1,
+    GHOSTTY_CLIPBOARD_PRIMARY = 2,
 }
 
 #[repr(C)]
 pub struct ghostty_clipboard_content_s {
     pub mime: *const c_char,
     pub data: *const c_char,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct ghostty_clipboard_complete_s {
+    pub contents: *const ghostty_clipboard_content_s,
+    pub contents_len: usize,
+    pub available: *const *const c_char,
+    pub available_len: usize,
+    pub confirmed: bool,
+    pub remember: bool,
+}
+
+#[repr(C)]
+pub struct ghostty_clipboard_confirm_s {
+    pub contents: *const ghostty_clipboard_content_s,
+    pub contents_len: usize,
+    pub available: *const *const c_char,
+    pub available_len: usize,
+    pub name: *const c_char,
+    pub can_remember: bool,
 }
 
 #[repr(C)]
@@ -442,7 +485,22 @@ pub enum ghostty_clipboard_request_e {
     GHOSTTY_CLIPBOARD_REQUEST_PASTE = 0,
     GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ = 1,
     GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE = 2,
+    GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ = 3,
+    GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE = 4,
+    GHOSTTY_CLIPBOARD_REQUEST_LIST = 5,
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ghostty_clipboard_read_result_e {
+    GHOSTTY_CLIPBOARD_READ_STARTED = 0,
+    GHOSTTY_CLIPBOARD_READ_UNAVAILABLE = 1,
+    GHOSTTY_CLIPBOARD_READ_UNSUPPORTED = 2,
+}
+
+const _: [(); 24] = [(); std::mem::size_of::<ghostty_clipboard_content_s>()];
+const _: [(); 40] = [(); std::mem::size_of::<ghostty_clipboard_complete_s>()];
+const _: [(); 48] = [(); std::mem::size_of::<ghostty_clipboard_confirm_s>()];
 
 // ── Runtime config (callbacks for embedded apprt) ───────────
 
@@ -461,13 +519,16 @@ pub type ghostty_runtime_read_clipboard_cb = Option<
         userdata: *mut c_void,
         clipboard: ghostty_clipboard_e,
         request: *mut c_void,
-    ) -> bool,
+        mime_types: *const *const c_char,
+        mime_types_len: usize,
+        needs_listing: bool,
+    ) -> ghostty_clipboard_read_result_e,
 >;
 
 pub type ghostty_runtime_confirm_read_clipboard_cb = Option<
     unsafe extern "C" fn(
         userdata: *mut c_void,
-        text: *const c_char,
+        confirm: *const ghostty_clipboard_confirm_s,
         request: *mut c_void,
         request_type: ghostty_clipboard_request_e,
     ),
@@ -497,6 +558,8 @@ pub struct ghostty_runtime_config_s {
     pub write_clipboard_cb: ghostty_runtime_write_clipboard_cb,
     pub close_surface_cb: ghostty_runtime_close_surface_cb,
 }
+
+const _: [(); 64] = [(); std::mem::size_of::<ghostty_runtime_config_s>()];
 
 // ── C API functions ─────────────────────────────────────────
 
@@ -626,10 +689,10 @@ unsafe extern "C" {
     // Clipboard
     pub fn ghostty_surface_complete_clipboard_request(
         surface: ghostty_surface_t,
-        text: *const c_char,
+        complete: *const ghostty_clipboard_complete_s,
         request: *mut c_void,
-        confirmed: bool,
     );
+    pub fn ghostty_surface_deny_clipboard_request(surface: ghostty_surface_t, request: *mut c_void);
 
     // macOS-specific
     #[cfg(target_os = "macos")]

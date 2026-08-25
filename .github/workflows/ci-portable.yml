@@ -7,11 +7,11 @@ name: ci-portable
 #   - con-cli   (control client, Unix socket + named pipe transport)
 #   - con-agent (tokio, rig)
 #   - con-terminal (theme helpers)
-#   - con-ghostty  (stub backend on non-macOS, libghostty wrapper on macOS)
-#   - con          (the UI binary — stub terminal view on non-macOS)
+#   - con-ghostty  (real libghostty-vt backend on Windows and Linux)
+#   - con          (the cross-platform UI binary)
 #
-# Jobs run `cargo check` (not `cargo build`) to keep CI fast; they also
-# run the test suite for crates that can run hermetic tests on the host.
+# Jobs run both checks and linked tests so libghostty-vt ABI or symbol drift
+# cannot hide behind Cargo's non-linking `check` path.
 
 on:
   push:
@@ -58,14 +58,9 @@ jobs:
     # the ancestor directory is still `con`. We sidestep the whole tree
     # by cloning into C:\src\repo outside $GITHUB_WORKSPACE and pointing
     # every subsequent step there.
-    #
-    # CON_SKIP_GHOSTTY_VT tells con-ghostty's build.rs to skip the
-    # zig-driven libghostty-vt build. `cargo check` doesn't link, so
-    # unresolved symbols don't matter; Zig 0.13+ isn't preinstalled on
-    # windows-latest images so trying to build would panic.
     env:
-      CON_SKIP_GHOSTTY_VT: "1"
       CON_CHECKOUT_DIR: C:\src\repo
+      ZIG_GLOBAL_CACHE_DIR: C:\zc
     defaults:
       run:
         working-directory: C:\src\repo
@@ -88,6 +83,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: C:\src\repo
+      - name: Prepare short-path Zig cache
+        working-directory: C:\
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path $env:ZIG_GLOBAL_CACHE_DIR | Out-Null
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
       - name: PowerShell installer parse check
         shell: pwsh
         run: |
@@ -104,14 +107,14 @@ jobs:
           }
       - name: cargo check — portable crates
         run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
-      - name: cargo check — UI binary (stub terminal backend)
+      - name: cargo check — UI binary
         # The default `bin-con` target compiles to `con.exe`, which Win32
         # file APIs reject because CON is a reserved device name. The
         # `bin-con-app` feature routes the same `main.rs` to `con-app.exe`
         # instead — mirrors what `cargo wbuild` / `cargo wrun` do locally.
         run: cargo check -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
-        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal
+        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
 
   linux:
     name: check (ubuntu-latest)
@@ -133,11 +136,11 @@ jobs:
           done
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         shell: bash
         run: |
           set -euo pipefail
-          ZIG_VERSION="0.15.2"
+          ZIG_VERSION="0.16.0"
           ZIG_ARCH="x86_64"
           ZIG_DIR="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
           ZIG_TARBALL="${ZIG_DIR}.tar.xz"
@@ -169,7 +172,7 @@ jobs:
             libfreetype-dev libfontconfig1-dev
       - name: cargo check — portable crates
         run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
-      - name: cargo check — UI binary (stub terminal backend)
+      - name: cargo check — UI binary
         run: cargo check -p con
       - name: cargo test — portable crates
-        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal
+        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty

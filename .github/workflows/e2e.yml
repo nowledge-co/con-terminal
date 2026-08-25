@@ -37,9 +37,7 @@ env:
 jobs:
   e2e:
     name: e2e (macos-15)
-    # Keep e2e on the same stable macOS generation as release builds. The
-    # macOS 26 preview image behind macos-latest currently breaks the Zig 0.15.2
-    # libghostty build before Rust code is compiled.
+    # Keep e2e on the same stable macOS generation as release builds.
     runs-on: macos-15
     timeout-minutes: 30
 
@@ -50,11 +48,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         shell: bash
         run: |
           set -euo pipefail
-          ZIG_VERSION="0.15.2"
+          ZIG_VERSION="0.16.0"
           ZIG_ARCH="aarch64"
           # Use x86_64 on Intel runners
           if [[ "$(uname -m)" == "x86_64" ]]; then

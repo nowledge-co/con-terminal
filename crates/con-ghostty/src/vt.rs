@@ -1,10 +1,10 @@
 //! Shared `libghostty-vt` FFI bindings + render-state snapshot.
 //!
 //! Rewritten to match the **actual** upstream API at GHOSTTY_REV
-//! `ca7516bea60190ee2e9a4f9182b61d318d107c6e` — `include/ghostty/vt/*.h`.
+//! `8867c37c55b578b9eb4cfaba41cb9023e557176d` — `include/ghostty/vt/*.h`.
 //! Key lifecycle:
 //!
-//! 1. `terminal = ghostty_terminal_new(NULL_alloc, opts)`
+//! 1. `terminal = ghostty_terminal_new(NULL_alloc, cols, rows)`
 //! 2. `state    = ghostty_render_state_new(NULL_alloc)`
 //! 3. `iter     = ghostty_render_state_row_iterator_new(NULL_alloc)`
 //! 4. `cells    = ghostty_render_state_row_cells_new(NULL_alloc)`
@@ -28,7 +28,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
@@ -81,6 +81,8 @@ pub enum GhosttyTerminalData {
     Scrollbar = 9,
     Title = 12,
     Pwd = 13,
+    ScrollbackMaxLines = 35,
+    Mode = 37,
 }
 
 /// `GhosttyTerminalScrollbar` — current viewport position in the full
@@ -147,6 +149,7 @@ pub enum GhosttyTerminalOption {
     ColorCursor = 13,
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
+    ScrollbackMaxLines = 28,
 }
 
 /// `GHOSTTY_RENDER_STATE_DATA_*` keys for `ghostty_render_state_get`.
@@ -236,6 +239,16 @@ pub type GhosttyCell = u64;
 /// (1 = ANSI, 0 = DEC private). Constructed via [`ghostty_mode`].
 pub type GhosttyMode = u16;
 
+/// Frozen-layout payload used with terminal mode get/set operations.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyTerminalModeConfig {
+    pub mode: GhosttyMode,
+    pub value: bool,
+}
+
+const _: [(); 4] = [(); std::mem::size_of::<GhosttyTerminalModeConfig>()];
+
 /// Pack a mode value + ANSI flag into a [`GhosttyMode`]. Mirrors the
 /// inline `ghostty_mode_new` helper the C header ships.
 #[inline]
@@ -269,14 +282,6 @@ const GHOSTTY_DA_FEATURE_RECTANGULAR_EDITING: u16 = 28;
 const GHOSTTY_DA_FEATURE_CLIPBOARD: u16 = 52;
 const GHOSTTY_DA_DEVICE_TYPE_VT220: u16 = 1;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct GhosttyTerminalOptions {
-    pub cols: u16,
-    pub rows: u16,
-    pub max_scrollback: usize,
-}
-
 /// `GhosttyColorRgb` — R,G,B bytes per upstream `color.h`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -291,13 +296,6 @@ pub struct GhosttyColorRgb {
 pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
-}
-
-fn ghostty_string_from_bytes(bytes: &[u8]) -> GhosttyString {
-    GhosttyString {
-        ptr: bytes.as_ptr(),
-        len: bytes.len(),
-    }
 }
 
 #[repr(C)]
@@ -429,11 +427,15 @@ pub const ATTR_INVERSE: u8 = 1 << 4;
 // ── Raw FFI ────────────────────────────────────────────────────────────
 
 unsafe extern "C" {
+    // ABI manifest (`types.h`).
+    pub fn ghostty_type_json() -> *const c_char;
+
     // Terminal (`terminal.h`)
     pub fn ghostty_terminal_new(
         allocator: *const GhosttyAllocator,
         out_terminal: *mut GhosttyTerminal,
-        options: GhosttyTerminalOptions,
+        cols: u16,
+        rows: u16,
     ) -> GhosttyResult;
     pub fn ghostty_terminal_free(terminal: GhosttyTerminal);
     pub fn ghostty_terminal_resize(
@@ -464,14 +466,6 @@ unsafe extern "C" {
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
         out: *mut c_void,
-    ) -> GhosttyResult;
-
-    /// Query whether a terminal mode is currently set. `out_value` is a
-    /// `bool` (1 byte). Returns `GHOSTTY_SUCCESS` on success.
-    pub fn ghostty_terminal_mode_get(
-        terminal: GhosttyTerminal,
-        mode: GhosttyMode,
-        out_value: *mut bool,
     ) -> GhosttyResult;
 
     // Render state (`render.h`)
@@ -683,23 +677,9 @@ struct VtInner {
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
-    osc_state: OscParseState,
-    osc_command: Vec<u8>,
-    osc7_buffer: Vec<u8>,
 }
 
 unsafe impl Send for VtInner {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OscParseState {
-    Ground,
-    Esc,
-    Command,
-    Ignore,
-    IgnoreEsc,
-    Osc7,
-    Osc7Esc,
-}
 
 fn default_device_attributes() -> GhosttyDeviceAttributes {
     let mut features = [0_u16; 64];
@@ -721,101 +701,6 @@ fn default_device_attributes() -> GhosttyDeviceAttributes {
         },
         tertiary: GhosttyDeviceAttributesTertiary { unit_id: 0 },
     }
-}
-
-fn ingest_osc7_cwd(inner: &mut VtInner, bytes: &[u8]) {
-    for &byte in bytes {
-        match inner.osc_state {
-            OscParseState::Ground => {
-                if byte == 0x1b {
-                    inner.osc_state = OscParseState::Esc;
-                }
-            }
-            OscParseState::Esc => {
-                if byte == b']' {
-                    inner.osc_command.clear();
-                    inner.osc_state = OscParseState::Command;
-                } else if byte != 0x1b {
-                    inner.osc_state = OscParseState::Ground;
-                }
-            }
-            OscParseState::Command => match byte {
-                b';' => {
-                    if inner.osc_command.as_slice() == b"7" {
-                        inner.osc7_buffer.clear();
-                        inner.osc_state = OscParseState::Osc7;
-                    } else {
-                        inner.osc_state = OscParseState::Ignore;
-                    }
-                }
-                0x07 => inner.osc_state = OscParseState::Ground,
-                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
-                _ if inner.osc_command.len() < 16 => inner.osc_command.push(byte),
-                _ => inner.osc_state = OscParseState::Ignore,
-            },
-            OscParseState::Ignore => match byte {
-                0x07 => inner.osc_state = OscParseState::Ground,
-                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
-                _ => {}
-            },
-            OscParseState::IgnoreEsc => {
-                inner.osc_state = OscParseState::Ground;
-                if byte == 0x1b {
-                    inner.osc_state = OscParseState::Esc;
-                } else if byte != b'\\' {
-                    // The ESC did not terminate the OSC. Resume ignoring
-                    // until the real BEL/ST terminator.
-                    inner.osc_state = OscParseState::Ignore;
-                }
-            }
-            OscParseState::Osc7 => match byte {
-                0x07 => finish_osc7_cwd(inner),
-                0x1b => inner.osc_state = OscParseState::Osc7Esc,
-                _ if inner.osc7_buffer.len() < 4096 => inner.osc7_buffer.push(byte),
-                _ => {
-                    inner.osc7_buffer.clear();
-                    inner.osc_state = OscParseState::Ignore;
-                }
-            },
-            OscParseState::Osc7Esc => {
-                if byte == b'\\' {
-                    finish_osc7_cwd(inner);
-                } else {
-                    if inner.osc7_buffer.len() + 2 <= 4096 {
-                        inner.osc7_buffer.push(0x1b);
-                        inner.osc7_buffer.push(byte);
-                        inner.osc_state = OscParseState::Osc7;
-                    } else {
-                        inner.osc7_buffer.clear();
-                        inner.osc_state = OscParseState::Ignore;
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn finish_osc7_cwd(inner: &mut VtInner) {
-    if let Ok(url) = std::str::from_utf8(&inner.osc7_buffer)
-        && let Some(cwd) = parse_osc7_cwd(url)
-    {
-        let pwd = ghostty_string_from_bytes(cwd.as_bytes());
-        // SAFETY: `ghostty_terminal_set(PWD)` copies the string during
-        // the call; `cwd` stays alive until the call returns.
-        let rc = unsafe {
-            ghostty_terminal_set(
-                inner.terminal,
-                GhosttyTerminalOption::Pwd,
-                &pwd as *const _ as *const c_void,
-            )
-        };
-        if rc != 0 {
-            log::warn!("ghostty_terminal_set(Pwd) failed: rc={rc}");
-        }
-    }
-
-    inner.osc7_buffer.clear();
-    inner.osc_state = OscParseState::Ground;
 }
 
 fn parse_osc7_cwd(url: &str) -> Option<String> {
@@ -910,15 +795,23 @@ impl VtScreen {
         write_pty: Option<PtyWriteCallback>,
     ) -> anyhow::Result<Self> {
         let mut terminal: GhosttyTerminal = std::ptr::null_mut();
-        let options = GhosttyTerminalOptions {
-            cols,
-            rows,
-            max_scrollback: 10_000,
-        };
         // SAFETY: out param; allocator NULL = upstream default.
-        let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, options) };
+        let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, cols, rows) };
         if rc != 0 || terminal.is_null() {
             anyhow::bail!("ghostty_terminal_new failed: rc={rc}");
+        }
+
+        let max_scrollback_lines = 10_000_usize;
+        let rc = unsafe {
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ScrollbackMaxLines,
+                &max_scrollback_lines as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(SCROLLBACK_MAX_LINES) failed: rc={rc}");
         }
 
         let mut callback_state = write_pty.map(|write_pty| {
@@ -1055,9 +948,6 @@ impl VtScreen {
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
-                osc_state: OscParseState::Ground,
-                osc_command: Vec::with_capacity(8),
-                osc7_buffer: Vec::with_capacity(256),
             })),
         })
     }
@@ -1090,7 +980,6 @@ impl VtScreen {
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
         let mut inner = self.inner.lock();
-        ingest_osc7_cwd(&mut inner, bytes);
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
         inner.generation = inner.generation.wrapping_add(1);
@@ -1511,7 +1400,15 @@ impl VtScreen {
         }
 
         let bytes = unsafe { std::slice::from_raw_parts(pwd.ptr, pwd.len) };
-        String::from_utf8(bytes.to_vec()).ok()
+        let pwd = std::str::from_utf8(bytes).ok()?;
+        if pwd.is_empty() {
+            return None;
+        }
+        if pwd.starts_with("file://") {
+            parse_osc7_cwd(pwd)
+        } else {
+            Some(pwd.to_string())
+        }
     }
 
     /// Returns `true` while the alternate screen buffer is active.
@@ -1590,10 +1487,16 @@ impl VtScreen {
         if inner.terminal.is_null() {
             return false;
         }
-        let mut on: bool = false;
-        // SAFETY: terminal valid; `on` is a 1-byte C `_Bool`.
-        let rc = unsafe { ghostty_terminal_mode_get(inner.terminal, mode, &mut on) };
-        rc == 0 && on
+        let mut config = GhosttyTerminalModeConfig { mode, value: false };
+        // SAFETY: terminal valid; `config` has the frozen C layout.
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::Mode,
+                &mut config as *mut _ as *mut c_void,
+            )
+        };
+        rc == 0 && config.value
     }
 }
 
@@ -1898,6 +1801,77 @@ impl Drop for VtScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
+
+    #[test]
+    fn libghostty_vt_manifest_matches_handwritten_ffi() {
+        let manifest = unsafe {
+            let ptr = ghostty_type_json();
+            assert!(!ptr.is_null(), "ghostty_type_json returned null");
+            CStr::from_ptr(ptr).to_str().expect("manifest is utf-8")
+        };
+        let manifest: serde_json::Value =
+            serde_json::from_str(manifest).expect("manifest is valid json");
+        let types = &manifest["types"];
+
+        assert_eq!(manifest["schema"].as_u64(), Some(1));
+        assert_eq!(
+            types["GhosttyCell"]["size"].as_u64(),
+            Some(std::mem::size_of::<GhosttyCell>() as u64)
+        );
+        assert_eq!(
+            types["GhosttyStyle"]["size"].as_u64(),
+            Some(std::mem::size_of::<GhosttyStyle>() as u64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalModeConfig"]["size"].as_u64(),
+            Some(std::mem::size_of::<GhosttyTerminalModeConfig>() as u64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalModeConfig"]["fields"]["mode"]["offset"].as_u64(),
+            Some(0)
+        );
+        assert_eq!(
+            types["GhosttyTerminalModeConfig"]["fields"]["value"]["offset"].as_u64(),
+            Some(2)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["SCROLLBACK_MAX_LINES"].as_i64(),
+            Some(GhosttyTerminalOption::ScrollbackMaxLines as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["MODE"].as_i64(),
+            Some(GhosttyTerminalData::Mode as i64)
+        );
+    }
+
+    #[test]
+    fn vt_screen_configures_line_scrollback_limit() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+        let inner = screen.inner.lock();
+        let mut max_lines = 0_usize;
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::ScrollbackMaxLines,
+                &mut max_lines as *mut _ as *mut c_void,
+            )
+        };
+
+        assert_eq!(rc, 0);
+        assert_eq!(max_lines, 10_000);
+    }
+
+    #[test]
+    fn vt_screen_queries_modes_through_terminal_data() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        assert!(!screen.is_bracketed_paste());
+        screen.feed(b"\x1b[?2004h");
+        assert!(screen.is_bracketed_paste());
+        screen.feed(b"\x1b[?2004l");
+        assert!(!screen.is_bracketed_paste());
+    }
 
     #[test]
     fn vt_screen_reports_osc7_current_dir() {
@@ -1945,6 +1919,15 @@ mod tests {
             screen.current_dir().as_deref(),
             Some("/home/me/con terminal")
         );
+    }
+
+    #[test]
+    fn vt_screen_preserves_whitespace_in_bare_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]9;9; /tmp/con cwd \x07");
+
+        assert_eq!(screen.current_dir().as_deref(), Some(" /tmp/con cwd "));
     }
 
     #[test]

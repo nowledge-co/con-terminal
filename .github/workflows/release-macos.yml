@@ -53,11 +53,11 @@ jobs:
           brew update
           brew install cmake
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         shell: bash
         run: |
           set -euo pipefail
-          ZIG_VERSION="0.15.2"
+          ZIG_VERSION="0.16.0"
           case "${{ matrix.arch }}" in
             arm64)  ZIG_ARCH="aarch64" ;;
             x86_64) ZIG_ARCH="x86_64" ;;

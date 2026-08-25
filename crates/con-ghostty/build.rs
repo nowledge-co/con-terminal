@@ -11,17 +11,15 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// macOS full-libghostty build or the Windows libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
 ///
-/// 2026-04-17 bump: from `e740f6fc1...` to `ca7516bea6...`. The older
-/// pin predated libghostty-vt's render-state implementation on
-/// Windows — `ghostty_render_state_new` was exported as a symbol but
-/// dereferenced a null internal function pointer at runtime. The new
-/// pin is tip-of-main on 2026-04-17; see the postmortem in
-/// docs/impl/windows-port.md.
+/// 2026-08-25 bump: from `ca7516bea6...` to `8867c37c55...`. This is the
+/// exact upstream revision audited for the Zig 0.16 migration and the
+/// portable Kitty protocol work; do not replace it with a moving branch.
 ///
-/// If a bump breaks the macOS libghostty build (different zig flags
-/// needed), revert by re-pinning to `e740f6fc117971da9df9fc957a706e6d96554aa5`
-/// — that's known-good on macOS.
-const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
+/// Ghostty's internal macOS embedding API and libghostty-vt API are not
+/// stable. Future bumps must update the handwritten FFI bindings, compile
+/// the ABI assertions, and run real build/link/runtime checks on all three
+/// platforms rather than treating this as a source-only dependency bump.
+const GHOSTTY_REV: &str = "8867c37c55b578b9eb4cfaba41cb9023e557176d";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
@@ -63,10 +61,22 @@ fn main() {
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
     let ghostty_dir = patchable_ghostty_source(ghostty_dir);
-    let _initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
+    let initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
+    let include_dir = ghostty_dir.join("include");
     let optimize = ghostty_optimize();
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
     let zig_global_cache_dir = zig_global_cache_dir("macos");
+
+    let mut ffi_abi = cc::Build::new();
+    ffi_abi
+        .file("src/ffi_abi.c")
+        .include(&include_dir)
+        .flag("-std=c11");
+    if initial_output_restore_enabled {
+        ffi_abi.define("CON_GHOSTTY_EMBEDDED_INITIAL_OUTPUT", None);
+    }
+    ffi_abi.compile("con_ghostty_ffi_abi");
+    println!("cargo:rerun-if-changed=src/ffi_abi.c");
 
     cc::Build::new()
         .file("src/objc/desktop_notification.m")
@@ -114,12 +124,16 @@ fn build_macos() {
         }
     }
 
-    let lib_path = find_lib(&ghostty_dir, "libghostty-fat.a");
+    // `libghostty-internal-fat.a` is an intermediate archive that still
+    // carries Zig compiler-rt memcpy/memmove. The final archive applies
+    // Ghostty's libSystem override, which avoids a measured PTY throughput
+    // regression in scroll-heavy workloads.
+    let lib_path = find_lib(&ghostty_dir, "libghostty-internal.a");
     println!(
         "cargo:rustc-link-search=native={}",
         lib_path.parent().unwrap().display()
     );
-    println!("cargo:rustc-link-lib=static=ghostty-fat");
+    println!("cargo:rustc-link-lib=static=ghostty-internal");
 
     for framework in &[
         "AppKit",
@@ -149,7 +163,6 @@ fn build_macos() {
         );
     }
 
-    let include_dir = ghostty_dir.join("include");
     println!("cargo:include={}", include_dir.display());
     println!(
         "cargo:rustc-env=CON_GHOSTTY_RESOURCES_DIR={}",
@@ -254,7 +267,7 @@ fn build_vt_backend(target_os: &str) {
             panic!(
                 "\n\n========================================================\n\
                  con-ghostty: could not spawn `{bin} version`: {err}\n\n\
-                 Zig 0.13+ is required to build libghostty-vt for {target_os}.\n\
+                 Zig 0.16.0 exactly is required to build libghostty-vt for {target_os}.\n\
                  Install it from https://ziglang.org/download/ and ensure\n\
                  the `zig` executable is on PATH, or set CON_ZIG_BIN to\n\
                  the absolute path of the zig executable.\n\n\
@@ -735,8 +748,8 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         &mut embedded_text,
         "Con: macOS may deny directory open/stat preflight for privacy-protected cwd",
         &[(
-            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
-            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n",
         )],
     )?;
     patch_text_once(
@@ -753,8 +766,8 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         &mut exec_text,
         "Con: trust macOS cwd after embedded surface validation",
         &[(
-            "            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
-            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
         )],
     )?;
     patch_text_once(
@@ -1008,7 +1021,7 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
                 continue;
             }
 
-            match prefetch_zig_url(zig_bin, &url, zig_global_cache_dir) {
+            match prefetch_zig_url(zig_bin, root, &url, zig_global_cache_dir) {
                 Some(package_hash) => {
                     fetched += 1;
                     let package_root = cache_dir.join("p").join(package_hash);
@@ -1081,11 +1094,18 @@ fn extract_zon_urls(text: &str) -> Vec<String> {
 
 fn prefetch_zig_url(
     zig_bin: &OsStr,
+    project_root: &Path,
     url: &str,
     zig_global_cache_dir: Option<&Path>,
 ) -> Option<String> {
     if let Some((repo_url, revision)) = parse_git_package_url(url) {
-        return prefetch_zig_git_url(zig_bin, &repo_url, &revision, zig_global_cache_dir);
+        return prefetch_zig_git_url(
+            zig_bin,
+            project_root,
+            &repo_url,
+            &revision,
+            zig_global_cache_dir,
+        );
     }
 
     let package_name = url.rsplit('/').next().unwrap_or("package.tar.gz");
@@ -1101,7 +1121,7 @@ fn prefetch_zig_url(
         .status();
     match curl_status {
         Ok(status) if status.success() => {
-            let hash = zig_fetch_path(zig_bin, &tmp, zig_global_cache_dir);
+            let hash = zig_fetch_path(zig_bin, project_root, &tmp, zig_global_cache_dir);
             let _ = fs::remove_file(&tmp);
             hash
         }
@@ -1135,6 +1155,7 @@ fn parse_git_package_url(url: &str) -> Option<(String, String)> {
 
 fn prefetch_zig_git_url(
     zig_bin: &OsStr,
+    project_root: &Path,
     repo_url: &str,
     revision: &str,
     zig_global_cache_dir: Option<&Path>,
@@ -1178,7 +1199,7 @@ fn prefetch_zig_git_url(
                 .arg("HEAD")
                 .current_dir(&checkout),
         )?;
-        zig_fetch_path(zig_bin, &archive, zig_global_cache_dir)
+        zig_fetch_path(zig_bin, project_root, &archive, zig_global_cache_dir)
     })();
 
     let _ = fs::remove_dir_all(&tmp_root);
@@ -1192,12 +1213,20 @@ fn run_status(command: &mut Command) -> Option<()> {
 
 fn zig_fetch_path(
     zig_bin: &OsStr,
+    project_root: &Path,
     path: &Path,
     zig_global_cache_dir: Option<&Path>,
 ) -> Option<String> {
     let mut cmd = Command::new(zig_bin);
     configure_zig_command(&mut cmd, zig_global_cache_dir);
-    let output = cmd.arg("fetch").arg(path).output().ok()?;
+    // Zig 0.16 resolves fetch configuration through the surrounding build
+    // project even without `--save`, so invoke it from Ghostty's root.
+    let output = cmd
+        .arg("fetch")
+        .arg(path)
+        .current_dir(project_root)
+        .output()
+        .ok()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         println!(
