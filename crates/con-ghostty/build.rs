@@ -703,68 +703,93 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     let exec = ghostty_dir.join("src/termio/Exec.zig");
     let header = ghostty_dir.join("include/ghostty.h");
 
-    patch_file_once(
+    // Prepare every source change in memory before writing anything. A Ghostty
+    // bump can invalidate any one of these anchors; validating the complete
+    // patch first prevents an anchor mismatch from leaving the cached checkout
+    // in a partially patched, internally inconsistent state.
+    let mut embedded_text = read_file_text(&embedded)?;
+    let mut surface_text = read_file_text(&surface)?;
+    let mut exec_text = read_file_text(&exec)?;
+    let mut header_text = read_file_text(&header)?;
+
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "initial_output: ?[*:0]const u8",
         &[(
             "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
             "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Output to seed into the terminal state before the command starts.\n        /// This is an embedding-only hook used for visual scrollback restore;\n        /// it is parsed as terminal output and is never written to the pty.\n        initial_output: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "initial_output_restore = if (opts.initial_output)",
         &[(
             "        // Initialize our surface right away. We're given a view that is\n        // ready to use.\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n        );\n",
             "        // Initialize our surface right away. We're given a view that is\n        // ready to use. `initial_output_restore` is parsed into Ghostty's\n        // terminal state before the child process starts.\n        const initial_output_restore = if (opts.initial_output) |c_output|\n            std.mem.sliceTo(c_output, 0)\n        else\n            null;\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n            initial_output_restore,\n        );\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "Con: macOS may deny directory open/stat preflight for privacy-protected cwd",
         &[(
             "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
             "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &surface,
+        &mut surface_text,
         "initial_output_restore: ?[]const u8",
         &[(
             "    rt_surface: *apprt.runtime.Surface,\n) !void {\n",
             "    rt_surface: *apprt.runtime.Surface,\n    initial_output_restore: ?[]const u8,\n) !void {\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &exec,
+        &mut exec_text,
         "Con: trust macOS cwd after embedded surface validation",
         &[(
             "            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
             "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &surface,
+        &mut surface_text,
         "This keeps restored text in Ghostty's",
         &[(
             "    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
             "    // Seed restored output after the renderer is alive but before the IO\n    // thread starts the child process. This keeps restored text in Ghostty's\n    // own terminal screen/scrollback layer without ever feeding it to the shell.\n    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n\n    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
         )],
     )?;
-    replace_file_text_if_present(
-        &surface,
+    replace_text_if_present(
+        &mut surface_text,
         "    if (opts.initial_output) |c_output| {\n        const initial_output = std.mem.sliceTo(c_output, 0);\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
         "    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
-    )?;
+    );
 
-    patch_file_once(
+    patch_text_once(
         &header,
+        &mut header_text,
         "const char* initial_output;",
         &[(
             "  const char* initial_input;\n  bool wait_after_command;\n",
             "  const char* initial_input;\n  const char* initial_output;\n  bool wait_after_command;\n",
         )],
     )?;
+
+    for (path, text) in [
+        (&embedded, embedded_text.as_str()),
+        (&surface, surface_text.as_str()),
+        (&exec, exec_text.as_str()),
+        (&header, header_text.as_str()),
+    ] {
+        write_file_atomic(path, text)?;
+    }
 
     println!("cargo:rustc-cfg=con_ghostty_embedded_initial_output");
     println!("cargo:rerun-if-changed={}", embedded.display());
@@ -774,9 +799,16 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn patch_file_once(path: &Path, marker: &str, replacements: &[(&str, &str)]) -> Result<(), String> {
-    let mut text = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+fn read_file_text(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+}
+
+fn patch_text_once(
+    path: &Path,
+    text: &mut String,
+    marker: &str,
+    replacements: &[(&str, &str)],
+) -> Result<(), String> {
     if text.contains(marker) {
         return Ok(());
     }
@@ -788,19 +820,16 @@ fn patch_file_once(path: &Path, marker: &str, replacements: &[(&str, &str)]) -> 
                 path.display()
             ));
         }
-        text = text.replacen(from, to, 1);
+        *text = text.replacen(from, to, 1);
     }
 
-    write_file_atomic(path, &text)
+    Ok(())
 }
 
-fn replace_file_text_if_present(path: &Path, from: &str, to: &str) -> Result<(), String> {
-    let text = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    if !text.contains(from) {
-        return Ok(());
+fn replace_text_if_present(text: &mut String, from: &str, to: &str) {
+    if text.contains(from) {
+        *text = text.replace(from, to);
     }
-    write_file_atomic(path, &text.replace(from, to))
 }
 
 fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
