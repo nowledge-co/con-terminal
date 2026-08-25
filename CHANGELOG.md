@@ -8,6 +8,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**macOS**
+
+- Added native desktop notifications for terminal applications that emit OSC 9
+  or OSC 777 sequences, including the first notification shown while Con asks
+  for notification permission. _(PR
+  [#290](https://github.com/nowledge-co/con-terminal/pull/290) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 **Packaging**
 
 - Added Flatpak packaging and automated AetherPak repository deployment to GitHub Pages (`https://con-releases.nowledge.co/flatpak`), supporting both `x86_64` and `aarch64` architectures. _(by [@abn](https://github.com/abn))_
