@@ -336,6 +336,14 @@ pub enum ghostty_action_tag_e {
     GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
 }
 
+/// Action payload for DESKTOP_NOTIFICATION (OSC 9 and OSC 777).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_desktop_notification_s {
+    pub title: *const c_char,
+    pub body: *const c_char,
+}
+
 /// Action payload for SET_TITLE.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -394,13 +402,11 @@ pub union ghostty_action_u {
     pub goto_split: ghostty_action_goto_split_e,
     pub resize_split: ghostty_action_resize_split_s,
     pub scrollbar: ghostty_action_scrollbar_s,
+    pub desktop_notification: ghostty_action_desktop_notification_s,
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,
     pub open_url: ghostty_action_open_url_s,
-    // The union size is determined by the largest variant in ghostty.h;
-    // we pad to ensure correct size.
-    pub _pad: [u8; 128],
 }
 
 #[repr(C)]
@@ -408,6 +414,12 @@ pub struct ghostty_action_s {
     pub tag: ghostty_action_tag_e,
     pub action: ghostty_action_u,
 }
+
+// The action is passed by value to ghostty_runtime_action_cb, so these sizes
+// must exactly match ghostty.h at the pinned Ghostty revision.
+const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_desktop_notification_s>()];
+const _: [(); 24] = [(); std::mem::size_of::<ghostty_action_u>()];
+const _: [(); 32] = [(); std::mem::size_of::<ghostty_action_s>()];
 
 // ── Clipboard types ─────────────────────────────────────────
 

@@ -1440,6 +1440,10 @@ unsafe extern "C" fn action_callback(
                 });
                 true
             }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_DESKTOP_NOTIFICATION => {
+                let notification = action.action.desktop_notification;
+                con_ghostty_show_desktop_notification(notification.title, notification.body)
+            }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_NEW_SPLIT => {
                 let direction = match action.action.new_split {
                     ffi::ghostty_action_split_direction_e::GHOSTTY_SPLIT_DIRECTION_RIGHT => {
@@ -1524,6 +1528,13 @@ unsafe extern "C" fn action_callback(
             _ => false,
         }
     }
+}
+
+unsafe extern "C" {
+    fn con_ghostty_show_desktop_notification(
+        title: *const std::os::raw::c_char,
+        body: *const std::os::raw::c_char,
+    ) -> bool;
 }
 
 /// Clipboard read — ghostty wants to paste. Read from macOS pasteboard and complete the request.
