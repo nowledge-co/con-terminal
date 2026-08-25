@@ -22,7 +22,7 @@ jobs:
     with:
       registry: ghcr.io
       oci-repository: nowledge-co/con-terminal
-      pages-url: https://con-releases.nowledge.co
+      pages-url: https://con-releases.nowledge.co/flatpak
       dry-run: ${{ inputs.dry-run || false }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
