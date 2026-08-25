@@ -68,6 +68,14 @@ fn build_macos() {
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
     let zig_global_cache_dir = zig_global_cache_dir("macos");
 
+    cc::Build::new()
+        .file("src/objc/desktop_notification.m")
+        .flag("-fobjc-arc")
+        .flag("-fblocks")
+        .flag("-fmodules")
+        .compile("con_ghostty_objc_trampolines");
+    println!("cargo:rerun-if-changed=src/objc/desktop_notification.m");
+
     let build_args = vec![
         "build".to_string(),
         "-Dapp-runtime=none".to_string(),
@@ -124,6 +132,7 @@ fn build_macos() {
         "IOSurface",
         "QuartzCore",
         "Carbon",
+        "UserNotifications",
     ] {
         println!("cargo:rustc-link-lib=framework={}", framework);
     }
