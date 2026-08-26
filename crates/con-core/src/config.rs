@@ -123,6 +123,10 @@ pub struct AppearanceConfig {
     /// Workspace tab presentation. Vertical is the default; horizontal remains
     /// available for users who prefer a top tab strip.
     pub tabs_orientation: TabsOrientation,
+    /// When `true` (default), closing the last tab closes the window (and
+    /// quits the app on Windows/Linux). When `false`, closing the last tab
+    /// opens a fresh tab instead so the window stays open.
+    pub close_to_quit: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -143,6 +147,7 @@ impl Default for AppearanceConfig {
             restore_terminal_text: default_restore_terminal_text(),
             hide_pane_title_bar: false,
             tabs_orientation: TabsOrientation::Vertical,
+            close_to_quit: true,
         }
     }
 }
@@ -1255,6 +1260,38 @@ tabs_orientation = "horizontal"
             config.appearance.tabs_orientation,
             TabsOrientation::Horizontal
         );
+    }
+
+    #[test]
+    fn close_to_quit_defaults_to_true() {
+        let config = Config::default();
+        assert!(config.appearance.close_to_quit);
+    }
+
+    #[test]
+    fn omitted_close_to_quit_defaults_to_true() {
+        let content = r#"
+[appearance]
+terminal_opacity = 0.8
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert!(config.appearance.close_to_quit);
+    }
+
+    #[test]
+    fn close_to_quit_is_preserved_when_set_false() {
+        let content = r#"
+[appearance]
+close_to_quit = false
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert!(!config.appearance.close_to_quit);
+
+        // Round-trip through serialization.
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(serialized.contains("close_to_quit = false"));
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert!(!reparsed.appearance.close_to_quit);
     }
 
     #[test]
