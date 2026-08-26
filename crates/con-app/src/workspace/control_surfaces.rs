@@ -360,7 +360,7 @@ impl ConWorkspace {
                     let closing = close_outcome.terminal.clone();
                     closing.set_focus_state(false, cx);
                     closing.set_native_view_visible(false, cx);
-                    closing.shutdown_surface(cx);
+                    closing.shutdown_surface(Some(window), cx);
                     if tab_idx == self.active_tab {
                         if close_outcome.closed_pane {
                             #[cfg(target_os = "macos")]

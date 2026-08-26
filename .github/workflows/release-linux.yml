@@ -74,13 +74,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         # Same Zig the linux CI smoke test installs — needed for
         # con-ghostty's libghostty-vt build.
         shell: bash
         run: |
           set -euo pipefail
-          ZIG_VERSION="0.15.2"
+          ZIG_VERSION="0.16.0"
           ZIG_ARCH="x86_64"
           ZIG_DIR="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
           ZIG_TARBALL="${ZIG_DIR}.tar.xz"

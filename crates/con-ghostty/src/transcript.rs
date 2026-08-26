@@ -272,6 +272,7 @@ mod tests {
             cols: 3,
             rows: 2,
             cells,
+            kitty_placements: Default::default(),
             dirty_rows: vec![0, 1],
             cursor: Cursor::default(),
             alternate_screen: false,

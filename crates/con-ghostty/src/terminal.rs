@@ -164,6 +164,14 @@ impl GhosttyConfigPatch {
         s.push_str("shell-integration-features = ");
         s.push_str(CON_SHELL_INTEGRATION_FEATURES);
         s.push('\n');
+        // Force Kitty writes through Ghostty's confirmation request so Con can
+        // reject them until it has a user-visible permission flow. OSC 52 uses
+        // the write callback's `confirm` flag instead; that callback preserves
+        // Con's existing unconditional-write behavior during this migration.
+        s.push_str("clipboard-write = ask\n");
+        // This limit applies only to Kitty OSC 5522, not OSC 52. Avoid buffering
+        // an untrusted 64 MiB transaction just to reject it at confirmation.
+        s.push_str("clipboard-write-limit-bytes = 0\n");
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
             if let Some(background_image_opacity) = self.background_image_opacity {
@@ -1271,7 +1279,7 @@ unsafe impl Sync for GhosttyTerminal {}
 
 // ── Public types ────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceSize {
     pub columns: u16,
     pub rows: u16,
@@ -1540,18 +1548,26 @@ unsafe extern "C" {
 /// Clipboard read — ghostty wants to paste. Read from macOS pasteboard and complete the request.
 unsafe extern "C" fn read_clipboard_callback(
     userdata: *mut c_void,
-    _clipboard: ffi::ghostty_clipboard_e,
+    clipboard: ffi::ghostty_clipboard_e,
     request: *mut c_void,
-) -> bool {
+    mime_types: *const *const std::os::raw::c_char,
+    mime_types_len: usize,
+    needs_listing: bool,
+) -> ffi::ghostty_clipboard_read_result_e {
     unsafe {
-        if userdata.is_null() {
-            return false;
+        // macOS has no X11-style primary clipboard. Keep the pre-migration
+        // behavior that maps standard and selection requests to NSPasteboard.
+        if userdata.is_null()
+            || request.is_null()
+            || clipboard == ffi::ghostty_clipboard_e::GHOSTTY_CLIPBOARD_PRIMARY
+        {
+            return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNSUPPORTED;
         }
 
         let state = &*(userdata as *const StateRef);
         let surface = state.lock().surface;
         if surface.is_null() {
-            return false;
+            return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNSUPPORTED;
         }
 
         #[cfg(target_os = "macos")]
@@ -1559,61 +1575,128 @@ unsafe extern "C" fn read_clipboard_callback(
             use objc::runtime::Object;
             use objc::{class, msg_send, sel, sel_impl};
 
+            if mime_types_len > 0 && mime_types.is_null() {
+                return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+            }
+            // MIME listings are used by Kitty OSC 5522 reads and paste events.
+            // Keep that protocol unavailable until its permission flow lands;
+            // otherwise an `ask` policy still exposes clipboard metadata for
+            // listing-only requests that upstream intentionally exempts from a
+            // content confirmation prompt.
+            if needs_listing {
+                return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNSUPPORTED;
+            }
+            let requested = if mime_types_len == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(mime_types, mime_types_len)
+            };
+            let wants_text = requested
+                .iter()
+                .copied()
+                .any(|mime| clipboard_c_mime_is_text(mime));
+            if !wants_text {
+                return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+            }
+
             let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
             // NSPasteboardTypeString = @"public.utf8-plain-text"
-            let type_str = CString::new("public.utf8-plain-text").unwrap();
-            let ns_type: *mut Object =
-                msg_send![class!(NSString), stringWithUTF8String: type_str.as_ptr()];
+            let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c"public.utf8-plain-text".as_ptr()];
             let text: *mut Object = msg_send![pb, stringForType: ns_type];
-            if text.is_null() {
-                let empty = c"";
-                ffi::ghostty_surface_complete_clipboard_request(
-                    surface,
-                    empty.as_ptr(),
-                    request,
-                    false,
-                );
-                return true;
-            }
-            let utf8: *const std::os::raw::c_char = msg_send![text, UTF8String];
-            ffi::ghostty_surface_complete_clipboard_request(surface, utf8, request, false);
-            return true;
+            let (data, len) = if text.is_null() {
+                // A started OSC 52 read must complete even when the pasteboard
+                // has no text representation. Upstream serializes an empty
+                // completion as the protocol's empty clipboard response.
+                (c"".as_ptr(), 0)
+            } else {
+                let data: *const std::os::raw::c_char = msg_send![text, UTF8String];
+                if data.is_null() {
+                    return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+                }
+                let len: usize = msg_send![text, lengthOfBytesUsingEncoding: 4usize];
+                (data, len)
+            };
+            let mime = c"text/plain";
+            let content = ffi::ghostty_clipboard_content_s {
+                mime: mime.as_ptr(),
+                data,
+                len,
+            };
+            let complete = ffi::ghostty_clipboard_complete_s {
+                contents: &content,
+                contents_len: 1,
+                available: std::ptr::null(),
+                available_len: 0,
+                confirmed: false,
+                remember: false,
+            };
+            ffi::ghostty_surface_complete_clipboard_request(surface, &complete, request);
+            return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_STARTED;
         }
 
         #[cfg(not(target_os = "macos"))]
-        false
+        ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
     }
 }
 
 /// Clipboard confirmation — ghostty confirmed a clipboard read (e.g. OSC 52).
 unsafe extern "C" fn confirm_read_clipboard_callback(
     userdata: *mut c_void,
-    text: *const std::os::raw::c_char,
+    confirm: *const ffi::ghostty_clipboard_confirm_s,
     request: *mut c_void,
-    _request_type: ffi::ghostty_clipboard_request_e,
+    request_type: ffi::ghostty_clipboard_request_e,
 ) {
     unsafe {
-        if userdata.is_null() || text.is_null() {
+        if userdata.is_null() || request.is_null() {
             return;
         }
         let state = &*(userdata as *const StateRef);
         let surface = state.lock().surface;
-        if !surface.is_null() {
-            ffi::ghostty_surface_complete_clipboard_request(surface, text, request, true);
+        if surface.is_null() {
+            return;
         }
+
+        if matches!(
+            request_type,
+            ffi::ghostty_clipboard_request_e::GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ
+                | ffi::ghostty_clipboard_request_e::GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE
+        ) || confirm.is_null()
+        {
+            // Kitty grants require a real user-visible permission flow. Until
+            // Con can present one, deny instead of silently granting a shell
+            // persistent access to the system clipboard.
+            ffi::ghostty_surface_deny_clipboard_request(surface, request);
+            return;
+        }
+
+        let confirm = &*confirm;
+        let complete = ffi::ghostty_clipboard_complete_s {
+            contents: confirm.contents,
+            contents_len: confirm.contents_len,
+            available: confirm.available,
+            available_len: confirm.available_len,
+            confirmed: true,
+            remember: false,
+        };
+        ffi::ghostty_surface_complete_clipboard_request(surface, &complete, request);
     }
 }
 
 /// Clipboard write — ghostty wants to copy (selection, OSC 52). Write to macOS pasteboard.
 unsafe extern "C" fn write_clipboard_callback(
     _userdata: *mut c_void,
-    _clipboard: ffi::ghostty_clipboard_e,
+    clipboard: ffi::ghostty_clipboard_e,
     content: *const ffi::ghostty_clipboard_content_s,
     content_count: usize,
     _confirm: bool,
 ) {
     unsafe {
-        if content.is_null() || content_count == 0 {
+        // Standard and selection both map to the macOS general pasteboard;
+        // primary is unsupported on this platform.
+        if clipboard == ffi::ghostty_clipboard_e::GHOSTTY_CLIPBOARD_PRIMARY
+            || content.is_null()
+            || content_count == 0
+        {
             return;
         }
 
@@ -1625,30 +1708,40 @@ unsafe extern "C" fn write_clipboard_callback(
             let items = std::slice::from_raw_parts(content, content_count);
 
             for item in items {
-                if item.data.is_null() {
+                if !clipboard_c_mime_is_text(item.mime) || (item.data.is_null() && item.len > 0) {
                     continue;
                 }
-                let text = CStr::from_ptr(item.data).to_string_lossy();
-                if text.is_empty() {
+                let data = if item.len == 0 {
+                    c"".as_ptr()
+                } else {
+                    item.data
+                };
+                let ns_str: *mut Object = msg_send![
+                    class!(NSString),
+                    stringWithBytes: data
+                    length: item.len
+                    encoding: 4usize
+                ];
+                if ns_str.is_null() {
                     continue;
                 }
-
-                let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
-                let _: () = msg_send![pb, clearContents];
-
-                let cstr = CString::new(text.as_ref()).unwrap_or_default();
-                let ns_str: *mut Object =
-                    msg_send![class!(NSString), stringWithUTF8String: cstr.as_ptr()];
 
                 // NSPasteboardTypeString = @"public.utf8-plain-text"
-                let type_cstr = CString::new("public.utf8-plain-text").unwrap();
-                let ns_type: *mut Object =
-                    msg_send![class!(NSString), stringWithUTF8String: type_cstr.as_ptr()];
+                let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c"public.utf8-plain-text".as_ptr()];
+                let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+                let _: () = msg_send![pb, clearContents];
                 let _success: bool = msg_send![pb, setString: ns_str forType: ns_type];
                 return;
             }
         }
     }
+}
+
+unsafe fn clipboard_c_mime_is_text(mime: *const std::os::raw::c_char) -> bool {
+    if mime.is_null() {
+        return false;
+    }
+    crate::clipboard_mime_is_text(unsafe { CStr::from_ptr(mime) }.to_bytes())
 }
 
 unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_alive: bool) {
@@ -1770,6 +1863,14 @@ mod tests {
         let config = GhosttyConfigPatch::default().to_config_string();
 
         assert!(config.contains("shell-integration-features = no-cursor,ssh-env,ssh-terminfo"));
+    }
+
+    #[test]
+    fn ghostty_config_rejects_kitty_clipboard_writes_until_permission_ui_exists() {
+        let config = GhosttyConfigPatch::default().to_config_string();
+
+        assert!(config.contains("clipboard-write = ask"));
+        assert!(config.contains("clipboard-write-limit-bytes = 0"));
     }
 
     #[test]

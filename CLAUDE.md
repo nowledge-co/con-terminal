@@ -49,7 +49,7 @@ The `3pp/` directory contains third-party source checkouts for **read-only refer
 ## Build
 
 ```bash
-# Prerequisites: rust (stable, edition 2024), cmake, Zig 0.15.2 exactly (for libghostty / libghostty-vt)
+# Prerequisites: rust (stable, edition 2024), cmake, Zig 0.16.0 exactly (for libghostty / libghostty-vt)
 cargo build            # debug (macOS)
 cargo build --release  # release (macOS)
 cargo run -p con       # run the terminal (macOS)
@@ -68,12 +68,12 @@ the path to the long-term GPU-accelerated grid renderer on each
 non-macOS target.
 
 ```bash
-# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.15.2 exactly on PATH
+# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.16.0 exactly on PATH
 # for libghostty-vt; the binary ships as `con-app.exe` because `CON` is a
 # reserved DOS device name):
 cargo wbuild -p con --release          # produces target\release\con-app.exe
 cargo wrun   -p con
-cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
+cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
 
 # Linux (needs the GPUI linux runtime deps — see .github/workflows/ci-portable.yml):
 cargo build -p con --release

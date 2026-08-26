@@ -1394,7 +1394,7 @@ mod tests {
     use super::{is_cjk_codepoint, is_wide_codepoint};
 
     #[test]
-    fn wide_codepoint_uses_unicode_width_instead_of_local_ranges() {
+    fn wide_codepoint_follows_unicode_width() {
         // These ranges were easy to miss in a hand-written East Asian
         // Width table. Keep the atlas decision delegated to
         // unicode-width so newly covered Unicode ranges do not regress
@@ -1402,7 +1402,6 @@ mod tests {
         for codepoint in [
             0x4E00,  // CJK Unified Ideograph
             0xA960,  // Hangul Jamo Extended-A
-            0xD7B0,  // Hangul Jamo Extended-B
             0x1B000, // Kana Supplement
             0x16FE0, // Tangut / ideographic marks
             0x1B170, // Nushu
@@ -1414,6 +1413,9 @@ mod tests {
         // Ambiguous-width punctuation should stay one cell unless the
         // terminal layer explicitly gains a CJK-ambiguous-width mode.
         assert!(!is_wide_codepoint(0x00B7));
+        // Hangul vowel and trailing jamo combine with a preceding consonant;
+        // unicode-width therefore assigns them zero columns rather than two.
+        assert!(!is_wide_codepoint(0xD7B0));
     }
 
     #[test]

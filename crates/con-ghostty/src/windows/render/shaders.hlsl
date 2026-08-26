@@ -1,69 +1,51 @@
-// Con Windows terminal renderer — HLSL.
+// Con Windows terminal cell renderer — HLSL.
 //
-// Single DrawIndexedInstanced(6, cells) per frame. Each cell is a quad
-// with per-instance inputs (IA layout, matching `VS_INSTANCE` in
-// pipeline.rs). VS computes the cell's screen-space position from its
-// grid coords; PS samples the DirectWrite grayscale glyph atlas (BGRA8,
-// same coverage in R,G,B) and composites fg over bg with one scalar
-// glyph coverage.
+// Kitty graphics can appear below cell backgrounds, between backgrounds
+// and text, or above text. Cell rendering is therefore split into three
+// passes over one instance buffer:
 //
-// Atlas contents: Direct2D draws a white brush through a grayscale text
-// render target onto an opaque-black background. Result RGB = glyph
-// coverage. We still defensively collapse sampled RGB to one scalar so
-// a driver / remote-display path cannot leak ClearType color fringe.
+//   ps_background  opaque/selected cell backgrounds
+//   ps_cursor      cursor block (text-layer decoration)
+//   ps_text        glyph coverage, underline, and strikethrough
+//
+// The background VS always emits one-cell quads. The text VS may widen a
+// quad to preserve oversized Nerd Font glyphs.
 
-// ── Constant buffer (per-frame) ────────────────────────────────────────
 cbuffer Globals : register(b0) {
-    // Pixel-to-NDC factors: 2.0/viewport_px per axis; also flips Y.
     float2 invViewport;
-    // Logical cell size in physical pixels.
     float2 cellSize;
-    // Grid dims — for cursor / debug overlays.
     uint   gridCols;
     uint   gridRows;
-    // Inverse of atlas texture dimensions (1/width, 1/height). Used
-    // to normalize the atlas UV (which we pass in pixel coords for
-    // simplicity) into the [0,1] range the D3D sampler expects.
     float2 invAtlasSize;
 };
 
-// ── Per-instance inputs ────────────────────────────────────────────────
 struct VSInstance {
-    // (col, row) of this cell in the grid.
     uint2  cellPos       : CELLPOS;
-    // (x, y) of this cell's glyph in atlas pixels.
     uint2  atlasPos      : ATLAS_POS;
-    // (w, h) of this cell's glyph in atlas pixels.
     uint2  atlasSize     : ATLAS_SIZE;
-    // Foreground RGBA8 (srgb).
     uint   fg            : FGCOLOR;
-    // Background RGBA8.
     uint   bg            : BGCOLOR;
-    // attrs: bit 0 = bold, 1 = italic, 2 = underline, 3 = strike,
-    // 4 = inverse. Unused low bits reserved.
+    // Low bits mirror Ghostty cell attrs. Con reserves:
+    //   bit 8 = default background
+    //   bit 9 = cursor cell
     uint   attrs         : ATTRS;
-};
-
-struct VSVertex {
-    // Built-in quad corner id (0..3). We use a 6-index strip, so vid %
-    // 4 maps to the corner: 0 = top-left, 1 = top-right, 2 = bot-left,
-    // 3 = bot-right.
-    uint   vid           : SV_VertexID;
 };
 
 struct VSOut {
     float4 pos           : SV_Position;
     float2 atlasUV       : TEXCOORD0;
-    // Cell-local UV, (0,0)=top-left .. (1,1)=bottom-right. Used by the
-    // PS to draw underline / strikethrough bands without needing to
-    // know the viewport.
     float2 cellUV        : TEXCOORD1;
     nointerpolation float4 fg : FGCOLOR;
     nointerpolation float4 bg : BGCOLOR;
     nointerpolation uint   attrs : ATTRS;
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────
+static const uint ATTR_UNDERLINE  = 4u;
+static const uint ATTR_STRIKE     = 8u;
+static const uint ATTR_INVERSE    = 16u;
+static const uint ATTR_DEFAULT_BG = 256u;
+static const uint ATTR_CURSOR     = 512u;
+
 float4 unpackRGBA(uint v) {
     return float4(
         float((v >> 24) & 0xFF),
@@ -73,120 +55,114 @@ float4 unpackRGBA(uint v) {
     ) / 255.0;
 }
 
-// ── Atlas binding ──────────────────────────────────────────────────────
-Texture2D<float4> atlas : register(t0);
-SamplerState      samp  : register(s0);
-
-// ── VS ─────────────────────────────────────────────────────────────────
-VSOut vs_main(uint vid : SV_VertexID, VSInstance inst) {
-    // The index buffer is `[0, 1, 2, 2, 1, 3]` — two triangles making
-    // a quad. `SV_VertexID` is the VALUE from the index buffer (one of
-    // 0, 1, 2, 3 — never higher), not the position-in-strip. Four
-    // entries in the mapping, one per corner:
-    //   0 = top-left (0, 0)
-    //   1 = top-right (1, 0)
-    //   2 = bottom-left (0, 1)
-    //   3 = bottom-right (1, 1)
+uint2 quadCorner(uint vid) {
     const uint2 mapping[4] = {
         uint2(0, 0),
         uint2(1, 0),
         uint2(0, 1),
         uint2(1, 1),
     };
-    uint2 corner = mapping[vid % 4];
+    return mapping[vid % 4];
+}
 
-    // Wide-glyph handling: Nerd-Font PUA icons are authored with
-    // advance=1 cell but ink wider than that. The atlas allocates them
-    // in slots up to 2 cells wide; honoring `atlasSize.x` as the quad
-    // width lets those icons render at their natural size on screen.
-    // Empty cells (codepoint=0 or space) set atlasSize=(0,0), so the
-    // max keeps their quad exactly cellSize — no visual change for the
-    // common case.
-    float2 quadSize = float2(
-        max(cellSize.x, float(inst.atlasSize.x)),
-        cellSize.y
-    );
+VSOut vertexOut(uint vid, VSInstance inst, float2 quadSize) {
+    uint2 corner = quadCorner(vid);
     float2 px = float2(inst.cellPos) * cellSize + float2(corner) * quadSize;
 
     VSOut o;
-    o.pos = float4(px * invViewport + float2(-1.0,  1.0), 0.0, 1.0);
-    // NDC y is up; our logical y is down. invViewport.y is negative to flip.
-
-    float2 atlasTopLeft = float2(inst.atlasPos);
-    float2 atlasPixels  = float2(inst.atlasSize);
-    // Pixel coords for the glyph rect, then normalize by the atlas
-    // texture dims so the Sample() call gets UVs in [0,1].
-    o.atlasUV = (atlasTopLeft + atlasPixels * float2(corner)) * invAtlasSize;
-    o.cellUV  = float2(corner);
-
-    o.fg    = unpackRGBA(inst.fg);
-    o.bg    = unpackRGBA(inst.bg);
+    o.pos = float4(px * invViewport + float2(-1.0, 1.0), 0.0, 1.0);
+    o.atlasUV = (float2(inst.atlasPos) + float2(inst.atlasSize) * float2(corner))
+        * invAtlasSize;
+    o.cellUV = float2(corner);
+    o.fg = unpackRGBA(inst.fg);
+    o.bg = unpackRGBA(inst.bg);
     o.attrs = inst.attrs;
     return o;
 }
 
-// ── PS ─────────────────────────────────────────────────────────────────
-float4 ps_main(VSOut i) : SV_Target {
-    // atlasUV arrives already normalized (VS divides pixel coords by
-    // invAtlasSize). The atlas is grayscale, but collapse RGB anyway
-    // so any platform-level subpixel fallback becomes neutral coverage
-    // instead of colored fringe.
-    float3 coverage_rgb = atlas.Sample(samp, i.atlasUV).rgb;
-    float coverage = max(coverage_rgb.r, max(coverage_rgb.g, coverage_rgb.b));
+Texture2D<float4> atlas : register(t0);
+SamplerState      samp  : register(s0);
 
-    // Inverse handling: swap fg/bg when attr bit 4 is set (SGR 7 or
-    // a selected cell via the CPU-side XOR). After the swap the new
-    // `fg.a` inherits the original bg's alpha — which the CPU rewrites
-    // to `background_opacity` for default-bg cells so Mica can show
-    // through. For an inverse cell we don't want Mica behind the
-    // glyph: the whole point of inverse is a solid highlight, and
-    // translucent glyph pixels against a solid block would render
-    // text visibly semi-transparent. Pin both channels to 1.0 after
-    // swap so inverse / selection cells paint opaque.
-    float4 fg = i.fg;
-    float4 bg = i.bg;
-    if (i.attrs & 16u) {
+VSOut vs_text(uint vid : SV_VertexID, VSInstance inst) {
+    float2 quadSize = float2(
+        max(cellSize.x, float(inst.atlasSize.x)),
+        cellSize.y
+    );
+    return vertexOut(vid, inst, quadSize);
+}
+
+VSOut vs_cell(uint vid : SV_VertexID, VSInstance inst) {
+    return vertexOut(vid, inst, cellSize);
+}
+
+void effectiveColors(VSOut i, out float4 fg, out float4 bg) {
+    fg = i.fg;
+    bg = i.bg;
+    if (i.attrs & ATTR_INVERSE) {
         float4 tmp = fg;
         fg = bg;
         bg = tmp;
+        // Selection and inverse-video cells are solid highlights even when
+        // the terminal's default background is translucent.
         fg.a = 1.0;
         bg.a = 1.0;
     }
+}
 
-    // Underline / strikethrough: draw a 1-pixel-tall fg band inside
-    // the cell. Bands are in cell-local UV space:
-    //   underline: bottom ~10% of the cell (UV.y in [0.90, 0.97])
-    //   strike:    vertical middle (UV.y in [0.48, 0.55])
-    // The cellSize in px tells us how wide a pixel is in UV, which
-    // lets us build a crisp 1-px band without AA fringing.
+float4 premultiply(float4 color) {
+    return float4(color.rgb * color.a, color.a);
+}
+
+float4 ps_background(VSOut i) : SV_Target {
+    // The renderer clear already supplies the default background. Keeping
+    // these pixels untouched is also what lets below-background images show
+    // through empty/default cells, matching upstream Ghostty's cell-bg pass.
+    if ((i.attrs & ATTR_CURSOR) ||
+        ((i.attrs & ATTR_DEFAULT_BG) && !(i.attrs & ATTR_INVERSE))) {
+        discard;
+    }
+
+    float4 fg;
+    float4 bg;
+    effectiveColors(i, fg, bg);
+    return premultiply(bg);
+}
+
+float4 ps_cursor(VSOut i) : SV_Target {
+    if (!(i.attrs & ATTR_CURSOR)) {
+        discard;
+    }
+
+    float4 fg;
+    float4 bg;
+    effectiveColors(i, fg, bg);
+    // The cursor toggles the effective cell colors and stays opaque even
+    // when the effective foreground came from the translucent default bg.
+    fg.a = 1.0;
+    return premultiply(fg);
+}
+
+float4 ps_text(VSOut i) : SV_Target {
+    float3 coverageRgb = atlas.Sample(samp, i.atlasUV).rgb;
+    float coverage = max(coverageRgb.r, max(coverageRgb.g, coverageRgb.b));
+
     float pxUV = 1.0 / max(cellSize.y, 1.0);
-    float band_coverage = 0.0;
-    if (i.attrs & 4u) {
-        // Underline.
-        float center = 0.92;
-        if (abs(i.cellUV.y - center) < pxUV) {
-            band_coverage = 1.0;
-        }
+    float bandCoverage = 0.0;
+    if ((i.attrs & ATTR_UNDERLINE) && abs(i.cellUV.y - 0.92) < pxUV) {
+        bandCoverage = 1.0;
     }
-    if (i.attrs & 8u) {
-        // Strikethrough.
-        float center = 0.52;
-        if (abs(i.cellUV.y - center) < pxUV) {
-            band_coverage = 1.0;
-        }
+    if ((i.attrs & ATTR_STRIKE) && abs(i.cellUV.y - 0.52) < pxUV) {
+        bandCoverage = 1.0;
     }
 
-    // Scalar glyph coverage keeps text neutral during screenshots,
-    // scaling, transparency, and remote-display review. Decorations use
-    // the same scalar path so underline / strike bands stay clean.
-    float comp = max(coverage, band_coverage);
-    float3 rgb = lerp(bg.rgb, fg.rgb, comp);
-    // Output alpha follows the maximum coverage so glyph pixels stay
-    // opaque while the cell's background takes the bg.a (which the
-    // renderer drops to `background_opacity` for default-bg cells so
-    // Mica / DComp visuals beneath show through). GPUI's compositor
-    // expects premultiplied alpha — multiply the lerped RGB by the
-    // output alpha so translucent pixels don't look washed out.
-    float alpha = lerp(bg.a, fg.a, comp);
-    return float4(rgb * alpha, alpha);
+    float4 fg;
+    float4 bg;
+    effectiveColors(i, fg, bg);
+    float4 color = (i.attrs & ATTR_CURSOR) ? bg : fg;
+    if (i.attrs & ATTR_CURSOR) {
+        color.a = 1.0;
+    }
+
+    float alpha = color.a * max(coverage, bandCoverage);
+    return float4(color.rgb * alpha, alpha);
 }

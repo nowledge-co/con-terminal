@@ -1,3 +1,158 @@
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, is_supported_functional_key};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use gpui::{KeyDownEvent, Keystroke, Modifiers};
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[derive(Debug, Clone)]
+pub struct TrackedVtKey {
+    text: String,
+    unshifted_codepoint: Option<char>,
+    modifiers: VtKeyModifiers,
+    consumed_modifiers: VtKeyModifiers,
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+impl TrackedVtKey {
+    pub fn from_non_release_event(event: &VtKeyEvent<'_>) -> Self {
+        Self {
+            text: event.text.to_owned(),
+            unshifted_codepoint: event.unshifted_codepoint,
+            modifiers: event.modifiers,
+            consumed_modifiers: event.consumed_modifiers,
+        }
+    }
+
+    pub fn release<'a>(&'a self, key: &'a str) -> VtKeyEvent<'a> {
+        VtKeyEvent {
+            key,
+            text: &self.text,
+            unshifted_codepoint: self.unshifted_codepoint,
+            action: VtKeyAction::Release,
+            modifiers: self.modifiers,
+            consumed_modifiers: self.consumed_modifiers,
+        }
+    }
+
+    pub fn release_with_modifiers<'a>(
+        &'a self,
+        key: &'a str,
+        modifiers: &Modifiers,
+    ) -> VtKeyEvent<'a> {
+        let modifiers = vt_modifiers(modifiers);
+        VtKeyEvent {
+            key,
+            text: &self.text,
+            unshifted_codepoint: self.unshifted_codepoint,
+            action: VtKeyAction::Release,
+            modifiers,
+            consumed_modifiers: VtKeyModifiers {
+                shift: modifiers.shift && self.consumed_modifiers.shift,
+                control: modifiers.control && self.consumed_modifiers.control,
+                alt: modifiers.alt && self.consumed_modifiers.alt,
+                platform: modifiers.platform && self.consumed_modifiers.platform,
+            },
+        }
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn vt_key_down_event(event: &KeyDownEvent) -> Option<VtKeyEvent<'_>> {
+    let keystroke = &event.keystroke;
+    let functional = is_supported_functional_key(&keystroke.key);
+
+    // GPUI explicitly sets this for character-producing input such as
+    // Windows AltGr. Let the InputHandler deliver the committed text so
+    // the encoder cannot turn Ctrl+Alt into a terminal chord or duplicate
+    // an IME/dead-key commit.
+    if event.prefer_character_input && !functional {
+        return None;
+    }
+
+    Some(vt_key_event(
+        keystroke,
+        if event.is_held {
+            VtKeyAction::Repeat
+        } else {
+            VtKeyAction::Press
+        },
+    ))
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub fn vt_key_event(keystroke: &Keystroke, action: VtKeyAction) -> VtKeyEvent<'_> {
+    let functional = is_supported_functional_key(&keystroke.key);
+    // Space has a physical-key identity but still requires its layout text
+    // for legacy and Kitty encoding (including Ctrl-Space -> NUL).
+    let text = if functional && keystroke.key != "space" {
+        ""
+    } else {
+        printable_text(keystroke).unwrap_or("")
+    };
+    let modifiers = vt_modifiers(&keystroke.modifiers);
+    let consumed_modifiers = VtKeyModifiers {
+        shift: !functional && modifiers.shift && !text.is_empty(),
+        ..VtKeyModifiers::default()
+    };
+
+    VtKeyEvent {
+        key: &keystroke.key,
+        text,
+        unshifted_codepoint: conservative_unshifted_codepoint(text, modifiers.shift),
+        action,
+        modifiers,
+        consumed_modifiers,
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn vt_modifiers(modifiers: &Modifiers) -> VtKeyModifiers {
+    VtKeyModifiers {
+        shift: modifiers.shift,
+        control: modifiers.control,
+        alt: modifiers.alt,
+        platform: modifiers.platform,
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn printable_text(keystroke: &Keystroke) -> Option<&str> {
+    keystroke
+        .key_char
+        .as_deref()
+        .filter(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
+        .or_else(|| {
+            let mut chars = keystroke.key.chars();
+            let ch = chars.next()?;
+            (chars.next().is_none() && !ch.is_control()).then_some(keystroke.key.as_str())
+        })
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn conservative_unshifted_codepoint(text: &str, shift: bool) -> Option<char> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if !shift {
+        return Some(ch);
+    }
+
+    // GPUI can retain Shift while reporting an already-lowercase key_char for
+    // shortcut chords such as Ctrl+Shift+P. Preserve that cased identity so
+    // Kitty does not fall back to emitting bare text. Shifted punctuation is
+    // intentionally excluded because its physical unshifted key is layout-
+    // dependent. Otherwise lowercase one cased codepoint so non-ASCII keys
+    // such as Ä/ä remain identifiable without guessing a keyboard layout.
+    if ch.is_lowercase() {
+        return Some(ch);
+    }
+    let mut lowercase = ch.to_lowercase();
+    let unshifted = lowercase.next()?;
+    (lowercase.next().is_none() && unshifted != ch).then_some(unshifted)
+}
+
 /// Map legacy terminal Ctrl-key aliases to the C0/DEL byte they emit.
 ///
 /// This intentionally covers the classic byte layer only. Modern protocols
@@ -50,36 +205,17 @@ pub fn ctrl_chord_to_c0(key: &str) -> Option<u8> {
     None
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
-fn ctrl_keystroke_key_to_c0(key: &str) -> Option<u8> {
-    let trimmed = key.trim();
-    // The surface API accepts legacy ctrl-2..8 byte aliases, but human
-    // Windows/Linux keyboard input reserves Ctrl+1..9 for app tab selection.
-    if trimmed.len() == 1 && trimmed.as_bytes()[0].is_ascii_digit() {
-        return None;
-    }
-
-    ctrl_key_to_c0(trimmed)
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
-pub fn ctrl_keystroke_to_c0(key: &str, key_char: Option<&str>, shift: bool) -> Option<u8> {
-    if shift {
-        return key_char
-            .filter(|text| !text.chars().all(|ch| ch.is_ascii_alphabetic()))
-            .and_then(ctrl_key_to_c0)
-            .or_else(|| match key {
-                "@" | "^" | "_" | "?" | "~" => ctrl_key_to_c0(key),
-                _ => None,
-            });
-    }
-
-    ctrl_keystroke_key_to_c0(key).or_else(|| key_char.and_then(ctrl_keystroke_key_to_c0))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ctrl_chord_to_c0, ctrl_key_to_c0, ctrl_keystroke_to_c0};
+    use super::{conservative_unshifted_codepoint, ctrl_chord_to_c0, ctrl_key_to_c0};
+
+    #[test]
+    fn shifted_lowercase_retains_kitty_key_identity() {
+        assert_eq!(conservative_unshifted_codepoint("p", true), Some('p'));
+        assert_eq!(conservative_unshifted_codepoint("Ä", true), Some('ä'));
+        assert_eq!(conservative_unshifted_codepoint("*", true), None);
+        assert_eq!(conservative_unshifted_codepoint("ss", true), None);
+    }
 
     #[test]
     fn ctrl_key_maps_letters_to_c0() {
@@ -126,20 +262,37 @@ mod tests {
         assert_eq!(ctrl_chord_to_c0("ctrl-2"), Some(0x00));
         assert_eq!(ctrl_chord_to_c0("ctrl-~"), Some(0x1e));
     }
+}
+
+#[cfg(all(test, any(target_os = "windows", target_os = "linux")))]
+mod vt_tests {
+    use super::vt_key_event;
+    use con_ghostty::vt::VtKeyAction;
+    use gpui::{Keystroke, Modifiers};
 
     #[test]
-    fn ctrl_keystroke_uses_shifted_punctuation_without_breaking_tab_shortcuts() {
-        assert_eq!(ctrl_keystroke_to_c0("2", Some("2"), false), None);
-        assert_eq!(ctrl_keystroke_to_c0("3", Some("3"), false), None);
-        assert_eq!(ctrl_keystroke_to_c0("8", Some("8"), false), None);
-        assert_eq!(ctrl_keystroke_to_c0("2", Some("@"), true), Some(0x00));
-        assert_eq!(ctrl_keystroke_to_c0("6", Some("^"), true), Some(0x1e));
-        assert_eq!(ctrl_keystroke_to_c0("-", Some("_"), true), Some(0x1f));
-        assert_eq!(ctrl_keystroke_to_c0("`", Some("~"), true), Some(0x1e));
-        assert_eq!(ctrl_keystroke_to_c0("~", None, true), Some(0x1e));
-        assert_eq!(ctrl_keystroke_to_c0("a", Some("A"), true), None);
-        assert_eq!(ctrl_keystroke_to_c0("]", Some("}"), true), None);
-        assert_eq!(ctrl_keystroke_to_c0("]", None, false), Some(0x1d));
-        assert_eq!(ctrl_keystroke_to_c0("/", Some("/"), false), Some(0x1f));
+    fn space_keeps_text_for_the_ghostty_encoder() {
+        let keystroke = Keystroke {
+            modifiers: Modifiers::default(),
+            key: "space".into(),
+            key_char: Some(" ".into()),
+        };
+
+        let event = vt_key_event(&keystroke, VtKeyAction::Press);
+        assert_eq!(event.key, "space");
+        assert_eq!(event.text, " ");
+        assert_eq!(event.unshifted_codepoint, Some(' '));
+
+        let shifted_non_ascii = Keystroke {
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            key: "adiaeresis".into(),
+            key_char: Some("Ä".into()),
+        };
+        let event = vt_key_event(&shifted_non_ascii, VtKeyAction::Press);
+        assert_eq!(event.text, "Ä");
+        assert_eq!(event.unshifted_codepoint, Some('ä'));
     }
 }

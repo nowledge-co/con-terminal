@@ -1387,6 +1387,8 @@ dependencies = [
  "core-foundation 0.10.0",
  "dispatch",
  "etagere",
+ "image",
+ "libc",
  "log",
  "objc",
  "parking_lot",

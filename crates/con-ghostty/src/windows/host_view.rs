@@ -30,7 +30,7 @@ use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
-use super::vt::{ScreenSnapshot, VtScreen};
+use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen};
 
 use super::render::CellMetrics;
 
@@ -164,10 +164,33 @@ impl RenderSession {
         let (cols, rows) = renderer.grid_for_dimensions(&renderer_config);
         log::info!("RenderSession: grid {cols}x{rows}");
 
+        let prepared_conpty = ConPty::prepare().context("prepare ConPTY pipes failed")?;
+        let vt_writer = prepared_conpty.writer();
+        let accept_vt_replies = Arc::new(AtomicBool::new(false));
+        let accept_vt_replies_in_callback = accept_vt_replies.clone();
         let vt = Arc::new(
-            VtScreen::new(cols, rows, renderer_config.theme.as_ref())
-                .context("VtScreen::new failed")?,
+            VtScreen::new_with_write_pty(
+                cols,
+                rows,
+                renderer_config.theme.as_ref(),
+                Some(Arc::new(move |bytes, class| {
+                    if !accept_vt_replies_in_callback.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    vt_writer.write_all(bytes, class)
+                })),
+            )
+            .context("VtScreen::new failed")?,
         );
+        let metrics = renderer.metrics();
+        let cell_width_px = metrics.cell_width_px.max(1);
+        let cell_height_px = metrics.cell_height_px.max(1);
+        // The renderer already owns an initial render target of the requested
+        // size, so initialize only libghostty's pixel geometry here. Waiting
+        // for the next size change leaves cell-based Kitty placements at 0px
+        // indefinitely when the pane opens at its final dimensions.
+        vt.resize(cols, rows, cell_width_px, cell_height_px)
+            .context("initial VtScreen::resize failed")?;
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
             .as_deref()
@@ -177,25 +200,33 @@ impl RenderSession {
             let text = String::from_utf8_lossy(output);
             transcript.lock().push(text.as_ref());
         }
+        // Replaying a restored transcript must not inject stale query
+        // responses into the new shell. Enable replies only after replay,
+        // while the child process still cannot have emitted output.
+        accept_vt_replies.store(true, Ordering::Release);
 
         let vt_for_pty = vt.clone();
         let transcript_for_pty = transcript.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell = super::conpty::default_shell_command();
         let shell_cwd = resolve_shell_cwd(cwd);
-        log::info!("RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?}");
-        let conpty = ConPty::spawn(
-            &shell,
-            shell_cwd.as_deref(),
-            PtySize { cols, rows },
-            move |bytes| {
-                let text = String::from_utf8_lossy(bytes);
-                transcript_for_pty.lock().push(text.as_ref());
-                vt_for_pty.feed(bytes);
-                wake_for_pty();
-            },
-        )
-        .context("ConPty::spawn failed")?;
+        log::info!(
+            "RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?} \
+             cell={cell_width_px}x{cell_height_px}"
+        );
+        let conpty = prepared_conpty
+            .spawn(
+                &shell,
+                shell_cwd.as_deref(),
+                PtySize { cols, rows },
+                move |bytes| {
+                    let text = String::from_utf8_lossy(bytes);
+                    transcript_for_pty.lock().push(text.as_ref());
+                    vt_for_pty.feed(bytes);
+                    wake_for_pty();
+                },
+            )
+            .context("ConPty::spawn failed")?;
         let conpty = Arc::new(conpty);
 
         Ok(Self {
@@ -282,18 +313,19 @@ impl RenderSession {
         let config = self.config.lock();
         let (cols, rows) = renderer.grid_for_dimensions(&config);
         drop(config);
-        let cell_w = metrics.cell_width_px.max(1);
-        let cell_h = metrics.cell_height_px.max(1);
+        let cell_width_px = metrics.cell_width_px.max(1);
+        let cell_height_px = metrics.cell_height_px.max(1);
         drop(renderer);
 
         self.vt
-            .resize(cols, rows, cell_w, cell_h)
+            .resize(cols, rows, cell_width_px, cell_height_px)
             .context("VtScreen::resize failed")?;
         self.conpty
             .resize(PtySize { cols, rows })
             .context("ConPty::resize failed")?;
         log::debug!(
-            "RenderSession::resize -> {width_px}x{height_px} grid={cols}x{rows} cell={cell_w}x{cell_h}"
+            "RenderSession::resize -> {width_px}x{height_px} grid={cols}x{rows} \
+             cell={cell_width_px}x{cell_height_px}"
         );
         Ok(())
     }
@@ -374,11 +406,7 @@ impl RenderSession {
     }
 
     pub fn is_alive(&self) -> bool {
-        self.conpty.is_alive()
-    }
-
-    pub fn is_bracketed_paste(&self) -> bool {
-        self.vt.is_bracketed_paste()
+        self.conpty.is_alive() && !self.vt.is_write_desynchronized()
     }
 
     pub fn is_decckm(&self) -> bool {
@@ -406,7 +434,7 @@ impl RenderSession {
 
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
-    pub fn write_input(&self, text: &str) {
+    pub fn write_input(&self, text: &str) -> Result<()> {
         self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
@@ -414,15 +442,32 @@ impl RenderSession {
         } else {
             std::borrow::Cow::Borrowed(text.as_bytes())
         };
-        let _ = self.conpty.write(&bytes);
+        self.vt
+            .write_input(&bytes)
+            .context("failed to queue ConPTY input")
     }
 
-    /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
-    /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
-    pub fn write_pty_raw(&self, data: &[u8]) {
-        self.scroll_viewport_to_bottom();
-        self.request_low_latency_after_next_generation();
-        let _ = self.conpty.write(data);
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
+        let outcome = self.vt.send_key(event)?;
+        if outcome.output_accepted {
+            self.scroll_viewport_to_bottom();
+            self.request_low_latency_after_next_generation();
+        }
+        Ok(outcome)
+    }
+
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: VtPasteSource,
+        confirm_unsafe_paste: bool,
+    ) -> Result<VtPasteResult> {
+        let result = self.vt.paste_text(text, source, confirm_unsafe_paste)?;
+        if result == VtPasteResult::Accepted {
+            self.scroll_viewport_to_bottom();
+            self.request_low_latency_after_next_generation();
+        }
+        Ok(result)
     }
 
     pub fn clear_screen_and_scrollback(&self) {
@@ -543,7 +588,11 @@ impl RenderSession {
         pressed: bool,
     ) -> bool {
         let seq = sgr_button_sequence(base_button, col, row, mods, pressed);
-        self.conpty.write(seq.as_bytes()).is_ok()
+        if pressed {
+            self.vt.write_input(seq.as_bytes()).is_ok()
+        } else {
+            self.vt.write_control(seq.as_bytes()).is_ok()
+        }
     }
 
     /// Cancel any in-flight drag (used on focus loss).
@@ -572,7 +621,9 @@ impl RenderSession {
         let col = col.max(1);
         let row = row.max(1);
         let seq = format!("\x1b[<{button};{col};{row}M");
-        let _ = self.conpty.write(seq.as_bytes());
+        if let Err(err) = self.vt.write_input(seq.as_bytes()) {
+            log::debug!("windows terminal mouse wheel write failed: {err}");
+        }
     }
 
     /// Scroll the terminal viewport when the shell did not request
@@ -660,10 +711,10 @@ impl RenderSession {
     }
 
     fn scroll_rows_for_delta(&self, delta_y_px: f32, alternate_screen: bool) -> isize {
-        let cell_h = self.metrics().cell_height_px.max(1) as f32;
+        let cell_height_px = self.metrics().cell_height_px.max(1) as f32;
         self.scroll_remainder
             .lock()
-            .rows_for_delta(delta_y_px, cell_h, alternate_screen)
+            .rows_for_delta(delta_y_px, cell_height_px, alternate_screen)
     }
 
     fn send_scroll_as_cursor_keys(&self, rows: isize) {
@@ -672,7 +723,10 @@ impl RenderSession {
         };
         self.request_low_latency_after_next_generation();
         for _ in 0..rows.unsigned_abs() {
-            let _ = self.conpty.write(seq.as_bytes());
+            if let Err(err) = self.vt.write_input(seq.as_bytes()) {
+                log::debug!("windows terminal alternate-scroll write failed: {err}");
+                break;
+            }
         }
     }
 

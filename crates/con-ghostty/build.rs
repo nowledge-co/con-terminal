@@ -11,20 +11,21 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// macOS full-libghostty build or the Windows libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
 ///
-/// 2026-04-17 bump: from `e740f6fc1...` to `ca7516bea6...`. The older
-/// pin predated libghostty-vt's render-state implementation on
-/// Windows — `ghostty_render_state_new` was exported as a symbol but
-/// dereferenced a null internal function pointer at runtime. The new
-/// pin is tip-of-main on 2026-04-17; see the postmortem in
-/// docs/impl/windows-port.md.
+/// 2026-08-26 bump: from `8867c37c55...` to `5f5b988c52...`. The 27 upstream
+/// commits were audited with unchanged public C headers and revalidated
+/// against Con's private embedding patch and portable VT bindings.
 ///
-/// If a bump breaks the macOS libghostty build (different zig flags
-/// needed), revert by re-pinning to `e740f6fc117971da9df9fc957a706e6d96554aa5`
-/// — that's known-good on macOS.
-const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
+/// Ghostty's internal macOS embedding API and libghostty-vt API are not
+/// stable. Future bumps must update the handwritten FFI bindings, compile
+/// the ABI assertions, and run real build/link/runtime checks on all three
+/// platforms rather than treating this as a source-only dependency bump.
+const GHOSTTY_REV: &str = "5f5b988c5236facfe8d2439203d9ee9d5b636cf8";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
+const REQUIRED_ZIG_VERSION: &str = "0.16.0";
+const MAX_PREFETCH_PACKAGES: usize = 256;
+const MAX_PREFETCH_ARCHIVE_BYTES: &str = "134217728";
 
 fn main() {
     // Rerun the build script when any of our own env vars flip — cargo
@@ -61,12 +62,26 @@ fn main() {
 // ── macOS ─────────────────────────────────────────────────────────────
 
 fn build_macos() {
-    let ghostty_dir = resolve_ghostty_source();
-    let ghostty_dir = patchable_ghostty_source(ghostty_dir);
-    let _initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
-    let optimize = ghostty_optimize();
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
     let zig_global_cache_dir = zig_global_cache_dir("macos");
+    require_zig_version(&zig_bin, zig_global_cache_dir.as_deref(), "macos");
+
+    let ghostty_dir = resolve_ghostty_source();
+    let ghostty_dir = patchable_ghostty_source(ghostty_dir);
+    let initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
+    let include_dir = ghostty_dir.join("include");
+    let optimize = ghostty_optimize();
+
+    let mut ffi_abi = cc::Build::new();
+    ffi_abi
+        .file("src/ffi_abi.c")
+        .include(&include_dir)
+        .flag("-std=c11");
+    if initial_output_restore_enabled {
+        ffi_abi.define("CON_GHOSTTY_EMBEDDED_INITIAL_OUTPUT", None);
+    }
+    ffi_abi.compile("con_ghostty_ffi_abi");
+    println!("cargo:rerun-if-changed=src/ffi_abi.c");
 
     cc::Build::new()
         .file("src/objc/desktop_notification.m")
@@ -114,12 +129,33 @@ fn build_macos() {
         }
     }
 
-    let lib_path = find_lib(&ghostty_dir, "libghostty-fat.a");
+    // `libghostty-internal-fat.a` is an intermediate archive that still
+    // carries Zig compiler-rt memcpy/memmove. The final archive applies
+    // Ghostty's libSystem override, which avoids a measured PTY throughput
+    // regression in scroll-heavy workloads.
+    let xcframework_arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64",
+        Ok("x86_64") => "x86_64",
+        Ok(arch) => panic!("unsupported macOS Ghostty architecture: {arch}"),
+        Err(err) => panic!("CARGO_CFG_TARGET_ARCH is not set: {err}"),
+    };
+    let lib_path = ghostty_dir
+        .join("macos")
+        .join("GhosttyKit.xcframework")
+        .join(format!("macos-{xcframework_arch}"))
+        .join("libghostty-internal.a");
+    if !lib_path.is_file() {
+        panic!(
+            "Could not find installed final archive {} after building ghostty source at {}",
+            lib_path.display(),
+            ghostty_dir.display()
+        );
+    }
     println!(
         "cargo:rustc-link-search=native={}",
         lib_path.parent().unwrap().display()
     );
-    println!("cargo:rustc-link-lib=static=ghostty-fat");
+    println!("cargo:rustc-link-lib=static=ghostty-internal");
 
     for framework in &[
         "AppKit",
@@ -149,7 +185,6 @@ fn build_macos() {
         );
     }
 
-    let include_dir = ghostty_dir.join("include");
     println!("cargo:include={}", include_dir.display());
     println!(
         "cargo:rustc-env=CON_GHOSTTY_RESOURCES_DIR={}",
@@ -225,50 +260,7 @@ fn build_vt_backend(target_os: &str) {
         println!("cargo:warning=using zig global cache dir {}", dir.display());
     }
 
-    let mut zig_probe_cmd = Command::new(&zig_bin);
-    configure_zig_command(&mut zig_probe_cmd, zig_global_cache_dir.as_deref());
-    let zig_probe = zig_probe_cmd.arg("version").output();
-    match zig_probe {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            println!(
-                "cargo:warning=using zig {} (from `{}`)",
-                version,
-                zig_bin.to_string_lossy()
-            );
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            panic!(
-                "\n\n========================================================\n\
-                 con-ghostty: `{bin} version` exited with status {status}.\n\
-                 stderr:\n{stderr}\n\
-                 ========================================================\n",
-                bin = zig_bin.to_string_lossy(),
-                status = output.status,
-                stderr = stderr,
-            );
-        }
-        Err(err) => {
-            let path = env::var("PATH").unwrap_or_default();
-            panic!(
-                "\n\n========================================================\n\
-                 con-ghostty: could not spawn `{bin} version`: {err}\n\n\
-                 Zig 0.13+ is required to build libghostty-vt for {target_os}.\n\
-                 Install it from https://ziglang.org/download/ and ensure\n\
-                 the `zig` executable is on PATH, or set CON_ZIG_BIN to\n\
-                 the absolute path of the zig executable.\n\n\
-                 Current PATH: {path}\n\n\
-                 To skip this step entirely (the terminal backend will\n\
-                 fail to link), set CON_SKIP_GHOSTTY_VT=1.\n\
-                 ========================================================\n",
-                bin = zig_bin.to_string_lossy(),
-                err = err,
-                target_os = target_os,
-                path = path,
-            );
-        }
-    }
+    require_zig_version(&zig_bin, zig_global_cache_dir.as_deref(), target_os);
 
     let ghostty_dir = resolve_ghostty_source();
 
@@ -291,16 +283,22 @@ fn build_vt_backend(target_os: &str) {
     // Windows, so default it on regardless of cargo profile and let
     // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
-    // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
-    // when SIMD is on, but the produced static archive does not yet
-    // bundle the required `simdutf` objects reliably across our target
-    // environments. Default SIMD off for now so the resulting
-    // `libghostty-vt` archive is self-contained on both Windows and
-    // Linux. Keep the env override for experimentation once the native
-    // link surface is understood well enough to ship.
-    let simd_on = env::var("CON_GHOSTTY_VT_SIMD")
-        .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+    // `-Dsimd`: the pinned Ghostty revision must build Linux libghostty-vt
+    // with libc enabled. Its non-libc Wuffs module exports hidden weak
+    // `calloc`/`free` fallbacks; when that archive is linked into a Rust
+    // executable, the hidden fallbacks capture the process-wide symbols and
+    // make every zeroed Rust allocation fail. Enabling SIMD also enables libc
+    // on Ghostty's root module, suppressing those fallbacks, and the current
+    // Linux archive contains the required simdutf/highway objects.
+    //
+    // Windows keeps the conservative non-SIMD default because its static
+    // archive has a different C++ link surface. The override remains useful
+    // there for targeted toolchain experiments; Linux always takes the only
+    // runtime-safe path.
+    let simd_on = target_os == "linux"
+        || env::var("CON_GHOSTTY_VT_SIMD")
+            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
     let simd_flag = if simd_on {
         "-Dsimd=true"
     } else {
@@ -364,47 +362,27 @@ fn build_vt_backend(target_os: &str) {
         }
     }
 
-    // Zig produces both a shared library (`ghostty-vt.dll` +
-    // `ghostty-vt.lib` import-stub on MSVC) and a static archive
-    // (`ghostty-vt-static.lib`). We want the static archive — linking
-    // the import stub would leave `con-app.exe` dependent on
-    // `ghostty-vt.dll` at runtime, which we don't ship.
-    //
-    // `cfg!()` at build.rs compile time reflects the *host*, not the
-    // target. Use the runtime env the cargo build passes us.
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let (static_lib_name, static_link_name, fallback_lib_name, fallback_link_name) =
-        if target_env == "msvc" {
-            (
-                "ghostty-vt-static.lib",
-                "ghostty-vt-static",
-                "ghostty-vt.lib",
-                "ghostty-vt",
-            )
-        } else {
-            (
-                "libghostty-vt-static.a",
-                "ghostty-vt-static",
-                "libghostty-vt.a",
-                "ghostty-vt",
-            )
-        };
-
-    // Prefer static; fall back to the import-lib variant with a loud
-    // warning so the user notices the runtime DLL dependency.
-    let (lib_path, link_name) = match try_find_lib(&ghostty_dir, static_lib_name) {
-        Some(p) => (p, static_link_name),
-        None => {
-            println!(
-                "cargo:warning=libghostty-vt-static not found; linking shared `{fallback_lib_name}` \
-                 instead. The resulting executable will depend on ghostty-vt.dll at runtime — \
-                 ship it alongside the .exe or bump the Ghostty pin to a revision that emits \
-                 the static archive."
-            );
-            let path = find_lib(&ghostty_dir, fallback_lib_name);
-            (path, fallback_link_name)
-        }
+    // Link the static archive installed by the build we just ran. Do not scan
+    // `.zig-cache`: one Ghostty checkout can contain cached archives for many
+    // targets, and mtime cannot tell a Linux archive from a newer Mach-O one.
+    // On Windows the distinct name also prevents accidentally linking the DLL
+    // import library, which would create an unshipped runtime dependency.
+    let (static_lib_name, link_name) = if target_os == "windows" {
+        ("ghostty-vt-static.lib", "ghostty-vt-static")
+    } else {
+        ("libghostty-vt.a", "ghostty-vt")
     };
+    let lib_path = ghostty_dir
+        .join("zig-out")
+        .join("lib")
+        .join(static_lib_name);
+    if !lib_path.is_file() {
+        panic!(
+            "Could not find installed static archive {} after building ghostty source at {}",
+            lib_path.display(),
+            ghostty_dir.display()
+        );
+    }
 
     println!(
         "cargo:rustc-link-search=native={}",
@@ -703,68 +681,99 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     let exec = ghostty_dir.join("src/termio/Exec.zig");
     let header = ghostty_dir.join("include/ghostty.h");
 
-    patch_file_once(
+    // Prepare every source change in memory before writing anything. A Ghostty
+    // bump can invalidate any one of these anchors; validating the complete
+    // patch first prevents an anchor mismatch from leaving the cached checkout
+    // in a partially patched, internally inconsistent state.
+    let embedded_original = read_file_text(&embedded)?;
+    let surface_original = read_file_text(&surface)?;
+    let exec_original = read_file_text(&exec)?;
+    let header_original = read_file_text(&header)?;
+    let mut embedded_text = embedded_original.clone();
+    let mut surface_text = surface_original.clone();
+    let mut exec_text = exec_original.clone();
+    let mut header_text = header_original.clone();
+
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "initial_output: ?[*:0]const u8",
         &[(
             "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
             "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Output to seed into the terminal state before the command starts.\n        /// This is an embedding-only hook used for visual scrollback restore;\n        /// it is parsed as terminal output and is never written to the pty.\n        initial_output: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "initial_output_restore = if (opts.initial_output)",
         &[(
             "        // Initialize our surface right away. We're given a view that is\n        // ready to use.\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n        );\n",
             "        // Initialize our surface right away. We're given a view that is\n        // ready to use. `initial_output_restore` is parsed into Ghostty's\n        // terminal state before the child process starts.\n        const initial_output_restore = if (opts.initial_output) |c_output|\n            std.mem.sliceTo(c_output, 0)\n        else\n            null;\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n            initial_output_restore,\n        );\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &embedded,
+        &mut embedded_text,
         "Con: macOS may deny directory open/stat preflight for privacy-protected cwd",
         &[(
-            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
-            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &surface,
+        &mut surface_text,
         "initial_output_restore: ?[]const u8",
         &[(
             "    rt_surface: *apprt.runtime.Surface,\n) !void {\n",
             "    rt_surface: *apprt.runtime.Surface,\n    initial_output_restore: ?[]const u8,\n) !void {\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &exec,
+        &mut exec_text,
         "Con: trust macOS cwd after embedded surface validation",
         &[(
-            "            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
-            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
         )],
     )?;
-    patch_file_once(
+    patch_text_once(
         &surface,
+        &mut surface_text,
         "This keeps restored text in Ghostty's",
         &[(
             "    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
             "    // Seed restored output after the renderer is alive but before the IO\n    // thread starts the child process. This keeps restored text in Ghostty's\n    // own terminal screen/scrollback layer without ever feeding it to the shell.\n    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n\n    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
         )],
     )?;
-    replace_file_text_if_present(
-        &surface,
+    replace_text_if_present(
+        &mut surface_text,
         "    if (opts.initial_output) |c_output| {\n        const initial_output = std.mem.sliceTo(c_output, 0);\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
         "    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
-    )?;
+    );
 
-    patch_file_once(
+    patch_text_once(
         &header,
+        &mut header_text,
         "const char* initial_output;",
         &[(
             "  const char* initial_input;\n  bool wait_after_command;\n",
             "  const char* initial_input;\n  const char* initial_output;\n  bool wait_after_command;\n",
         )],
     )?;
+
+    write_patch_files_with_rollback(&[
+        (
+            &embedded,
+            embedded_original.as_str(),
+            embedded_text.as_str(),
+        ),
+        (&surface, surface_original.as_str(), surface_text.as_str()),
+        (&exec, exec_original.as_str(), exec_text.as_str()),
+        (&header, header_original.as_str(), header_text.as_str()),
+    ])?;
 
     println!("cargo:rustc-cfg=con_ghostty_embedded_initial_output");
     println!("cargo:rerun-if-changed={}", embedded.display());
@@ -774,9 +783,16 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn patch_file_once(path: &Path, marker: &str, replacements: &[(&str, &str)]) -> Result<(), String> {
-    let mut text = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+fn read_file_text(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|err| format!("failed to read {}: {err}", path.display()))
+}
+
+fn patch_text_once(
+    path: &Path,
+    text: &mut String,
+    marker: &str,
+    replacements: &[(&str, &str)],
+) -> Result<(), String> {
     if text.contains(marker) {
         return Ok(());
     }
@@ -788,19 +804,16 @@ fn patch_file_once(path: &Path, marker: &str, replacements: &[(&str, &str)]) -> 
                 path.display()
             ));
         }
-        text = text.replacen(from, to, 1);
+        *text = text.replacen(from, to, 1);
     }
 
-    write_file_atomic(path, &text)
+    Ok(())
 }
 
-fn replace_file_text_if_present(path: &Path, from: &str, to: &str) -> Result<(), String> {
-    let text = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    if !text.contains(from) {
-        return Ok(());
+fn replace_text_if_present(text: &mut String, from: &str, to: &str) {
+    if text.contains(from) {
+        *text = text.replace(from, to);
     }
-    write_file_atomic(path, &text.replace(from, to))
 }
 
 fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
@@ -812,77 +825,66 @@ fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
     })
 }
 
-fn try_find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> Option<PathBuf> {
-    let zig_cache = ghostty_dir.join(".zig-cache");
-    if zig_cache.exists() {
-        if let Ok(output) = Command::new("find")
-            .args([zig_cache.to_str().unwrap(), "-name", lib_name, "-type", "f"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut candidates: Vec<PathBuf> = stdout
-                .lines()
-                .map(PathBuf::from)
-                .filter(|p| p.exists())
-                .collect();
-            candidates.sort_by(|a, b| {
-                let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-                let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-                b_time.cmp(&a_time)
-            });
-            if let Some(path) = candidates.first() {
-                return Some(path.clone());
+fn write_patch_files_with_rollback(files: &[(&Path, &str, &str)]) -> Result<(), String> {
+    for (written_count, (path, _, patched)) in files.iter().enumerate() {
+        if let Err(write_err) = write_file_atomic(path, patched) {
+            let mut rollback_errors = Vec::new();
+            for (rollback_path, original, _) in files[..written_count].iter().rev() {
+                if let Err(err) = write_file_atomic(rollback_path, original) {
+                    rollback_errors.push(err);
+                }
             }
+            if !rollback_errors.is_empty() {
+                panic!(
+                    "con-ghostty: Ghostty patch write failed and rollback could not restore the \
+                     cached source tree. Refusing to continue with mixed source files. Write error: \
+                     {write_err}. Rollback error(s): {}",
+                    rollback_errors.join("; ")
+                );
+            }
+            return Err(write_err);
         }
     }
-    for relative in ["zig-out/lib", "zig-out\\lib", "macos/build/Debug"] {
-        let candidate = ghostty_dir.join(relative).join(lib_name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    Ok(())
 }
 
-fn find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> PathBuf {
-    let zig_cache = ghostty_dir.join(".zig-cache");
-    if zig_cache.exists() {
-        let output = Command::new("find")
-            .args([zig_cache.to_str().unwrap(), "-name", lib_name, "-type", "f"])
-            .output();
-
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut candidates: Vec<PathBuf> = stdout
-                .lines()
-                .map(PathBuf::from)
-                .filter(|p| p.exists())
-                .collect();
-
-            candidates.sort_by(|a, b| {
-                let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-                let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-                b_time.cmp(&a_time)
-            });
-
-            if let Some(path) = candidates.first() {
-                return path.clone();
-            }
-        }
+fn require_zig_version(zig_bin: &OsStr, zig_global_cache_dir: Option<&Path>, target_os: &str) {
+    let mut command = Command::new(zig_bin);
+    configure_zig_command(&mut command, zig_global_cache_dir);
+    let output = command.arg("version").output().unwrap_or_else(|err| {
+        let path = env::var("PATH").unwrap_or_default();
+        panic!(
+            "\n\n========================================================\n\
+             con-ghostty: could not spawn `{bin} version`: {err}\n\n\
+             Zig {required} exactly is required to build Ghostty for {target_os}.\n\
+             Install it from https://ziglang.org/download/ and ensure the `zig`\n\
+             executable is on PATH, or set CON_ZIG_BIN to its absolute path.\n\n\
+             Current PATH: {path}\n\n\
+             ========================================================\n",
+            bin = zig_bin.to_string_lossy(),
+            required = REQUIRED_ZIG_VERSION,
+        )
+    });
+    if !output.status.success() {
+        panic!(
+            "con-ghostty: `{}` version failed with status {}: {}",
+            zig_bin.to_string_lossy(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
 
-    // Cross-platform fallback walk for systems without `find` (e.g.
-    // Windows without WSL). Manual scan of common output dirs.
-    for relative in ["zig-out/lib", "macos/build/Debug"] {
-        let candidate = ghostty_dir.join(relative).join(lib_name);
-        if candidate.exists() {
-            return candidate;
-        }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version != REQUIRED_ZIG_VERSION {
+        panic!(
+            "con-ghostty: Zig {REQUIRED_ZIG_VERSION} exactly is required for {target_os}, \
+             but `{}` reports {version}. Set CON_ZIG_BIN to the validated Zig executable.",
+            zig_bin.to_string_lossy()
+        );
     }
-
-    panic!(
-        "Could not find {lib_name} after building ghostty source at {}",
-        ghostty_dir.display()
+    println!(
+        "cargo:warning=using zig {version} (from `{}`)",
+        zig_bin.to_string_lossy()
     );
 }
 
@@ -978,8 +980,17 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
             if !seen_urls.insert(url.clone()) {
                 continue;
             }
+            if seen_urls.len() > MAX_PREFETCH_PACKAGES {
+                println!(
+                    "cargo:warning=con-ghostty: refusing to prefetch more than \
+                     {MAX_PREFETCH_PACKAGES} unique Zig packages"
+                );
+                failed += 1;
+                zon_queue.clear();
+                break;
+            }
 
-            match prefetch_zig_url(zig_bin, &url, zig_global_cache_dir) {
+            match prefetch_zig_url(zig_bin, root, &url, zig_global_cache_dir) {
                 Some(package_hash) => {
                     fetched += 1;
                     let package_root = cache_dir.join("p").join(package_hash);
@@ -1052,11 +1063,18 @@ fn extract_zon_urls(text: &str) -> Vec<String> {
 
 fn prefetch_zig_url(
     zig_bin: &OsStr,
+    project_root: &Path,
     url: &str,
     zig_global_cache_dir: Option<&Path>,
 ) -> Option<String> {
     if let Some((repo_url, revision)) = parse_git_package_url(url) {
-        return prefetch_zig_git_url(zig_bin, &repo_url, &revision, zig_global_cache_dir);
+        return prefetch_zig_git_url(
+            zig_bin,
+            project_root,
+            &repo_url,
+            &revision,
+            zig_global_cache_dir,
+        );
     }
 
     let package_name = url.rsplit('/').next().unwrap_or("package.tar.gz");
@@ -1067,12 +1085,30 @@ fn prefetch_zig_url(
     ));
 
     let curl_status = Command::new("curl")
-        .args(["-fL", "--retry", "3", "--retry-delay", "1", url, "-o"])
+        .args([
+            "-fL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "1",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            "300",
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "30",
+            "--max-filesize",
+            MAX_PREFETCH_ARCHIVE_BYTES,
+            url,
+            "-o",
+        ])
         .arg(&tmp)
         .status();
     match curl_status {
         Ok(status) if status.success() => {
-            let hash = zig_fetch_path(zig_bin, &tmp, zig_global_cache_dir);
+            let hash = zig_fetch_path(zig_bin, project_root, &tmp, zig_global_cache_dir);
             let _ = fs::remove_file(&tmp);
             hash
         }
@@ -1106,6 +1142,7 @@ fn parse_git_package_url(url: &str) -> Option<(String, String)> {
 
 fn prefetch_zig_git_url(
     zig_bin: &OsStr,
+    project_root: &Path,
     repo_url: &str,
     revision: &str,
     zig_global_cache_dir: Option<&Path>,
@@ -1149,7 +1186,7 @@ fn prefetch_zig_git_url(
                 .arg("HEAD")
                 .current_dir(&checkout),
         )?;
-        zig_fetch_path(zig_bin, &archive, zig_global_cache_dir)
+        zig_fetch_path(zig_bin, project_root, &archive, zig_global_cache_dir)
     })();
 
     let _ = fs::remove_dir_all(&tmp_root);
@@ -1163,12 +1200,20 @@ fn run_status(command: &mut Command) -> Option<()> {
 
 fn zig_fetch_path(
     zig_bin: &OsStr,
+    project_root: &Path,
     path: &Path,
     zig_global_cache_dir: Option<&Path>,
 ) -> Option<String> {
     let mut cmd = Command::new(zig_bin);
     configure_zig_command(&mut cmd, zig_global_cache_dir);
-    let output = cmd.arg("fetch").arg(path).output().ok()?;
+    // Zig 0.16 resolves fetch configuration through the surrounding build
+    // project even without `--save`, so invoke it from Ghostty's root.
+    let output = cmd
+        .arg("fetch")
+        .arg(path)
+        .current_dir(project_root)
+        .output()
+        .ok()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         println!(

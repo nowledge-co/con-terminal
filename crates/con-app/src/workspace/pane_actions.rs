@@ -337,7 +337,7 @@ impl ConWorkspace {
         let closing = close_outcome.terminal.clone();
         closing.set_focus_state(false, cx);
         closing.set_native_view_visible(false, cx);
-        closing.shutdown_surface(cx);
+        closing.shutdown_surface(Some(window), cx);
 
         #[cfg(target_os = "macos")]
         self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
@@ -937,9 +937,9 @@ impl ConWorkspace {
             }
 
             if shutdown_closing_terminals {
-                cx.on_next_frame(window, move |_workspace, _window, cx| {
+                cx.on_next_frame(window, move |_workspace, window, cx| {
                     for terminal in &closing_terminals {
-                        terminal.shutdown_surface(cx);
+                        terminal.shutdown_surface(Some(&mut *window), cx);
                     }
                     if tab_is_visible {
                         for terminal in &surviving_terminals {

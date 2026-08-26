@@ -13,25 +13,31 @@
 //! and layout state. The Windows D3D11 path remains the model for the
 //! eventual native renderer.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
+use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
-    GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell, VtCursor,
+    GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
+    SurfaceSize, VtCell, VtCursor,
 };
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Sizable as _};
+use image::{Frame, RgbaImage};
+use smallvec::SmallVec;
 
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
-    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
+    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths, unsafe_paste_preview,
 };
-use crate::terminal_restore::{key_down_may_write_terminal, restored_terminal_output};
+use crate::terminal_restore::restored_terminal_output;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const MIN_FONT_SIZE_PX: f32 = 12.0;
@@ -39,6 +45,7 @@ const DEFAULT_CELL_WIDTH_RATIO: f32 = 0.62;
 const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
 const TERMINAL_PADDING_X_PX: f32 = 12.0;
 const TERMINAL_PADDING_Y_PX: f32 = 10.0;
+const KITTY_BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
 
 /// Resolved logical font size used for both the cell-grid estimate
 /// (`estimate_surface_size`) and the actual paint (`render`). Both
@@ -62,6 +69,18 @@ fn cell_width_px(font_size_px: f32) -> f32 {
 
 fn cell_height_px(font_size_px: f32) -> f32 {
     (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0)
+}
+
+fn physical_cell_size(font_size_px: f32, scale_factor: f32) -> (u32, u32) {
+    let scale_factor = scale_factor.max(f32::EPSILON);
+    (
+        (cell_width_px(font_size_px) * scale_factor)
+            .round()
+            .max(1.0) as u32,
+        (cell_height_px(font_size_px) * scale_factor)
+            .round()
+            .max(1.0) as u32,
+    )
 }
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -97,6 +116,8 @@ pub struct GhosttyView {
     row_cache_cursor: Option<VtCursor>,
     row_cache_style: Option<RowCacheStyleKey>,
     row_cache_shape: Option<(u16, u16)>,
+    kitty_images: HashMap<KittyImageKey, Arc<RenderImage>>,
+    failed_kitty_images: HashSet<KittyImageKey>,
     /// Latched after the first PTY snapshot that contained any
     /// printable content. Used to gate the "Waiting for shell
     /// prompt…" placeholder so it disappears the moment bash echoes
@@ -108,7 +129,7 @@ pub struct GhosttyView {
     scale_factor: f32,
     ime_marked_text: Option<String>,
     ime_selected_range: Option<Range<usize>>,
-    last_surface_size: Option<(u32, u32, u16, u16)>,
+    last_surface_size: Option<SurfaceSize>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -122,6 +143,8 @@ pub struct GhosttyView {
     /// Shift state at the right-button press, reused for the matching
     /// release so a modifier change in between doesn't break pairing.
     terminal_mouse_right_shift: bool,
+    keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
+    pending_unsafe_paste: Option<(String, VtPasteSource)>,
 }
 
 pub fn init(cx: &mut App) {
@@ -190,6 +213,8 @@ impl GhosttyView {
             row_cache_cursor: None,
             row_cache_style: None,
             row_cache_shape: None,
+            kitty_images: HashMap::new(),
+            failed_kitty_images: HashSet::new(),
             seen_any_output: false,
             pane_bounds: None,
             scale_factor: 1.0,
@@ -204,6 +229,8 @@ impl GhosttyView {
             drag_anchor: None,
             terminal_mouse_right_consumed: None,
             terminal_mouse_right_shift: false,
+            keys_awaiting_release: HashMap::new(),
+            pending_unsafe_paste: None,
         }
     }
 
@@ -277,7 +304,8 @@ impl GhosttyView {
         true
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -291,6 +319,10 @@ impl GhosttyView {
         self.row_cache_cursor = None;
         self.row_cache_style = None;
         self.row_cache_shape = None;
+        for image in self.kitty_images.drain().map(|(_, image)| image) {
+            cx.drop_image(image, window.as_deref_mut());
+        }
+        self.failed_kitty_images.clear();
         self.seen_any_output = false;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
@@ -303,9 +335,14 @@ impl GhosttyView {
         self.drag_anchor = None;
         self.terminal_mouse_right_consumed = None;
         self.terminal_mouse_right_shift = false;
+        self.keys_awaiting_release.clear();
+        self.pending_unsafe_paste = None;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
+        if !focused {
+            self.release_tracked_keys();
+        }
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
         }
@@ -478,15 +515,20 @@ impl GhosttyView {
         {
             return false;
         }
-        // Latch once the parser has handed us any printable cell.
+        // Latch once the parser has handed us any visible terminal output.
         // Used to suppress the "Waiting for shell prompt…" placeholder
         // for the lifetime of the PTY session — important for TUIs
         // (htop, vim, less, fzf, …) that switch to the alternate
         // screen and leave the grid empty for ~hundreds of ms before
         // drawing their UI. Without this latch the placeholder would
         // briefly flash over a black backdrop on every alt-screen
-        // entry and look like a regression in shell readiness.
-        if !self.seen_any_output && snapshot.cells.iter().any(|c| c.codepoint != 0) {
+        // entry and look like a regression in shell readiness. Image-only
+        // applications count too, otherwise the placeholder would shift
+        // their Kitty placements down by one synthetic row indefinitely.
+        if !self.seen_any_output
+            && (snapshot.cells.iter().any(|c| c.codepoint != 0)
+                || !snapshot.kitty_placements.is_empty())
+        {
             self.seen_any_output = true;
         }
         self.clear_selection();
@@ -503,14 +545,19 @@ impl GhosttyView {
         };
 
         let size = self.estimate_surface_size(bounds, scale_factor);
-        let signature = (size.width_px, size.height_px, size.columns, size.rows);
-        if self.last_surface_size == Some(signature) {
+        if self.last_surface_size == Some(size) {
             return false;
         }
 
         self.clear_selection();
-        terminal.resize_surface(size);
-        self.last_surface_size = Some(signature);
+        if let Err(err) = terminal.resize_surface(size) {
+            // Do not cache a resize that never reached the PTY. A later layout
+            // or render pass can retry the same dimensions after backpressure
+            // on the Flatpak host bridge clears.
+            log::debug!("linux pty resize failed: {err}");
+            return false;
+        }
+        self.last_surface_size = Some(size);
         false
     }
 
@@ -526,9 +573,13 @@ impl GhosttyView {
         // actually paint at — picking different floors here would
         // make text overrun the estimated column count and lines
         // wrap unexpectedly on the alternate screen.
-        let font_size_px = effective_font_size(self.initial_font_size) * scale_factor;
-        let cell_width = cell_width_px(font_size_px) as u32;
-        let cell_height = cell_height_px(font_size_px) as u32;
+        let font_size_px = effective_font_size(self.initial_font_size);
+        // GPUI paints in logical pixels and applies the display scale after
+        // layout. Scale those exact logical cell metrics for libghostty too;
+        // recalculating the ratios from an already-scaled font can round to a
+        // different device size (for example 9 px logical became 17 px at 2x),
+        // which makes Kitty placements drift away from their text columns.
+        let (cell_width, cell_height) = physical_cell_size(font_size_px, scale_factor);
         let columns = (width_px / cell_width.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
@@ -702,15 +753,98 @@ impl GhosttyView {
         )
     }
 
+    fn send_vt_key(
+        &mut self,
+        tracking_key: &str,
+        event: &VtKeyEvent<'_>,
+    ) -> Result<con_ghostty::vt::VtKeyOutcome, String> {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return Ok(con_ghostty::vt::VtKeyOutcome::default());
+        };
+        let outcome = terminal.send_key(event)?;
+        if outcome.output_accepted {
+            self.clear_restored_screen_text();
+            self.clear_selection();
+            if outcome.report_releases
+                && event.action != VtKeyAction::Release
+                && !self.keys_awaiting_release.contains_key(tracking_key)
+            {
+                self.keys_awaiting_release.insert(
+                    tracking_key.to_owned(),
+                    crate::terminal_keys::TrackedVtKey::from_non_release_event(event),
+                );
+            }
+        }
+        Ok(outcome)
+    }
+
+    fn handle_key_up(&mut self, event: &KeyUpEvent) -> bool {
+        let Some(tracked) = self.keys_awaiting_release.remove(&event.keystroke.key) else {
+            return false;
+        };
+        let release =
+            tracked.release_with_modifiers(&event.keystroke.key, &event.keystroke.modifiers);
+        match self.send_vt_key(&event.keystroke.key, &release) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                // Preserve the press so focus loss can retry the release if
+                // this was a transient PTY write failure.
+                self.keys_awaiting_release
+                    .insert(event.keystroke.key.clone(), tracked);
+                log::debug!("linux terminal key release failed: {err}");
+                false
+            }
+        }
+    }
+
+    fn release_tracked_keys(&mut self) {
+        let tracked_keys = std::mem::take(&mut self.keys_awaiting_release);
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return;
+        };
+        for (key, tracked) in tracked_keys {
+            let release = tracked.release(&key);
+            if let Err(err) = terminal.send_key(&release) {
+                self.keys_awaiting_release.insert(key, tracked);
+                log::debug!("linux terminal key release failed: {err}");
+            }
+        }
+    }
+
+    fn send_tab_key(&mut self, shift: bool) -> bool {
+        let event = VtKeyEvent {
+            key: "tab",
+            text: "",
+            unshifted_codepoint: None,
+            action: if self.keys_awaiting_release.contains_key("tab") {
+                VtKeyAction::Repeat
+            } else {
+                VtKeyAction::Press
+            },
+            modifiers: VtKeyModifiers {
+                shift,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        match self.send_vt_key("tab", &event) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                log::debug!("linux terminal key encoding failed: {err}");
+                false
+            }
+        }
+    }
+
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(terminal) = self.terminal.as_ref().cloned() else {
+        if self.terminal.is_none() {
             return false;
-        };
+        }
 
         let keystroke = &event.keystroke;
         if keystroke.modifiers.platform {
@@ -768,21 +902,18 @@ impl GhosttyView {
                     return true;
                 }
                 "v" => {
-                    paste_from_clipboard(&terminal, cx);
+                    self.paste_from_clipboard(cx);
                     return true;
                 }
                 _ => {}
             }
         }
 
-        let decckm = terminal.is_decckm();
-        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
-            terminal.send_text(&bytes);
-            return true;
-        }
-
-        if event.prefer_character_input
-            && !keystroke.modifiers.control
+        // XKB compose and IME completion can arrive as a normal keydown
+        // while GPUI still owns marked text. Its InputHandler must commit
+        // the text and clear that state; encoding here would leave the
+        // preedit overlay stale even though the character reached the PTY.
+        if self.ime_marked_text.is_some()
             && keystroke
                 .key_char
                 .as_deref()
@@ -791,64 +922,179 @@ impl GhosttyView {
             return false;
         }
 
-        if keystroke.modifiers.control
-            && !keystroke.modifiers.alt
-            && (keystroke.key.len() == 1
-                || keystroke
-                    .key_char
-                    .as_deref()
-                    .is_some_and(|text| text.len() == 1))
-        {
-            if let Some(code) = crate::terminal_keys::ctrl_keystroke_to_c0(
-                &keystroke.key,
-                keystroke.key_char.as_deref(),
-                keystroke.modifiers.shift,
-            ) {
-                let control = [code];
-                let text = std::str::from_utf8(&control)
-                    .expect("terminal C0 control bytes are always valid UTF-8");
-                terminal.send_text(text);
-                return true;
+        let Some(vt_event) = crate::terminal_keys::vt_key_down_event(event) else {
+            return false;
+        };
+        match self.send_vt_key(&keystroke.key, &vt_event) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                log::debug!("linux terminal key encoding failed: {err}");
+                false
             }
         }
+    }
 
-        if keystroke.modifiers.alt && !keystroke.modifiers.control && !keystroke.modifiers.shift {
-            if let Some(ch) = keystroke.key_char.as_deref().filter(|ch| !ch.is_empty()) {
-                let mut out = String::with_capacity(1 + ch.len());
-                out.push('\x1b');
-                out.push_str(ch);
-                terminal.send_text(&out);
-                return true;
+    fn handle_terminal_paste_payload(
+        &mut self,
+        payload: TerminalPastePayload,
+        source: VtPasteSource,
+    ) -> bool {
+        // A new paste intent invalidates any confirmation for older text,
+        // even when this attempt later turns out to be empty or fails.
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return replaced_confirmation;
+        };
+
+        match payload {
+            TerminalPastePayload::Text(text) if !text.is_empty() => {
+                match terminal.paste_text(&text, source, false) {
+                    Ok(VtPasteResult::Accepted) => {
+                        self.clear_restored_screen_text();
+                        self.clear_selection();
+                        true
+                    }
+                    Ok(VtPasteResult::RequiresConfirmation) => {
+                        self.pending_unsafe_paste = Some((text, source));
+                        true
+                    }
+                    Ok(VtPasteResult::Empty) => replaced_confirmation,
+                    Err(err) => {
+                        log::debug!("linux terminal paste failed: {err}");
+                        replaced_confirmation
+                    }
+                }
+            }
+            TerminalPastePayload::ForwardCtrlV => {
+                self.clear_restored_screen_text();
+                self.clear_selection();
+                terminal.send_text("\x16");
+                true
+            }
+            TerminalPastePayload::Text(_) => replaced_confirmation,
+        }
+    }
+
+    fn paste_from_clipboard(&mut self, cx: &mut App) -> bool {
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(payload) = cx
+            .read_from_clipboard()
+            .and_then(|item| payload_from_clipboard(&item))
+        else {
+            return replaced_confirmation;
+        };
+        self.handle_terminal_paste_payload(payload, VtPasteSource::Clipboard)
+            || replaced_confirmation
+    }
+
+    fn confirm_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((text, source)) = self.pending_unsafe_paste.take() else {
+            return;
+        };
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            self.pending_unsafe_paste = Some((text, source));
+            return;
+        };
+
+        match terminal.paste_text(&text, source, true) {
+            Ok(VtPasteResult::Accepted) => {
+                self.clear_restored_screen_text();
+                self.clear_selection();
+            }
+            Ok(VtPasteResult::Empty) => {}
+            Ok(VtPasteResult::RequiresConfirmation) => {
+                self.pending_unsafe_paste = Some((text, source));
+            }
+            Err(err) => {
+                log::debug!("linux confirmed terminal paste failed: {err}");
+                self.pending_unsafe_paste = Some((text, source));
             }
         }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
 
-        if let Some(text) = keystroke
-            .key_char
-            .as_deref()
-            .filter(|text| !text.is_empty())
-        {
-            if !keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.platform
-            {
-                return false;
-            }
-            terminal.send_text(text);
-            return true;
-        }
+    fn cancel_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_unsafe_paste = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
 
-        if keystroke.key.len() == 1 {
-            if !keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.platform
-            {
-                return false;
-            }
-            terminal.send_text(&keystroke.key);
-            return true;
-        }
+    fn render_unsafe_paste_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.pending_unsafe_paste.as_ref()?.0.as_str();
+        let preview = unsafe_paste_preview(text);
+        let theme = cx.theme();
 
-        false
+        Some(
+            div()
+                .absolute()
+                .left(px(12.0))
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .occlude()
+                        .w_full()
+                        .max_w(px(620.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(8.0))
+                        .bg(theme
+                            .warning
+                            .opacity(if theme.is_dark() { 0.18 } else { 0.12 }))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child("This paste can run commands. Review it before continuing."),
+                        )
+                        .child(
+                            div()
+                                .max_h(px(88.0))
+                                .overflow_hidden()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(theme.foreground.opacity(0.06))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11.0))
+                                .line_height(px(15.0))
+                                .text_color(theme.foreground.opacity(0.82))
+                                .child(preview),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    Button::new("linux-cancel-unsafe-paste")
+                                        .label("Cancel")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.cancel_unsafe_paste(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("linux-confirm-unsafe-paste")
+                                        .label("Paste")
+                                        .small()
+                                        .primary()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_unsafe_paste(window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -867,6 +1113,50 @@ impl GhosttyView {
             ),
             size(px(cell_width.max(1.0)), px(cell_height.max(1.0))),
         ))
+    }
+
+    fn sync_kitty_image_cache(
+        &mut self,
+        placements: &[KittyPlacement],
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let active = placements
+            .iter()
+            .map(|placement| KittyImageKey::from(placement.image.as_ref()))
+            .collect::<HashSet<_>>();
+        let mut stale = Vec::new();
+        self.kitty_images.retain(|key, image| {
+            let keep = active.contains(key);
+            if !keep {
+                stale.push(image.clone());
+            }
+            keep
+        });
+        for image in stale {
+            cx.drop_image(image, Some(window));
+        }
+        self.failed_kitty_images.retain(|key| active.contains(key));
+
+        for placement in placements {
+            let key = KittyImageKey::from(placement.image.as_ref());
+            if self.kitty_images.contains_key(&key) || self.failed_kitty_images.contains(&key) {
+                continue;
+            }
+            if let Some(image) = kitty_image_to_render_image(&placement.image) {
+                self.kitty_images.insert(key, image);
+            } else {
+                log::warn!(
+                    "ignoring invalid Kitty image {} generation {} ({}x{}, {} bytes)",
+                    key.id,
+                    key.generation,
+                    placement.image.width,
+                    placement.image.height,
+                    placement.image.rgba.len()
+                );
+                self.failed_kitty_images.insert(key);
+            }
+        }
     }
 
     fn sync_row_cache(
@@ -944,41 +1234,6 @@ impl GhosttyView {
     }
 }
 
-fn send_paste(terminal: &GhosttyTerminal, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-
-    if terminal.is_bracketed_paste() {
-        let mut wrapped = String::with_capacity(text.len() + 12);
-        wrapped.push_str("\x1b[200~");
-        wrapped.push_str(text);
-        wrapped.push_str("\x1b[201~");
-        terminal.send_text(&wrapped);
-    } else {
-        terminal.send_text(text);
-    }
-}
-
-fn send_terminal_paste_payload(terminal: &GhosttyTerminal, payload: TerminalPastePayload) {
-    match payload {
-        TerminalPastePayload::Text(text) => send_paste(terminal, &text),
-        TerminalPastePayload::ForwardCtrlV => terminal.send_text("\x16"),
-    }
-}
-
-fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
-    let Some(payload) = cx
-        .read_from_clipboard()
-        .and_then(|item| payload_from_clipboard(&item))
-    else {
-        return false;
-    };
-
-    send_terminal_paste_payload(terminal, payload);
-    true
-}
-
 impl Focusable for GhosttyView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1030,7 +1285,15 @@ impl TerminalImeView for GhosttyView {
 }
 
 impl Render for GhosttyView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let unsafe_paste_confirmation = self.render_unsafe_paste_confirmation(cx);
+        let kitty_placements = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kitty_placements.clone())
+            .unwrap_or_default();
+        self.sync_kitty_image_cache(&kitty_placements, window, cx);
+
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
@@ -1042,6 +1305,10 @@ impl Render for GhosttyView {
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = cell_height_px(font_size_px);
         let cell_width_px = cell_width_px(font_size_px);
+        let physical_cell = self
+            .last_surface_size
+            .map(|size| (size.cell_width_px, size.cell_height_px))
+            .unwrap_or_else(|| physical_cell_size(font_size_px, self.scale_factor));
         let mono_font = Font {
             family: theme.mono_font_family.clone(),
             features: FontFeatures::default(),
@@ -1081,6 +1348,22 @@ impl Render for GhosttyView {
         let pane_background = theme.background.opacity(pane_opacity);
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
+        let mut has_kitty_images = false;
+        let mut split_terminal_rows = false;
+        for placement in kitty_placements.iter() {
+            let key = KittyImageKey::from(placement.image.as_ref());
+            let valid = self.kitty_images.contains_key(&key)
+                && kitty_placement_geometry(
+                    placement,
+                    cell_width_px,
+                    line_height_px,
+                    physical_cell.0,
+                    physical_cell.1,
+                )
+                .is_some();
+            has_kitty_images |= valid;
+            split_terminal_rows |= valid && placement.z < 0;
+        }
         self.sync_row_cache(
             foreground,
             theme.background,
@@ -1093,6 +1376,9 @@ impl Render for GhosttyView {
             usize::from(self.snapshot.as_ref().map_or(0, |snapshot| snapshot.rows))
                 + if status_message.is_some() { 1 } else { 0 },
         );
+        let mut cell_backgrounds = split_terminal_rows.then(Vec::new);
+        let mut overlay_backgrounds = split_terminal_rows.then(Vec::new);
+        let status_row_offset = usize::from(status_message.is_some());
         if let Some(message) = status_message {
             rows.push(
                 div()
@@ -1123,18 +1409,50 @@ impl Render for GhosttyView {
                             Some(selection_cols),
                             selection_bg,
                         );
+                        if let (Some(backgrounds), Some(overlays)) =
+                            (cell_backgrounds.as_mut(), overlay_backgrounds.as_mut())
+                        {
+                            append_terminal_backgrounds(
+                                &row,
+                                row_idx + status_row_offset,
+                                backgrounds,
+                                overlays,
+                            );
+                            rows.push(render_terminal_foreground_row(
+                                &row,
+                                px(font_size_px),
+                                px(line_height_px),
+                            ));
+                        } else {
+                            rows.push(render_cached_terminal_row(
+                                &row,
+                                px(font_size_px),
+                                px(line_height_px),
+                            ));
+                        }
+                    }
+                } else if let Some(row) = self.row_cache.get(row_idx) {
+                    if let (Some(backgrounds), Some(overlays)) =
+                        (cell_backgrounds.as_mut(), overlay_backgrounds.as_mut())
+                    {
+                        append_terminal_backgrounds(
+                            row,
+                            row_idx + status_row_offset,
+                            backgrounds,
+                            overlays,
+                        );
+                        rows.push(render_terminal_foreground_row(
+                            row,
+                            px(font_size_px),
+                            px(line_height_px),
+                        ));
+                    } else {
                         rows.push(render_cached_terminal_row(
-                            &row,
+                            row,
                             px(font_size_px),
                             px(line_height_px),
                         ));
                     }
-                } else if let Some(row) = self.row_cache.get(row_idx) {
-                    rows.push(render_cached_terminal_row(
-                        row,
-                        px(font_size_px),
-                        px(line_height_px),
-                    ));
                 }
             }
         }
@@ -1151,20 +1469,109 @@ impl Render for GhosttyView {
             );
         }
 
-        let terminal_content = div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .bg(pane_background)
-            .px(px(TERMINAL_PADDING_X_PX))
-            .py(px(TERMINAL_PADDING_Y_PX))
-            .text_color(foreground)
-            .items_start()
-            .justify_start()
-            .children(rows);
+        let terminal_content = if has_kitty_images {
+            let row_layer = div()
+                .absolute()
+                .flex()
+                .flex_col()
+                .size_full()
+                .items_start()
+                .justify_start()
+                .text_color(foreground)
+                .children(rows);
+            let content_viewport = if split_terminal_rows {
+                div()
+                    .absolute()
+                    .left(px(TERMINAL_PADDING_X_PX))
+                    .right(px(TERMINAL_PADDING_X_PX))
+                    .top(px(TERMINAL_PADDING_Y_PX))
+                    .bottom(px(TERMINAL_PADDING_Y_PX))
+                    .overflow_hidden()
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::BelowBackground,
+                        cell_width_px,
+                        line_height_px,
+                        physical_cell.0,
+                        physical_cell.1,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+                    .child(render_terminal_background_layer(
+                        cell_backgrounds.unwrap_or_default(),
+                        px(cell_width_px),
+                        px(line_height_px),
+                    ))
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::BelowText,
+                        cell_width_px,
+                        line_height_px,
+                        physical_cell.0,
+                        physical_cell.1,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+                    .child(render_terminal_background_layer(
+                        overlay_backgrounds.unwrap_or_default(),
+                        px(cell_width_px),
+                        px(line_height_px),
+                    ))
+                    .child(row_layer)
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::AboveText,
+                        cell_width_px,
+                        line_height_px,
+                        physical_cell.0,
+                        physical_cell.1,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+            } else {
+                div()
+                    .absolute()
+                    .left(px(TERMINAL_PADDING_X_PX))
+                    .right(px(TERMINAL_PADDING_X_PX))
+                    .top(px(TERMINAL_PADDING_Y_PX))
+                    .bottom(px(TERMINAL_PADDING_Y_PX))
+                    .overflow_hidden()
+                    .child(row_layer)
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::AboveText,
+                        cell_width_px,
+                        line_height_px,
+                        physical_cell.0,
+                        physical_cell.1,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+            };
+            div()
+                .relative()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .bg(pane_background)
+                .child(content_viewport)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .bg(pane_background)
+                .px(px(TERMINAL_PADDING_X_PX))
+                .py(px(TERMINAL_PADDING_Y_PX))
+                .text_color(foreground)
+                .items_start()
+                .justify_start()
+                .children(rows)
+        };
         let mut terminal_children = vec![terminal_content.into_any_element()];
         if let Some(overlay) = self.render_link_cursor_overlay(cell_width_px, line_height_px) {
             terminal_children.push(overlay);
@@ -1193,10 +1600,7 @@ impl Render for GhosttyView {
                     return;
                 }
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\t");
-                }
+                this.send_tab_key(false);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, cx| {
@@ -1204,10 +1608,7 @@ impl Render for GhosttyView {
                     return;
                 }
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\x1b[Z");
-                }
+                this.send_tab_key(true);
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
@@ -1217,10 +1618,7 @@ impl Render for GhosttyView {
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal
-                    && paste_from_clipboard(terminal, cx)
-                {
+                if this.paste_from_clipboard(cx) {
                     cx.notify();
                 }
             }))
@@ -1232,9 +1630,7 @@ impl Render for GhosttyView {
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
                 let _ = this.ensure_session(cx);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    send_terminal_paste_payload(terminal, payload);
+                if this.handle_terminal_paste_payload(payload, VtPasteSource::Text) {
                     cx.notify();
                 }
             }))
@@ -1242,22 +1638,18 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                let special_key_writes =
-                    encode_special_key(&event.keystroke.key, &event.keystroke.modifiers, false)
-                        .is_some();
-                let clears_restore = key_down_may_write_terminal(event, special_key_writes);
-                let copy_shortcut = event.keystroke.modifiers.control
-                    && !event.keystroke.modifiers.alt
-                    && !event.keystroke.modifiers.platform
-                    && event.keystroke.key == "c";
                 let _ = this.ensure_session(cx);
-                if clears_restore {
-                    this.clear_restored_screen_text();
-                }
-                if clears_restore && !copy_shortcut {
-                    this.clear_selection();
-                }
                 if this.handle_key_down(event, window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if this.handle_key_up(event) {
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
@@ -1444,7 +1836,8 @@ impl Render for GhosttyView {
                         )
                         .absolute()
                         .size_full(),
-                    ),
+                    )
+                    .children(unsafe_paste_confirmation),
             )
             .context_menu(move |menu, window, cx| {
                 // Empty PopupMenu renders nothing; suppress con's menu only
@@ -1466,10 +1859,216 @@ impl Render for GhosttyView {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct KittyImageKey {
+    id: u32,
+    generation: u64,
+}
+
+impl From<&KittyImage> for KittyImageKey {
+    fn from(image: &KittyImage) -> Self {
+        Self {
+            id: image.id,
+            generation: image.generation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyImageLayer {
+    BelowBackground,
+    BelowText,
+    AboveText,
+}
+
+impl KittyImageLayer {
+    fn contains(self, z: i32) -> bool {
+        match self {
+            Self::BelowBackground => z < KITTY_BELOW_BACKGROUND_LIMIT,
+            Self::BelowText => (KITTY_BELOW_BACKGROUND_LIMIT..0).contains(&z),
+            Self::AboveText => z >= 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct KittyPlacementGeometry {
+    left_px: f32,
+    top_px: f32,
+    width_px: f32,
+    height_px: f32,
+    image_left_px: f32,
+    image_top_px: f32,
+    image_width_px: f32,
+    image_height_px: f32,
+}
+
+fn kitty_placement_geometry(
+    placement: &KittyPlacement,
+    logical_cell_width_px: f32,
+    logical_cell_height_px: f32,
+    physical_cell_width_px: u32,
+    physical_cell_height_px: u32,
+) -> Option<KittyPlacementGeometry> {
+    let image = &placement.image;
+    let source_right = placement.source_x.checked_add(placement.source_width)?;
+    let source_bottom = placement.source_y.checked_add(placement.source_height)?;
+    if placement.pixel_width == 0
+        || placement.pixel_height == 0
+        || placement.source_width == 0
+        || placement.source_height == 0
+        || image.width == 0
+        || image.height == 0
+        || source_right > image.width
+        || source_bottom > image.height
+        || !logical_cell_width_px.is_finite()
+        || !logical_cell_height_px.is_finite()
+        || logical_cell_width_px <= 0.0
+        || logical_cell_height_px <= 0.0
+        || physical_cell_width_px == 0
+        || physical_cell_height_px == 0
+    {
+        return None;
+    }
+
+    // libghostty positions placements in the integer physical cell geometry
+    // supplied by `resize_surface`. Derive each axis from that exact quantized
+    // size instead of dividing by the fractional display scale, which drifts
+    // away from GPUI's logical text grid after several columns.
+    let device_to_logical_x = logical_cell_width_px as f64 / physical_cell_width_px as f64;
+    let device_to_logical_y = logical_cell_height_px as f64 / physical_cell_height_px as f64;
+    let width_px = placement.pixel_width as f64 * device_to_logical_x;
+    let height_px = placement.pixel_height as f64 * device_to_logical_y;
+    let source_scale_x = width_px / placement.source_width as f64;
+    let source_scale_y = height_px / placement.source_height as f64;
+    let values = KittyPlacementGeometry {
+        left_px: (placement.viewport_col as f64 * logical_cell_width_px as f64
+            + placement.cell_x_offset as f64 * device_to_logical_x) as f32,
+        top_px: (placement.viewport_row as f64 * logical_cell_height_px as f64
+            + placement.cell_y_offset as f64 * device_to_logical_y) as f32,
+        width_px: width_px as f32,
+        height_px: height_px as f32,
+        image_left_px: (-(placement.source_x as f64) * source_scale_x) as f32,
+        image_top_px: (-(placement.source_y as f64) * source_scale_y) as f32,
+        image_width_px: (image.width as f64 * source_scale_x) as f32,
+        image_height_px: (image.height as f64 * source_scale_y) as f32,
+    };
+    if [
+        values.left_px,
+        values.top_px,
+        values.width_px,
+        values.height_px,
+        values.image_left_px,
+        values.image_top_px,
+        values.image_width_px,
+        values.image_height_px,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+    {
+        Some(values)
+    } else {
+        None
+    }
+}
+
+fn kitty_image_to_render_image(image: &KittyImage) -> Option<Arc<RenderImage>> {
+    let expected_len = (image.width as usize)
+        .checked_mul(image.height as usize)?
+        .checked_mul(4)?;
+    if image.width == 0 || image.height == 0 || image.rgba.len() != expected_len {
+        return None;
+    }
+
+    // GPUI's `RenderImage` byte contract is BGRA even though the image crate
+    // buffer type is named `RgbaImage`. Keep the shared VT snapshot in its
+    // renderer-neutral RGBA form and swizzle only once per image generation.
+    let mut bgra = image.rgba.to_vec();
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let buffer = RgbaImage::from_raw(image.width, image.height, bgra)?;
+    let frame = Frame::new(buffer);
+    let frames: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
+fn render_kitty_image_layer(
+    placements: &[KittyPlacement],
+    images: &HashMap<KittyImageKey, Arc<RenderImage>>,
+    layer: KittyImageLayer,
+    logical_cell_width_px: f32,
+    logical_cell_height_px: f32,
+    physical_cell_width_px: u32,
+    physical_cell_height_px: u32,
+    top_offset_px: f32,
+) -> AnyElement {
+    let paint_records = placements
+        .iter()
+        .filter_map(|placement| {
+            if !layer.contains(placement.z) {
+                return None;
+            }
+            let key = KittyImageKey::from(placement.image.as_ref());
+            let image = images.get(&key)?.clone();
+            let geometry = kitty_placement_geometry(
+                placement,
+                logical_cell_width_px,
+                logical_cell_height_px,
+                physical_cell_width_px,
+                physical_cell_height_px,
+            )?;
+            Some((image, geometry))
+        })
+        .collect::<Vec<_>>();
+
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for (image, geometry) in paint_records {
+                let crop_bounds = Bounds::new(
+                    point(
+                        bounds.origin.x + px(geometry.left_px),
+                        bounds.origin.y + px(geometry.top_px + top_offset_px),
+                    ),
+                    size(px(geometry.width_px), px(geometry.height_px)),
+                );
+                if !crop_bounds.intersects(&bounds) {
+                    continue;
+                }
+
+                let image_bounds = Bounds::new(
+                    point(
+                        crop_bounds.origin.x + px(geometry.image_left_px),
+                        crop_bounds.origin.y + px(geometry.image_top_px),
+                    ),
+                    size(px(geometry.image_width_px), px(geometry.image_height_px)),
+                );
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: crop_bounds.intersect(&bounds),
+                    }),
+                    |window| {
+                        if let Err(err) =
+                            window.paint_image(image_bounds, Default::default(), image, 0, false)
+                        {
+                            log::debug!("failed to paint Kitty image placement: {err:#}");
+                        }
+                    },
+                );
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1567,6 +2166,23 @@ fn extract_selection_text(
 struct CachedTerminalRow {
     text: SharedString,
     runs: Vec<TextRun>,
+    backgrounds: Vec<TerminalBackgroundRun>,
+}
+
+#[derive(Clone, Copy)]
+struct TerminalBackgroundRun {
+    start_col: usize,
+    len: usize,
+    color: Hsla,
+    overlay: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TerminalBackgroundQuad {
+    row: usize,
+    start_col: usize,
+    len: usize,
+    color: Hsla,
 }
 
 #[derive(Clone, PartialEq)]
@@ -1637,6 +2253,76 @@ fn render_cached_terminal_row(
         .into_any_element()
 }
 
+fn append_terminal_backgrounds(
+    row: &CachedTerminalRow,
+    display_row: usize,
+    backgrounds: &mut Vec<TerminalBackgroundQuad>,
+    overlays: &mut Vec<TerminalBackgroundQuad>,
+) {
+    for run in &row.backgrounds {
+        let quad = TerminalBackgroundQuad {
+            row: display_row,
+            start_col: run.start_col,
+            len: run.len,
+            color: run.color,
+        };
+        if run.overlay {
+            overlays.push(quad);
+        } else {
+            backgrounds.push(quad);
+        }
+    }
+}
+
+fn render_terminal_background_layer(
+    backgrounds: Vec<TerminalBackgroundQuad>,
+    cell_width: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for background in backgrounds {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(
+                            bounds.origin.x + cell_width * background.start_col as f32,
+                            bounds.origin.y + line_height * background.row as f32,
+                        ),
+                        size(cell_width * background.len as f32, line_height),
+                    ),
+                    background.color,
+                ));
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
+}
+
+fn render_terminal_foreground_row(
+    row: &CachedTerminalRow,
+    font_size: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    let mut runs = row.runs.clone();
+    for run in &mut runs {
+        run.background_color = None;
+    }
+
+    div()
+        .w_full()
+        .h(line_height)
+        .min_h(line_height)
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(font_size)
+        .line_height(line_height)
+        .child(StyledText::new(row.text.clone()).with_runs(runs))
+        .into_any_element()
+}
+
 /// Build a single GPUI row element from a slice of `VtCell`s. We
 /// collapse runs of cells that share `(fg, bg, attrs)` into one
 /// `TextRun` so each row is a single `StyledText` element. That keeps
@@ -1683,9 +2369,11 @@ fn build_terminal_row(
 
     let mut text = String::with_capacity(kept.len());
     let mut runs: Vec<TextRun> = Vec::new();
+    let mut backgrounds = Vec::new();
     let mut last_signature: Option<(u32, u32, u8, bool, bool)> = None;
     let mut active_run_len: usize = 0;
     let mut active_style: Option<RowStyle> = None;
+    let mut active_background: Option<(usize, Hsla, bool)> = None;
 
     fn flush_run(
         runs: &mut Vec<TextRun>,
@@ -1722,6 +2410,19 @@ fn build_terminal_row(
             selection_bg,
         );
 
+        let background = style.bg.map(|color| (color, is_cursor || is_selected));
+        if active_background.map(|(_, color, overlay)| (color, overlay)) != background {
+            if let Some((start_col, color, overlay)) = active_background.take() {
+                backgrounds.push(TerminalBackgroundRun {
+                    start_col,
+                    len: col_idx - start_col,
+                    color,
+                    overlay,
+                });
+            }
+            active_background = background.map(|(color, overlay)| (col_idx, color, overlay));
+        }
+
         let glyph: char = match cell.codepoint {
             0 => ' ',
             cp => char::from_u32(cp).unwrap_or('\u{FFFD}'),
@@ -1738,6 +2439,14 @@ fn build_terminal_row(
     }
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
+    if let Some((start_col, color, overlay)) = active_background {
+        backgrounds.push(TerminalBackgroundRun {
+            start_col,
+            len: kept.len() - start_col,
+            color,
+            overlay,
+        });
+    }
 
     let text = if text.is_empty() {
         let mut fallback = String::with_capacity(1);
@@ -1758,6 +2467,7 @@ fn build_terminal_row(
     CachedTerminalRow {
         text: text.into(),
         runs,
+        backgrounds,
     }
 }
 
@@ -1861,72 +2571,20 @@ fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
     Some(Rgba { r, g, b, a }.into())
 }
 
-fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
-    let mask = u8::from(modifiers.shift)
-        | (u8::from(modifiers.alt) << 1)
-        | (u8::from(modifiers.control) << 2);
-    if mask == 0 { None } else { Some(1 + mask) }
-}
-
-fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
-    let m = xterm_modifier_param(modifiers);
-
-    let tilde = |code: u8| match m {
-        Some(m) => format!("\x1b[{};{}~", code, m),
-        None => format!("\x1b[{}~", code),
-    };
-
-    let csi1 = |final_byte: char, ss3_when_plain: bool, decckm_arrow: bool| match m {
-        Some(m) => format!("\x1b[1;{}{}", m, final_byte),
-        None if decckm_arrow && decckm => format!("\x1bO{}", final_byte),
-        None if ss3_when_plain => format!("\x1bO{}", final_byte),
-        None => format!("\x1b[{}", final_byte),
-    };
-
-    Some(match key {
-        "up" => csi1('A', false, true),
-        "down" => csi1('B', false, true),
-        "right" => csi1('C', false, true),
-        "left" => csi1('D', false, true),
-        "home" => csi1('H', false, false),
-        "end" => csi1('F', false, false),
-        "pageup" => tilde(5),
-        "pagedown" => tilde(6),
-        "insert" => tilde(2),
-        "delete" => tilde(3),
-        "f1" => csi1('P', true, false),
-        "f2" => csi1('Q', true, false),
-        "f3" => csi1('R', true, false),
-        "f4" => csi1('S', true, false),
-        "f5" => tilde(15),
-        "f6" => tilde(17),
-        "f7" => tilde(18),
-        "f8" => tilde(19),
-        "f9" => tilde(20),
-        "f10" => tilde(21),
-        "f11" => tilde(23),
-        "f12" => tilde(24),
-        "enter" | "return" => "\r".into(),
-        "escape" => "\x1b".into(),
-        "backspace" if modifiers.alt && !modifiers.control && !modifiers.platform => {
-            "\x1b\x7f".into()
-        }
-        "backspace" => "\x7f".into(),
-        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => "\x1b[Z".into(),
-        "tab" => "\t".into(),
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_FONT_SIZE, MIN_FONT_SIZE_PX, TerminalSelection, build_terminal_row, cell_height_px,
-        cell_width_px, effective_font_size, extract_selection_text, rows_needing_refresh,
-        vt_color_to_hsla,
+        DEFAULT_FONT_SIZE, KITTY_BELOW_BACKGROUND_LIMIT, KittyImageLayer, MIN_FONT_SIZE_PX,
+        TerminalSelection, build_terminal_row, cell_height_px, cell_width_px, effective_font_size,
+        extract_selection_text, kitty_image_to_render_image, kitty_placement_geometry,
+        physical_cell_size, rows_needing_refresh, vt_color_to_hsla,
     };
-    use con_ghostty::{ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, ScreenSnapshot, VtCell, VtCursor};
+    use con_ghostty::{
+        ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, KittyImage, KittyPlacement, ScreenSnapshot,
+        VtCell, VtCursor,
+    };
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
+    use std::sync::Arc;
 
     fn base_font() -> Font {
         Font {
@@ -1980,6 +2638,102 @@ mod tests {
         assert_eq!(effective_font_size(8.0), MIN_FONT_SIZE_PX);
         assert_eq!(cell_width_px(14.0), 9.0);
         assert_eq!(cell_height_px(14.0), 20.0);
+        assert_eq!(physical_cell_size(14.0, 2.0), (18, 40));
+    }
+
+    #[test]
+    fn kitty_placement_maps_device_pixels_and_source_crop() {
+        let placement = KittyPlacement {
+            image: Arc::new(KittyImage {
+                id: 1,
+                generation: 2,
+                width: 4,
+                height: 2,
+                rgba: vec![0; 4 * 2 * 4].into(),
+            }),
+            placement_id: 3,
+            z: 0,
+            viewport_col: -1,
+            viewport_row: 2,
+            cell_x_offset: 4,
+            cell_y_offset: 6,
+            pixel_width: 20,
+            pixel_height: 10,
+            source_x: 1,
+            source_y: 0,
+            source_width: 2,
+            source_height: 1,
+        };
+
+        let geometry = kitty_placement_geometry(&placement, 10.0, 20.0, 20, 40).unwrap();
+        assert_eq!(geometry.left_px, -8.0);
+        assert_eq!(geometry.top_px, 43.0);
+        assert_eq!(geometry.width_px, 10.0);
+        assert_eq!(geometry.height_px, 5.0);
+        assert_eq!(geometry.image_left_px, -5.0);
+        assert_eq!(geometry.image_top_px, 0.0);
+        assert_eq!(geometry.image_width_px, 20.0);
+        assert_eq!(geometry.image_height_px, 10.0);
+    }
+
+    #[test]
+    fn kitty_placement_stays_aligned_after_fractional_cell_rounding() {
+        let placement = KittyPlacement {
+            image: Arc::new(KittyImage {
+                id: 1,
+                generation: 2,
+                width: 140,
+                height: 30,
+                rgba: vec![0; 140 * 30 * 4].into(),
+            }),
+            placement_id: 3,
+            z: 0,
+            viewport_col: 40,
+            viewport_row: 2,
+            cell_x_offset: 14,
+            cell_y_offset: 0,
+            pixel_width: 140,
+            pixel_height: 30,
+            source_x: 0,
+            source_y: 0,
+            source_width: 140,
+            source_height: 30,
+        };
+
+        // A 9px logical cell rounds to 14 physical pixels at 1.5x. The
+        // placement must advance exactly one logical cell for every 14 device
+        // pixels rather than using 1 / 1.5 and accumulating column drift.
+        let geometry = kitty_placement_geometry(&placement, 9.0, 20.0, 14, 30).unwrap();
+        assert_eq!(geometry.left_px, 369.0);
+        assert_eq!(geometry.top_px, 40.0);
+        assert_eq!(geometry.width_px, 90.0);
+        assert_eq!(geometry.height_px, 20.0);
+    }
+
+    #[test]
+    fn kitty_layers_match_protocol_z_boundaries() {
+        assert!(KittyImageLayer::BelowBackground.contains(i32::MIN));
+        assert!(!KittyImageLayer::BelowBackground.contains(KITTY_BELOW_BACKGROUND_LIMIT));
+        assert!(KittyImageLayer::BelowText.contains(KITTY_BELOW_BACKGROUND_LIMIT));
+        assert!(KittyImageLayer::BelowText.contains(-1));
+        assert!(!KittyImageLayer::BelowText.contains(0));
+        assert!(KittyImageLayer::AboveText.contains(0));
+    }
+
+    #[test]
+    fn kitty_rgba_is_swizzled_for_gpui_render_images() {
+        let image = KittyImage {
+            id: 1,
+            generation: 1,
+            width: 1,
+            height: 1,
+            rgba: vec![0x11, 0x22, 0x33, 0x44].into(),
+        };
+        let render_image = kitty_image_to_render_image(&image).unwrap();
+        assert_eq!(
+            render_image.as_bytes(0),
+            Some(&[0x33, 0x22, 0x11, 0x44][..])
+        );
     }
 
     #[test]
@@ -1996,11 +2750,46 @@ mod tests {
     }
 
     #[test]
+    fn cursor_and_selection_backgrounds_render_above_negative_z_images() {
+        let cells = [
+            make_cell('a', 0, 0, 0x112233FF),
+            make_cell('b', 0, 0, 0x112233FF),
+            make_cell('c', 0, 0, 0x112233FF),
+        ];
+        let row = build_terminal_row(
+            &cells,
+            fg(),
+            bg(),
+            &base_font(),
+            Some(2),
+            Some((1, 1)),
+            bg(),
+        );
+
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 0 && run.len == 1 && !run.overlay)
+        );
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 1 && run.len == 1 && run.overlay)
+        );
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 2 && run.len == 1 && run.overlay)
+        );
+    }
+
+    #[test]
     fn terminal_selection_row_range_handles_reverse_drag() {
         let snapshot = ScreenSnapshot {
             cols: 5,
             rows: 3,
             cells: Vec::new(),
+            kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
                 col: 0,
@@ -2032,6 +2821,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells,
+            kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
                 col: 0,
@@ -2061,6 +2851,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells: vec![Default::default(); 12],
+            kitty_placements: Default::default(),
             dirty_rows: vec![1],
             cursor: VtCursor {
                 col: 2,

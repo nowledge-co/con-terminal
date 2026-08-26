@@ -14,6 +14,9 @@ parking_lot.workspace = true
 [build-dependencies]
 cc = "1"
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 objc = "0.2"
@@ -21,6 +24,7 @@ dispatch = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Win32 API surface for the Windows terminal backend (Phase 3).
 # See docs/impl/windows-port.md for the staged plan.
 windows = { version = "0.61", features = [
@@ -60,5 +64,7 @@ etagere = "0.2"
 unicode-width.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
 portable-pty = "0.9"
 uuid.workspace = true

@@ -115,7 +115,7 @@ jobs:
       - name: Install Zig Compiler
         uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Configure Zig C toolchain
         shell: bash

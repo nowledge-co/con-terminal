@@ -28,7 +28,7 @@ rustup default stable
 git clone https://github.com/nowledge-co/con-terminal.git
 cd con-terminal
 cargo wbuild -p con --release          # → target\release\con-app.exe
-cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal
+cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
 ```
 
 Prerequisites:
@@ -36,7 +36,7 @@ Prerequisites:
 - **Visual Studio Build Tools 2022** with "Desktop development with
   C++" (for `link.exe` + Windows SDK).
 - **Git for Windows**.
-- **Zig 0.15.2 or newer** on PATH (for `libghostty-vt`); download from
+- **Zig 0.16.0 exactly** on PATH (for `libghostty-vt`); download from
   <https://ziglang.org/download/>. If the `zig` executable isn't on
   PATH, set `CON_ZIG_BIN` to its absolute path.
 
@@ -67,7 +67,7 @@ Common Windows pitfalls when the Zig step fails mid-build with
    path on Windows; if your machine disallows `C:\zc`, set
    `ZIG_GLOBAL_CACHE_DIR` explicitly to another short writable path.
 3. **Zig version mismatch** — the current pin is validated with Zig
-   0.15.2. If a newer Zig breaks upstream, either install the validated
+   0.16.0. If a newer Zig breaks upstream, either install the validated
    Zig version or bump `GHOSTTY_REV` in `build.rs` (requires macOS
    re-validation of the full libghostty build).
 
@@ -113,7 +113,7 @@ future Windows build will produce a valid executable filename.
 
 `con-ghostty` is a thin Rust wrapper over libghostty's C embedding API.
 libghostty is built from a pinned Ghostty revision via `zig build` and
-linked statically as `libghostty-fat.a`. Surface creation hands a NSView
+linked statically as the final `libghostty-internal.a` archive. Surface creation hands a NSView
 pointer to libghostty, which attaches a Metal `IOSurfaceLayer` and renders
 the terminal directly into it. PTY, VT parsing, and rendering are all
 inside libghostty.
@@ -469,13 +469,12 @@ polish, and distribution hardening rather than basic input/selection
 bring-up.
 
 Caveats:
-- You must have **Zig 0.15.2 exactly** on `PATH` for `cargo build` to
-  compile `libghostty-vt`. Do not use Zig 0.16.0 for this pinned
-  Ghostty revision; install 0.15.2 from
-  <https://ziglang.org/download/0.15.2/> or point `CON_ZIG_BIN` at an
-  explicit 0.15.2 binary. `cargo check` works without Zig
-  (compile-only, no link); set `CON_SKIP_GHOSTTY_VT=1` to skip the
-  build entirely.
+- You must have **Zig 0.16.0 exactly** on `PATH` for `cargo build` or
+  `cargo check` to compile `libghostty-vt`; install it from
+  <https://ziglang.org/download/0.16.0/> or point `CON_ZIG_BIN` at an
+  explicit 0.16.0 binary. `CON_SKIP_GHOSTTY_VT=1` remains a local
+  check-only escape hatch, but CI intentionally builds and links the real
+  library so removed symbols and calling-convention drift cannot hide.
 - The shell is `CON_SHELL` if set, else the configured Windows Terminal
   default profile command when `%LOCALAPPDATA%` settings are readable,
   else `pwsh.exe`/`powershell.exe` if on `PATH`, else `$env:COMSPEC`,

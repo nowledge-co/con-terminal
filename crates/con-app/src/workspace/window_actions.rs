@@ -535,9 +535,9 @@ impl ConWorkspace {
                 self.workspace_focus.clone().focus(window, cx);
             }
             self.sync_active_terminal_focus_states(cx);
-            cx.on_next_frame(window, move |_workspace, _window, cx| {
+            cx.on_next_frame(window, move |_workspace, window, cx| {
                 for terminal in &closing_terminals {
-                    terminal.shutdown_surface(cx);
+                    terminal.shutdown_surface(Some(&mut *window), cx);
                 }
                 for terminal in &surviving_terminals {
                     terminal.notify(cx);
@@ -612,9 +612,9 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
         }
         self.sync_active_tab_native_view_visibility(cx);
-        cx.on_next_frame(window, move |_workspace, _window, cx| {
+        cx.on_next_frame(window, move |_workspace, window, cx| {
             for terminal in &closing_terminals {
-                terminal.shutdown_surface(cx);
+                terminal.shutdown_surface(Some(&mut *window), cx);
             }
         });
         let focused = self.tabs[self.active_tab].pane_tree.try_focused_terminal();
@@ -740,7 +740,9 @@ impl ConWorkspace {
             let _ = conv.lock().save();
 
             for terminal in tab.pane_tree.all_surface_terminals() {
-                terminal.shutdown_surface(cx);
+                // The platform window is already closing and will release its
+                // sprite atlas; no current Window handle is available here.
+                terminal.shutdown_surface(None, cx);
             }
         }
     }

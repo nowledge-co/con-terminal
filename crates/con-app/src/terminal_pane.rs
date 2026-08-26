@@ -132,8 +132,9 @@ impl TerminalPane {
             .set_transition_underlay_visible(visible);
     }
 
-    pub fn shutdown_surface(&self, cx: &mut App) {
-        self.entity.update(cx, |view, _| view.shutdown_surface());
+    pub fn shutdown_surface(&self, window: Option<&mut Window>, cx: &mut App) {
+        self.entity
+            .update(cx, |view, cx| view.shutdown_surface(window, cx));
     }
 
     pub fn set_focus_state(&self, focused: bool, cx: &mut App) {

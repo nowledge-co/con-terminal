@@ -36,17 +36,20 @@
 //!    stalling GPUI's thread.
 //! 4. Drop releases the `RenderSession` and ends the child shell.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Sizable as _};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
@@ -54,9 +57,9 @@ use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
-    payload_from_external_paths,
+    payload_from_external_paths, unsafe_paste_preview,
 };
-use crate::terminal_restore::{key_down_may_write_terminal, restored_terminal_output};
+use crate::terminal_restore::restored_terminal_output;
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
@@ -166,6 +169,8 @@ pub struct GhosttyView {
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
     last_mouse_position: Option<Point<Pixels>>,
+    keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
+    pending_unsafe_paste: Option<(String, VtPasteSource)>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
     /// thread sends at most one queued signal while a repaint wake is
     /// pending. The coalescer task spawned in `new()` consumes that
@@ -252,6 +257,8 @@ impl GhosttyView {
             suppress_link_mouse_up: false,
             hovered_link: None,
             last_mouse_position: None,
+            keys_awaiting_release: HashMap::new(),
+            pending_unsafe_paste: None,
             wake_tx,
             wake_pending,
         }
@@ -295,7 +302,8 @@ impl GhosttyView {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -319,11 +327,16 @@ impl GhosttyView {
         self.suppress_link_mouse_up = false;
         self.hovered_link = None;
         self.last_mouse_position = None;
+        self.keys_awaiting_release.clear();
+        self.pending_unsafe_paste = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
+        if !focused {
+            self.release_tracked_keys();
+        }
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
         }
@@ -1147,23 +1160,99 @@ impl GhosttyView {
         )
     }
 
-    /// Translate a GPUI `KeyDownEvent` into bytes and forward to the
-    /// ConPTY. Returns `true` if the key was handled (so GPUI can stop
-    /// propagation).
-    ///
-    /// GPUI owns keyboard focus on Windows — there's no child HWND in
-    /// the focus chain — so we translate at this layer into byte
-    /// sequences a terminal emulator expects. DECCKM-aware arrows live
-    /// alongside the printable / Ctrl-letter paths.
+    fn send_vt_key(
+        &mut self,
+        tracking_key: &str,
+        event: &VtKeyEvent<'_>,
+    ) -> Result<con_ghostty::vt::VtKeyOutcome, String> {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return Ok(con_ghostty::vt::VtKeyOutcome::default());
+        };
+        let outcome = terminal.send_key(event)?;
+        if outcome.output_accepted {
+            self.clear_restored_screen_text();
+            if outcome.report_releases
+                && event.action != VtKeyAction::Release
+                && !self.keys_awaiting_release.contains_key(tracking_key)
+            {
+                self.keys_awaiting_release.insert(
+                    tracking_key.to_owned(),
+                    crate::terminal_keys::TrackedVtKey::from_non_release_event(event),
+                );
+            }
+        }
+        Ok(outcome)
+    }
+
+    fn handle_key_up(&mut self, event: &KeyUpEvent) -> bool {
+        let Some(tracked) = self.keys_awaiting_release.remove(&event.keystroke.key) else {
+            return false;
+        };
+        let release =
+            tracked.release_with_modifiers(&event.keystroke.key, &event.keystroke.modifiers);
+        match self.send_vt_key(&event.keystroke.key, &release) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                // Preserve the press so focus loss can retry the release if
+                // this was a transient PTY write failure.
+                self.keys_awaiting_release
+                    .insert(event.keystroke.key.clone(), tracked);
+                log::debug!("windows terminal key release failed: {err}");
+                false
+            }
+        }
+    }
+
+    fn release_tracked_keys(&mut self) {
+        let tracked_keys = std::mem::take(&mut self.keys_awaiting_release);
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return;
+        };
+        for (key, tracked) in tracked_keys {
+            let release = tracked.release(&key);
+            if let Err(err) = terminal.send_key(&release) {
+                self.keys_awaiting_release.insert(key, tracked);
+                log::debug!("windows terminal key release failed: {err}");
+            }
+        }
+    }
+
+    fn send_tab_key(&mut self, shift: bool) -> bool {
+        let event = VtKeyEvent {
+            key: "tab",
+            text: "",
+            unshifted_codepoint: None,
+            action: if self.keys_awaiting_release.contains_key("tab") {
+                VtKeyAction::Repeat
+            } else {
+                VtKeyAction::Press
+            },
+            modifiers: VtKeyModifiers {
+                shift,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        match self.send_vt_key("tab", &event) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                log::debug!("windows terminal key encoding failed: {err}");
+                false
+            }
+        }
+    }
+
+    /// Translate a GPUI key event with libghostty-vt and forward the
+    /// encoded bytes to ConPTY. App shortcuts remain ahead of this path.
     fn handle_key_down(
-        &self,
+        &mut self,
         event: &KeyDownEvent,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(terminal) = self.terminal.as_ref() else {
+        if self.terminal.is_none() {
             return false;
-        };
+        }
         let keystroke = &event.keystroke;
 
         if crate::terminal_shortcuts::key_down_starts_action_binding(
@@ -1203,7 +1292,10 @@ impl GhosttyView {
             && !keystroke.modifiers.alt
             && !keystroke.modifiers.platform
             && keystroke.key == "c"
-            && copy_selection_to_clipboard(terminal, cx)
+            && self
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| copy_selection_to_clipboard(terminal, cx))
         {
             cx.notify();
             return true;
@@ -1219,36 +1311,30 @@ impl GhosttyView {
         {
             match keystroke.key.as_str() {
                 "c" => {
-                    if copy_selection_to_clipboard(terminal, cx) {
+                    if self
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|terminal| copy_selection_to_clipboard(terminal, cx))
+                    {
                         cx.notify();
                     }
                     return true;
                 }
                 "v" => {
-                    paste_from_clipboard(terminal, cx);
+                    if self.paste_from_clipboard(cx) {
+                        cx.notify();
+                    }
                     return true;
                 }
                 _ => {}
             }
         }
 
-        let decckm = {
-            let inner = terminal.inner();
-            inner.lock().as_ref().is_some_and(|s| s.is_decckm())
-        };
-
-        // Named / special keys — arrows, home/end, page nav, insert,
-        // delete, F1-F12, tab/shift-tab, enter, backspace, escape. Each
-        // honours DECCKM (arrows) and xterm modifier-parameter encoding
-        // for Ctrl/Shift/Alt (CSI 1;m<X> for arrows + F1-F4, CSI n;m~
-        // for tilde-terminated keys).
-        if let Some(bytes) = encode_special_key(&keystroke.key, &keystroke.modifiers, decckm) {
-            terminal.send_text(&bytes);
-            return true;
-        }
-
-        if event.prefer_character_input
-            && !keystroke.modifiers.control
+        // A dead-key/IME composition may complete as an ordinary keydown
+        // while GPUI still owns marked text. Let its InputHandler commit the
+        // text and clear that state instead of bypassing it through the VT
+        // encoder and leaving a stale preedit overlay behind.
+        if self.ime_marked_text.is_some()
             && keystroke
                 .key_char
                 .as_deref()
@@ -1257,74 +1343,174 @@ impl GhosttyView {
             return false;
         }
 
-        // Ctrl + defined ASCII keys → C0 control bytes. This includes
-        // punctuation controls terminals rely on, such as Ctrl+] for tmux's
-        // `C-]` prefix (GS / 0x1d), not just Ctrl+A-Z.
-        if keystroke.modifiers.control
-            && !keystroke.modifiers.alt
-            && !keystroke.modifiers.platform
-            && (keystroke.key.len() == 1
-                || keystroke
-                    .key_char
-                    .as_deref()
-                    .is_some_and(|text| text.len() == 1))
-        {
-            if let Some(code) = crate::terminal_keys::ctrl_keystroke_to_c0(
-                &keystroke.key,
-                keystroke.key_char.as_deref(),
-                keystroke.modifiers.shift,
-            ) {
-                let byte = [code];
-                let text = std::str::from_utf8(&byte)
-                    .expect("terminal C0 control bytes are always valid UTF-8");
-                terminal.send_text(text);
-                return true;
+        let Some(vt_event) = crate::terminal_keys::vt_key_down_event(event) else {
+            return false;
+        };
+        match self.send_vt_key(&keystroke.key, &vt_event) {
+            Ok(outcome) => outcome.output_accepted,
+            Err(err) => {
+                log::debug!("windows terminal key encoding failed: {err}");
+                false
             }
         }
+    }
 
-        // Alt + printable ASCII → ESC + char (meta-prefix convention
-        // readline / vim / tmux / fzf all recognise: Alt+B word-back,
-        // Alt+F word-forward, Alt+D word-delete, Alt+. last-arg, …).
-        // Only when Alt is the only app-consumable modifier — AltGr-
-        // produced characters already arrive decoded via `key_char`
-        // without the `alt` flag on most layouts, and Ctrl+Alt is left
-        // for the terminal's own modifyOtherKeys semantics if added
-        // later.
-        if keystroke.modifiers.alt && !keystroke.modifiers.control && !keystroke.modifiers.platform
-        {
-            if let Some(ch) = keystroke.key_char.as_deref().filter(|s| !s.is_empty()) {
-                let mut out = String::with_capacity(1 + ch.len());
-                out.push('\x1b');
-                out.push_str(ch);
-                terminal.send_text(&out);
-                return true;
-            }
-        }
+    fn handle_terminal_paste_payload(
+        &mut self,
+        payload: TerminalPastePayload,
+        source: VtPasteSource,
+    ) -> bool {
+        // A new paste intent invalidates any confirmation for older text,
+        // even when this attempt later turns out to be empty or fails.
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return replaced_confirmation;
+        };
 
-        if let Some(ch) = keystroke.key_char.as_deref() {
-            if !ch.is_empty() {
-                if !keystroke.modifiers.control
-                    && !keystroke.modifiers.alt
-                    && !keystroke.modifiers.platform
-                {
-                    return false;
+        match payload {
+            TerminalPastePayload::Text(text) if !text.is_empty() => {
+                match terminal.paste_text(&text, source, false) {
+                    Ok(VtPasteResult::Accepted) => {
+                        self.clear_restored_screen_text();
+                        true
+                    }
+                    Ok(VtPasteResult::RequiresConfirmation) => {
+                        self.pending_unsafe_paste = Some((text, source));
+                        true
+                    }
+                    Ok(VtPasteResult::Empty) => replaced_confirmation,
+                    Err(err) => {
+                        log::debug!("windows terminal paste failed: {err}");
+                        replaced_confirmation
+                    }
                 }
-                terminal.send_text(ch);
-                return true;
             }
-        }
-        if keystroke.key.len() == 1 {
-            if !keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.platform
-            {
-                return false;
+            TerminalPastePayload::ForwardCtrlV => {
+                self.clear_restored_screen_text();
+                terminal.send_text("\x16");
+                true
             }
-            terminal.send_text(&keystroke.key);
-            return true;
+            TerminalPastePayload::Text(_) => replaced_confirmation,
         }
+    }
 
-        false
+    fn paste_from_clipboard(&mut self, cx: &mut App) -> bool {
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(payload) = cx
+            .read_from_clipboard()
+            .and_then(|item| payload_from_clipboard(&item))
+        else {
+            return replaced_confirmation;
+        };
+        self.handle_terminal_paste_payload(payload, VtPasteSource::Clipboard)
+            || replaced_confirmation
+    }
+
+    fn confirm_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((text, source)) = self.pending_unsafe_paste.take() else {
+            return;
+        };
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            self.pending_unsafe_paste = Some((text, source));
+            return;
+        };
+
+        match terminal.paste_text(&text, source, true) {
+            Ok(VtPasteResult::Accepted) => self.clear_restored_screen_text(),
+            Ok(VtPasteResult::Empty) => {}
+            Ok(VtPasteResult::RequiresConfirmation) => {
+                self.pending_unsafe_paste = Some((text, source));
+            }
+            Err(err) => {
+                log::debug!("windows confirmed terminal paste failed: {err}");
+                self.pending_unsafe_paste = Some((text, source));
+            }
+        }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn cancel_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_unsafe_paste = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn render_unsafe_paste_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.pending_unsafe_paste.as_ref()?.0.as_str();
+        let preview = unsafe_paste_preview(text);
+        let theme = cx.theme();
+
+        Some(
+            div()
+                .absolute()
+                .left(px(12.0))
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .occlude()
+                        .w_full()
+                        .max_w(px(620.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(8.0))
+                        .bg(theme
+                            .warning
+                            .opacity(if theme.is_dark() { 0.18 } else { 0.12 }))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child("This paste can run commands. Review it before continuing."),
+                        )
+                        .child(
+                            div()
+                                .max_h(px(88.0))
+                                .overflow_hidden()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(theme.foreground.opacity(0.06))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11.0))
+                                .line_height(px(15.0))
+                                .text_color(theme.foreground.opacity(0.82))
+                                .child(preview),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    Button::new("windows-cancel-unsafe-paste")
+                                        .label("Cancel")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.cancel_unsafe_paste(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("windows-confirm-unsafe-paste")
+                                        .label("Paste")
+                                        .small()
+                                        .primary()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_unsafe_paste(window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -1393,121 +1579,6 @@ fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<Re
     let frame = Frame::new(buffer);
     let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
     Some(Arc::new(RenderImage::new(data)))
-}
-
-/// xterm modifier parameter (`m`) — `1 + (shift | alt<<1 | ctrl<<2)`,
-/// where `1` itself means "no modifier" (so the encoder omits it).
-///
-/// Used in CSI `1;m{A|B|C|D|H|F|P|Q|R|S}` and CSI `{n};m~` sequences.
-/// Source: xterm's "PC-Style Function Keys" encoding.
-fn xterm_modifier_param(modifiers: &Modifiers) -> Option<u8> {
-    let mask = u8::from(modifiers.shift)
-        | (u8::from(modifiers.alt) << 1)
-        | (u8::from(modifiers.control) << 2);
-    if mask == 0 { None } else { Some(1 + mask) }
-}
-
-/// Translate a GPUI key name + modifiers into the byte sequence the
-/// shell / TUI expects. Returns `None` for keys that should flow
-/// through the printable-character path (letters, digits, symbols).
-///
-/// Covers arrows (DECCKM-aware and modifier-aware), home/end, pageup/
-/// pagedown, insert/delete, F1-F12, enter, backspace, tab/shift-tab,
-/// escape. xterm modifier encoding is applied uniformly: any combination
-/// of Shift/Alt/Ctrl shifts the sequence into its CSI `1;m<final>`
-/// (arrows, home/end, F1-F4) or CSI `n;m~` (tilde-terminated) form.
-fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<String> {
-    let m = xterm_modifier_param(modifiers);
-
-    let tilde = |code: u8| match m {
-        Some(m) => format!("\x1b[{};{}~", code, m),
-        None => format!("\x1b[{}~", code),
-    };
-
-    // CSI-1-final covers arrows + home/end + F1-F4. For the no-modifier
-    // case: arrows honour DECCKM, F1-F4 use SS3 (ESC O x), home/end use
-    // plain CSI.
-    let csi1 = |final_byte: char, ss3_when_plain: bool, decckm_arrow: bool| match m {
-        Some(m) => format!("\x1b[1;{}{}", m, final_byte),
-        None if decckm_arrow && decckm => format!("\x1bO{}", final_byte),
-        None if ss3_when_plain => format!("\x1bO{}", final_byte),
-        None => format!("\x1b[{}", final_byte),
-    };
-
-    Some(match key {
-        "up" => csi1('A', false, true),
-        "down" => csi1('B', false, true),
-        "right" => csi1('C', false, true),
-        "left" => csi1('D', false, true),
-        "home" => csi1('H', false, false),
-        "end" => csi1('F', false, false),
-        "pageup" => tilde(5),
-        "pagedown" => tilde(6),
-        "insert" => tilde(2),
-        "delete" => tilde(3),
-        "f1" => csi1('P', true, false),
-        "f2" => csi1('Q', true, false),
-        "f3" => csi1('R', true, false),
-        "f4" => csi1('S', true, false),
-        "f5" => tilde(15),
-        "f6" => tilde(17),
-        "f7" => tilde(18),
-        "f8" => tilde(19),
-        "f9" => tilde(20),
-        "f10" => tilde(21),
-        "f11" => tilde(23),
-        "f12" => tilde(24),
-        "enter" | "return" => "\r".into(),
-        "escape" => "\x1b".into(),
-        // Alt+Backspace is readline's word-delete (ESC + DEL).
-        "backspace" if modifiers.alt && !modifiers.control && !modifiers.platform => {
-            "\x1b\x7f".into()
-        }
-        "backspace" => "\x7f".into(),
-        // Shift+Tab is the xterm "back-tab" CSI Z — bash/zsh completion
-        // menus and fzf use it to cycle backwards.
-        "tab" if modifiers.shift && !modifiers.control && !modifiers.platform => "\x1b[Z".into(),
-        "tab" => "\t".into(),
-        _ => return None,
-    })
-}
-
-fn send_paste(terminal: &GhosttyTerminal, text: &str) {
-    // Bracketed paste lets the shell tell pasted text apart from real
-    // typing, so vim / readline can disable auto-indent. Hold the lock
-    // across both wrapper writes so the session can't be swapped out
-    // mid-paste (which would strip the trailing `ESC[201~`).
-    let inner = terminal.inner();
-    let guard = inner.lock();
-    if let Some(session) = guard.as_ref() {
-        if session.is_bracketed_paste() {
-            session.write_pty_raw(b"\x1b[200~");
-            session.write_input(text);
-            session.write_pty_raw(b"\x1b[201~");
-        } else {
-            session.write_input(text);
-        }
-    }
-}
-
-fn send_terminal_paste_payload(terminal: &GhosttyTerminal, payload: TerminalPastePayload) {
-    match payload {
-        TerminalPastePayload::Text(text) if !text.is_empty() => send_paste(terminal, &text),
-        TerminalPastePayload::ForwardCtrlV => terminal.send_text("\x16"),
-        TerminalPastePayload::Text(_) => {}
-    }
-}
-
-fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
-    let Some(payload) = cx
-        .read_from_clipboard()
-        .and_then(|item| payload_from_clipboard(&item))
-    else {
-        return false;
-    };
-
-    send_terminal_paste_payload(terminal, payload);
-    true
 }
 
 impl Focusable for GhosttyView {
@@ -1583,6 +1654,7 @@ impl Render for GhosttyView {
         if let Some(scrollbar) = self.render_terminal_scrollbar(cx) {
             terminal_children.push(scrollbar);
         }
+        let unsafe_paste_confirmation = self.render_unsafe_paste_confirmation(cx);
 
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
@@ -1605,19 +1677,13 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\t");
-                }
+                this.send_tab_key(false);
             }))
             .on_action(cx.listener(|this, _: &ConsumeTabPrev, window, _cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    terminal.send_text("\x1b[Z");
-                }
+                this.send_tab_key(true);
             }))
             .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
                 if let Some(terminal) = &this.terminal {
@@ -1627,10 +1693,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal
-                    && paste_from_clipboard(terminal, cx)
-                {
+                if this.paste_from_clipboard(cx) {
                     cx.notify();
                 }
             }))
@@ -1641,9 +1704,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    send_terminal_paste_payload(terminal, payload);
+                if this.handle_terminal_paste_payload(payload, VtPasteSource::Text) {
                     cx.notify();
                 }
             }))
@@ -1651,13 +1712,16 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                let special_key_writes =
-                    encode_special_key(&event.keystroke.key, &event.keystroke.modifiers, false)
-                        .is_some();
-                if key_down_may_write_terminal(event, special_key_writes) {
-                    this.clear_restored_screen_text();
-                }
                 if this.handle_key_down(event, window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, window, cx| {
+                if !this.focus_handle.is_focused(window) {
+                    return;
+                }
+                if this.handle_key_up(event) {
                     window.prevent_default();
                     cx.stop_propagation();
                 }
@@ -2005,7 +2069,8 @@ impl Render for GhosttyView {
                             .bottom(px(TERMINAL_PADDING_Y_PX))
                             .w(px(TERMINAL_PADDING_X_PX))
                             .bg(padding_background),
-                    ),
+                    )
+                    .children(unsafe_paste_confirmation),
             )
             .context_menu(move |menu, window, cx| {
                 // Empty PopupMenu renders nothing; suppress con's menu only
@@ -2027,6 +2092,7 @@ impl Render for GhosttyView {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
+        self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }

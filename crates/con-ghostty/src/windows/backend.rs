@@ -15,6 +15,7 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
+use crate::vt::{VtKeyEvent, VtKeyOutcome};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -215,16 +216,43 @@ impl WindowsGhosttyTerminal {
 
     pub fn write_to_pty(&self, data: &[u8]) {
         if let Some(session) = self.inner.lock().as_ref() {
-            if let Ok(s) = std::str::from_utf8(data) {
-                session.write_input(s);
+            if let Ok(s) = std::str::from_utf8(data)
+                && let Err(err) = session.write_input(s)
+            {
+                log::debug!("windows terminal input write failed: {err:#}");
             }
         }
     }
 
     pub fn send_text(&self, text: &str) {
-        if let Some(session) = self.inner.lock().as_ref() {
-            session.write_input(text);
+        if let Some(session) = self.inner.lock().as_ref()
+            && let Err(err) = session.write_input(text)
+        {
+            log::debug!("windows terminal text write failed: {err:#}");
         }
+    }
+
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(VtKeyOutcome::default());
+        };
+        session.send_key(event).map_err(|err| err.to_string())
+    }
+
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: crate::vt::VtPasteSource,
+        confirm_unsafe_paste: bool,
+    ) -> Result<crate::vt::VtPasteResult, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(crate::vt::VtPasteResult::Empty);
+        };
+        session
+            .paste_text(text, source, confirm_unsafe_paste)
+            .map_err(|err| err.to_string())
     }
 
     pub fn send_mouse_button(&self, _pressed: bool, _button: MouseButton, _mods: i32) -> bool {

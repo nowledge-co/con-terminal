@@ -1,20 +1,27 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
-use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
+use crate::vt::{
+    PtyWriteClass, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
+    VtPasteSource, VtScreen,
+};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
-const MAX_BRIDGE_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// A 16 MiB Kitty clipboard response expands to about 22 MiB after base64.
+const MAX_BRIDGE_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -57,18 +64,155 @@ fn theme_colors_to_vt(colors: &TerminalColors) -> ThemeColors {
 enum LinuxPtyBackend {
     Local {
         master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
-        writer: Arc<Mutex<Box<dyn Write + Send>>>,
         child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+        io_shutdown: UnixStream,
     },
     HostBridge {
-        stream_writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
+        stream_shutdown: UnixStream,
         socket_path: PathBuf,
         child: Mutex<std::process::Child>,
     },
 }
 
+#[derive(Clone)]
+enum LinuxPtyInput {
+    Local(PtyWriteQueue),
+    HostBridge(PtyWriteQueue),
+}
+
+impl LinuxPtyInput {
+    fn write_data(&self, data: &[u8], class: PtyWriteClass) -> std::io::Result<()> {
+        match self {
+            Self::Local(queue) => match class {
+                PtyWriteClass::Regular => queue.enqueue(data),
+                PtyWriteClass::ReservedControl => queue.enqueue_with_reserved_capacity(data),
+            },
+            Self::HostBridge(queue) => {
+                if data.len() > MAX_BRIDGE_FRAME_BYTES {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "host PTY input frame is too large",
+                    ));
+                }
+
+                let mut frame = Vec::with_capacity(5 + data.len());
+                frame.push(0x00); // TAG_DATA
+                frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                frame.extend_from_slice(data);
+                match class {
+                    PtyWriteClass::Regular => queue.enqueue_owned(frame.into_boxed_slice()),
+                    PtyWriteClass::ReservedControl => {
+                        queue.enqueue_owned_with_reserved_capacity(frame.into_boxed_slice())
+                    }
+                }
+            }
+        }
+    }
+
+    fn resize(&self, size: &SurfaceSize) -> std::io::Result<()> {
+        let Self::HostBridge(queue) = self else {
+            return Ok(());
+        };
+
+        let cols = size.columns.max(1);
+        let rows = size.rows.max(1);
+        let width_px = size.width_px.min(u32::from(u16::MAX)) as u16;
+        let height_px = size.height_px.min(u32::from(u16::MAX)) as u16;
+        let mut frame = [0u8; 9];
+        frame[0] = 0x01; // TAG_RESIZE
+        frame[1..3].copy_from_slice(&cols.to_be_bytes());
+        frame[3..5].copy_from_slice(&rows.to_be_bytes());
+        frame[5..7].copy_from_slice(&width_px.to_be_bytes());
+        frame[7..9].copy_from_slice(&height_px.to_be_bytes());
+        queue.enqueue_with_reserved_capacity(&frame)
+    }
+}
+
+fn duplicate_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: `fd` remains owned by portable_pty for this call. The returned
+    // descriptor has independent ownership and is closed by `OwnedFd`.
+    unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()
+}
+
+fn set_fd_nonblocking(fd: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Wait for one non-blocking PTY operation or an explicit session shutdown.
+/// The cancellation socket is never consumed, so both reader and writer wake
+/// when the owner shuts down its peer endpoint.
+fn wait_for_pty_io(pty_fd: RawFd, cancel_fd: RawFd, events: i16) -> io::Result<bool> {
+    let mut fds = [
+        libc::pollfd {
+            fd: cancel_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: pty_fd,
+            events,
+            revents: 0,
+        },
+    ];
+    loop {
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if result == -1 {
+            let err = io::Error::last_os_error();
+            if err.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+
+        if fds[0].revents != 0 {
+            return Ok(false);
+        }
+        if fds[1].revents & (events | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn write_all_cancellable(
+    writer: &mut dyn Write,
+    readiness: &OwnedFd,
+    cancel: &UnixStream,
+    mut data: &[u8],
+) -> io::Result<()> {
+    while !data.is_empty() {
+        if !wait_for_pty_io(readiness.as_raw_fd(), cancel.as_raw_fd(), libc::POLLOUT)? {
+            return Err(io::Error::new(
+                ErrorKind::BrokenPipe,
+                "PTY input writer was cancelled",
+            ));
+        }
+
+        match writer.write(data) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::WriteZero,
+                    "PTY input accepted zero bytes",
+                ));
+            }
+            Ok(written) => data = &data[written..],
+            Err(err) if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 pub struct LinuxPtySession {
     backend: LinuxPtyBackend,
+    input: LinuxPtyInput,
+    input_worker: PtyWriteWorker,
     shared: Arc<SessionShared>,
     size: Mutex<SurfaceSize>,
     title: Option<String>,
@@ -198,22 +342,11 @@ impl LinuxPtySession {
                     .resize(pty_size_from_surface(&size))
                     .context("failed to resize linux pty")?;
             }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                let cols = size.columns.max(1);
-                let rows = size.rows.max(1);
-                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
-                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
-                let mut buf = [0u8; 9];
-                buf[0] = 0x01; // TAG_RESIZE
-                buf[1..3].copy_from_slice(&cols.to_be_bytes());
-                buf[3..5].copy_from_slice(&rows.to_be_bytes());
-                buf[5..7].copy_from_slice(&wp.to_be_bytes());
-                buf[7..9].copy_from_slice(&hp.to_be_bytes());
-                let mut guard = stream_writer.lock();
-                let _ = guard.write_all(&buf);
-                let _ = guard.flush();
-            }
+            LinuxPtyBackend::HostBridge { .. } => {}
         }
+        self.input
+            .resize(&size)
+            .context("failed to queue linux pty resize")?;
 
         self.mark_needs_render();
         Ok(())
@@ -238,22 +371,11 @@ impl LinuxPtySession {
                     .resize(pty_size_from_surface(&size))
                     .context("failed to resize linux pty")?;
             }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                let cols = size.columns.max(1);
-                let rows = size.rows.max(1);
-                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
-                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
-                let mut buf = [0u8; 9];
-                buf[0] = 0x01; // TAG_RESIZE
-                buf[1..3].copy_from_slice(&cols.to_be_bytes());
-                buf[3..5].copy_from_slice(&rows.to_be_bytes());
-                buf[5..7].copy_from_slice(&wp.to_be_bytes());
-                buf[7..9].copy_from_slice(&hp.to_be_bytes());
-                let mut guard = stream_writer.lock();
-                let _ = guard.write_all(&buf);
-                let _ = guard.flush();
-            }
+            LinuxPtyBackend::HostBridge { .. } => {}
         }
+        self.input
+            .resize(&size)
+            .context("failed to queue linux pty resize")?;
 
         self.mark_needs_render();
         Ok(())
@@ -268,33 +390,48 @@ impl LinuxPtySession {
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
         self.scroll_viewport_to_bottom();
-        match &self.backend {
-            LinuxPtyBackend::Local { writer, .. } => {
-                writer
-                    .lock()
-                    .write_all(data)
-                    .context("failed to write to linux pty")?;
-            }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                if data.len() > MAX_BRIDGE_FRAME_BYTES {
-                    bail!("host PTY input frame is too large");
-                }
-                let len = data.len() as u32;
-                let mut guard = stream_writer.lock();
-                guard
-                    .write_all(&[0x00])
-                    .context("failed to write data tag")?;
-                guard
-                    .write_all(&len.to_be_bytes())
-                    .context("failed to write data len")?;
-                guard
-                    .write_all(data)
-                    .context("failed to write data payload")?;
-                guard.flush().context("failed to flush socket")?;
-            }
-        }
+        self.shared
+            .screen
+            .write_input(data)
+            .context("failed to queue linux pty input")?;
         self.input_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    pub fn write_control(&self, data: &[u8]) -> Result<()> {
+        self.scroll_viewport_to_bottom();
+        self.shared
+            .screen
+            .write_control(data)
+            .context("failed to queue linux pty control input")?;
+        self.input_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
+        let outcome = self.shared.screen.send_key(event)?;
+        if outcome.output_accepted {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(outcome)
+    }
+
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: VtPasteSource,
+        confirm_unsafe_paste: bool,
+    ) -> Result<VtPasteResult> {
+        let result = self
+            .shared
+            .screen
+            .paste_text(text, source, confirm_unsafe_paste)?;
+        if result == VtPasteResult::Accepted {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(result)
     }
 
     pub fn clear_screen_and_scrollback(&self) {
@@ -321,7 +458,7 @@ impl LinuxPtySession {
 
     pub fn is_alive(&self) -> bool {
         self.poll_child_status();
-        self.shared.alive.load(Ordering::Acquire)
+        self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.is_write_desynchronized()
     }
 
     pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {
@@ -371,10 +508,6 @@ impl LinuxPtySession {
         self.shared.transcript.lock().search(pattern, limit)
     }
 
-    pub fn is_bracketed_paste(&self) -> bool {
-        self.shared.screen.is_bracketed_paste()
-    }
-
     pub fn is_decckm(&self) -> bool {
         self.shared.screen.is_decckm()
     }
@@ -421,17 +554,25 @@ impl LinuxPtySession {
 impl Drop for LinuxPtySession {
     fn drop(&mut self) {
         match &self.backend {
-            LinuxPtyBackend::Local { child, .. } => {
+            LinuxPtyBackend::Local {
+                child, io_shutdown, ..
+            } => {
+                let _ = io_shutdown.shutdown(std::net::Shutdown::Both);
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate linux pty child during drop: {err}");
                 }
+                self.input_worker.shutdown();
             }
             LinuxPtyBackend::HostBridge {
-                child, socket_path, ..
+                child,
+                stream_shutdown,
+                socket_path,
             } => {
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate host pty bridge child during drop: {err}");
                 }
+                let _ = stream_shutdown.shutdown(std::net::Shutdown::Both);
+                self.input_worker.shutdown();
                 let _ = std::fs::remove_file(socket_path);
             }
         }
@@ -447,6 +588,20 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
     let pair = pty_system
         .openpty(pty_size)
         .context("failed to open linux pty")?;
+    let master_fd = pair
+        .master
+        .as_raw_fd()
+        .context("linux pty master did not expose a file descriptor")?;
+    let reader_readiness =
+        duplicate_fd(master_fd).context("failed to clone linux pty reader fd")?;
+    let writer_readiness =
+        duplicate_fd(master_fd).context("failed to clone linux pty writer fd")?;
+    set_fd_nonblocking(master_fd).context("failed to make linux pty non-blocking")?;
+    let (io_shutdown, io_cancel) =
+        UnixStream::pair().context("failed to create linux pty cancellation socket")?;
+    let writer_cancel = io_cancel
+        .try_clone()
+        .context("failed to clone linux pty writer cancellation socket")?;
 
     let target_program = options
         .program
@@ -465,11 +620,15 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         .master
         .try_clone_reader()
         .context("failed to clone linux pty reader")?;
-    let writer = Arc::new(Mutex::new(
-        pair.master
-            .take_writer()
-            .context("failed to take linux pty writer")?,
-    ));
+    let mut writer = pair
+        .master
+        .take_writer()
+        .context("failed to take linux pty writer")?;
+    let (input_queue, input_worker) = PtyWriteQueue::spawn("con-linux-pty-writer", move |data| {
+        write_all_cancellable(writer.as_mut(), &writer_readiness, &writer_cancel, data)
+    })
+    .context("failed to spawn linux pty writer")?;
+    let input = LinuxPtyInput::Local(input_queue);
     let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
     let screen = Arc::new(
         VtScreen::new_with_write_pty(
@@ -477,12 +636,8 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             options.size.rows.max(1),
             theme_owned.as_ref(),
             Some({
-                let writer = writer.clone();
-                Arc::new(move |data: &[u8]| {
-                    if let Err(err) = writer.lock().write_all(data) {
-                        log::debug!("linux vt write_pty failed: {err:#}");
-                    }
-                })
+                let input = input.clone();
+                Arc::new(move |data: &[u8], priority| input.write_data(data, priority))
             }),
         )
         .context("failed to create linux vt screen")?,
@@ -510,14 +665,22 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         shared.transcript.lock().push(text);
     }
     let started_at = Instant::now();
-    spawn_reader_thread(reader, shared.clone(), started_at);
+    spawn_reader_thread(
+        reader,
+        reader_readiness,
+        io_cancel,
+        shared.clone(),
+        started_at,
+    );
 
     Ok(LinuxPtySession {
         backend: LinuxPtyBackend::Local {
             master: Mutex::new(pair.master),
-            writer,
             child: Mutex::new(child),
+            io_shutdown,
         },
+        input,
+        input_worker,
         shared,
         size: Mutex::new(options.size),
         title: Some(default_title(
@@ -628,8 +791,14 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         stream.ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
     let stream_writer = stream.try_clone().context("clone socket writer")?;
     let stream_reader = stream.try_clone().context("clone socket reader")?;
-    let stream_writer_mutex = Arc::new(Mutex::new(stream_writer));
-    let writer_for_vt = stream_writer_mutex.clone();
+    let mut stream_writer = stream_writer;
+    let (input_queue, input_worker) =
+        PtyWriteQueue::spawn("con-linux-pty-bridge-writer", move |frame| {
+            stream_writer.write_all(frame)?;
+            stream_writer.flush()
+        })
+        .context("failed to spawn host pty bridge writer")?;
+    let input = LinuxPtyInput::HostBridge(input_queue);
 
     let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
     let screen = Arc::new(
@@ -637,18 +806,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             options.size.columns.max(1),
             options.size.rows.max(1),
             theme_owned.as_ref(),
-            Some(Arc::new(move |data: &[u8]| {
-                if data.len() > MAX_BRIDGE_FRAME_BYTES {
-                    log::warn!("dropping oversized host PTY input frame");
-                    return;
-                }
-                let len = data.len() as u32;
-                let mut guard = writer_for_vt.lock();
-                let _ = guard.write_all(&[0x00]);
-                let _ = guard.write_all(&len.to_be_bytes());
-                let _ = guard.write_all(data);
-                let _ = guard.flush();
-            })),
+            Some({
+                let input = input.clone();
+                Arc::new(move |data: &[u8], priority| input.write_data(data, priority))
+            }),
         )
         .context("failed to create linux vt screen")?,
     );
@@ -676,10 +837,12 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
 
     Ok(LinuxPtySession {
         backend: LinuxPtyBackend::HostBridge {
-            stream_writer: stream_writer_mutex,
+            stream_shutdown: stream,
             socket_path,
             child: Mutex::new(child),
         },
+        input,
+        input_worker,
         shared,
         size: Mutex::new(options.size),
         title: Some(default_title(
@@ -749,6 +912,8 @@ fn spawn_bridge_reader_thread(
 
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
+    readiness: OwnedFd,
+    cancel: UnixStream,
     shared: Arc<SessionShared>,
     started_at: Instant,
 ) {
@@ -757,6 +922,15 @@ fn spawn_reader_thread(
         .spawn(move || {
             let mut buffer = [0_u8; 8192];
             loop {
+                match wait_for_pty_io(readiness.as_raw_fd(), cancel.as_raw_fd(), libc::POLLIN) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(err) => {
+                        log::debug!("linux pty reader poll terminated: {err}");
+                        shared.mark_exited(None, started_at.elapsed());
+                        break;
+                    }
+                }
                 match reader.read(&mut buffer) {
                     Ok(0) => {
                         shared.mark_exited(None, started_at.elapsed());
@@ -767,7 +941,11 @@ fn spawn_reader_thread(
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
                         shared.push_output(chunk.as_ref());
                     }
-                    Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
+                    {
+                        continue;
+                    }
                     Err(err) => {
                         log::debug!("linux pty reader terminated: {err}");
                         shared.mark_exited(None, started_at.elapsed());
@@ -991,13 +1169,62 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{ErrorKind, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
     use std::sync::Arc;
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::VtScreen;
 
-    use super::SessionShared;
+    use super::{SessionShared, duplicate_fd, set_fd_nonblocking, write_all_cancellable};
+
+    #[test]
+    fn blocked_writer_stops_when_session_is_cancelled() {
+        let (mut writer, _unread_peer) = UnixStream::pair().expect("create blocked writer socket");
+        set_fd_nonblocking(writer.as_raw_fd()).expect("make test writer non-blocking");
+        let readiness = duplicate_fd(writer.as_raw_fd()).expect("clone test writer fd");
+
+        let fill = [0_u8; 8 * 1024];
+        loop {
+            match writer.write(&fill) {
+                Ok(0) => panic!("test writer accepted zero bytes"),
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => panic!("failed to fill test writer: {err}"),
+            }
+        }
+
+        let (shutdown, cancel) = UnixStream::pair().expect("create cancellation socket");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            entered_tx.send(()).expect("signal writer entry");
+            result_tx
+                .send(write_all_cancellable(
+                    &mut writer,
+                    &readiness,
+                    &cancel,
+                    b"blocked",
+                ))
+                .expect("send writer result");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("writer thread started");
+        shutdown
+            .shutdown(std::net::Shutdown::Both)
+            .expect("cancel writer");
+        let err = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled writer returned")
+            .expect_err("cancelled writer must fail");
+        assert_eq!(err.kind(), ErrorKind::BrokenPipe);
+        handle.join().expect("writer thread joined");
+    }
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {

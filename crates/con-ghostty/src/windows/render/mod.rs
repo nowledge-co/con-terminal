@@ -19,15 +19,16 @@
 //! into its own DirectComposition tree — no child HWND on top of the
 //! app's modals, no z-order glitches on tab switch.
 //!
-//! One `DrawIndexedInstanced(6, cell_count)` per dirty frame. Grayscale
-//! coverage; bg/fg lerp in the pixel shader. See `shaders.hlsl` for the
-//! shader code and `pipeline.rs` for the D3D11 plumbing.
+//! Dirty frames use layered cell and RGBA image passes so Kitty placements
+//! can render below backgrounds, below text, or above text. See the HLSL
+//! sources and pipeline modules for the D3D11 plumbing.
 
 mod atlas;
 mod font_loader;
+mod image_pipeline;
 mod pipeline;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -49,8 +50,9 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
-use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, ScreenSnapshot};
+use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, KittyPlacement, ScreenSnapshot};
 use atlas::{GlyphCache, GlyphKey};
+use image_pipeline::{ImageLayer, ImagePipeline};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
 
 pub use super::vt::ThemeColors;
@@ -62,6 +64,8 @@ const ALTERNATE_SCREEN_BACKGROUND_OPACITY_FLOOR: f32 = 1.0;
 /// without reallocation; panes larger than that grow via
 /// `Pipeline::ensure_instance_capacity` in the hot path.
 const INITIAL_INSTANCE_CAPACITY: u32 = 16 * 1024;
+const RENDER_ATTR_DEFAULT_BG: u32 = 1 << 8;
+const RENDER_ATTR_CURSOR: u32 = 1 << 9;
 
 #[derive(Debug, Clone)]
 pub struct RendererConfig {
@@ -113,10 +117,12 @@ pub struct Renderer {
     _dwrite: IDWriteFactory,
 
     pipeline: std::sync::Mutex<Pipeline>,
+    image_pipeline: Mutex<ImagePipeline>,
     atlas: Mutex<GlyphCache>,
 
     instances: Mutex<Vec<Instance>>,
     has_full_frame: Mutex<bool>,
+    kitty_readback: Mutex<KittyReadbackState>,
     /// Generation fingerprint of the last frame we actually rendered.
     /// It includes VT generation, selection state, and snapshot/view
     /// geometry so resize catch-up frames are not mistaken for
@@ -268,6 +274,7 @@ impl Renderer {
         log::info!("Renderer: creating D3D11 pipeline (HLSL compile)");
         let pipeline =
             Pipeline::new(&device, INITIAL_INSTANCE_CAPACITY).context("Pipeline::new failed")?;
+        let image_pipeline = ImagePipeline::new(&device).context("ImagePipeline::new failed")?;
         log::info!("Renderer: pipeline ready");
 
         Ok(Self {
@@ -278,9 +285,11 @@ impl Renderer {
             staging_ring: Mutex::new(staging_ring),
             _dwrite: dwrite,
             pipeline: std::sync::Mutex::new(pipeline),
+            image_pipeline: Mutex::new(image_pipeline),
             atlas: Mutex::new(atlas),
             instances: Mutex::new(Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize)),
             has_full_frame: Mutex::new(false),
+            kitty_readback: Mutex::new(KittyReadbackState::default()),
             last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
             last_presented_at: Mutex::new(None),
@@ -366,6 +375,10 @@ impl Renderer {
             .last_generation
             .lock()
             .expect("last_generation mutex poisoned in rebuild_atlas()") = u64::MAX;
+        *self
+            .has_full_frame
+            .lock()
+            .expect("has_full_frame mutex poisoned in rebuild_atlas()") = false;
         Ok(())
     }
 
@@ -543,9 +556,7 @@ impl Renderer {
                 self.context.ClearRenderTargetView(&self.rtv, &clear);
             }
 
-            if !snapshot.cells.is_empty() {
-                self.draw_cells(snapshot, config)?;
-            }
+            let cell_metrics = self.draw_terminal(snapshot, config)?;
             draw_ms = draw_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
@@ -555,14 +566,26 @@ impl Renderer {
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
             let submit_started = perf_trace_enabled().then(Instant::now);
+            // Image damage is relative to the last frame handed to GPUI.
+            // Partial patches are safe only when no older mailbox slot can be
+            // presented first and change that baseline.
             let can_partial_readback = in_flight_before_submit == 0
                 && *self
                     .has_full_frame
                     .lock()
                     .expect("has_full_frame mutex poisoned checking partial readback");
-            let readback_regions = self.readback_regions(snapshot, sel_hash, can_partial_readback);
-            submitted =
-                Some(ring.submit_copy_mailbox(&self.context, &self.rt_texture, &readback_regions));
+            let kitty_visuals = KittyVisualState::from_placements(
+                &snapshot.kitty_placements,
+                [cell_metrics.cell_width_px, cell_metrics.cell_height_px],
+            );
+            let readback_regions =
+                self.readback_regions(snapshot, sel_hash, can_partial_readback, &kitty_visuals);
+            submitted = Some(ring.submit_copy_mailbox(
+                &self.context,
+                &self.rt_texture,
+                &readback_regions,
+                kitty_visuals,
+            ));
             submit_ms = submit_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
@@ -771,6 +794,7 @@ impl Renderer {
         snapshot: &ScreenSnapshot,
         sel_hash: u64,
         allow_partial: bool,
+        kitty_visuals: &KittyVisualState,
     ) -> Vec<ReadbackRegion> {
         if !allow_partial
             || sel_hash != 0
@@ -780,19 +804,16 @@ impl Renderer {
             return vec![ReadbackRegion::full(self.height_px)];
         }
 
-        let cell_h = self.metrics().cell_height_px.max(1);
-        let mut regions: Vec<ReadbackRegion> = Vec::new();
+        let cell_h = kitty_visuals.cell_size[1].max(1);
+        let mut regions = self
+            .kitty_readback
+            .lock()
+            .expect("kitty_readback mutex poisoned")
+            .damage_regions(kitty_visuals, self.height_px);
         for row in snapshot.dirty_rows.iter().copied() {
             let y = u32::from(row).saturating_mul(cell_h).min(self.height_px);
             let bottom = y.saturating_add(cell_h).min(self.height_px);
             if y >= bottom {
-                continue;
-            }
-            if let Some(last) = regions.last_mut()
-                && last.y.saturating_add(last.height) >= y
-            {
-                let merged_bottom = last.y.saturating_add(last.height).max(bottom);
-                last.height = merged_bottom.saturating_sub(last.y);
                 continue;
             }
             regions.push(ReadbackRegion {
@@ -800,6 +821,7 @@ impl Renderer {
                 height: bottom - y,
             });
         }
+        merge_readback_regions(&mut regions, self.height_px);
         if regions.is_empty() {
             vec![ReadbackRegion::full(self.height_px)]
         } else {
@@ -835,6 +857,10 @@ impl Renderer {
     }
 
     fn frame_from_readback(&self, mut readback: Readback) -> FrameBgra {
+        self.kitty_readback
+            .lock()
+            .expect("kitty_readback mutex poisoned in frame_from_readback()")
+            .presented(std::mem::take(&mut readback.kitty_visuals));
         if readback.regions.len() == 1 && readback.regions[0].is_full(self.height_px) {
             *self
                 .has_full_frame
@@ -883,11 +909,15 @@ impl Renderer {
         }
     }
 
-    fn draw_cells(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
+    fn draw_terminal(
+        &self,
+        snapshot: &ScreenSnapshot,
+        config: &RendererConfig,
+    ) -> Result<CellMetrics> {
         let selection = *self
             .selection
             .lock()
-            .expect("selection mutex poisoned in draw_cells()");
+            .expect("selection mutex poisoned in draw_terminal()");
         // Sentinel alpha=0 in cell.bg means "default theme background"
         // (set by the VT layer); rewrite it to the configured opacity
         // so the shader composes the cell over Mica with the right
@@ -916,11 +946,11 @@ impl Renderer {
         let mut atlas = self
             .atlas
             .lock()
-            .expect("atlas mutex poisoned in draw_cells() glyph pass");
+            .expect("atlas mutex poisoned in draw_terminal() glyph pass");
         let mut instances = self
             .instances
             .lock()
-            .expect("instances mutex poisoned in draw_cells()");
+            .expect("instances mutex poisoned in draw_terminal()");
         instances.clear();
         instances.reserve(snapshot.cells.len().saturating_add(1));
         let cell_w_px = atlas.metrics().cell_width_px;
@@ -931,7 +961,6 @@ impl Renderer {
             None
         };
         let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
-        let mut cursor_source: Option<Instance> = None;
         let mut has_wide_glyph = false;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
@@ -948,6 +977,17 @@ impl Renderer {
             };
 
             let is_cursor_cell = cursor_pos == Some((col, row));
+            let render_attrs = effective_attrs as u32
+                | if (cell.bg & 0xFF) == 0 {
+                    RENDER_ATTR_DEFAULT_BG
+                } else {
+                    0
+                }
+                | if is_cursor_cell {
+                    RENDER_ATTR_CURSOR
+                } else {
+                    0
+                };
 
             // The render target clear already paints the pane's default
             // background. Avoid emitting a bg-only instance for blank
@@ -967,11 +1007,8 @@ impl Renderer {
                     atlas_size: [0, 0],
                     fg: cell.fg,
                     bg: apply_opacity(cell.bg),
-                    attrs: effective_attrs as u32,
+                    attrs: render_attrs,
                 };
-                if is_cursor_cell {
-                    cursor_source = Some(instance);
-                }
                 instances.push(instance);
                 continue;
             }
@@ -1002,11 +1039,8 @@ impl Renderer {
                                 atlas_size: [0, 0],
                                 fg: cell.fg,
                                 bg: apply_opacity(cell.bg),
-                                attrs: effective_attrs as u32,
+                                attrs: render_attrs,
                             };
-                            if is_cursor_cell {
-                                cursor_source = Some(instance);
-                            }
                             instances.push(instance);
                             continue;
                         }
@@ -1020,15 +1054,11 @@ impl Renderer {
                 glyph,
                 cell.fg,
                 apply_opacity(cell.bg),
-                effective_attrs,
+                render_attrs,
             );
             has_wide_glyph |= glyph.w as u32 > cell_w_px;
-            if is_cursor_cell {
-                cursor_source = Some(instance);
-            }
             instances.push(instance);
         }
-        drop(atlas);
 
         // Sort so oversized PUA icons render LAST within the grid
         // pass. Their atlas slots are wider than a cell, so their
@@ -1039,32 +1069,42 @@ impl Renderer {
         // would otherwise paint on top. Stable partition keeps the
         // grid's row-major order within the narrow and wide groups
         // independently — bad ordering would show up as flicker.
-        if has_wide_glyph {
-            instances.sort_by_key(|inst| (inst.atlas_size[0] > cell_w_px) as u8);
-        }
-
-        // Push the cursor instance AFTER the sort so it always renders
-        // last — on top of any wide PUA glyph that might otherwise
-        // overdraw the cursor cell.
-        if let Some(src) = cursor_source {
-            // Force both alphas to 0xFF on the swapped cursor instance.
-            // `src.bg` may carry the opacity sentinel (see `apply_opacity`
-            // above — default-bg cells get alpha = opacity_byte so Mica
-            // shows through). Without this mask the cursor block itself
-            // would stay solid (it uses `src.fg`, which is always 0xFF)
-            // but the cursor's text glyph — which now draws with
-            // `fg = src.bg` — would render semi-transparent against
-            // the solid block. Cursor is meant to be a solid highlight,
-            // so both channels are pinned to opaque.
-            instances.push(Instance {
-                cell_pos: src.cell_pos,
-                atlas_pos: src.atlas_pos,
-                atlas_size: src.atlas_size,
-                fg: (src.bg & 0xFFFFFF00) | 0xFF,
-                bg: (src.fg & 0xFFFFFF00) | 0xFF,
-                attrs: src.attrs & !0x10,
+        if has_wide_glyph || cursor_pos.is_some() {
+            instances.sort_by_key(|instance| {
+                if instance.attrs & RENDER_ATTR_CURSOR != 0 {
+                    2
+                } else if instance.atlas_size[0] > cell_w_px {
+                    1
+                } else {
+                    0
+                }
             });
         }
+
+        let text_instance_count = instances.len() as u32;
+        let cursor_instance = instances
+            .iter()
+            .position(|instance| instance.attrs & RENDER_ATTR_CURSOR != 0)
+            .map(|index| index as u32);
+        // Background instances share the same GPU buffer but occupy a compact
+        // suffix. This avoids rasterizing every ordinary glyph cell through a
+        // discard-only background pass while retaining a single map/upload.
+        instances.reserve(text_instance_count as usize);
+        for index in 0..text_instance_count as usize {
+            let instance = instances[index];
+            if instance.attrs & RENDER_ATTR_CURSOR == 0
+                && (instance.attrs & RENDER_ATTR_DEFAULT_BG == 0
+                    || instance.attrs & ATTR_INVERSE as u32 != 0)
+            {
+                instances.push(instance);
+            }
+        }
+        let background_instance_count = instances.len() as u32 - text_instance_count;
+
+        let metrics = atlas.metrics();
+        let atlas_size = atlas.atlas_size() as f32;
+        let atlas_srv = atlas.atlas_srv().clone();
+        drop(atlas);
 
         let mut pipeline = self.pipeline.lock().expect("pipeline mutex poisoned");
         let needed = instances.len() as u32;
@@ -1085,12 +1125,6 @@ impl Renderer {
             .upload_instances(&self.context, &instances)
             .context("upload_instances failed")?;
 
-        let metrics = self.metrics();
-        let atlas_size = self
-            .atlas
-            .lock()
-            .expect("atlas mutex poisoned reading atlas_size")
-            .atlas_size() as f32;
         let inv_viewport = [
             2.0 / self.width_px.max(1) as f32,
             -2.0 / self.height_px.max(1) as f32,
@@ -1106,17 +1140,33 @@ impl Renderer {
             .upload_globals(&self.context, &globals)
             .context("upload_globals failed")?;
 
-        let instance_count = instances.len() as u32;
         drop(instances);
 
-        let atlas = self
-            .atlas
+        let mut image_pipeline = self
+            .image_pipeline
             .lock()
-            .expect("atlas mutex poisoned before bind_and_draw");
-        pipeline.bind_and_draw(&self.context, atlas.atlas_srv(), instance_count);
-        drop(atlas);
+            .expect("image_pipeline mutex poisoned");
+        image_pipeline.prepare(
+            &self.device,
+            &self.context,
+            &snapshot.kitty_placements,
+            [metrics.cell_width_px, metrics.cell_height_px],
+            [self.width_px, self.height_px],
+        )?;
+
+        image_pipeline.draw_layer(&self.context, ImageLayer::BelowBackground);
+        pipeline.draw_backgrounds(
+            &self.context,
+            text_instance_count,
+            background_instance_count,
+        );
+        image_pipeline.draw_layer(&self.context, ImageLayer::BelowText);
+        pipeline.draw_cursor(&self.context, cursor_instance);
+        pipeline.draw_text(&self.context, &atlas_srv, text_instance_count);
+        image_pipeline.draw_layer(&self.context, ImageLayer::AboveText);
+        drop(image_pipeline);
         drop(pipeline);
-        Ok(())
+        Ok(metrics)
     }
 }
 
@@ -1279,6 +1329,152 @@ struct StagingSlot {
     /// flight.)
     seq: u64,
     regions: Vec<ReadbackRegion>,
+    kitty_visuals: KittyVisualState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KittyVisual {
+    image_id: u32,
+    image_generation: u64,
+    image_size: [u32; 2],
+    z: i32,
+    viewport: [i32; 2],
+    cell_offset: [u32; 2],
+    pixel_size: [u32; 2],
+    source: [u32; 4],
+}
+
+impl From<&KittyPlacement> for KittyVisual {
+    fn from(placement: &KittyPlacement) -> Self {
+        Self {
+            image_id: placement.image.id,
+            image_generation: placement.image.generation,
+            image_size: [placement.image.width, placement.image.height],
+            z: placement.z,
+            viewport: [placement.viewport_col, placement.viewport_row],
+            cell_offset: [placement.cell_x_offset, placement.cell_y_offset],
+            pixel_size: [placement.pixel_width, placement.pixel_height],
+            source: [
+                placement.source_x,
+                placement.source_y,
+                placement.source_width,
+                placement.source_height,
+            ],
+        }
+    }
+}
+
+impl KittyVisual {
+    fn vertical_region(self, cell_height: u32, viewport_height: u32) -> Option<ReadbackRegion> {
+        let top = i64::from(self.viewport[1])
+            .saturating_mul(i64::from(cell_height))
+            .saturating_add(i64::from(self.cell_offset[1]));
+        let bottom = top.saturating_add(i64::from(self.pixel_size[1]));
+        let viewport_height = i64::from(viewport_height);
+        let top = top.clamp(0, viewport_height) as u32;
+        let bottom = bottom.clamp(0, viewport_height) as u32;
+        (top < bottom).then_some(ReadbackRegion {
+            y: top,
+            height: bottom - top,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct KittyVisualState {
+    cell_size: [u32; 2],
+    placements: Arc<[KittyVisual]>,
+}
+
+impl KittyVisualState {
+    fn from_placements(placements: &[KittyPlacement], cell_size: [u32; 2]) -> Self {
+        Self {
+            cell_size,
+            placements: placements
+                .iter()
+                .map(KittyVisual::from)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct KittyReadbackState {
+    /// Exact image state represented by the last readback handed to GPUI.
+    /// Submitted states are deliberately not authoritative: staging slots are
+    /// a lossy mailbox and may be replaced before presentation.
+    presented: KittyVisualState,
+}
+
+impl KittyReadbackState {
+    fn damage_regions(
+        &self,
+        current: &KittyVisualState,
+        viewport_height: u32,
+    ) -> Vec<ReadbackRegion> {
+        let mut regions = Vec::new();
+        append_kitty_transition_regions(&self.presented, current, viewport_height, &mut regions);
+        regions
+    }
+
+    fn presented(&mut self, visuals: KittyVisualState) {
+        self.presented = visuals;
+    }
+}
+
+fn append_kitty_transition_regions(
+    previous: &KittyVisualState,
+    current: &KittyVisualState,
+    viewport_height: u32,
+    regions: &mut Vec<ReadbackRegion>,
+) {
+    if previous == current {
+        return;
+    }
+
+    let (prefix, suffix) = if previous.cell_size == current.cell_size {
+        let prefix = previous
+            .placements
+            .iter()
+            .zip(current.placements.iter())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let suffix_limit = previous
+            .placements
+            .len()
+            .min(current.placements.len())
+            .saturating_sub(prefix);
+        let suffix = previous
+            .placements
+            .iter()
+            .rev()
+            .zip(current.placements.iter().rev())
+            .take(suffix_limit)
+            .take_while(|(left, right)| left == right)
+            .count();
+        (prefix, suffix)
+    } else {
+        (0, 0)
+    };
+
+    let previous_end = previous.placements.len().saturating_sub(suffix);
+    let current_end = current.placements.len().saturating_sub(suffix);
+    regions.reserve(
+        previous_end
+            .saturating_sub(prefix)
+            .saturating_add(current_end.saturating_sub(prefix)),
+    );
+    for visual in &previous.placements[prefix..previous_end] {
+        if let Some(region) = visual.vertical_region(previous.cell_size[1], viewport_height) {
+            regions.push(region);
+        }
+    }
+    for visual in &current.placements[prefix..current_end] {
+        if let Some(region) = visual.vertical_region(current.cell_size[1], viewport_height) {
+            regions.push(region);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1289,7 +1485,7 @@ struct SubmittedCopy {
     readback_rows: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadbackRegion {
     y: u32,
     height: u32,
@@ -1305,9 +1501,40 @@ impl ReadbackRegion {
     }
 }
 
+fn merge_readback_regions(regions: &mut Vec<ReadbackRegion>, viewport_height: u32) {
+    regions.sort_unstable_by_key(|region| region.y);
+    let mut write = 0usize;
+    for read in 0..regions.len() {
+        let y = regions[read].y.min(viewport_height);
+        let bottom = regions[read]
+            .y
+            .saturating_add(regions[read].height)
+            .min(viewport_height);
+        if y >= bottom {
+            continue;
+        }
+
+        if write > 0 {
+            let previous = &mut regions[write - 1];
+            let previous_bottom = previous.y.saturating_add(previous.height);
+            if previous_bottom >= y {
+                previous.height = previous_bottom.max(bottom) - previous.y;
+                continue;
+            }
+        }
+        regions[write] = ReadbackRegion {
+            y,
+            height: bottom - y,
+        };
+        write += 1;
+    }
+    regions.truncate(write);
+}
+
 struct Readback {
     bytes: Vec<u8>,
     regions: Vec<ReadbackRegion>,
+    kitty_visuals: KittyVisualState,
 }
 
 /// Two-slot staging ring. See `Renderer::render` for the state machine.
@@ -1335,6 +1562,7 @@ impl StagingRing {
                 in_flight: false,
                 seq: 0,
                 regions: vec![ReadbackRegion::full(height)],
+                kitty_visuals: KittyVisualState::default(),
             });
         }
         Ok(Self {
@@ -1357,6 +1585,7 @@ impl StagingRing {
                 in_flight: false,
                 seq: 0,
                 regions: vec![ReadbackRegion::full(height)],
+                kitty_visuals: KittyVisualState::default(),
             });
         }
         self.slots = new_slots;
@@ -1372,6 +1601,7 @@ impl StagingRing {
         ctx: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
         regions: &[ReadbackRegion],
+        kitty_visuals: KittyVisualState,
     ) -> SubmittedCopy {
         let clean_idx = self
             .slots
@@ -1428,6 +1658,7 @@ impl StagingRing {
         slot.in_flight = true;
         slot.seq = self.next_seq;
         slot.regions = regions;
+        slot.kitty_visuals = kitty_visuals;
         self.next_seq = self.next_seq.wrapping_add(1);
         self.next_idx = (idx + 1) % self.slots.len();
         SubmittedCopy {
@@ -1541,9 +1772,11 @@ impl StagingRing {
             ctx.Unmap(&slot.texture, 0);
         }
         slot.in_flight = false;
+        let kitty_visuals = std::mem::take(&mut slot.kitty_visuals);
         Ok(Some(Readback {
             bytes: out,
             regions,
+            kitty_visuals,
         }))
     }
 }
@@ -1652,4 +1885,96 @@ fn create_staging_texture(
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)) }
         .context("CreateTexture2D(staging) failed")?;
     texture.context("staging CreateTexture2D produced no texture")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        KittyReadbackState, KittyVisual, KittyVisualState, ReadbackRegion, merge_readback_regions,
+    };
+
+    const VIEWPORT_HEIGHT: u32 = 100;
+
+    fn visual(row: i32) -> KittyVisual {
+        KittyVisual {
+            image_id: 1,
+            image_generation: 2,
+            image_size: [8, 8],
+            z: 0,
+            viewport: [0, row],
+            cell_offset: [0, 0],
+            pixel_size: [8, 10],
+            source: [0, 0, 8, 8],
+        }
+    }
+
+    fn visual_state(placements: Vec<KittyVisual>) -> KittyVisualState {
+        KittyVisualState {
+            cell_size: [8, 10],
+            placements: Arc::from(placements),
+        }
+    }
+
+    fn damage(state: &KittyReadbackState, current: &KittyVisualState) -> Vec<ReadbackRegion> {
+        let mut regions = state.damage_regions(current, VIEWPORT_HEIGHT);
+        merge_readback_regions(&mut regions, VIEWPORT_HEIGHT);
+        regions
+    }
+
+    #[test]
+    fn unchanged_kitty_images_add_no_readback_damage() {
+        let current = visual_state(vec![visual(2)]);
+        let state = KittyReadbackState {
+            presented: current.clone(),
+        };
+
+        assert!(damage(&state, &current).is_empty());
+    }
+
+    #[test]
+    fn moved_kitty_image_damages_old_and_new_rows() {
+        let previous = visual_state(vec![visual(1)]);
+        let current = visual_state(vec![visual(5)]);
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![
+                ReadbackRegion { y: 10, height: 10 },
+                ReadbackRegion { y: 50, height: 10 },
+            ]
+        );
+    }
+
+    #[test]
+    fn inserted_kitty_image_preserves_common_prefix_and_suffix() {
+        let previous = visual_state(vec![visual(1), visual(7)]);
+        let current = visual_state(vec![visual(1), visual(4), visual(7)]);
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![ReadbackRegion { y: 40, height: 10 }]
+        );
+    }
+
+    #[test]
+    fn removed_kitty_image_damages_its_previous_rows() {
+        let previous = visual_state(vec![visual(7)]);
+        let current = visual_state(Vec::new());
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![ReadbackRegion { y: 70, height: 10 }]
+        );
+    }
 }

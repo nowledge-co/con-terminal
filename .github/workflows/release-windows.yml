@@ -100,10 +100,10 @@ jobs:
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath $env:ZIG_GLOBAL_CACHE_DIR -ErrorAction SilentlyContinue
 
-      - name: Install Zig 0.15.2
+      - name: Install Zig 0.16.0
         shell: pwsh
         run: |
-          $ZigVersion = "0.15.2"
+          $ZigVersion = "0.16.0"
           $ZigDir    = "zig-x86_64-windows-$ZigVersion"
           $ZigZip    = "$ZigDir.zip"
           $Dest      = "$env:USERPROFILE\.local"

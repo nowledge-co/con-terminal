@@ -10,7 +10,7 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
-use crate::vt::ScreenSnapshot;
+use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome};
 
 #[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
@@ -241,12 +241,12 @@ impl LinuxGhosttyTerminal {
         }
     }
 
-    pub fn resize_surface(&self, size: SurfaceSize) {
-        if let Some(session) = self.inner.lock().as_ref() {
-            if let Err(err) = session.resize(size) {
-                log::debug!("linux pty resize failed: {err:#}");
-            }
-        }
+    pub fn resize_surface(&self, size: SurfaceSize) -> Result<(), String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Err("linux terminal is not attached".to_string());
+        };
+        session.resize(size).map_err(|err| format!("{err:#}"))
     }
 
     pub fn size(&self) -> SurfaceSize {
@@ -330,11 +330,27 @@ impl LinuxGhosttyTerminal {
         self.write_to_pty(text.as_bytes());
     }
 
-    pub fn is_bracketed_paste(&self) -> bool {
-        self.inner
-            .lock()
-            .as_ref()
-            .is_some_and(LinuxPtySession::is_bracketed_paste)
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(VtKeyOutcome::default());
+        };
+        session.send_key(event).map_err(|err| err.to_string())
+    }
+
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: crate::vt::VtPasteSource,
+        confirm_unsafe_paste: bool,
+    ) -> Result<crate::vt::VtPasteResult, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(crate::vt::VtPasteResult::Empty);
+        };
+        session
+            .paste_text(text, source, confirm_unsafe_paste)
+            .map_err(|err| err.to_string())
     }
 
     pub fn is_decckm(&self) -> bool {
@@ -397,7 +413,7 @@ impl LinuxGhosttyTerminal {
             return false;
         }
         let seq = sgr_mouse_sequence(button, col, row, false);
-        match session.write_input(seq.as_bytes()) {
+        match session.write_control(seq.as_bytes()) {
             Ok(()) => true,
             Err(err) => {
                 log::debug!("linux pty mouse release write failed: {err:#}");

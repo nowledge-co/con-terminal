@@ -313,7 +313,7 @@ impl GhosttyView {
         changed
     }
 
-    fn send_terminal_paste_payload(&self, payload: TerminalPastePayload) -> bool {
+    fn handle_terminal_paste_payload(&self, payload: TerminalPastePayload) -> bool {
         let Some(terminal) = &self.terminal else {
             return false;
         };
@@ -347,7 +347,7 @@ impl GhosttyView {
             return false;
         };
 
-        self.send_terminal_paste_payload(payload)
+        self.handle_terminal_paste_payload(payload)
     }
 
     pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
@@ -539,7 +539,7 @@ impl GhosttyView {
         }
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
         self.native_view_visible.set(false);
 
         if let Some(ref terminal) = self.terminal {
@@ -1977,7 +1977,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 this.restored_screen_text = None;
-                if this.send_terminal_paste_payload(payload) {
+                if this.handle_terminal_paste_payload(payload) {
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }

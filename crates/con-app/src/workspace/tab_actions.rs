@@ -483,7 +483,7 @@ impl ConWorkspace {
             {
                 let terminal = outcome.terminal;
                 terminal.set_native_view_visible(false, cx);
-                terminal.shutdown_surface(cx);
+                terminal.shutdown_surface(Some(window), cx);
             }
             if tab_idx == self.active_tab {
                 self.sync_active_tab_native_view_visibility(cx);

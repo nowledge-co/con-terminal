@@ -4,7 +4,7 @@
  * cargo build can link without a working Zig/libghostty-vt toolchain.
  *
  * Signatures mirror `include/ghostty/vt/{terminal,render,allocator}.h`
- * at GHOSTTY_REV `ca7516bea60190ee2e9a4f9182b61d318d107c6e` — keep in
+ * at GHOSTTY_REV `5f5b988c5236facfe8d2439203d9ee9d5b636cf8` — keep in
  * sync with vt.rs on upstream bumps.
  *
  * All calls return empty / false / zero so downstream code degrades
@@ -21,13 +21,12 @@ typedef void* GhosttyTerminal;
 typedef void* GhosttyRenderState;
 typedef void* GhosttyRowIterator;
 typedef void* GhosttyRowCells;
+typedef void* GhosttyKeyEncoder;
+typedef void* GhosttyKeyEvent;
+typedef void* GhosttyKittyGraphics;
+typedef void* GhosttyKittyGraphicsImage;
+typedef void* GhosttyKittyGraphicsPlacementIterator;
 typedef int   GhosttyResult;
-
-struct GhosttyTerminalOptions {
-    uint16_t cols;
-    uint16_t rows;
-    size_t   max_scrollback;
-};
 
 union GhosttyTerminalScrollViewportValue {
     intptr_t delta;
@@ -39,14 +38,32 @@ struct GhosttyTerminalScrollViewport {
     union GhosttyTerminalScrollViewportValue value;
 };
 
+/* The stub has no real ABI manifest. Returning NULL keeps ordinary stub
+ * builds linkable while making manifest-aware tests fail explicitly rather
+ * than validating against invented metadata. */
+const char* ghostty_type_json(void) { return NULL; }
+
+/* ── Allocator and process-global services ─────────────────────── */
+
+uint8_t* ghostty_alloc(const void* allocator, size_t len) {
+    (void)allocator; (void)len;
+    return NULL;
+}
+
+GhosttyResult ghostty_sys_set(int option, const void* value) {
+    (void)option; (void)value;
+    return 0;
+}
+
 /* ── Terminal lifecycle ─────────────────────────────────────────── */
 
 GhosttyResult ghostty_terminal_new(
     const void* allocator,
     GhosttyTerminal* out_terminal,
-    struct GhosttyTerminalOptions options
+    uint16_t cols,
+    uint16_t rows
 ) {
-    (void)allocator; (void)options;
+    (void)allocator; (void)cols; (void)rows;
     if (out_terminal) { *out_terminal = (void*)(uintptr_t)1; }
     return 0;
 }
@@ -73,20 +90,156 @@ void ghostty_terminal_scroll_viewport(
     (void)terminal; (void)behavior;
 }
 
-GhosttyResult ghostty_terminal_get(
-    GhosttyTerminal terminal, int key, void* out
+GhosttyResult ghostty_terminal_set(
+    GhosttyTerminal terminal, int option, const void* value
 ) {
-    (void)terminal; (void)key;
-    if (out) { *(uint8_t*)out = 0; }
+    (void)terminal; (void)option; (void)value;
     return 0;
 }
 
-GhosttyResult ghostty_terminal_mode_get(
-    GhosttyTerminal terminal, uint16_t mode, bool* out_value
+GhosttyResult ghostty_terminal_get(
+    GhosttyTerminal terminal, int key, void* out
 ) {
-    (void)terminal; (void)mode;
-    if (out_value) { *out_value = false; }
+    (void)terminal; (void)key; (void)out;
+    return 1;
+}
+
+GhosttyResult ghostty_terminal_paste(
+    GhosttyTerminal terminal, const void* paste, bool* out_written
+) {
+    (void)terminal; (void)paste;
+    if (out_written) { *out_written = false; }
     return 0;
+}
+
+/* ── Kitty graphics ────────────────────────────────────────────── */
+
+GhosttyResult ghostty_kitty_graphics_get(
+    GhosttyKittyGraphics graphics, int data, void* out
+) {
+    (void)graphics; (void)data; (void)out;
+    return 1;
+}
+
+GhosttyKittyGraphicsImage ghostty_kitty_graphics_image(
+    GhosttyKittyGraphics graphics, uint32_t image_id
+) {
+    (void)graphics; (void)image_id;
+    return NULL;
+}
+
+GhosttyResult ghostty_kitty_graphics_image_get(
+    GhosttyKittyGraphicsImage image, int data, void* out
+) {
+    (void)image; (void)data; (void)out;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_image_get_multi(
+    GhosttyKittyGraphicsImage image, size_t count,
+    const int* keys, void** values, size_t* out_written
+) {
+    (void)image; (void)count; (void)keys; (void)values; (void)out_written;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_iterator_new(
+    const void* allocator, GhosttyKittyGraphicsPlacementIterator* out_iterator
+) {
+    (void)allocator;
+    if (out_iterator) { *out_iterator = (void*)(uintptr_t)7; }
+    return 0;
+}
+
+void ghostty_kitty_graphics_placement_iterator_free(
+    GhosttyKittyGraphicsPlacementIterator iterator
+) {
+    (void)iterator;
+}
+
+bool ghostty_kitty_graphics_placement_next(
+    GhosttyKittyGraphicsPlacementIterator iterator
+) {
+    (void)iterator;
+    return false;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_get_multi(
+    GhosttyKittyGraphicsPlacementIterator iterator, size_t count,
+    const int* keys, void** values, size_t* out_written
+) {
+    (void)iterator; (void)count; (void)keys; (void)values; (void)out_written;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_render_info(
+    GhosttyKittyGraphicsPlacementIterator iterator,
+    GhosttyKittyGraphicsImage image, GhosttyTerminal terminal, void* out_info
+) {
+    (void)iterator; (void)image; (void)terminal; (void)out_info;
+    return 1;
+}
+
+/* ── Key encoder ────────────────────────────────────────────────── */
+
+GhosttyResult ghostty_key_encoder_new(
+    const void* allocator, GhosttyKeyEncoder* out_encoder
+) {
+    (void)allocator;
+    if (out_encoder) { *out_encoder = (void*)(uintptr_t)5; }
+    return 0;
+}
+
+void ghostty_key_encoder_free(GhosttyKeyEncoder encoder) { (void)encoder; }
+
+void ghostty_key_encoder_setopt_from_terminal(
+    GhosttyKeyEncoder encoder, GhosttyTerminal terminal
+) {
+    (void)encoder; (void)terminal;
+}
+
+GhosttyResult ghostty_key_encoder_encode(
+    GhosttyKeyEncoder encoder, GhosttyKeyEvent event,
+    char* out_buf, size_t out_buf_size, size_t* out_len
+) {
+    (void)encoder; (void)event; (void)out_buf; (void)out_buf_size;
+    if (out_len) { *out_len = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_key_event_new(
+    const void* allocator, GhosttyKeyEvent* out_event
+) {
+    (void)allocator;
+    if (out_event) { *out_event = (void*)(uintptr_t)6; }
+    return 0;
+}
+
+void ghostty_key_event_free(GhosttyKeyEvent event) { (void)event; }
+void ghostty_key_event_set_action(GhosttyKeyEvent event, int action) {
+    (void)event; (void)action;
+}
+void ghostty_key_event_set_key(GhosttyKeyEvent event, int key) {
+    (void)event; (void)key;
+}
+void ghostty_key_event_set_mods(GhosttyKeyEvent event, uint16_t mods) {
+    (void)event; (void)mods;
+}
+void ghostty_key_event_set_consumed_mods(GhosttyKeyEvent event, uint16_t mods) {
+    (void)event; (void)mods;
+}
+void ghostty_key_event_set_composing(GhosttyKeyEvent event, bool composing) {
+    (void)event; (void)composing;
+}
+void ghostty_key_event_set_utf8(
+    GhosttyKeyEvent event, const char* utf8, size_t len
+) {
+    (void)event; (void)utf8; (void)len;
+}
+void ghostty_key_event_set_unshifted_codepoint(
+    GhosttyKeyEvent event, uint32_t codepoint
+) {
+    (void)event; (void)codepoint;
 }
 
 /* ── Cell accessor ──────────────────────────────────────────────── */
