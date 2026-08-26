@@ -283,16 +283,22 @@ fn build_vt_backend(target_os: &str) {
     // Windows, so default it on regardless of cargo profile and let
     // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
-    // `-Dsimd`: Ghostty vendors `simdutf` (a C++ SIMD UTF-8 library)
-    // when SIMD is on, but the produced static archive does not yet
-    // bundle the required `simdutf` objects reliably across our target
-    // environments. Default SIMD off for now so the resulting
-    // `libghostty-vt` archive is self-contained on both Windows and
-    // Linux. Keep the env override for experimentation once the native
-    // link surface is understood well enough to ship.
-    let simd_on = env::var("CON_GHOSTTY_VT_SIMD")
-        .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+    // `-Dsimd`: the pinned Ghostty revision must build Linux libghostty-vt
+    // with libc enabled. Its non-libc Wuffs module exports hidden weak
+    // `calloc`/`free` fallbacks; when that archive is linked into a Rust
+    // executable, the hidden fallbacks capture the process-wide symbols and
+    // make every zeroed Rust allocation fail. Enabling SIMD also enables libc
+    // on Ghostty's root module, suppressing those fallbacks, and the current
+    // Linux archive contains the required simdutf/highway objects.
+    //
+    // Windows keeps the conservative non-SIMD default because its static
+    // archive has a different C++ link surface. The override remains useful
+    // there for targeted toolchain experiments; Linux always takes the only
+    // runtime-safe path.
+    let simd_on = target_os == "linux"
+        || env::var("CON_GHOSTTY_VT_SIMD")
+            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
     let simd_flag = if simd_on {
         "-Dsimd=true"
     } else {
