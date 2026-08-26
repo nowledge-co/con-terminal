@@ -30,7 +30,7 @@ use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
-use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeySend, VtScreen};
+use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeySend, VtPasteResult, VtPasteSource, VtScreen};
 
 use super::render::CellMetrics;
 
@@ -396,10 +396,6 @@ impl RenderSession {
         self.conpty.is_alive()
     }
 
-    pub fn is_bracketed_paste(&self) -> bool {
-        self.vt.is_bracketed_paste()
-    }
-
     pub fn is_decckm(&self) -> bool {
         self.vt.is_decckm()
     }
@@ -445,12 +441,18 @@ impl RenderSession {
         Ok(sent)
     }
 
-    /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
-    /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
-    pub fn write_pty_raw(&self, data: &[u8]) {
-        self.scroll_viewport_to_bottom();
-        self.request_low_latency_after_next_generation();
-        let _ = self.conpty.write(data);
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: VtPasteSource,
+        allow_unsafe: bool,
+    ) -> Result<VtPasteResult> {
+        let result = self.vt.paste_text(text, source, allow_unsafe)?;
+        if result == VtPasteResult::Written {
+            self.scroll_viewport_to_bottom();
+            self.request_low_latency_after_next_generation();
+        }
+        Ok(result)
     }
 
     pub fn clear_screen_and_scrollback(&self) {

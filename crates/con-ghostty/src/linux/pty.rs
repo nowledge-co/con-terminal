@@ -10,7 +10,9 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
-use crate::vt::{ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtScreen};
+use crate::vt::{
+    ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtPasteResult, VtPasteSource, VtScreen,
+};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -306,6 +308,20 @@ impl LinuxPtySession {
         Ok(sent)
     }
 
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: VtPasteSource,
+        allow_unsafe: bool,
+    ) -> Result<VtPasteResult> {
+        let result = self.shared.screen.paste_text(text, source, allow_unsafe)?;
+        if result == VtPasteResult::Written {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(result)
+    }
+
     pub fn clear_screen_and_scrollback(&self) {
         self.shared.screen.clear_screen_and_scrollback();
         self.mark_needs_render();
@@ -378,10 +394,6 @@ impl LinuxPtySession {
 
     pub fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
         self.shared.transcript.lock().search(pattern, limit)
-    }
-
-    pub fn is_bracketed_paste(&self) -> bool {
-        self.shared.screen.is_bracketed_paste()
     }
 
     pub fn is_decckm(&self) -> bool {

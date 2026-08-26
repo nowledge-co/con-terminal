@@ -65,12 +65,15 @@ pub type GhosttyResult = c_int;
 
 const GHOSTTY_SUCCESS: GhosttyResult = 0;
 const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
+const GHOSTTY_IO_ERROR: GhosttyResult = -5;
+const GHOSTTY_REJECTED: GhosttyResult = -7;
 
 const GHOSTTY_MODS_SHIFT: u16 = 1 << 0;
 const GHOSTTY_MODS_CTRL: u16 = 1 << 1;
 const GHOSTTY_MODS_ALT: u16 = 1 << 2;
 const GHOSTTY_MODS_SUPER: u16 = 1 << 3;
 const GHOSTTY_KITTY_KEY_REPORT_EVENTS: u8 = 1 << 1;
+const TEXT_PLAIN_MIME: &[u8] = b"text/plain";
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -162,6 +165,7 @@ pub enum GhosttyTerminalOption {
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
     ScrollbackMaxLines = 28,
+    ClipboardRead = 38,
 }
 
 /// `GHOSTTY_RENDER_STATE_DATA_*` keys for `ghostty_render_state_get`.
@@ -309,6 +313,98 @@ pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyWriter {
+    pub write: Option<unsafe extern "C" fn(*mut c_void, *const u8, usize) -> bool>,
+    pub userdata: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyMimeReader {
+    pub read: Option<unsafe extern "C" fn(*mut c_void, GhosttyString, GhosttyWriter) -> bool>,
+    pub userdata: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyClipboardLocation {
+    Standard = 0,
+    Selection = 1,
+    Primary = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyPasteSource {
+    Clipboard = 0,
+    Text = 1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyPaste {
+    pub size: usize,
+    pub location: GhosttyClipboardLocation,
+    pub source: GhosttyPasteSource,
+    pub mimes: *const GhosttyString,
+    pub mimes_len: usize,
+    pub reader: GhosttyMimeReader,
+    pub allow_unsafe: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyClipboardContent {
+    pub mime: GhosttyString,
+    pub data: GhosttyString,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyClipboardReadResult {
+    Success = 0,
+    Denied = 1,
+    Unsupported = 2,
+    Busy = 3,
+    IoError = 4,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyClipboardReadReply {
+    pub size: usize,
+    pub result: GhosttyClipboardReadResult,
+    pub contents: *const GhosttyClipboardContent,
+    pub contents_len: usize,
+    pub available: *const GhosttyString,
+    pub available_len: usize,
+    pub remember: bool,
+}
+
+#[repr(C)]
+pub struct GhosttyClipboardRead {
+    pub size: usize,
+    pub location: GhosttyClipboardLocation,
+    pub mimes: *const GhosttyString,
+    pub mimes_len: usize,
+    pub list: bool,
+    pub name: GhosttyString,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub ctx: *const c_void,
+    pub reply:
+        Option<unsafe extern "C" fn(*const GhosttyClipboardRead, *const GhosttyClipboardReadReply)>,
+}
+
+const _: [(); 16] = [(); std::mem::size_of::<GhosttyWriter>()];
+const _: [(); 16] = [(); std::mem::size_of::<GhosttyMimeReader>()];
+const _: [(); 56] = [(); std::mem::size_of::<GhosttyPaste>()];
+const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
+const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
+const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -478,6 +574,11 @@ unsafe extern "C" {
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_terminal_paste(
+        terminal: GhosttyTerminal,
+        paste: *const GhosttyPaste,
+        out_written: *mut bool,
     ) -> GhosttyResult;
 
     // Key encoder (`key/{encoder,event}.h`). The encoder and reusable
@@ -731,9 +832,31 @@ pub struct VtKeySend {
     pub report_releases: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtPasteResult {
+    Empty,
+    Written,
+    RequiresConfirmation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtPasteSource {
+    Clipboard,
+    Text,
+}
+
+struct VtPasteReader<'a> {
+    text: &'a [u8],
+    served: bool,
+}
+
 struct VtCallbackState {
     write_pty: PtyWriteCallback,
     enquiry_response: Box<[u8]>,
+    /// Last clipboard text the user explicitly chose to paste. Only a
+    /// Kitty one-time paste grant can read this through the terminal
+    /// clipboard effect; unsolicited OSC reads are denied.
+    clipboard_text: Option<Box<str>>,
     rows: AtomicU16,
     cols: AtomicU16,
     cell_width: AtomicU32,
@@ -1044,6 +1167,7 @@ impl VtScreen {
             Box::new(VtCallbackState {
                 write_pty,
                 enquiry_response: b"con".to_vec().into_boxed_slice(),
+                clipboard_text: None,
                 rows: AtomicU16::new(rows),
                 cols: AtomicU16::new(cols),
                 cell_width: AtomicU32::new(1),
@@ -1099,6 +1223,11 @@ impl VtScreen {
                     GhosttyTerminalOption::Xtversion,
                     vt_xtversion_callback as *const c_void,
                     "XTVERSION",
+                ),
+                (
+                    GhosttyTerminalOption::ClipboardRead,
+                    vt_clipboard_read_callback as *const c_void,
+                    "CLIPBOARD_READ",
                 ),
             ];
 
@@ -1354,6 +1483,75 @@ impl VtScreen {
             wrote: !bytes.is_empty(),
             report_releases: kitty_flags & GHOSTTY_KITTY_KEY_REPORT_EVENTS != 0,
         })
+    }
+
+    /// Paste user-selected clipboard text according to the terminal's active
+    /// bracketed-paste and Kitty paste-event modes.
+    ///
+    /// Potential command injection is rejected before any PTY write. The UI
+    /// may explicitly retry with `allow_unsafe` after showing the text to the
+    /// user. A successful Kitty paste event caches only this user-approved
+    /// text for the event's one-time granted clipboard read.
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: VtPasteSource,
+        allow_unsafe: bool,
+    ) -> anyhow::Result<VtPasteResult> {
+        let mut inner = self.inner.lock();
+        if inner.callback_state.is_none() {
+            anyhow::bail!("terminal paste requires a WRITE_PTY callback");
+        }
+
+        let mime = GhosttyString {
+            ptr: TEXT_PLAIN_MIME.as_ptr(),
+            len: TEXT_PLAIN_MIME.len(),
+        };
+        let mut reader = VtPasteReader {
+            text: text.as_bytes(),
+            served: false,
+        };
+        let paste = GhosttyPaste {
+            size: std::mem::size_of::<GhosttyPaste>(),
+            location: GhosttyClipboardLocation::Standard,
+            source: match source {
+                VtPasteSource::Clipboard => GhosttyPasteSource::Clipboard,
+                VtPasteSource::Text => GhosttyPasteSource::Text,
+            },
+            mimes: &mime,
+            mimes_len: 1,
+            reader: GhosttyMimeReader {
+                read: Some(vt_paste_read_callback),
+                userdata: (&mut reader as *mut VtPasteReader<'_>).cast(),
+            },
+            allow_unsafe,
+        };
+        let mut written = false;
+        let rc = unsafe { ghostty_terminal_paste(inner.terminal, &paste, &mut written) };
+        match rc {
+            GHOSTTY_SUCCESS => {
+                if written && !reader.served && source == VtPasteSource::Clipboard {
+                    // Ghostty does not call the MIME reader for a Kitty paste
+                    // event. Retain the exact user-selected text for the
+                    // event's later one-time granted read.
+                    inner
+                        .callback_state
+                        .as_mut()
+                        .expect("callback state checked above")
+                        .clipboard_text = Some(text.into());
+                }
+                Ok(if written {
+                    VtPasteResult::Written
+                } else {
+                    VtPasteResult::Empty
+                })
+            }
+            GHOSTTY_REJECTED => Ok(VtPasteResult::RequiresConfirmation),
+            GHOSTTY_IO_ERROR => {
+                anyhow::bail!("ghostty_terminal_paste failed to read clipboard text")
+            }
+            _ => anyhow::bail!("ghostty_terminal_paste failed: rc={rc}"),
+        }
     }
 
     pub fn clear_screen_and_scrollback(&self) {
@@ -1871,6 +2069,143 @@ impl VtScreen {
     }
 }
 
+unsafe extern "C" fn vt_paste_read_callback(
+    userdata: *mut c_void,
+    mime: GhosttyString,
+    writer: GhosttyWriter,
+) -> bool {
+    if userdata.is_null() || !ghostty_string_eq(mime, TEXT_PLAIN_MIME) {
+        return false;
+    }
+    let Some(write) = writer.write else {
+        return false;
+    };
+    let reader = unsafe { &mut *(userdata as *mut VtPasteReader<'_>) };
+    reader.served = true;
+    if reader.text.is_empty() {
+        return true;
+    }
+    unsafe { write(writer.userdata, reader.text.as_ptr(), reader.text.len()) }
+}
+
+/// Clipboard reads initiated by a running program are denied by default.
+/// The only data-bearing read accepted here is a one-time Kitty paste grant
+/// minted by `ghostty_terminal_paste` after an explicit local paste action.
+/// This callback never enters GPUI or the system clipboard while the VT lock
+/// is held, avoiding a reader-thread/UI-thread lock inversion.
+unsafe extern "C" fn vt_clipboard_read_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    read: *const GhosttyClipboardRead,
+) {
+    if userdata.is_null() || read.is_null() {
+        return;
+    }
+    if unsafe { (*read).size } < std::mem::size_of::<GhosttyClipboardRead>() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let read = unsafe { &*read };
+    let Some(reply) = read.reply else {
+        return;
+    };
+
+    let mut result = GhosttyClipboardReadResult::Success;
+    let mut available = GhosttyString::default();
+    let mut available_len = 0;
+    let mut content = GhosttyClipboardContent {
+        mime: GhosttyString::default(),
+        data: GhosttyString::default(),
+    };
+    let mut contents_len = 0;
+
+    let listing_only = read.list && read.mimes_len == 0;
+    if read.location != GhosttyClipboardLocation::Standard {
+        result = GhosttyClipboardReadResult::Unsupported;
+    } else if !listing_only && !read.granted {
+        result = GhosttyClipboardReadResult::Denied;
+    } else if let Some(text) = state.clipboard_text.as_deref() {
+        if read.list {
+            available = GhosttyString {
+                ptr: TEXT_PLAIN_MIME.as_ptr(),
+                len: TEXT_PLAIN_MIME.len(),
+            };
+            available_len = 1;
+        }
+
+        if read.mimes_len > 0 {
+            if read.mimes.is_null() {
+                result = GhosttyClipboardReadResult::IoError;
+            } else {
+                let requested = unsafe { std::slice::from_raw_parts(read.mimes, read.mimes_len) };
+                if let Some(mime) = requested
+                    .iter()
+                    .copied()
+                    .find(|mime| ghostty_string_is_supported_text(*mime))
+                {
+                    content = GhosttyClipboardContent {
+                        mime,
+                        data: GhosttyString {
+                            ptr: text.as_ptr(),
+                            len: text.len(),
+                        },
+                    };
+                    contents_len = 1;
+                }
+            }
+        }
+    }
+
+    let reply_value = GhosttyClipboardReadReply {
+        size: std::mem::size_of::<GhosttyClipboardReadReply>(),
+        result,
+        contents: if contents_len == 0 {
+            std::ptr::null()
+        } else {
+            &content
+        },
+        contents_len,
+        available: if available_len == 0 {
+            std::ptr::null()
+        } else {
+            &available
+        },
+        available_len,
+        remember: false,
+    };
+    unsafe { reply(read, &reply_value) };
+}
+
+fn ghostty_string_eq(value: GhosttyString, expected: &[u8]) -> bool {
+    if value.len != expected.len() || (value.ptr.is_null() && value.len > 0) {
+        return false;
+    }
+    let bytes = if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
+    };
+    bytes == expected
+}
+
+fn ghostty_string_is_supported_text(value: GhosttyString) -> bool {
+    if value.ptr.is_null() && value.len > 0 {
+        return false;
+    }
+    let bytes = if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
+    };
+    bytes.eq_ignore_ascii_case(TEXT_PLAIN_MIME)
+        || bytes.eq_ignore_ascii_case(b"UTF8_STRING")
+        || bytes.eq_ignore_ascii_case(b"text")
+        || bytes
+            .iter()
+            .position(|byte| *byte == b';')
+            .is_some_and(|separator| bytes[..separator].eq_ignore_ascii_case(TEXT_PLAIN_MIME))
+}
+
 unsafe extern "C" fn vt_write_pty_callback(
     _terminal: GhosttyTerminal,
     userdata: *mut c_void,
@@ -2225,6 +2560,95 @@ mod tests {
             Some(GhosttyTerminalOption::ScrollbackMaxLines as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
+            Some(GhosttyTerminalOption::ClipboardRead as i64)
+        );
+        for (name, size, align) in [
+            (
+                "GhosttyWriter",
+                std::mem::size_of::<GhosttyWriter>(),
+                std::mem::align_of::<GhosttyWriter>(),
+            ),
+            (
+                "GhosttyMimeReader",
+                std::mem::size_of::<GhosttyMimeReader>(),
+                std::mem::align_of::<GhosttyMimeReader>(),
+            ),
+            (
+                "GhosttyPaste",
+                std::mem::size_of::<GhosttyPaste>(),
+                std::mem::align_of::<GhosttyPaste>(),
+            ),
+            (
+                "GhosttyClipboardContent",
+                std::mem::size_of::<GhosttyClipboardContent>(),
+                std::mem::align_of::<GhosttyClipboardContent>(),
+            ),
+            (
+                "GhosttyClipboardReadReply",
+                std::mem::size_of::<GhosttyClipboardReadReply>(),
+                std::mem::align_of::<GhosttyClipboardReadReply>(),
+            ),
+            (
+                "GhosttyClipboardRead",
+                std::mem::size_of::<GhosttyClipboardRead>(),
+                std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+        ] {
+            assert_eq!(
+                types[name]["size"].as_u64(),
+                Some(size as u64),
+                "{name} size"
+            );
+            assert_eq!(
+                types[name]["align"].as_u64(),
+                Some(align as u64),
+                "{name} alignment"
+            );
+        }
+        for (name, value) in [
+            ("STANDARD", GhosttyClipboardLocation::Standard),
+            ("SELECTION", GhosttyClipboardLocation::Selection),
+            ("PRIMARY", GhosttyClipboardLocation::Primary),
+        ] {
+            assert_eq!(
+                types["GhosttyClipboardLocation"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyClipboardLocation::{name}"
+            );
+        }
+        for (name, value) in [
+            ("CLIPBOARD", GhosttyPasteSource::Clipboard),
+            ("TEXT", GhosttyPasteSource::Text),
+        ] {
+            assert_eq!(
+                types["GhosttyPasteSource"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyPasteSource::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SUCCESS", GhosttyClipboardReadResult::Success),
+            ("DENIED", GhosttyClipboardReadResult::Denied),
+            ("UNSUPPORTED", GhosttyClipboardReadResult::Unsupported),
+            ("BUSY", GhosttyClipboardReadResult::Busy),
+            ("IO_ERROR", GhosttyClipboardReadResult::IoError),
+        ] {
+            assert_eq!(
+                types["GhosttyClipboardReadResult"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyClipboardReadResult::{name}"
+            );
+        }
+        assert_eq!(
+            types["GhosttyResult"]["values"]["IO_ERROR"].as_i64(),
+            Some(GHOSTTY_IO_ERROR as i64)
+        );
+        assert_eq!(
+            types["GhosttyResult"]["values"]["REJECTED"].as_i64(),
+            Some(GHOSTTY_REJECTED as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalData"]["values"]["MODE"].as_i64(),
             Some(GhosttyTerminalData::Mode as i64)
         );
@@ -2498,6 +2922,149 @@ mod tests {
         assert!(screen.is_bracketed_paste());
         screen.feed(b"\x1b[?2004l");
         assert!(!screen.is_bracketed_paste());
+    }
+
+    #[test]
+    fn paste_applies_terminal_modes_and_requires_confirmation_for_command_injection() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+
+        assert_eq!(
+            screen
+                .paste_text("echo safe", VtPasteSource::Clipboard, false)
+                .expect("safe paste"),
+            VtPasteResult::Written
+        );
+        assert_eq!(output.lock().as_slice(), b"echo safe");
+
+        output.lock().clear();
+        let unsafe_text = "echo first\necho second";
+        assert_eq!(
+            screen
+                .paste_text(unsafe_text, VtPasteSource::Clipboard, false)
+                .expect("check unsafe paste"),
+            VtPasteResult::RequiresConfirmation
+        );
+        assert!(output.lock().is_empty(), "rejected paste wrote to the PTY");
+
+        assert_eq!(
+            screen
+                .paste_text(unsafe_text, VtPasteSource::Clipboard, true)
+                .expect("confirmed paste"),
+            VtPasteResult::Written
+        );
+        assert_eq!(output.lock().as_slice(), b"echo first\recho second");
+
+        output.lock().clear();
+        screen.feed(b"\x1b[?2004h");
+        assert_eq!(
+            screen
+                .paste_text("first\nsecond", VtPasteSource::Clipboard, false)
+                .expect("bracketed paste"),
+            VtPasteResult::Written
+        );
+        assert_eq!(output.lock().as_slice(), b"\x1b[200~first\nsecond\x1b[201~");
+    }
+
+    #[test]
+    fn kitty_paste_event_exposes_only_the_user_pasted_text_once() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+        screen.feed(b"\x1b[?5522h");
+
+        assert_eq!(
+            screen
+                .paste_text("dropped path", VtPasteSource::Text, false)
+                .expect("text insertion with Kitty paste events enabled"),
+            VtPasteResult::Written
+        );
+        assert_eq!(output.lock().as_slice(), b"dropped path");
+        output.lock().clear();
+
+        assert_eq!(
+            screen
+                .paste_text("event secret", VtPasteSource::Clipboard, false)
+                .expect("Kitty paste event"),
+            VtPasteResult::Written
+        );
+        let event = output.lock().clone();
+        assert!(!event.windows(6).any(|window| window == b"secret"));
+
+        let password_prefix = b"\x1b]5522;type=read:status=OK:pw=";
+        assert!(event.starts_with(password_prefix));
+        let password_end = event[password_prefix.len()..]
+            .windows(2)
+            .position(|window| window == b"\x1b\\")
+            .expect("paste event password terminator")
+            + password_prefix.len();
+        let password = &event[password_prefix.len()..password_end];
+
+        let mut read = b"\x1b]5522;type=read:pw=".to_vec();
+        read.extend_from_slice(password);
+        read.extend_from_slice(b";dGV4dC9wbGFpbg==\x1b\\");
+
+        output.lock().clear();
+        screen.feed(&read);
+        let first_read = output.lock().clone();
+        assert!(
+            first_read
+                .windows(b"ZXZlbnQgc2VjcmV0".len())
+                .any(|window| window == b"ZXZlbnQgc2VjcmV0"),
+            "one-time paste grant did not expose cached text"
+        );
+
+        output.lock().clear();
+        screen.feed(&read);
+        let second_read = output.lock().clone();
+        assert!(
+            second_read
+                .windows(b"status=EPERM".len())
+                .any(|window| window == b"status=EPERM"),
+            "one-time paste grant was reusable"
+        );
+        assert!(
+            !second_read
+                .windows(b"ZXZlbnQgc2VjcmV0".len())
+                .any(|window| window == b"ZXZlbnQgc2VjcmV0")
+        );
+    }
+
+    #[test]
+    fn clipboard_text_mime_matching_is_exact_and_case_insensitive() {
+        let supported = |value: &[u8]| {
+            ghostty_string_is_supported_text(GhosttyString {
+                ptr: value.as_ptr(),
+                len: value.len(),
+            })
+        };
+
+        assert!(supported(b"text/plain"));
+        assert!(supported(b"TEXT/PLAIN"));
+        assert!(supported(b"text/plain;charset=utf-8"));
+        assert!(supported(b"UTF8_STRING"));
+        assert!(supported(b"text"));
+        assert!(!supported(b"text/plainEVIL"));
+        assert!(!supported(b"image/png"));
     }
 
     #[test]

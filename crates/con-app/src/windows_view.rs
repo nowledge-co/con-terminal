@@ -42,13 +42,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers};
+use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui::*;
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Sizable as _};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
@@ -56,7 +57,7 @@ use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
-    payload_from_external_paths,
+    payload_from_external_paths, unsafe_paste_preview,
 };
 use crate::terminal_restore::restored_terminal_output;
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
@@ -169,6 +170,7 @@ pub struct GhosttyView {
     hovered_link: Option<TerminalLink>,
     last_mouse_position: Option<Point<Pixels>>,
     keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
+    pending_unsafe_paste: Option<(String, VtPasteSource)>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
     /// thread sends at most one queued signal while a repaint wake is
     /// pending. The coalescer task spawned in `new()` consumes that
@@ -256,6 +258,7 @@ impl GhosttyView {
             hovered_link: None,
             last_mouse_position: None,
             keys_awaiting_release: HashMap::new(),
+            pending_unsafe_paste: None,
             wake_tx,
             wake_pending,
         }
@@ -325,6 +328,7 @@ impl GhosttyView {
         self.hovered_link = None;
         self.last_mouse_position = None;
         self.keys_awaiting_release.clear();
+        self.pending_unsafe_paste = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
     }
@@ -1245,9 +1249,9 @@ impl GhosttyView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(terminal) = self.terminal.as_ref() else {
+        if self.terminal.is_none() {
             return false;
-        };
+        }
         let keystroke = &event.keystroke;
 
         if crate::terminal_shortcuts::key_down_starts_action_binding(
@@ -1287,7 +1291,10 @@ impl GhosttyView {
             && !keystroke.modifiers.alt
             && !keystroke.modifiers.platform
             && keystroke.key == "c"
-            && copy_selection_to_clipboard(terminal, cx)
+            && self
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| copy_selection_to_clipboard(terminal, cx))
         {
             cx.notify();
             return true;
@@ -1303,13 +1310,17 @@ impl GhosttyView {
         {
             match keystroke.key.as_str() {
                 "c" => {
-                    if copy_selection_to_clipboard(terminal, cx) {
+                    if self
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|terminal| copy_selection_to_clipboard(terminal, cx))
+                    {
                         cx.notify();
                     }
                     return true;
                 }
                 "v" => {
-                    paste_from_clipboard(terminal, cx);
+                    self.paste_from_clipboard(cx);
                     return true;
                 }
                 _ => {}
@@ -1339,6 +1350,163 @@ impl GhosttyView {
                 false
             }
         }
+    }
+
+    fn send_terminal_paste_payload(
+        &mut self,
+        payload: TerminalPastePayload,
+        source: VtPasteSource,
+    ) -> bool {
+        // A new paste intent invalidates any confirmation for older text,
+        // even when this attempt later turns out to be empty or fails.
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            return replaced_confirmation;
+        };
+
+        match payload {
+            TerminalPastePayload::Text(text) if !text.is_empty() => {
+                match terminal.paste_text(&text, source, false) {
+                    Ok(VtPasteResult::Written) => {
+                        self.clear_restored_screen_text();
+                        true
+                    }
+                    Ok(VtPasteResult::RequiresConfirmation) => {
+                        self.pending_unsafe_paste = Some((text, source));
+                        true
+                    }
+                    Ok(VtPasteResult::Empty) => replaced_confirmation,
+                    Err(err) => {
+                        log::debug!("windows terminal paste failed: {err}");
+                        replaced_confirmation
+                    }
+                }
+            }
+            TerminalPastePayload::ForwardCtrlV => {
+                self.clear_restored_screen_text();
+                terminal.send_text("\x16");
+                true
+            }
+            TerminalPastePayload::Text(_) => replaced_confirmation,
+        }
+    }
+
+    fn paste_from_clipboard(&mut self, cx: &mut App) -> bool {
+        let replaced_confirmation = self.pending_unsafe_paste.take().is_some();
+        let Some(payload) = cx
+            .read_from_clipboard()
+            .and_then(|item| payload_from_clipboard(&item))
+        else {
+            return replaced_confirmation;
+        };
+        self.send_terminal_paste_payload(payload, VtPasteSource::Clipboard) || replaced_confirmation
+    }
+
+    fn confirm_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((text, source)) = self.pending_unsafe_paste.take() else {
+            return;
+        };
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
+            self.pending_unsafe_paste = Some((text, source));
+            return;
+        };
+
+        match terminal.paste_text(&text, source, true) {
+            Ok(VtPasteResult::Written) => self.clear_restored_screen_text(),
+            Ok(VtPasteResult::Empty) => {}
+            Ok(VtPasteResult::RequiresConfirmation) => {
+                self.pending_unsafe_paste = Some((text, source));
+            }
+            Err(err) => {
+                log::debug!("windows confirmed terminal paste failed: {err}");
+                self.pending_unsafe_paste = Some((text, source));
+            }
+        }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn cancel_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_unsafe_paste = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    fn render_unsafe_paste_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let text = self.pending_unsafe_paste.as_ref()?.0.as_str();
+        let preview = unsafe_paste_preview(text);
+        let theme = cx.theme();
+
+        Some(
+            div()
+                .absolute()
+                .left(px(12.0))
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .occlude()
+                        .w_full()
+                        .max_w(px(620.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(8.0))
+                        .bg(theme
+                            .warning
+                            .opacity(if theme.is_dark() { 0.18 } else { 0.12 }))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.foreground)
+                                .child("This paste can run commands. Review it before continuing."),
+                        )
+                        .child(
+                            div()
+                                .max_h(px(88.0))
+                                .overflow_hidden()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(theme.foreground.opacity(0.06))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11.0))
+                                .line_height(px(15.0))
+                                .text_color(theme.foreground.opacity(0.82))
+                                .child(preview),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(6.0))
+                                .child(
+                                    Button::new("windows-cancel-unsafe-paste")
+                                        .label("Cancel")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.cancel_unsafe_paste(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("windows-confirm-unsafe-paste")
+                                        .label("Paste")
+                                        .small()
+                                        .primary()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_unsafe_paste(window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -1407,44 +1575,6 @@ fn bgra_frame_to_image(bytes: Vec<u8>, width: u32, height: u32) -> Option<Arc<Re
     let frame = Frame::new(buffer);
     let data: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
     Some(Arc::new(RenderImage::new(data)))
-}
-
-fn send_paste(terminal: &GhosttyTerminal, text: &str) {
-    // Bracketed paste lets the shell tell pasted text apart from real
-    // typing, so vim / readline can disable auto-indent. Hold the lock
-    // across both wrapper writes so the session can't be swapped out
-    // mid-paste (which would strip the trailing `ESC[201~`).
-    let inner = terminal.inner();
-    let guard = inner.lock();
-    if let Some(session) = guard.as_ref() {
-        if session.is_bracketed_paste() {
-            session.write_pty_raw(b"\x1b[200~");
-            session.write_input(text);
-            session.write_pty_raw(b"\x1b[201~");
-        } else {
-            session.write_input(text);
-        }
-    }
-}
-
-fn send_terminal_paste_payload(terminal: &GhosttyTerminal, payload: TerminalPastePayload) {
-    match payload {
-        TerminalPastePayload::Text(text) if !text.is_empty() => send_paste(terminal, &text),
-        TerminalPastePayload::ForwardCtrlV => terminal.send_text("\x16"),
-        TerminalPastePayload::Text(_) => {}
-    }
-}
-
-fn paste_from_clipboard(terminal: &GhosttyTerminal, cx: &mut App) -> bool {
-    let Some(payload) = cx
-        .read_from_clipboard()
-        .and_then(|item| payload_from_clipboard(&item))
-    else {
-        return false;
-    };
-
-    send_terminal_paste_payload(terminal, payload);
-    true
 }
 
 impl Focusable for GhosttyView {
@@ -1520,6 +1650,7 @@ impl Render for GhosttyView {
         if let Some(scrollbar) = self.render_terminal_scrollbar(cx) {
             terminal_children.push(scrollbar);
         }
+        let unsafe_paste_confirmation = self.render_unsafe_paste_confirmation(cx);
 
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
@@ -1558,10 +1689,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal
-                    && paste_from_clipboard(terminal, cx)
-                {
+                if this.paste_from_clipboard(cx) {
                     cx.notify();
                 }
             }))
@@ -1572,9 +1700,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
-                this.clear_restored_screen_text();
-                if let Some(terminal) = &this.terminal {
-                    send_terminal_paste_payload(terminal, payload);
+                if this.send_terminal_paste_payload(payload, VtPasteSource::Text) {
                     cx.notify();
                 }
             }))
@@ -1939,7 +2065,8 @@ impl Render for GhosttyView {
                             .bottom(px(TERMINAL_PADDING_Y_PX))
                             .w(px(TERMINAL_PADDING_X_PX))
                             .bg(padding_background),
-                    ),
+                    )
+                    .children(unsafe_paste_confirmation),
             )
             .context_menu(move |menu, window, cx| {
                 // Empty PopupMenu renders nothing; suppress con's menu only

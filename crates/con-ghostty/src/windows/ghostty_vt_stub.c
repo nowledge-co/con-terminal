@@ -89,6 +89,14 @@ GhosttyResult ghostty_terminal_get(
     return 1;
 }
 
+GhosttyResult ghostty_terminal_paste(
+    GhosttyTerminal terminal, const void* paste, bool* out_written
+) {
+    (void)terminal; (void)paste;
+    if (out_written) { *out_written = false; }
+    return 0;
+}
+
 /* ── Key encoder ────────────────────────────────────────────────── */
 
 GhosttyResult ghostty_key_encoder_new(

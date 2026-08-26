@@ -10,6 +10,69 @@ pub enum TerminalPastePayload {
     ForwardCtrlV,
 }
 
+/// Produce a bounded, inert preview for the unsafe-paste confirmation UI.
+/// Terminal controls, Unicode directional controls, and invisible formatting
+/// characters are replaced so text cannot alter the UI or disguise a command.
+pub fn unsafe_paste_preview(text: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    const MAX_LINES: usize = 4;
+
+    let mut preview = String::with_capacity(text.len().min(MAX_CHARS));
+    let mut chars = text.chars();
+    let mut consumed = 0;
+    let mut lines = 1;
+    let mut truncated = false;
+
+    for ch in chars.by_ref() {
+        if consumed == MAX_CHARS {
+            truncated = true;
+            break;
+        }
+        consumed += 1;
+
+        match ch {
+            '\n' if lines < MAX_LINES => {
+                preview.push('↵');
+                preview.push('\n');
+                lines += 1;
+            }
+            '\n' => {
+                truncated = true;
+                break;
+            }
+            '\r' => preview.push('␍'),
+            '\t' => preview.push('⇥'),
+            ch if is_unsafe_preview_control(ch) => preview.push('�'),
+            ch => preview.push(ch),
+        }
+    }
+
+    if !truncated && chars.next().is_some() {
+        truncated = true;
+    }
+    if truncated {
+        preview.push('…');
+    }
+    preview
+}
+
+fn is_unsafe_preview_control(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            // Soft hyphen, Arabic letter mark, and Mongolian vowel separator.
+            '\u{00ad}' | '\u{061c}' | '\u{180e}'
+            // Zero-width controls plus left-to-right/right-to-left marks.
+            | '\u{200b}'..='\u{200f}'
+            // Unicode line/paragraph separators and bidi embeddings/overrides.
+            | '\u{2028}'..='\u{202e}'
+            // Word joiner, bidi isolates, and deprecated directional controls.
+            | '\u{2060}'..='\u{206f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+        )
+}
+
 pub fn payload_from_clipboard(item: &ClipboardItem) -> Option<TerminalPastePayload> {
     let paths = external_paths_from_entries(item.entries());
     if !paths.is_empty() {
@@ -212,7 +275,7 @@ mod tests {
 
     use super::{
         CopySelectionDecision, TerminalPastePayload, copy_selection_decision,
-        payload_from_clipboard, quoted_paths_text,
+        payload_from_clipboard, quoted_paths_text, unsafe_paste_preview,
     };
 
     #[test]
@@ -397,6 +460,23 @@ mod tests {
         };
 
         assert_eq!(payload_from_clipboard(&item), None);
+    }
+
+    #[test]
+    fn unsafe_paste_preview_is_bounded_and_neutralizes_control_text() {
+        let text = format!(
+            "echo ok\n\x1b[31mhidden\u{202e}\u{200b}\u{2028}{}",
+            "x".repeat(300)
+        );
+        let preview = unsafe_paste_preview(&text);
+
+        assert!(preview.starts_with("echo ok↵\n�[31mhidden���"));
+        assert!(preview.ends_with('…'));
+        assert!(!preview.contains('\x1b'));
+        assert!(!preview.contains('\u{202e}'));
+        assert!(!preview.contains('\u{200b}'));
+        assert!(!preview.contains('\u{2028}'));
+        assert!(preview.chars().count() <= 245);
     }
 
     #[cfg(windows)]

@@ -236,6 +236,21 @@ impl WindowsGhosttyTerminal {
         session.send_key(event).map_err(|err| err.to_string())
     }
 
+    pub fn paste_text(
+        &self,
+        text: &str,
+        source: crate::vt::VtPasteSource,
+        allow_unsafe: bool,
+    ) -> Result<crate::vt::VtPasteResult, String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Ok(crate::vt::VtPasteResult::Empty);
+        };
+        session
+            .paste_text(text, source, allow_unsafe)
+            .map_err(|err| err.to_string())
+    }
+
     pub fn send_mouse_button(&self, _pressed: bool, _button: MouseButton, _mods: i32) -> bool {
         false
     }
