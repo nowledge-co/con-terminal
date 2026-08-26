@@ -13,6 +13,7 @@ pub enum TerminalPastePayload {
 /// Produce a bounded, inert preview for the unsafe-paste confirmation UI.
 /// Terminal controls, Unicode directional controls, and invisible formatting
 /// characters are replaced so text cannot alter the UI or disguise a command.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub fn unsafe_paste_preview(text: &str) -> String {
     const MAX_CHARS: usize = 240;
     const MAX_LINES: usize = 4;
@@ -56,6 +57,7 @@ pub fn unsafe_paste_preview(text: &str) -> String {
     preview
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 fn is_unsafe_preview_control(ch: char) -> bool {
     ch.is_control()
         || matches!(

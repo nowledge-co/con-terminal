@@ -1603,14 +1603,19 @@ unsafe extern "C" fn read_clipboard_callback(
             // NSPasteboardTypeString = @"public.utf8-plain-text"
             let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c"public.utf8-plain-text".as_ptr()];
             let text: *mut Object = msg_send![pb, stringForType: ns_type];
-            if text.is_null() {
-                return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
-            }
-            let data: *const std::os::raw::c_char = msg_send![text, UTF8String];
-            if data.is_null() {
-                return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
-            }
-            let len: usize = msg_send![text, lengthOfBytesUsingEncoding: 4usize];
+            let (data, len) = if text.is_null() {
+                // A started OSC 52 read must complete even when the pasteboard
+                // has no text representation. Upstream serializes an empty
+                // completion as the protocol's empty clipboard response.
+                (c"".as_ptr(), 0)
+            } else {
+                let data: *const std::os::raw::c_char = msg_send![text, UTF8String];
+                if data.is_null() {
+                    return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
+                }
+                let len: usize = msg_send![text, lengthOfBytesUsingEncoding: 4usize];
+                (data, len)
+            };
             let mime = c"text/plain";
             let content = ffi::ghostty_clipboard_content_s {
                 mime: mime.as_ptr(),
