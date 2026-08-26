@@ -47,6 +47,7 @@ use windows::Win32::System::Threading::{
 use windows::core::PWSTR;
 
 use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
+use crate::vt::PtyWritePriority;
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -143,8 +144,11 @@ pub(crate) struct ConPtyWriter {
 }
 
 impl ConPtyWriter {
-    pub(crate) fn write_all(&self, bytes: &[u8]) -> io::Result<()> {
-        self.queue.enqueue(bytes)
+    pub(crate) fn write_all(&self, bytes: &[u8], priority: PtyWritePriority) -> io::Result<()> {
+        match priority {
+            PtyWritePriority::UserInput => self.queue.enqueue(bytes),
+            PtyWritePriority::TerminalControl => self.queue.enqueue_control(bytes),
+        }
     }
 }
 
@@ -206,7 +210,7 @@ pub struct ConPty {
     /// skips. See `close_hpcon_slot`.
     pcon: Arc<Mutex<Option<HPCON>>>,
     /// Host end of the pipe the child reads from.
-    input_writer: ConPtyWriter,
+    _input_writer: ConPtyWriter,
     /// Sole owner of the blocking pipe handle. Joined only after the child and
     /// pseudo-console have been terminated so a pending write cannot hang Drop.
     input_worker: PtyWriteWorker,
@@ -427,18 +431,13 @@ impl ConPty {
 
         Ok(Self {
             pcon,
-            input_writer,
+            _input_writer: input_writer,
             input_worker,
             process,
             _thread: thread,
             output_thread: Some(output_thread),
             exit_watcher,
         })
-    }
-
-    pub fn write(&self, bytes: &[u8]) -> io::Result<usize> {
-        self.input_writer.write_all(bytes)?;
-        Ok(bytes.len())
     }
 
     pub fn resize(&self, size: PtySize) -> Result<()> {

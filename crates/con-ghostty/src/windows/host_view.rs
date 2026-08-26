@@ -173,11 +173,11 @@ impl RenderSession {
                 cols,
                 rows,
                 renderer_config.theme.as_ref(),
-                Some(Arc::new(move |bytes| {
+                Some(Arc::new(move |bytes, priority| {
                     if !accept_vt_replies_in_callback.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    vt_writer.write_all(bytes)
+                    vt_writer.write_all(bytes, priority)
                 })),
             )
             .context("VtScreen::new failed")?,
@@ -404,7 +404,7 @@ impl RenderSession {
     }
 
     pub fn is_alive(&self) -> bool {
-        self.conpty.is_alive()
+        self.conpty.is_alive() && !self.vt.has_write_failure()
     }
 
     pub fn is_decckm(&self) -> bool {
@@ -432,7 +432,7 @@ impl RenderSession {
 
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
-    pub fn write_input(&self, text: &str) {
+    pub fn write_input(&self, text: &str) -> Result<()> {
         self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
@@ -440,7 +440,9 @@ impl RenderSession {
         } else {
             std::borrow::Cow::Borrowed(text.as_bytes())
         };
-        let _ = self.conpty.write(&bytes);
+        self.vt
+            .write_input(&bytes)
+            .context("failed to queue ConPTY input")
     }
 
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend> {
@@ -584,7 +586,11 @@ impl RenderSession {
         pressed: bool,
     ) -> bool {
         let seq = sgr_button_sequence(base_button, col, row, mods, pressed);
-        self.conpty.write(seq.as_bytes()).is_ok()
+        if pressed {
+            self.vt.write_input(seq.as_bytes()).is_ok()
+        } else {
+            self.vt.write_control(seq.as_bytes()).is_ok()
+        }
     }
 
     /// Cancel any in-flight drag (used on focus loss).
@@ -613,7 +619,9 @@ impl RenderSession {
         let col = col.max(1);
         let row = row.max(1);
         let seq = format!("\x1b[<{button};{col};{row}M");
-        let _ = self.conpty.write(seq.as_bytes());
+        if let Err(err) = self.vt.write_input(seq.as_bytes()) {
+            log::debug!("windows terminal mouse wheel write failed: {err}");
+        }
     }
 
     /// Scroll the terminal viewport when the shell did not request
@@ -713,7 +721,10 @@ impl RenderSession {
         };
         self.request_low_latency_after_next_generation();
         for _ in 0..rows.unsigned_abs() {
-            let _ = self.conpty.write(seq.as_bytes());
+            if let Err(err) = self.vt.write_input(seq.as_bytes()) {
+                log::debug!("windows terminal alternate-scroll write failed: {err}");
+                break;
+            }
         }
     }
 

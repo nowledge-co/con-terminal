@@ -1089,7 +1089,14 @@ pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
 }
 
-pub type PtyWriteCallback = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync + 'static>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtyWritePriority {
+    UserInput,
+    TerminalControl,
+}
+
+pub type PtyWriteCallback =
+    Arc<dyn Fn(&[u8], PtyWritePriority) -> std::io::Result<()> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtKeyAction {
@@ -1177,6 +1184,10 @@ struct VtCallbackState {
     /// are one-time capabilities, but multiple outstanding grants read this
     /// shared current value. Unsolicited OSC reads remain denied.
     clipboard_text: Mutex<Option<Arc<str>>>,
+    /// A terminal-generated reply or release cannot be retried through the C
+    /// callback ABI. If its reserved queue capacity is exhausted, fail the
+    /// session explicitly rather than continuing with desynchronized state.
+    write_failed: Arc<AtomicBool>,
     /// Active only during `ghostty_terminal_paste`. The C callback cannot
     /// return an I/O result, so buffer the complete logical paste and perform
     /// one fallible host enqueue after libghostty returns.
@@ -1511,6 +1522,7 @@ impl VtScreen {
                 write_order: Arc::new(Mutex::new(())),
                 enquiry_response: b"con".to_vec().into_boxed_slice(),
                 clipboard_text: Mutex::new(None),
+                write_failed: Arc::new(AtomicBool::new(false)),
                 pending_paste_write: Mutex::new(None),
                 rows: AtomicU16::new(rows),
                 cols: AtomicU16::new(cols),
@@ -1743,6 +1755,52 @@ impl VtScreen {
         self.inner.lock().generation
     }
 
+    pub fn has_write_failure(&self) -> bool {
+        self.inner
+            .lock()
+            .callback_state
+            .as_ref()
+            .is_some_and(|state| state.write_failed.load(Ordering::Acquire))
+    }
+
+    /// Enqueue raw user input through the same ordering boundary as encoded
+    /// keys and parser replies.
+    pub fn write_input(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_bytes(bytes, PtyWritePriority::UserInput)
+    }
+
+    /// Enqueue a state-balancing host report, such as a key or mouse release,
+    /// using the queue capacity reserved for terminal control traffic.
+    pub fn write_control(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_bytes(bytes, PtyWritePriority::TerminalControl)
+    }
+
+    fn write_bytes(&self, bytes: &[u8], priority: PtyWritePriority) -> std::io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let inner = self.inner.lock();
+        let Some(callback_state) = inner.callback_state.as_ref() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "terminal input requires a WRITE_PTY callback",
+            ));
+        };
+        let write_pty = callback_state.write_pty.clone();
+        let write_failed = callback_state.write_failed.clone();
+        let write_order = callback_state.write_order.clone();
+        let write_guard = write_order.lock();
+        drop(inner);
+        let result = write_pty(bytes, priority);
+        if let Err(err) = &result
+            && priority == PtyWritePriority::TerminalControl
+        {
+            mark_control_write_failed(&write_failed, err);
+        }
+        drop(write_guard);
+        result
+    }
+
     /// Feed bytes from the PTY into the parser. Non-reentrant per
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
@@ -1764,6 +1822,7 @@ impl VtScreen {
             anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
         };
         let write_pty = callback_state.write_pty.clone();
+        let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
 
         let mut kitty_flags = 0_u8;
@@ -1851,8 +1910,17 @@ impl VtScreen {
             // host callbacks enqueue into a non-blocking bounded queue.
             let write_guard = write_order.lock();
             drop(inner);
-            write_pty(bytes)
-                .map_err(|err| anyhow::anyhow!("failed to write encoded key: {err}"))?;
+            let priority = if event.action == VtKeyAction::Release {
+                PtyWritePriority::TerminalControl
+            } else {
+                PtyWritePriority::UserInput
+            };
+            if let Err(err) = write_pty(bytes, priority) {
+                if priority == PtyWritePriority::TerminalControl {
+                    mark_control_write_failed(&write_failed, &err);
+                }
+                return Err(anyhow::anyhow!("failed to write encoded key: {err}"));
+            }
             drop(write_guard);
         }
 
@@ -1933,9 +2001,9 @@ impl VtScreen {
                     // one-time Kitty grant is installed before a program can
                     // react to the event and request its clipboard payload.
                     let _write_guard = callback_state.write_order.lock();
-                    (callback_state.write_pty)(&output).map_err(|err| {
-                        anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}")
-                    })?;
+                    (callback_state.write_pty)(&output, PtyWritePriority::UserInput).map_err(
+                        |err| anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}"),
+                    )?;
                 }
                 if written && !reader.served && source == VtPasteSource::Clipboard {
                     // Ghostty does not call the MIME reader for a Kitty paste
@@ -2631,11 +2699,14 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let _write_guard = state.write_order.lock();
-    if let Err(err) = (state.write_pty)(bytes) {
-        // Asynchronous terminal replies are best-effort because libghostty's
-        // callback ABI has no error return. Keys and paste invoke the same
-        // host callback directly and propagate their enqueue failures.
-        log::debug!("vt WRITE_PTY callback failed: {err}");
+    if let Err(err) = (state.write_pty)(bytes, PtyWritePriority::TerminalControl) {
+        mark_control_write_failed(&state.write_failed, &err);
+    }
+}
+
+fn mark_control_write_failed(write_failed: &AtomicBool, err: &std::io::Error) {
+    if !write_failed.swap(true, Ordering::AcqRel) {
+        log::error!("terminal control write failed; closing the desynchronized session: {err}");
     }
 }
 
@@ -3218,6 +3289,8 @@ impl Drop for VtScreen {
 mod tests {
     use super::*;
     use std::ffi::CStr;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn libghostty_vt_manifest_matches_handwritten_ffi() {
@@ -3532,7 +3605,7 @@ mod tests {
 
     #[test]
     fn kitty_graphics_snapshot_decodes_png_and_reuses_unchanged_pixels() {
-        let screen = VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_| Ok(()))))
+        let screen = VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(()))))
             .expect("create vt screen");
         screen.resize(80, 24, 8, 16).expect("set cell size");
         screen.feed(
@@ -3572,7 +3645,7 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(move |bytes| {
+            Some(Arc::new(move |bytes, _| {
                 output_for_callback.lock().extend_from_slice(bytes);
                 Ok(())
             })),
@@ -3667,7 +3740,7 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(move |bytes| {
+            Some(Arc::new(move |bytes, _| {
                 output_for_callback.lock().extend_from_slice(bytes);
                 Ok(())
             })),
@@ -3702,7 +3775,7 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(|_| {
+            Some(Arc::new(|_, _| {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "test PTY is closed",
@@ -3723,6 +3796,85 @@ mod tests {
             .send_key(&event)
             .expect_err("surface write must fail");
         assert!(err.to_string().contains("test PTY is closed"));
+    }
+
+    #[test]
+    fn raw_input_cannot_be_overtaken_by_a_terminal_reply() {
+        let gate = Arc::new((Mutex::new(false), parking_lot::Condvar::new()));
+        let callback_gate = gate.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let callback_writes = writes.clone();
+        let screen = Arc::new(
+            VtScreen::new_with_write_pty(
+                80,
+                24,
+                None,
+                Some(Arc::new(move |bytes, priority| {
+                    if bytes == b"user" {
+                        entered_tx.send(()).expect("signal raw input callback");
+                        let (open, ready) = &*callback_gate;
+                        let mut open = open.lock();
+                        while !*open {
+                            ready.wait(&mut open);
+                        }
+                    }
+                    callback_writes.lock().push((bytes.to_vec(), priority));
+                    Ok(())
+                })),
+            )
+            .expect("create vt screen"),
+        );
+
+        let input_screen = screen.clone();
+        let input =
+            std::thread::spawn(move || input_screen.write_input(b"user").expect("write raw input"));
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("raw input callback must start");
+
+        let reply_screen = screen.clone();
+        let reply = std::thread::spawn(move || reply_screen.feed(b"\x1b[5n"));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while screen.inner.try_lock().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "terminal reply did not reach the ordering gate"
+            );
+            std::thread::yield_now();
+        }
+
+        let (open, ready) = &*gate;
+        *open.lock() = true;
+        ready.notify_all();
+        input.join().expect("raw input thread");
+        reply.join().expect("terminal reply thread");
+
+        let writes = writes.lock();
+        assert_eq!(writes[0], (b"user".to_vec(), PtyWritePriority::UserInput));
+        assert_eq!(writes[1].1, PtyWritePriority::TerminalControl);
+        assert!(writes[1].0.starts_with(b"\x1b[0n"));
+    }
+
+    #[test]
+    fn failed_terminal_reply_marks_the_session_desynchronized() {
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(|_, priority| {
+                assert_eq!(priority, PtyWritePriority::TerminalControl);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "reserved PTY capacity exhausted",
+                ))
+            })),
+        )
+        .expect("create vt screen");
+
+        screen.feed(b"\x1b[5n");
+
+        assert!(screen.has_write_failure());
     }
 
     #[test]
@@ -3763,7 +3915,7 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(move |bytes| {
+            Some(Arc::new(move |bytes, _| {
                 *callback_calls_for_callback.lock() += 1;
                 output_for_callback.lock().extend_from_slice(bytes);
                 Ok(())
@@ -3838,7 +3990,7 @@ mod tests {
                 80,
                 24,
                 None,
-                Some(Arc::new(move |bytes| {
+                Some(Arc::new(move |bytes, _| {
                     output_for_callback.lock().extend_from_slice(bytes);
                     Ok(())
                 })),
@@ -3919,7 +4071,7 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(|_| {
+            Some(Arc::new(|_, _| {
                 panic!("oversized paste reached the PTY callback")
             })),
         )

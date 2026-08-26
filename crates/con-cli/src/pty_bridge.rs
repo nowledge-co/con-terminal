@@ -24,7 +24,8 @@ pub struct PtyBridgeArgs {
 }
 
 #[cfg(unix)]
-const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// A 16 MiB Kitty clipboard response expands to about 22 MiB after base64.
+const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(unix)]
 fn configure_shell_startup(program: &str, command: &mut portable_pty::CommandBuilder) {

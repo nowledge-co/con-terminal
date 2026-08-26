@@ -413,7 +413,7 @@ impl LinuxGhosttyTerminal {
             return false;
         }
         let seq = sgr_mouse_sequence(button, col, row, false);
-        match session.write_input(seq.as_bytes()) {
+        match session.write_control(seq.as_bytes()) {
             Ok(()) => true,
             Err(err) => {
                 log::debug!("linux pty mouse release write failed: {err:#}");

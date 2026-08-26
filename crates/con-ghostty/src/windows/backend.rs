@@ -216,15 +216,19 @@ impl WindowsGhosttyTerminal {
 
     pub fn write_to_pty(&self, data: &[u8]) {
         if let Some(session) = self.inner.lock().as_ref() {
-            if let Ok(s) = std::str::from_utf8(data) {
-                session.write_input(s);
+            if let Ok(s) = std::str::from_utf8(data)
+                && let Err(err) = session.write_input(s)
+            {
+                log::debug!("windows terminal input write failed: {err:#}");
             }
         }
     }
 
     pub fn send_text(&self, text: &str) {
-        if let Some(session) = self.inner.lock().as_ref() {
-            session.write_input(text);
+        if let Some(session) = self.inner.lock().as_ref()
+            && let Err(err) = session.write_input(text)
+        {
+            log::debug!("windows terminal text write failed: {err:#}");
         }
     }
 

@@ -14,12 +14,14 @@ use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
-    ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtPasteResult, VtPasteSource, VtScreen,
+    PtyWritePriority, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtPasteResult,
+    VtPasteSource, VtScreen,
 };
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
-const MAX_BRIDGE_FRAME_BYTES: usize = 16 * 1024 * 1024;
+// A 16 MiB Kitty clipboard response expands to about 22 MiB after base64.
+const MAX_BRIDGE_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -79,9 +81,12 @@ enum LinuxPtyInput {
 }
 
 impl LinuxPtyInput {
-    fn write_data(&self, data: &[u8]) -> std::io::Result<()> {
+    fn write_data(&self, data: &[u8], priority: PtyWritePriority) -> std::io::Result<()> {
         match self {
-            Self::Local(queue) => queue.enqueue(data),
+            Self::Local(queue) => match priority {
+                PtyWritePriority::UserInput => queue.enqueue(data),
+                PtyWritePriority::TerminalControl => queue.enqueue_control(data),
+            },
             Self::HostBridge(queue) => {
                 if data.len() > MAX_BRIDGE_FRAME_BYTES {
                     return Err(std::io::Error::new(
@@ -94,7 +99,12 @@ impl LinuxPtyInput {
                 frame.push(0x00); // TAG_DATA
                 frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
                 frame.extend_from_slice(data);
-                queue.enqueue_owned(frame.into_boxed_slice())
+                match priority {
+                    PtyWritePriority::UserInput => queue.enqueue_owned(frame.into_boxed_slice()),
+                    PtyWritePriority::TerminalControl => {
+                        queue.enqueue_control_owned(frame.into_boxed_slice())
+                    }
+                }
             }
         }
     }
@@ -380,9 +390,20 @@ impl LinuxPtySession {
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
         self.scroll_viewport_to_bottom();
-        self.input
-            .write_data(data)
+        self.shared
+            .screen
+            .write_input(data)
             .context("failed to queue linux pty input")?;
+        self.input_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn write_control(&self, data: &[u8]) -> Result<()> {
+        self.scroll_viewport_to_bottom();
+        self.shared
+            .screen
+            .write_control(data)
+            .context("failed to queue linux pty control input")?;
         self.input_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -434,7 +455,7 @@ impl LinuxPtySession {
 
     pub fn is_alive(&self) -> bool {
         self.poll_child_status();
-        self.shared.alive.load(Ordering::Acquire)
+        self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.has_write_failure()
     }
 
     pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {
@@ -613,7 +634,7 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             theme_owned.as_ref(),
             Some({
                 let input = input.clone();
-                Arc::new(move |data: &[u8]| input.write_data(data))
+                Arc::new(move |data: &[u8], priority| input.write_data(data, priority))
             }),
         )
         .context("failed to create linux vt screen")?,
@@ -784,7 +805,7 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             theme_owned.as_ref(),
             Some({
                 let input = input.clone();
-                Arc::new(move |data: &[u8]| input.write_data(data))
+                Arc::new(move |data: &[u8], priority| input.write_data(data, priority))
             }),
         )
         .context("failed to create linux vt screen")?,

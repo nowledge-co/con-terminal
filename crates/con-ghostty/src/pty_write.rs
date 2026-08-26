@@ -7,7 +7,11 @@ use std::thread::{self, JoinHandle};
 
 use parking_lot::{Condvar, Mutex};
 
-const DEFAULT_MAX_QUEUED_BYTES: usize = 32 * 1024 * 1024;
+// A maximally expanded 16 MiB paste can occupy 32 MiB of ordinary output,
+// while a simultaneous Kitty clipboard reply can base64-expand to about
+// 22 MiB. Keep enough bounded headroom for both without reordering the FIFO.
+const DEFAULT_MAX_QUEUED_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_CONTROL_RESERVE_BYTES: usize = 24 * 1024 * 1024;
 
 struct QueueState {
     payloads: VecDeque<Box<[u8]>>,
@@ -20,6 +24,7 @@ struct Shared {
     state: Mutex<QueueState>,
     ready: Condvar,
     max_queued_bytes: usize,
+    max_regular_bytes: usize,
 }
 
 /// Cloneable, non-blocking producer for one ordered PTY input stream.
@@ -27,7 +32,9 @@ struct Shared {
 /// libghostty invokes WRITE_PTY while its parser lock is held, so callbacks
 /// must never perform pipe or socket I/O directly. This queue bounds retained
 /// memory and hands all writes to one worker, preserving byte ordering between
-/// terminal replies, keyboard input, paste, and resize control frames.
+/// terminal replies, keyboard input, paste, and resize control frames. Regular
+/// input cannot consume the reserved tail of the budget, so a terminal reply
+/// or key release can still enter the same FIFO behind an accepted large paste.
 pub(crate) struct PtyWriteQueue {
     shared: Arc<Shared>,
 }
@@ -42,17 +49,24 @@ impl PtyWriteQueue {
     where
         F: FnMut(&[u8]) -> io::Result<()> + Send + 'static,
     {
-        Self::spawn_with_limit(thread_name, DEFAULT_MAX_QUEUED_BYTES, write)
+        Self::spawn_with_limits(
+            thread_name,
+            DEFAULT_MAX_QUEUED_BYTES,
+            DEFAULT_CONTROL_RESERVE_BYTES,
+            write,
+        )
     }
 
-    fn spawn_with_limit<F>(
+    fn spawn_with_limits<F>(
         thread_name: &str,
         max_queued_bytes: usize,
+        control_reserve_bytes: usize,
         mut write: F,
     ) -> io::Result<(Self, PtyWriteWorker)>
     where
         F: FnMut(&[u8]) -> io::Result<()> + Send + 'static,
     {
+        let max_regular_bytes = max_queued_bytes.saturating_sub(control_reserve_bytes);
         let shared = Arc::new(Shared {
             state: Mutex::new(QueueState {
                 payloads: VecDeque::new(),
@@ -62,6 +76,7 @@ impl PtyWriteQueue {
             }),
             ready: Condvar::new(),
             max_queued_bytes,
+            max_regular_bytes,
         });
         let worker_shared = shared.clone();
         let handle = thread::Builder::new()
@@ -112,10 +127,27 @@ impl PtyWriteQueue {
         if bytes.is_empty() {
             return Ok(());
         }
-        self.enqueue_owned(bytes.into())
+        self.enqueue_owned_with_limit(bytes.into(), self.shared.max_regular_bytes)
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn enqueue_owned(&self, payload: Box<[u8]>) -> io::Result<()> {
+        self.enqueue_owned_with_limit(payload, self.shared.max_regular_bytes)
+    }
+
+    pub(crate) fn enqueue_control(&self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.enqueue_owned_with_limit(bytes.into(), self.shared.max_queued_bytes)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn enqueue_control_owned(&self, payload: Box<[u8]>) -> io::Result<()> {
+        self.enqueue_owned_with_limit(payload, self.shared.max_queued_bytes)
+    }
+
+    fn enqueue_owned_with_limit(&self, payload: Box<[u8]>, limit: usize) -> io::Result<()> {
         if payload.is_empty() {
             return Ok(());
         }
@@ -132,7 +164,7 @@ impl PtyWriteQueue {
                 "PTY input queue byte count overflowed",
             ));
         };
-        if total > self.shared.max_queued_bytes {
+        if total > limit {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "PTY input queue is full",
@@ -208,16 +240,17 @@ mod tests {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let worker_gate = gate.clone();
         let (entered_tx, entered_rx) = mpsc::channel();
-        let (queue, mut worker) = PtyWriteQueue::spawn_with_limit("pty-write-test", 4, move |_| {
-            entered_tx.send(()).expect("signal writer entry");
-            let (open, ready) = &*worker_gate;
-            let mut open = open.lock();
-            while !*open {
-                ready.wait(&mut open);
-            }
-            Ok(())
-        })
-        .expect("spawn writer");
+        let (queue, mut worker) =
+            PtyWriteQueue::spawn_with_limits("pty-write-test", 4, 0, move |_| {
+                entered_tx.send(()).expect("signal writer entry");
+                let (open, ready) = &*worker_gate;
+                let mut open = open.lock();
+                while !*open {
+                    ready.wait(&mut open);
+                }
+                Ok(())
+            })
+            .expect("spawn writer");
 
         queue.enqueue(b"full").expect("fill queue budget");
         entered_rx
@@ -229,6 +262,70 @@ mod tests {
         let (open, ready) = &*gate;
         *open.lock() = true;
         ready.notify_all();
+        worker.shutdown();
+    }
+
+    #[test]
+    fn control_writes_use_reserved_capacity_without_reordering_the_fifo() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let worker_gate = gate.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel();
+        let (queue, mut worker) =
+            PtyWriteQueue::spawn_with_limits("pty-write-reserve-test", 6, 2, move |bytes| {
+                entered_tx.send(()).expect("signal writer entry");
+                let (open, ready) = &*worker_gate;
+                let mut open = open.lock();
+                while !*open {
+                    ready.wait(&mut open);
+                }
+                written_tx
+                    .send(bytes.to_vec())
+                    .expect("record completed write");
+                Ok(())
+            })
+            .expect("spawn writer");
+
+        queue.enqueue(b"user").expect("fill regular budget");
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("writer must start");
+        assert_eq!(
+            queue
+                .enqueue(b"x")
+                .expect_err("regular input must preserve the reserve")
+                .kind(),
+            ErrorKind::WouldBlock
+        );
+        queue
+            .enqueue_control(b"ok")
+            .expect("control write must use reserved capacity");
+        assert_eq!(
+            queue
+                .enqueue_control(b"x")
+                .expect_err("control write must remain bounded")
+                .kind(),
+            ErrorKind::WouldBlock
+        );
+
+        let (open, ready) = &*gate;
+        *open.lock() = true;
+        ready.notify_all();
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("reserved control write must reach the worker");
+        assert_eq!(
+            written_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("regular write must complete first"),
+            b"user"
+        );
+        assert_eq!(
+            written_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("control write must complete second"),
+            b"ok"
+        );
         worker.shutdown();
     }
 }

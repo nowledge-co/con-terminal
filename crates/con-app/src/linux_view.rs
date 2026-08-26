@@ -799,6 +799,7 @@ impl GhosttyView {
         for (key, tracked) in tracked_keys {
             let release = tracked.release(&key);
             if let Err(err) = terminal.send_key(&release) {
+                self.keys_awaiting_release.insert(key, tracked);
                 log::debug!("linux terminal key release failed: {err}");
             }
         }
