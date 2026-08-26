@@ -28,6 +28,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
+use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -36,6 +37,7 @@ use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
 
+use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
 
 fn perf_trace_enabled() -> bool {
@@ -68,6 +70,15 @@ const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
 const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 const GHOSTTY_REJECTED: GhosttyResult = -7;
 
+// Match libghostty's conservative embedded-library default. Keeping this
+// explicit makes the PNG decoder's output cap and the terminal's retained
+// image cap one contract instead of allowing a compressed payload to allocate
+// far more memory than the terminal can retain.
+const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 10_000_000;
+const KITTY_PNG_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
+const KITTY_PNG_MAX_DIMENSION: u32 = 10_000;
+const KITTY_PNG_DECODER_MAX_ALLOC_BYTES: u64 = 32 * 1024 * 1024;
+
 const GHOSTTY_MODS_SHIFT: u16 = 1 << 0;
 const GHOSTTY_MODS_CTRL: u16 = 1 << 1;
 const GHOSTTY_MODS_ALT: u16 = 1 << 2;
@@ -96,6 +107,8 @@ pub enum GhosttyTerminalData {
     Scrollbar = 9,
     Title = 12,
     Pwd = 13,
+    KittyImageStorageLimit = 26,
+    KittyGraphics = 30,
     ScrollbackMaxLines = 35,
     Mode = 37,
 }
@@ -164,8 +177,16 @@ pub enum GhosttyTerminalOption {
     ColorCursor = 13,
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
+    KittyImageStorageLimit = 15,
     ScrollbackMaxLines = 28,
     ClipboardRead = 38,
+}
+
+/// `GHOSTTY_SYS_OPT_*` keys for process-global optional services.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+enum GhosttySysOption {
+    DecodePng = 1,
 }
 
 /// `GHOSTTY_RENDER_STATE_DATA_*` keys for `ghostty_render_state_get`.
@@ -399,12 +420,32 @@ pub struct GhosttyClipboardRead {
         Option<unsafe extern "C" fn(*const GhosttyClipboardRead, *const GhosttyClipboardReadReply)>,
 }
 
+/// RGBA buffer returned by `GhosttySysDecodePngFn`. The pixel allocation is
+/// transferred to libghostty and must come from the allocator supplied to the
+/// callback, which is not necessarily Rust's global allocator on Windows.
+#[repr(C)]
+struct GhosttySysImage {
+    width: u32,
+    height: u32,
+    data: *mut u8,
+    data_len: usize,
+}
+
+type GhosttySysDecodePngFn = unsafe extern "C" fn(
+    userdata: *mut c_void,
+    allocator: *const GhosttyAllocator,
+    data: *const u8,
+    data_len: usize,
+    out: *mut GhosttySysImage,
+) -> bool;
+
 const _: [(); 16] = [(); std::mem::size_of::<GhosttyWriter>()];
 const _: [(); 16] = [(); std::mem::size_of::<GhosttyMimeReader>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyPaste>()];
 const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
 const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
+const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,6 +579,10 @@ unsafe extern "C" {
     // ABI manifest (`types.h`).
     pub fn ghostty_type_json() -> *const c_char;
 
+    // Allocator + process-global optional services (`allocator.h`, `sys.h`).
+    fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
+    fn ghostty_sys_set(option: GhosttySysOption, value: *const c_void) -> GhosttyResult;
+
     // Terminal (`terminal.h`)
     pub fn ghostty_terminal_new(
         allocator: *const GhosttyAllocator,
@@ -662,6 +707,95 @@ unsafe extern "C" {
         key: GhosttyCellData,
         out: *mut c_void,
     ) -> GhosttyResult;
+}
+
+fn decode_png_rgba(data: &[u8]) -> anyhow::Result<(u32, u32, Vec<u8>)> {
+    if data.is_empty() || data.len() > KITTY_PNG_MAX_INPUT_BYTES {
+        anyhow::bail!("PNG input exceeds the Kitty image limit");
+    }
+
+    let mut reader = ImageReader::with_format(IoCursor::new(data), ImageFormat::Png);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(KITTY_PNG_MAX_DIMENSION);
+    limits.max_image_height = Some(KITTY_PNG_MAX_DIMENSION);
+    limits.max_alloc = Some(KITTY_PNG_DECODER_MAX_ALLOC_BYTES);
+    reader.limits(limits);
+    let decoded = reader.decode()?;
+    let width = decoded.width();
+    let height = decoded.height();
+    let rgba_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("PNG dimensions overflow the host address space"))?;
+    if rgba_len > KITTY_IMAGE_STORAGE_LIMIT_BYTES as usize {
+        anyhow::bail!("decoded PNG exceeds the Kitty image storage limit");
+    }
+
+    let rgba = decoded.into_rgba8().into_raw();
+    if rgba.len() != rgba_len {
+        anyhow::bail!("PNG decoder returned an inconsistent pixel buffer");
+    }
+    Ok((width, height, rgba))
+}
+
+unsafe extern "C" fn decode_png_callback(
+    _userdata: *mut c_void,
+    allocator: *const GhosttyAllocator,
+    data: *const u8,
+    data_len: usize,
+    out: *mut GhosttySysImage,
+) -> bool {
+    if data.is_null() || out.is_null() {
+        return false;
+    }
+
+    // No Rust panic may cross the C ABI boundary. Malformed or over-limit
+    // terminal input is a normal protocol rejection, so all failures collapse
+    // to false and libghostty emits the protocol-level error response.
+    let decoded = std::panic::catch_unwind(|| {
+        let bytes = unsafe { std::slice::from_raw_parts(data, data_len) };
+        decode_png_rgba(bytes)
+    });
+    let Ok(Ok((width, height, rgba))) = decoded else {
+        return false;
+    };
+
+    let allocation = unsafe { ghostty_alloc(allocator, rgba.len()) };
+    if allocation.is_null() {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(rgba.as_ptr(), allocation, rgba.len()) };
+    unsafe {
+        out.write(GhosttySysImage {
+            width,
+            height,
+            data: allocation,
+            data_len: rgba.len(),
+        });
+    }
+    true
+}
+
+fn install_ghostty_sys_services() -> anyhow::Result<()> {
+    static RESULT: OnceLock<GhosttyResult> = OnceLock::new();
+    let rc = *RESULT.get_or_init(|| {
+        let decoder: GhosttySysDecodePngFn = decode_png_callback;
+        unsafe {
+            ghostty_sys_set(
+                GhosttySysOption::DecodePng,
+                decoder as *const () as *const c_void,
+            )
+        }
+    });
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_sys_set(DECODE_PNG) failed: rc={rc}");
+    }
+    Ok(())
 }
 
 // ── Theme ──────────────────────────────────────────────────────────────
@@ -1143,6 +1277,8 @@ impl VtScreen {
         theme: Option<&ThemeColors>,
         write_pty: Option<PtyWriteCallback>,
     ) -> anyhow::Result<Self> {
+        install_ghostty_sys_services()?;
+
         let mut terminal: GhosttyTerminal = std::ptr::null_mut();
         // SAFETY: out param; allocator NULL = upstream default.
         let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, cols, rows) };
@@ -1161,6 +1297,18 @@ impl VtScreen {
         if rc != 0 {
             unsafe { ghostty_terminal_free(terminal) };
             anyhow::bail!("ghostty_terminal_set(SCROLLBACK_MAX_LINES) failed: rc={rc}");
+        }
+
+        let rc = unsafe {
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::KittyImageStorageLimit,
+                &KITTY_IMAGE_STORAGE_LIMIT_BYTES as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(KITTY_IMAGE_STORAGE_LIMIT) failed: rc={rc}");
         }
 
         let mut callback_state = write_pty.map(|write_pty| {
@@ -2560,6 +2708,10 @@ mod tests {
             Some(GhosttyTerminalOption::ScrollbackMaxLines as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["KITTY_IMAGE_STORAGE_LIMIT"].as_i64(),
+            Some(GhosttyTerminalOption::KittyImageStorageLimit as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
             Some(GhosttyTerminalOption::ClipboardRead as i64)
         );
@@ -2593,6 +2745,11 @@ mod tests {
                 "GhosttyClipboardRead",
                 std::mem::size_of::<GhosttyClipboardRead>(),
                 std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+            (
+                "GhosttySysImage",
+                std::mem::size_of::<GhosttySysImage>(),
+                std::mem::align_of::<GhosttySysImage>(),
             ),
         ] {
             assert_eq!(
@@ -2655,6 +2812,18 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalData"]["values"]["KITTY_KEYBOARD_FLAGS"].as_i64(),
             Some(GhosttyTerminalData::KittyKeyboardFlags as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["KITTY_IMAGE_STORAGE_LIMIT"].as_i64(),
+            Some(GhosttyTerminalData::KittyImageStorageLimit as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["KITTY_GRAPHICS"].as_i64(),
+            Some(GhosttyTerminalData::KittyGraphics as i64)
+        );
+        assert_eq!(
+            types["GhosttySysOption"]["values"]["DECODE_PNG"].as_i64(),
+            Some(GhosttySysOption::DecodePng as i64)
         );
         assert_eq!(
             types["GhosttyKittyKeyFlags"]["size"].as_u64(),

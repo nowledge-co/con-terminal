@@ -40,6 +40,18 @@ struct GhosttyTerminalScrollViewport {
  * than validating against invented metadata. */
 const char* ghostty_type_json(void) { return NULL; }
 
+/* ── Allocator and process-global services ─────────────────────── */
+
+uint8_t* ghostty_alloc(const void* allocator, size_t len) {
+    (void)allocator; (void)len;
+    return NULL;
+}
+
+GhosttyResult ghostty_sys_set(int option, const void* value) {
+    (void)option; (void)value;
+    return 0;
+}
+
 /* ── Terminal lifecycle ─────────────────────────────────────────── */
 
 GhosttyResult ghostty_terminal_new(
