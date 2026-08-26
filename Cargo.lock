@@ -1388,6 +1388,7 @@ dependencies = [
  "dispatch",
  "etagere",
  "image",
+ "libc",
  "log",
  "objc",
  "parking_lot",

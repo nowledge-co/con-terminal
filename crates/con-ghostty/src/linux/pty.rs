@@ -1,4 +1,6 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -61,9 +63,10 @@ enum LinuxPtyBackend {
     Local {
         master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
         child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+        io_shutdown: UnixStream,
     },
     HostBridge {
-        stream_shutdown: std::os::unix::net::UnixStream,
+        stream_shutdown: UnixStream,
         socket_path: PathBuf,
         child: Mutex<std::process::Child>,
     },
@@ -113,6 +116,87 @@ impl LinuxPtyInput {
         frame[7..9].copy_from_slice(&height_px.to_be_bytes());
         queue.enqueue(&frame)
     }
+}
+
+fn duplicate_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: `fd` remains owned by portable_pty for this call. The returned
+    // descriptor has independent ownership and is closed by `OwnedFd`.
+    unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()
+}
+
+fn set_fd_nonblocking(fd: RawFd) -> io::Result<()> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Wait for one non-blocking PTY operation or an explicit session shutdown.
+/// The cancellation socket is never consumed, so both reader and writer wake
+/// when the owner shuts down its peer endpoint.
+fn wait_for_pty_io(pty_fd: RawFd, cancel_fd: RawFd, events: i16) -> io::Result<bool> {
+    let mut fds = [
+        libc::pollfd {
+            fd: cancel_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: pty_fd,
+            events,
+            revents: 0,
+        },
+    ];
+    loop {
+        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+        if result == -1 {
+            let err = io::Error::last_os_error();
+            if err.kind() == ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+
+        if fds[0].revents != 0 {
+            return Ok(false);
+        }
+        if fds[1].revents & (events | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn write_all_cancellable(
+    writer: &mut dyn Write,
+    readiness: &OwnedFd,
+    cancel: &UnixStream,
+    mut data: &[u8],
+) -> io::Result<()> {
+    while !data.is_empty() {
+        if !wait_for_pty_io(readiness.as_raw_fd(), cancel.as_raw_fd(), libc::POLLOUT)? {
+            return Err(io::Error::new(
+                ErrorKind::BrokenPipe,
+                "PTY input writer was cancelled",
+            ));
+        }
+
+        match writer.write(data) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::WriteZero,
+                    "PTY input accepted zero bytes",
+                ));
+            }
+            Ok(written) => data = &data[written..],
+            Err(err) if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
 }
 
 pub struct LinuxPtySession {
@@ -446,15 +530,14 @@ impl LinuxPtySession {
 impl Drop for LinuxPtySession {
     fn drop(&mut self) {
         match &self.backend {
-            LinuxPtyBackend::Local { child, .. } => {
+            LinuxPtyBackend::Local {
+                child, io_shutdown, ..
+            } => {
+                let _ = io_shutdown.shutdown(std::net::Shutdown::Both);
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate linux pty child during drop: {err}");
                 }
-                // portable_pty exposes the master writer only as `dyn Write`,
-                // so there is no safe way to cancel a syscall blocked by a
-                // descendant that inherited the slave. Close the queue and
-                // detach the worker rather than hanging the UI during teardown.
-                self.input_worker.close_without_join();
+                self.input_worker.shutdown();
             }
             LinuxPtyBackend::HostBridge {
                 child,
@@ -481,6 +564,20 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
     let pair = pty_system
         .openpty(pty_size)
         .context("failed to open linux pty")?;
+    let master_fd = pair
+        .master
+        .as_raw_fd()
+        .context("linux pty master did not expose a file descriptor")?;
+    let reader_readiness =
+        duplicate_fd(master_fd).context("failed to clone linux pty reader fd")?;
+    let writer_readiness =
+        duplicate_fd(master_fd).context("failed to clone linux pty writer fd")?;
+    set_fd_nonblocking(master_fd).context("failed to make linux pty non-blocking")?;
+    let (io_shutdown, io_cancel) =
+        UnixStream::pair().context("failed to create linux pty cancellation socket")?;
+    let writer_cancel = io_cancel
+        .try_clone()
+        .context("failed to clone linux pty writer cancellation socket")?;
 
     let target_program = options
         .program
@@ -503,9 +600,10 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         .master
         .take_writer()
         .context("failed to take linux pty writer")?;
-    let (input_queue, input_worker) =
-        PtyWriteQueue::spawn("con-linux-pty-writer", move |data| writer.write_all(data))
-            .context("failed to spawn linux pty writer")?;
+    let (input_queue, input_worker) = PtyWriteQueue::spawn("con-linux-pty-writer", move |data| {
+        write_all_cancellable(writer.as_mut(), &writer_readiness, &writer_cancel, data)
+    })
+    .context("failed to spawn linux pty writer")?;
     let input = LinuxPtyInput::Local(input_queue);
     let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
     let screen = Arc::new(
@@ -543,12 +641,19 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         shared.transcript.lock().push(text);
     }
     let started_at = Instant::now();
-    spawn_reader_thread(reader, shared.clone(), started_at);
+    spawn_reader_thread(
+        reader,
+        reader_readiness,
+        io_cancel,
+        shared.clone(),
+        started_at,
+    );
 
     Ok(LinuxPtySession {
         backend: LinuxPtyBackend::Local {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
+            io_shutdown,
         },
         input,
         input_worker,
@@ -783,6 +888,8 @@ fn spawn_bridge_reader_thread(
 
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
+    readiness: OwnedFd,
+    cancel: UnixStream,
     shared: Arc<SessionShared>,
     started_at: Instant,
 ) {
@@ -791,6 +898,15 @@ fn spawn_reader_thread(
         .spawn(move || {
             let mut buffer = [0_u8; 8192];
             loop {
+                match wait_for_pty_io(readiness.as_raw_fd(), cancel.as_raw_fd(), libc::POLLIN) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(err) => {
+                        log::debug!("linux pty reader poll terminated: {err}");
+                        shared.mark_exited(None, started_at.elapsed());
+                        break;
+                    }
+                }
                 match reader.read(&mut buffer) {
                     Ok(0) => {
                         shared.mark_exited(None, started_at.elapsed());
@@ -801,7 +917,11 @@ fn spawn_reader_thread(
                         let chunk = String::from_utf8_lossy(&buffer[..read]);
                         shared.push_output(chunk.as_ref());
                     }
-                    Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
+                    {
+                        continue;
+                    }
                     Err(err) => {
                         log::debug!("linux pty reader terminated: {err}");
                         shared.mark_exited(None, started_at.elapsed());
@@ -1025,13 +1145,62 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{ErrorKind, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
     use std::sync::Arc;
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::VtScreen;
 
-    use super::SessionShared;
+    use super::{SessionShared, duplicate_fd, set_fd_nonblocking, write_all_cancellable};
+
+    #[test]
+    fn blocked_writer_stops_when_session_is_cancelled() {
+        let (mut writer, _unread_peer) = UnixStream::pair().expect("create blocked writer socket");
+        set_fd_nonblocking(writer.as_raw_fd()).expect("make test writer non-blocking");
+        let readiness = duplicate_fd(writer.as_raw_fd()).expect("clone test writer fd");
+
+        let fill = [0_u8; 8 * 1024];
+        loop {
+            match writer.write(&fill) {
+                Ok(0) => panic!("test writer accepted zero bytes"),
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => panic!("failed to fill test writer: {err}"),
+            }
+        }
+
+        let (shutdown, cancel) = UnixStream::pair().expect("create cancellation socket");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            entered_tx.send(()).expect("signal writer entry");
+            result_tx
+                .send(write_all_cancellable(
+                    &mut writer,
+                    &readiness,
+                    &cancel,
+                    b"blocked",
+                ))
+                .expect("send writer result");
+        });
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("writer thread started");
+        shutdown
+            .shutdown(std::net::Shutdown::Both)
+            .expect("cancel writer");
+        let err = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled writer returned")
+            .expect_err("cancelled writer must fail");
+        assert_eq!(err.kind(), ErrorKind::BrokenPipe);
+        handle.join().expect("writer thread joined");
+    }
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {

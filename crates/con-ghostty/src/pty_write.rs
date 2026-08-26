@@ -175,14 +175,6 @@ impl PtyWriteWorker {
         self.shared.ready.notify_all();
     }
 
-    /// Stop accepting input without joining an in-flight OS write. Use this
-    /// only when the platform writer has no safe cross-thread cancellation;
-    /// dropping the worker then detaches it until its peer eventually closes.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn close_without_join(&self) {
-        self.close_queue();
-    }
-
     /// Stop accepting input and join the writer. The platform owner must close
     /// or terminate the PTY peer first so an already-running OS write unblocks.
     pub(crate) fn shutdown(&mut self) {

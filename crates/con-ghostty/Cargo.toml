@@ -65,5 +65,6 @@ unicode-width.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
 portable-pty = "0.9"
 uuid.workspace = true
