@@ -14,7 +14,7 @@ use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
-    PtyWritePriority, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeySend, VtPasteResult,
+    PtyWriteClass, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
     VtPasteSource, VtScreen,
 };
 
@@ -81,11 +81,11 @@ enum LinuxPtyInput {
 }
 
 impl LinuxPtyInput {
-    fn write_data(&self, data: &[u8], priority: PtyWritePriority) -> std::io::Result<()> {
+    fn write_data(&self, data: &[u8], class: PtyWriteClass) -> std::io::Result<()> {
         match self {
-            Self::Local(queue) => match priority {
-                PtyWritePriority::UserInput => queue.enqueue(data),
-                PtyWritePriority::TerminalControl => queue.enqueue_control(data),
+            Self::Local(queue) => match class {
+                PtyWriteClass::Regular => queue.enqueue(data),
+                PtyWriteClass::ReservedControl => queue.enqueue_with_reserved_capacity(data),
             },
             Self::HostBridge(queue) => {
                 if data.len() > MAX_BRIDGE_FRAME_BYTES {
@@ -99,10 +99,10 @@ impl LinuxPtyInput {
                 frame.push(0x00); // TAG_DATA
                 frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
                 frame.extend_from_slice(data);
-                match priority {
-                    PtyWritePriority::UserInput => queue.enqueue_owned(frame.into_boxed_slice()),
-                    PtyWritePriority::TerminalControl => {
-                        queue.enqueue_control_owned(frame.into_boxed_slice())
+                match class {
+                    PtyWriteClass::Regular => queue.enqueue_owned(frame.into_boxed_slice()),
+                    PtyWriteClass::ReservedControl => {
+                        queue.enqueue_owned_with_reserved_capacity(frame.into_boxed_slice())
                     }
                 }
             }
@@ -124,7 +124,7 @@ impl LinuxPtyInput {
         frame[3..5].copy_from_slice(&rows.to_be_bytes());
         frame[5..7].copy_from_slice(&width_px.to_be_bytes());
         frame[7..9].copy_from_slice(&height_px.to_be_bytes());
-        queue.enqueue_control(&frame)
+        queue.enqueue_with_reserved_capacity(&frame)
     }
 }
 
@@ -408,23 +408,26 @@ impl LinuxPtySession {
         Ok(())
     }
 
-    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend> {
-        let sent = self.shared.screen.send_key(event)?;
-        if sent.wrote {
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
+        let outcome = self.shared.screen.send_key(event)?;
+        if outcome.output_accepted {
             self.scroll_viewport_to_bottom();
             self.input_generation.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(sent)
+        Ok(outcome)
     }
 
     pub fn paste_text(
         &self,
         text: &str,
         source: VtPasteSource,
-        allow_unsafe: bool,
+        confirm_unsafe_paste: bool,
     ) -> Result<VtPasteResult> {
-        let result = self.shared.screen.paste_text(text, source, allow_unsafe)?;
-        if result == VtPasteResult::Written {
+        let result = self
+            .shared
+            .screen
+            .paste_text(text, source, confirm_unsafe_paste)?;
+        if result == VtPasteResult::Accepted {
             self.scroll_viewport_to_bottom();
             self.input_generation.fetch_add(1, Ordering::Relaxed);
         }
@@ -455,7 +458,7 @@ impl LinuxPtySession {
 
     pub fn is_alive(&self) -> bool {
         self.poll_child_status();
-        self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.has_write_failure()
+        self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.is_write_desynchronized()
     }
 
     pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {

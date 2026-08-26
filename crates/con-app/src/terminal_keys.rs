@@ -14,7 +14,7 @@ pub struct TrackedVtKey {
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 impl TrackedVtKey {
-    pub fn from_press(event: &VtKeyEvent<'_>) -> Self {
+    pub fn from_non_release_event(event: &VtKeyEvent<'_>) -> Self {
         Self {
             text: event.text.to_owned(),
             unshifted_codepoint: event.unshifted_codepoint,

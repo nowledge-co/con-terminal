@@ -25,7 +25,7 @@ use super::pipeline::{
 use crate::vt::{KittyImage, KittyPlacement};
 
 const HLSL_SOURCE: &str = include_str!("image_shaders.hlsl");
-const INITIAL_IMAGE_CAPACITY: u32 = 64;
+const INITIAL_INSTANCE_CAPACITY: u32 = 64;
 const BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,11 +125,11 @@ impl ImagePipeline {
             rasterizer: create_no_cull_rasterizer(device)?,
             instance_buffer: create_dynamic_buffer(
                 device,
-                INITIAL_IMAGE_CAPACITY,
+                INITIAL_INSTANCE_CAPACITY,
                 std::mem::size_of::<ImageInstance>() as u32,
                 D3D11_BIND_VERTEX_BUFFER.0 as u32,
             )?,
-            instance_capacity: INITIAL_IMAGE_CAPACITY,
+            instance_capacity: INITIAL_INSTANCE_CAPACITY,
             globals_buffer: create_dynamic_buffer(
                 device,
                 1,
@@ -138,8 +138,8 @@ impl ImagePipeline {
             )?,
             textures: HashMap::new(),
             failed_uploads: HashSet::new(),
-            instances: Vec::with_capacity(INITIAL_IMAGE_CAPACITY as usize),
-            draws: Vec::with_capacity(INITIAL_IMAGE_CAPACITY as usize),
+            instances: Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize),
+            draws: Vec::with_capacity(INITIAL_INSTANCE_CAPACITY as usize),
         })
     }
 
@@ -269,7 +269,7 @@ impl ImagePipeline {
         if needed <= self.instance_capacity {
             return Ok(());
         }
-        let capacity = (needed + needed / 2).max(INITIAL_IMAGE_CAPACITY);
+        let capacity = (needed + needed / 2).max(INITIAL_INSTANCE_CAPACITY);
         self.instance_buffer = create_dynamic_buffer(
             device,
             capacity,
@@ -283,8 +283,8 @@ impl ImagePipeline {
 
 fn image_instance(
     placement: &KittyPlacement,
-    cell_width: u32,
-    cell_height: u32,
+    cell_width_px: u32,
+    cell_height_px: u32,
 ) -> Option<ImageInstance> {
     let image = &placement.image;
     let source_right = placement.source_x.checked_add(placement.source_width)?;
@@ -301,8 +301,10 @@ fn image_instance(
         return None;
     }
 
-    let left = placement.viewport_col as f64 * cell_width as f64 + placement.cell_x_offset as f64;
-    let top = placement.viewport_row as f64 * cell_height as f64 + placement.cell_y_offset as f64;
+    let left =
+        placement.viewport_col as f64 * cell_width_px as f64 + placement.cell_x_offset as f64;
+    let top =
+        placement.viewport_row as f64 * cell_height_px as f64 + placement.cell_y_offset as f64;
     let right = left + placement.pixel_width as f64;
     let bottom = top + placement.pixel_height as f64;
     if ![left, top, right, bottom]
@@ -486,7 +488,7 @@ mod tests {
     use super::{image_instance, premultiplied_rgba};
 
     #[test]
-    fn texture_upload_premultiplies_translucent_rgb() {
+    fn premultiplied_rgba_premultiplies_translucent_rgb() {
         let rgba = [
             10, 20, 30, 255, // opaque prefix remains exact
             200, 100, 50, 128, // rounded half alpha

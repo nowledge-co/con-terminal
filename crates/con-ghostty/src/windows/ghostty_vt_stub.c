@@ -4,7 +4,7 @@
  * cargo build can link without a working Zig/libghostty-vt toolchain.
  *
  * Signatures mirror `include/ghostty/vt/{terminal,render,allocator}.h`
- * at GHOSTTY_REV `8867c37c55b578b9eb4cfaba41cb9023e557176d` — keep in
+ * at GHOSTTY_REV `5f5b988c5236facfe8d2439203d9ee9d5b636cf8` — keep in
  * sync with vt.rs on upstream bumps.
  *
  * All calls return empty / false / zero so downstream code degrades

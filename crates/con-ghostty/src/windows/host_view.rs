@@ -30,7 +30,7 @@ use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
-use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeySend, VtPasteResult, VtPasteSource, VtScreen};
+use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen};
 
 use super::render::CellMetrics;
 
@@ -173,23 +173,23 @@ impl RenderSession {
                 cols,
                 rows,
                 renderer_config.theme.as_ref(),
-                Some(Arc::new(move |bytes, priority| {
+                Some(Arc::new(move |bytes, class| {
                     if !accept_vt_replies_in_callback.load(Ordering::Acquire) {
                         return Ok(());
                     }
-                    vt_writer.write_all(bytes, priority)
+                    vt_writer.write_all(bytes, class)
                 })),
             )
             .context("VtScreen::new failed")?,
         );
         let metrics = renderer.metrics();
-        let cell_w = metrics.cell_width_px.max(1);
-        let cell_h = metrics.cell_height_px.max(1);
+        let cell_width_px = metrics.cell_width_px.max(1);
+        let cell_height_px = metrics.cell_height_px.max(1);
         // The renderer already owns an initial render target of the requested
         // size, so initialize only libghostty's pixel geometry here. Waiting
         // for the next size change leaves cell-based Kitty placements at 0px
         // indefinitely when the pane opens at its final dimensions.
-        vt.resize(cols, rows, cell_w, cell_h)
+        vt.resize(cols, rows, cell_width_px, cell_height_px)
             .context("initial VtScreen::resize failed")?;
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
@@ -211,7 +211,8 @@ impl RenderSession {
         let shell = super::conpty::default_shell_command();
         let shell_cwd = resolve_shell_cwd(cwd);
         log::info!(
-            "RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?} cell={cell_w}x{cell_h}"
+            "RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?} \
+             cell={cell_width_px}x{cell_height_px}"
         );
         let conpty = prepared_conpty
             .spawn(
@@ -312,18 +313,19 @@ impl RenderSession {
         let config = self.config.lock();
         let (cols, rows) = renderer.grid_for_dimensions(&config);
         drop(config);
-        let cell_w = metrics.cell_width_px.max(1);
-        let cell_h = metrics.cell_height_px.max(1);
+        let cell_width_px = metrics.cell_width_px.max(1);
+        let cell_height_px = metrics.cell_height_px.max(1);
         drop(renderer);
 
         self.vt
-            .resize(cols, rows, cell_w, cell_h)
+            .resize(cols, rows, cell_width_px, cell_height_px)
             .context("VtScreen::resize failed")?;
         self.conpty
             .resize(PtySize { cols, rows })
             .context("ConPty::resize failed")?;
         log::debug!(
-            "RenderSession::resize -> {width_px}x{height_px} grid={cols}x{rows} cell={cell_w}x{cell_h}"
+            "RenderSession::resize -> {width_px}x{height_px} grid={cols}x{rows} \
+             cell={cell_width_px}x{cell_height_px}"
         );
         Ok(())
     }
@@ -404,7 +406,7 @@ impl RenderSession {
     }
 
     pub fn is_alive(&self) -> bool {
-        self.conpty.is_alive() && !self.vt.has_write_failure()
+        self.conpty.is_alive() && !self.vt.is_write_desynchronized()
     }
 
     pub fn is_decckm(&self) -> bool {
@@ -445,23 +447,23 @@ impl RenderSession {
             .context("failed to queue ConPTY input")
     }
 
-    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend> {
-        let sent = self.vt.send_key(event)?;
-        if sent.wrote {
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
+        let outcome = self.vt.send_key(event)?;
+        if outcome.output_accepted {
             self.scroll_viewport_to_bottom();
             self.request_low_latency_after_next_generation();
         }
-        Ok(sent)
+        Ok(outcome)
     }
 
     pub fn paste_text(
         &self,
         text: &str,
         source: VtPasteSource,
-        allow_unsafe: bool,
+        confirm_unsafe_paste: bool,
     ) -> Result<VtPasteResult> {
-        let result = self.vt.paste_text(text, source, allow_unsafe)?;
-        if result == VtPasteResult::Written {
+        let result = self.vt.paste_text(text, source, confirm_unsafe_paste)?;
+        if result == VtPasteResult::Accepted {
             self.scroll_viewport_to_bottom();
             self.request_low_latency_after_next_generation();
         }
@@ -709,10 +711,10 @@ impl RenderSession {
     }
 
     fn scroll_rows_for_delta(&self, delta_y_px: f32, alternate_screen: bool) -> isize {
-        let cell_h = self.metrics().cell_height_px.max(1) as f32;
+        let cell_height_px = self.metrics().cell_height_px.max(1) as f32;
         self.scroll_remainder
             .lock()
-            .rows_for_delta(delta_y_px, cell_h, alternate_screen)
+            .rows_for_delta(delta_y_px, cell_height_px, alternate_screen)
     }
 
     fn send_scroll_as_cursor_keys(&self, rows: isize) {

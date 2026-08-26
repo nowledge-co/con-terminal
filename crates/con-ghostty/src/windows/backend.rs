@@ -15,7 +15,7 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
-use crate::vt::{VtKeyEvent, VtKeySend};
+use crate::vt::{VtKeyEvent, VtKeyOutcome};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -232,10 +232,10 @@ impl WindowsGhosttyTerminal {
         }
     }
 
-    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeySend, String> {
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome, String> {
         let guard = self.inner.lock();
         let Some(session) = guard.as_ref() else {
-            return Ok(VtKeySend::default());
+            return Ok(VtKeyOutcome::default());
         };
         session.send_key(event).map_err(|err| err.to_string())
     }
@@ -244,14 +244,14 @@ impl WindowsGhosttyTerminal {
         &self,
         text: &str,
         source: crate::vt::VtPasteSource,
-        allow_unsafe: bool,
+        confirm_unsafe_paste: bool,
     ) -> Result<crate::vt::VtPasteResult, String> {
         let guard = self.inner.lock();
         let Some(session) = guard.as_ref() else {
             return Ok(crate::vt::VtPasteResult::Empty);
         };
         session
-            .paste_text(text, source, allow_unsafe)
+            .paste_text(text, source, confirm_unsafe_paste)
             .map_err(|err| err.to_string())
     }
 

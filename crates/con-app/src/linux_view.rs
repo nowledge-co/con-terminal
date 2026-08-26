@@ -757,25 +757,25 @@ impl GhosttyView {
         &mut self,
         tracking_key: &str,
         event: &VtKeyEvent<'_>,
-    ) -> Result<con_ghostty::vt::VtKeySend, String> {
+    ) -> Result<con_ghostty::vt::VtKeyOutcome, String> {
         let Some(terminal) = self.terminal.as_ref().cloned() else {
-            return Ok(con_ghostty::vt::VtKeySend::default());
+            return Ok(con_ghostty::vt::VtKeyOutcome::default());
         };
-        let sent = terminal.send_key(event)?;
-        if sent.wrote {
+        let outcome = terminal.send_key(event)?;
+        if outcome.output_accepted {
             self.clear_restored_screen_text();
             self.clear_selection();
-            if sent.report_releases
+            if outcome.report_releases
                 && event.action != VtKeyAction::Release
                 && !self.keys_awaiting_release.contains_key(tracking_key)
             {
                 self.keys_awaiting_release.insert(
                     tracking_key.to_owned(),
-                    crate::terminal_keys::TrackedVtKey::from_press(event),
+                    crate::terminal_keys::TrackedVtKey::from_non_release_event(event),
                 );
             }
         }
-        Ok(sent)
+        Ok(outcome)
     }
 
     fn handle_key_up(&mut self, event: &KeyUpEvent) -> bool {
@@ -785,7 +785,7 @@ impl GhosttyView {
         let release =
             tracked.release_with_modifiers(&event.keystroke.key, &event.keystroke.modifiers);
         match self.send_vt_key(&event.keystroke.key, &release) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 // Preserve the press so focus loss can retry the release if
                 // this was a transient PTY write failure.
@@ -828,7 +828,7 @@ impl GhosttyView {
             consumed_modifiers: VtKeyModifiers::default(),
         };
         match self.send_vt_key("tab", &event) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 log::debug!("linux terminal key encoding failed: {err}");
                 false
@@ -926,7 +926,7 @@ impl GhosttyView {
             return false;
         };
         match self.send_vt_key(&keystroke.key, &vt_event) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 log::debug!("linux terminal key encoding failed: {err}");
                 false
@@ -934,7 +934,7 @@ impl GhosttyView {
         }
     }
 
-    fn send_terminal_paste_payload(
+    fn handle_terminal_paste_payload(
         &mut self,
         payload: TerminalPastePayload,
         source: VtPasteSource,
@@ -949,7 +949,7 @@ impl GhosttyView {
         match payload {
             TerminalPastePayload::Text(text) if !text.is_empty() => {
                 match terminal.paste_text(&text, source, false) {
-                    Ok(VtPasteResult::Written) => {
+                    Ok(VtPasteResult::Accepted) => {
                         self.clear_restored_screen_text();
                         self.clear_selection();
                         true
@@ -983,7 +983,8 @@ impl GhosttyView {
         else {
             return replaced_confirmation;
         };
-        self.send_terminal_paste_payload(payload, VtPasteSource::Clipboard) || replaced_confirmation
+        self.handle_terminal_paste_payload(payload, VtPasteSource::Clipboard)
+            || replaced_confirmation
     }
 
     fn confirm_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -996,7 +997,7 @@ impl GhosttyView {
         };
 
         match terminal.paste_text(&text, source, true) {
-            Ok(VtPasteResult::Written) => {
+            Ok(VtPasteResult::Accepted) => {
                 self.clear_restored_screen_text();
                 self.clear_selection();
             }
@@ -1629,7 +1630,7 @@ impl Render for GhosttyView {
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
                 let _ = this.ensure_session(cx);
-                if this.send_terminal_paste_payload(payload, VtPasteSource::Text) {
+                if this.handle_terminal_paste_payload(payload, VtPasteSource::Text) {
                     cx.notify();
                 }
             }))
@@ -1899,22 +1900,22 @@ impl KittyImageLayer {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct KittyPlacementGeometry {
-    left: f32,
-    top: f32,
-    width: f32,
-    height: f32,
-    image_left: f32,
-    image_top: f32,
-    image_width: f32,
-    image_height: f32,
+    left_px: f32,
+    top_px: f32,
+    width_px: f32,
+    height_px: f32,
+    image_left_px: f32,
+    image_top_px: f32,
+    image_width_px: f32,
+    image_height_px: f32,
 }
 
 fn kitty_placement_geometry(
     placement: &KittyPlacement,
-    cell_width: f32,
-    cell_height: f32,
-    physical_cell_width: u32,
-    physical_cell_height: u32,
+    logical_cell_width_px: f32,
+    logical_cell_height_px: f32,
+    physical_cell_width_px: u32,
+    physical_cell_height_px: u32,
 ) -> Option<KittyPlacementGeometry> {
     let image = &placement.image;
     let source_right = placement.source_x.checked_add(placement.source_width)?;
@@ -1927,12 +1928,12 @@ fn kitty_placement_geometry(
         || image.height == 0
         || source_right > image.width
         || source_bottom > image.height
-        || !cell_width.is_finite()
-        || !cell_height.is_finite()
-        || cell_width <= 0.0
-        || cell_height <= 0.0
-        || physical_cell_width == 0
-        || physical_cell_height == 0
+        || !logical_cell_width_px.is_finite()
+        || !logical_cell_height_px.is_finite()
+        || logical_cell_width_px <= 0.0
+        || logical_cell_height_px <= 0.0
+        || physical_cell_width_px == 0
+        || physical_cell_height_px == 0
     {
         return None;
     }
@@ -1941,33 +1942,33 @@ fn kitty_placement_geometry(
     // supplied by `resize_surface`. Derive each axis from that exact quantized
     // size instead of dividing by the fractional display scale, which drifts
     // away from GPUI's logical text grid after several columns.
-    let device_to_logical_x = cell_width as f64 / physical_cell_width as f64;
-    let device_to_logical_y = cell_height as f64 / physical_cell_height as f64;
-    let width = placement.pixel_width as f64 * device_to_logical_x;
-    let height = placement.pixel_height as f64 * device_to_logical_y;
-    let source_scale_x = width / placement.source_width as f64;
-    let source_scale_y = height / placement.source_height as f64;
+    let device_to_logical_x = logical_cell_width_px as f64 / physical_cell_width_px as f64;
+    let device_to_logical_y = logical_cell_height_px as f64 / physical_cell_height_px as f64;
+    let width_px = placement.pixel_width as f64 * device_to_logical_x;
+    let height_px = placement.pixel_height as f64 * device_to_logical_y;
+    let source_scale_x = width_px / placement.source_width as f64;
+    let source_scale_y = height_px / placement.source_height as f64;
     let values = KittyPlacementGeometry {
-        left: (placement.viewport_col as f64 * cell_width as f64
+        left_px: (placement.viewport_col as f64 * logical_cell_width_px as f64
             + placement.cell_x_offset as f64 * device_to_logical_x) as f32,
-        top: (placement.viewport_row as f64 * cell_height as f64
+        top_px: (placement.viewport_row as f64 * logical_cell_height_px as f64
             + placement.cell_y_offset as f64 * device_to_logical_y) as f32,
-        width: width as f32,
-        height: height as f32,
-        image_left: (-(placement.source_x as f64) * source_scale_x) as f32,
-        image_top: (-(placement.source_y as f64) * source_scale_y) as f32,
-        image_width: (image.width as f64 * source_scale_x) as f32,
-        image_height: (image.height as f64 * source_scale_y) as f32,
+        width_px: width_px as f32,
+        height_px: height_px as f32,
+        image_left_px: (-(placement.source_x as f64) * source_scale_x) as f32,
+        image_top_px: (-(placement.source_y as f64) * source_scale_y) as f32,
+        image_width_px: (image.width as f64 * source_scale_x) as f32,
+        image_height_px: (image.height as f64 * source_scale_y) as f32,
     };
     if [
-        values.left,
-        values.top,
-        values.width,
-        values.height,
-        values.image_left,
-        values.image_top,
-        values.image_width,
-        values.image_height,
+        values.left_px,
+        values.top_px,
+        values.width_px,
+        values.height_px,
+        values.image_left_px,
+        values.image_top_px,
+        values.image_width_px,
+        values.image_height_px,
     ]
     .iter()
     .all(|value| value.is_finite())
@@ -2003,11 +2004,11 @@ fn render_kitty_image_layer(
     placements: &[KittyPlacement],
     images: &HashMap<KittyImageKey, Arc<RenderImage>>,
     layer: KittyImageLayer,
-    cell_width: f32,
-    cell_height: f32,
-    physical_cell_width: u32,
-    physical_cell_height: u32,
-    top_offset: f32,
+    logical_cell_width_px: f32,
+    logical_cell_height_px: f32,
+    physical_cell_width_px: u32,
+    physical_cell_height_px: u32,
+    top_offset_px: f32,
 ) -> AnyElement {
     let paint_records = placements
         .iter()
@@ -2019,10 +2020,10 @@ fn render_kitty_image_layer(
             let image = images.get(&key)?.clone();
             let geometry = kitty_placement_geometry(
                 placement,
-                cell_width,
-                cell_height,
-                physical_cell_width,
-                physical_cell_height,
+                logical_cell_width_px,
+                logical_cell_height_px,
+                physical_cell_width_px,
+                physical_cell_height_px,
             )?;
             Some((image, geometry))
         })
@@ -2034,10 +2035,10 @@ fn render_kitty_image_layer(
             for (image, geometry) in paint_records {
                 let crop_bounds = Bounds::new(
                     point(
-                        bounds.origin.x + px(geometry.left),
-                        bounds.origin.y + px(geometry.top + top_offset),
+                        bounds.origin.x + px(geometry.left_px),
+                        bounds.origin.y + px(geometry.top_px + top_offset_px),
                     ),
-                    size(px(geometry.width), px(geometry.height)),
+                    size(px(geometry.width_px), px(geometry.height_px)),
                 );
                 if !crop_bounds.intersects(&bounds) {
                     continue;
@@ -2045,10 +2046,10 @@ fn render_kitty_image_layer(
 
                 let image_bounds = Bounds::new(
                     point(
-                        crop_bounds.origin.x + px(geometry.image_left),
-                        crop_bounds.origin.y + px(geometry.image_top),
+                        crop_bounds.origin.x + px(geometry.image_left_px),
+                        crop_bounds.origin.y + px(geometry.image_top_px),
                     ),
-                    size(px(geometry.image_width), px(geometry.image_height)),
+                    size(px(geometry.image_width_px), px(geometry.image_height_px)),
                 );
                 window.with_content_mask(
                     Some(ContentMask {
@@ -2665,14 +2666,14 @@ mod tests {
         };
 
         let geometry = kitty_placement_geometry(&placement, 10.0, 20.0, 20, 40).unwrap();
-        assert_eq!(geometry.left, -8.0);
-        assert_eq!(geometry.top, 43.0);
-        assert_eq!(geometry.width, 10.0);
-        assert_eq!(geometry.height, 5.0);
-        assert_eq!(geometry.image_left, -5.0);
-        assert_eq!(geometry.image_top, 0.0);
-        assert_eq!(geometry.image_width, 20.0);
-        assert_eq!(geometry.image_height, 10.0);
+        assert_eq!(geometry.left_px, -8.0);
+        assert_eq!(geometry.top_px, 43.0);
+        assert_eq!(geometry.width_px, 10.0);
+        assert_eq!(geometry.height_px, 5.0);
+        assert_eq!(geometry.image_left_px, -5.0);
+        assert_eq!(geometry.image_top_px, 0.0);
+        assert_eq!(geometry.image_width_px, 20.0);
+        assert_eq!(geometry.image_height_px, 10.0);
     }
 
     #[test]
@@ -2703,10 +2704,10 @@ mod tests {
         // placement must advance exactly one logical cell for every 14 device
         // pixels rather than using 1 / 1.5 and accumulating column drift.
         let geometry = kitty_placement_geometry(&placement, 9.0, 20.0, 14, 30).unwrap();
-        assert_eq!(geometry.left, 369.0);
-        assert_eq!(geometry.top, 40.0);
-        assert_eq!(geometry.width, 90.0);
-        assert_eq!(geometry.height, 20.0);
+        assert_eq!(geometry.left_px, 369.0);
+        assert_eq!(geometry.top_px, 40.0);
+        assert_eq!(geometry.width_px, 90.0);
+        assert_eq!(geometry.height_px, 20.0);
     }
 
     #[test]

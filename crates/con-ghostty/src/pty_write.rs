@@ -135,7 +135,7 @@ impl PtyWriteQueue {
         self.enqueue_owned_with_limit(payload, self.shared.max_regular_bytes)
     }
 
-    pub(crate) fn enqueue_control(&self, bytes: &[u8]) -> io::Result<()> {
+    pub(crate) fn enqueue_with_reserved_capacity(&self, bytes: &[u8]) -> io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -143,7 +143,10 @@ impl PtyWriteQueue {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn enqueue_control_owned(&self, payload: Box<[u8]>) -> io::Result<()> {
+    pub(crate) fn enqueue_owned_with_reserved_capacity(
+        &self,
+        payload: Box<[u8]>,
+    ) -> io::Result<()> {
         self.enqueue_owned_with_limit(payload, self.shared.max_queued_bytes)
     }
 
@@ -298,11 +301,11 @@ mod tests {
             ErrorKind::WouldBlock
         );
         queue
-            .enqueue_control(b"ok")
+            .enqueue_with_reserved_capacity(b"ok")
             .expect("control write must use reserved capacity");
         assert_eq!(
             queue
-                .enqueue_control(b"x")
+                .enqueue_with_reserved_capacity(b"x")
                 .expect_err("control write must remain bounded")
                 .kind(),
             ErrorKind::WouldBlock

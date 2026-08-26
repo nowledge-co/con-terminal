@@ -1164,24 +1164,24 @@ impl GhosttyView {
         &mut self,
         tracking_key: &str,
         event: &VtKeyEvent<'_>,
-    ) -> Result<con_ghostty::vt::VtKeySend, String> {
+    ) -> Result<con_ghostty::vt::VtKeyOutcome, String> {
         let Some(terminal) = self.terminal.as_ref().cloned() else {
-            return Ok(con_ghostty::vt::VtKeySend::default());
+            return Ok(con_ghostty::vt::VtKeyOutcome::default());
         };
-        let sent = terminal.send_key(event)?;
-        if sent.wrote {
+        let outcome = terminal.send_key(event)?;
+        if outcome.output_accepted {
             self.clear_restored_screen_text();
-            if sent.report_releases
+            if outcome.report_releases
                 && event.action != VtKeyAction::Release
                 && !self.keys_awaiting_release.contains_key(tracking_key)
             {
                 self.keys_awaiting_release.insert(
                     tracking_key.to_owned(),
-                    crate::terminal_keys::TrackedVtKey::from_press(event),
+                    crate::terminal_keys::TrackedVtKey::from_non_release_event(event),
                 );
             }
         }
-        Ok(sent)
+        Ok(outcome)
     }
 
     fn handle_key_up(&mut self, event: &KeyUpEvent) -> bool {
@@ -1191,7 +1191,7 @@ impl GhosttyView {
         let release =
             tracked.release_with_modifiers(&event.keystroke.key, &event.keystroke.modifiers);
         match self.send_vt_key(&event.keystroke.key, &release) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 // Preserve the press so focus loss can retry the release if
                 // this was a transient PTY write failure.
@@ -1234,7 +1234,7 @@ impl GhosttyView {
             consumed_modifiers: VtKeyModifiers::default(),
         };
         match self.send_vt_key("tab", &event) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 log::debug!("windows terminal key encoding failed: {err}");
                 false
@@ -1347,7 +1347,7 @@ impl GhosttyView {
             return false;
         };
         match self.send_vt_key(&keystroke.key, &vt_event) {
-            Ok(sent) => sent.wrote,
+            Ok(outcome) => outcome.output_accepted,
             Err(err) => {
                 log::debug!("windows terminal key encoding failed: {err}");
                 false
@@ -1355,7 +1355,7 @@ impl GhosttyView {
         }
     }
 
-    fn send_terminal_paste_payload(
+    fn handle_terminal_paste_payload(
         &mut self,
         payload: TerminalPastePayload,
         source: VtPasteSource,
@@ -1370,7 +1370,7 @@ impl GhosttyView {
         match payload {
             TerminalPastePayload::Text(text) if !text.is_empty() => {
                 match terminal.paste_text(&text, source, false) {
-                    Ok(VtPasteResult::Written) => {
+                    Ok(VtPasteResult::Accepted) => {
                         self.clear_restored_screen_text();
                         true
                     }
@@ -1402,7 +1402,8 @@ impl GhosttyView {
         else {
             return replaced_confirmation;
         };
-        self.send_terminal_paste_payload(payload, VtPasteSource::Clipboard) || replaced_confirmation
+        self.handle_terminal_paste_payload(payload, VtPasteSource::Clipboard)
+            || replaced_confirmation
     }
 
     fn confirm_unsafe_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1415,7 +1416,7 @@ impl GhosttyView {
         };
 
         match terminal.paste_text(&text, source, true) {
-            Ok(VtPasteResult::Written) => self.clear_restored_screen_text(),
+            Ok(VtPasteResult::Accepted) => self.clear_restored_screen_text(),
             Ok(VtPasteResult::Empty) => {}
             Ok(VtPasteResult::RequiresConfirmation) => {
                 self.pending_unsafe_paste = Some((text, source));
@@ -1703,7 +1704,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
-                if this.send_terminal_paste_payload(payload, VtPasteSource::Text) {
+                if this.handle_terminal_paste_payload(payload, VtPasteSource::Text) {
                     cx.notify();
                 }
             }))

@@ -826,11 +826,10 @@ fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
 }
 
 fn write_patch_files_with_rollback(files: &[(&Path, &str, &str)]) -> Result<(), String> {
-    let mut replaced = 0;
-    for (path, _, patched) in files {
+    for (written_count, (path, _, patched)) in files.iter().enumerate() {
         if let Err(write_err) = write_file_atomic(path, patched) {
             let mut rollback_errors = Vec::new();
-            for (rollback_path, original, _) in files[..replaced].iter().rev() {
+            for (rollback_path, original, _) in files[..written_count].iter().rev() {
                 if let Err(err) = write_file_atomic(rollback_path, original) {
                     rollback_errors.push(err);
                 }
@@ -845,7 +844,6 @@ fn write_patch_files_with_rollback(files: &[(&Path, &str, &str)]) -> Result<(), 
             }
             return Err(write_err);
         }
-        replaced += 1;
     }
     Ok(())
 }

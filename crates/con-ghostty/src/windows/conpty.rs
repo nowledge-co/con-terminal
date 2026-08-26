@@ -47,7 +47,7 @@ use windows::Win32::System::Threading::{
 use windows::core::PWSTR;
 
 use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
-use crate::vt::PtyWritePriority;
+use crate::vt::PtyWriteClass;
 
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -144,10 +144,10 @@ pub(crate) struct ConPtyWriter {
 }
 
 impl ConPtyWriter {
-    pub(crate) fn write_all(&self, bytes: &[u8], priority: PtyWritePriority) -> io::Result<()> {
-        match priority {
-            PtyWritePriority::UserInput => self.queue.enqueue(bytes),
-            PtyWritePriority::TerminalControl => self.queue.enqueue_control(bytes),
+    pub(crate) fn write_all(&self, bytes: &[u8], class: PtyWriteClass) -> io::Result<()> {
+        match class {
+            PtyWriteClass::Regular => self.queue.enqueue(bytes),
+            PtyWriteClass::ReservedControl => self.queue.enqueue_with_reserved_capacity(bytes),
         }
     }
 }

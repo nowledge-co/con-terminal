@@ -1,7 +1,7 @@
 //! Shared `libghostty-vt` FFI bindings + render-state snapshot.
 //!
 //! Rewritten to match the **actual** upstream API at GHOSTTY_REV
-//! `8867c37c55b578b9eb4cfaba41cb9023e557176d` — `include/ghostty/vt/*.h`.
+//! `5f5b988c5236facfe8d2439203d9ee9d5b636cf8` — `include/ghostty/vt/*.h`.
 //! Key lifecycle:
 //!
 //! 1. `terminal = ghostty_terminal_new(NULL_alloc, cols, rows)`
@@ -1090,13 +1090,13 @@ pub struct VtScreen {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PtyWritePriority {
-    UserInput,
-    TerminalControl,
+pub enum PtyWriteClass {
+    Regular,
+    ReservedControl,
 }
 
 pub type PtyWriteCallback =
-    Arc<dyn Fn(&[u8], PtyWritePriority) -> std::io::Result<()> + Send + Sync + 'static>;
+    Arc<dyn Fn(&[u8], PtyWriteClass) -> std::io::Result<()> + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtKeyAction {
@@ -1128,15 +1128,15 @@ pub struct VtKeyEvent<'a> {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct VtKeySend {
-    pub wrote: bool,
+pub struct VtKeyOutcome {
+    pub output_accepted: bool,
     pub report_releases: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtPasteResult {
     Empty,
-    Written,
+    Accepted,
     RequiresConfirmation,
 }
 
@@ -1755,7 +1755,7 @@ impl VtScreen {
         self.inner.lock().generation
     }
 
-    pub fn has_write_failure(&self) -> bool {
+    pub fn is_write_desynchronized(&self) -> bool {
         self.inner
             .lock()
             .callback_state
@@ -1766,16 +1766,16 @@ impl VtScreen {
     /// Enqueue raw user input through the same ordering boundary as encoded
     /// keys and parser replies.
     pub fn write_input(&self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write_bytes(bytes, PtyWritePriority::UserInput)
+        self.write_bytes(bytes, PtyWriteClass::Regular)
     }
 
     /// Enqueue a state-balancing host report, such as a key or mouse release,
     /// using the queue capacity reserved for terminal control traffic.
     pub fn write_control(&self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write_bytes(bytes, PtyWritePriority::TerminalControl)
+        self.write_bytes(bytes, PtyWriteClass::ReservedControl)
     }
 
-    fn write_bytes(&self, bytes: &[u8], priority: PtyWritePriority) -> std::io::Result<()> {
+    fn write_bytes(&self, bytes: &[u8], class: PtyWriteClass) -> std::io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -1791,9 +1791,9 @@ impl VtScreen {
         let write_order = callback_state.write_order.clone();
         let write_guard = write_order.lock();
         drop(inner);
-        let result = write_pty(bytes, priority);
+        let result = write_pty(bytes, class);
         if let Err(err) = &result
-            && priority == PtyWritePriority::TerminalControl
+            && class == PtyWriteClass::ReservedControl
         {
             mark_control_write_failed(&write_failed, err);
         }
@@ -1816,7 +1816,7 @@ impl VtScreen {
     /// The mode snapshot, reusable encoder/event, and terminal are all
     /// protected by one mutex so DECCKM/modifyOtherKeys/Kitty state cannot
     /// change between parsing output and encoding the next key.
-    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> anyhow::Result<VtKeySend> {
+    pub fn send_key(&self, event: &VtKeyEvent<'_>) -> anyhow::Result<VtKeyOutcome> {
         let inner = self.inner.lock();
         let Some(callback_state) = inner.callback_state.as_ref() else {
             anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
@@ -1910,13 +1910,13 @@ impl VtScreen {
             // host callbacks enqueue into a non-blocking bounded queue.
             let write_guard = write_order.lock();
             drop(inner);
-            let priority = if event.action == VtKeyAction::Release {
-                PtyWritePriority::TerminalControl
+            let class = if event.action == VtKeyAction::Release {
+                PtyWriteClass::ReservedControl
             } else {
-                PtyWritePriority::UserInput
+                PtyWriteClass::Regular
             };
-            if let Err(err) = write_pty(bytes, priority) {
-                if priority == PtyWritePriority::TerminalControl {
+            if let Err(err) = write_pty(bytes, class) {
+                if class == PtyWriteClass::ReservedControl {
                     mark_control_write_failed(&write_failed, &err);
                 }
                 return Err(anyhow::anyhow!("failed to write encoded key: {err}"));
@@ -1924,8 +1924,8 @@ impl VtScreen {
             drop(write_guard);
         }
 
-        Ok(VtKeySend {
-            wrote: !bytes.is_empty(),
+        Ok(VtKeyOutcome {
+            output_accepted: !bytes.is_empty(),
             report_releases: kitty_flags & GHOSTTY_KITTY_KEY_REPORT_EVENTS != 0,
         })
     }
@@ -1934,14 +1934,14 @@ impl VtScreen {
     /// bracketed-paste and Kitty paste-event modes.
     ///
     /// Potential command injection is rejected before any PTY write. The UI
-    /// may explicitly retry with `allow_unsafe` after showing the text to the
-    /// user. A successful Kitty paste event caches only this user-approved
+    /// may explicitly retry with `confirm_unsafe_paste` after showing the text
+    /// to the user. A successful Kitty paste event caches only this user-approved
     /// text for the event's one-time granted clipboard read.
     pub fn paste_text(
         &self,
         text: &str,
         source: VtPasteSource,
-        allow_unsafe: bool,
+        confirm_unsafe_paste: bool,
     ) -> anyhow::Result<VtPasteResult> {
         if text.len() > TERMINAL_PASTE_LIMIT_BYTES {
             anyhow::bail!(
@@ -1981,7 +1981,7 @@ impl VtScreen {
                 read: Some(vt_paste_read_callback),
                 userdata: (&mut reader as *mut VtPasteReader<'_>).cast(),
             },
-            allow_unsafe,
+            allow_unsafe: confirm_unsafe_paste,
         };
         let mut written = false;
         let rc = unsafe { ghostty_terminal_paste(inner.terminal, &paste, &mut written) };
@@ -2001,9 +2001,9 @@ impl VtScreen {
                     // one-time Kitty grant is installed before a program can
                     // react to the event and request its clipboard payload.
                     let _write_guard = callback_state.write_order.lock();
-                    (callback_state.write_pty)(&output, PtyWritePriority::UserInput).map_err(
-                        |err| anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}"),
-                    )?;
+                    (callback_state.write_pty)(&output, PtyWriteClass::Regular).map_err(|err| {
+                        anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}")
+                    })?;
                 }
                 if written && !reader.served && source == VtPasteSource::Clipboard {
                     // Ghostty does not call the MIME reader for a Kitty paste
@@ -2012,7 +2012,7 @@ impl VtScreen {
                     *callback_state.clipboard_text.lock() = Some(Arc::from(text));
                 }
                 Ok(if written {
-                    VtPasteResult::Written
+                    VtPasteResult::Accepted
                 } else {
                     VtPasteResult::Empty
                 })
@@ -2699,7 +2699,7 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let _write_guard = state.write_order.lock();
-    if let Err(err) = (state.write_pty)(bytes, PtyWritePriority::TerminalControl) {
+    if let Err(err) = (state.write_pty)(bytes, PtyWriteClass::ReservedControl) {
         mark_control_write_failed(&state.write_failed, &err);
     }
 }
@@ -3663,7 +3663,12 @@ mod tests {
             },
             consumed_modifiers: VtKeyModifiers::default(),
         };
-        assert!(screen.send_key(&ctrl_c).expect("encode Ctrl-C").wrote);
+        assert!(
+            screen
+                .send_key(&ctrl_c)
+                .expect("encode Ctrl-C")
+                .output_accepted
+        );
         assert_eq!(output.lock().as_slice(), b"\x03");
 
         output.lock().clear();
@@ -3676,7 +3681,12 @@ mod tests {
             modifiers: VtKeyModifiers::default(),
             consumed_modifiers: VtKeyModifiers::default(),
         };
-        assert!(screen.send_key(&up).expect("encode DECCKM up").wrote);
+        assert!(
+            screen
+                .send_key(&up)
+                .expect("encode DECCKM up")
+                .output_accepted
+        );
         assert_eq!(output.lock().as_slice(), b"\x1bOA");
 
         output.lock().clear();
@@ -3695,7 +3705,7 @@ mod tests {
             screen
                 .send_key(&alt_backspace)
                 .expect("encode Alt-Backspace")
-                .wrote
+                .output_accepted
         );
         assert_eq!(output.lock().as_slice(), b"\x1b\x7f");
 
@@ -3711,7 +3721,12 @@ mod tests {
             },
             consumed_modifiers: VtKeyModifiers::default(),
         };
-        assert!(screen.send_key(&shift_tab).expect("encode Shift-Tab").wrote);
+        assert!(
+            screen
+                .send_key(&shift_tab)
+                .expect("encode Shift-Tab")
+                .output_accepted
+        );
         assert_eq!(output.lock().as_slice(), b"\x1b[Z");
 
         output.lock().clear();
@@ -3723,12 +3738,22 @@ mod tests {
             modifiers: VtKeyModifiers::default(),
             consumed_modifiers: VtKeyModifiers::default(),
         };
-        assert!(screen.send_key(&space).expect("encode Space").wrote);
+        assert!(
+            screen
+                .send_key(&space)
+                .expect("encode Space")
+                .output_accepted
+        );
         assert_eq!(output.lock().as_slice(), b" ");
 
         output.lock().clear();
         space.modifiers.control = true;
-        assert!(screen.send_key(&space).expect("encode Ctrl-Space").wrote);
+        assert!(
+            screen
+                .send_key(&space)
+                .expect("encode Ctrl-Space")
+                .output_accepted
+        );
         assert_eq!(output.lock().as_slice(), b"\x00");
     }
 
@@ -3762,9 +3787,9 @@ mod tests {
                 modifiers: VtKeyModifiers::default(),
                 consumed_modifiers: VtKeyModifiers::default(),
             };
-            let sent = screen.send_key(&event).expect("encode Kitty key event");
-            assert!(sent.wrote);
-            assert!(sent.report_releases);
+            let outcome = screen.send_key(&event).expect("encode Kitty key event");
+            assert!(outcome.output_accepted);
+            assert!(outcome.report_releases);
             assert_eq!(output.lock().as_slice(), expected);
         }
     }
@@ -3851,8 +3876,8 @@ mod tests {
         reply.join().expect("terminal reply thread");
 
         let writes = writes.lock();
-        assert_eq!(writes[0], (b"user".to_vec(), PtyWritePriority::UserInput));
-        assert_eq!(writes[1].1, PtyWritePriority::TerminalControl);
+        assert_eq!(writes[0], (b"user".to_vec(), PtyWriteClass::Regular));
+        assert_eq!(writes[1].1, PtyWriteClass::ReservedControl);
         assert!(writes[1].0.starts_with(b"\x1b[0n"));
     }
 
@@ -3862,8 +3887,8 @@ mod tests {
             80,
             24,
             None,
-            Some(Arc::new(|_, priority| {
-                assert_eq!(priority, PtyWritePriority::TerminalControl);
+            Some(Arc::new(|_, class| {
+                assert_eq!(class, PtyWriteClass::ReservedControl);
                 Err(std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
                     "reserved PTY capacity exhausted",
@@ -3874,7 +3899,7 @@ mod tests {
 
         screen.feed(b"\x1b[5n");
 
-        assert!(screen.has_write_failure());
+        assert!(screen.is_write_desynchronized());
     }
 
     #[test]
@@ -3927,7 +3952,7 @@ mod tests {
             screen
                 .paste_text("echo safe", VtPasteSource::Clipboard, false)
                 .expect("safe paste"),
-            VtPasteResult::Written
+            VtPasteResult::Accepted
         );
         assert_eq!(output.lock().as_slice(), b"echo safe");
 
@@ -3945,7 +3970,7 @@ mod tests {
             screen
                 .paste_text(unsafe_text, VtPasteSource::Clipboard, true)
                 .expect("confirmed paste"),
-            VtPasteResult::Written
+            VtPasteResult::Accepted
         );
         assert_eq!(output.lock().as_slice(), b"echo first\recho second");
 
@@ -3956,7 +3981,7 @@ mod tests {
             screen
                 .paste_text("first\nsecond", VtPasteSource::Clipboard, false)
                 .expect("bracketed paste"),
-            VtPasteResult::Written
+            VtPasteResult::Accepted
         );
         assert_eq!(output.lock().as_slice(), b"\x1b[200~first\nsecond\x1b[201~");
         assert_eq!(
@@ -4002,7 +4027,7 @@ mod tests {
                 screen
                     .paste_text("dropped path", VtPasteSource::Text, false)
                     .expect("text insertion with Kitty paste events enabled"),
-                VtPasteResult::Written
+                VtPasteResult::Accepted
             );
             assert_eq!(output.lock().as_slice(), b"dropped path");
 
@@ -4013,7 +4038,7 @@ mod tests {
                     screen
                         .paste_text(text, VtPasteSource::Clipboard, false)
                         .expect("Kitty paste event"),
-                    VtPasteResult::Written
+                    VtPasteResult::Accepted
                 );
                 let event = output.lock().clone();
                 assert!(
