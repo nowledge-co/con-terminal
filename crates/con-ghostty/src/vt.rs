@@ -3807,7 +3807,7 @@ mod tests {
 
         let mut read = b"\x1b]5522;type=read:pw=".to_vec();
         read.extend_from_slice(password);
-        read.extend_from_slice(b";dGV4dC9wbGFpbg==\x1b\\");
+        read.extend_from_slice(b":name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\");
 
         output.lock().clear();
         screen.feed(&read);
