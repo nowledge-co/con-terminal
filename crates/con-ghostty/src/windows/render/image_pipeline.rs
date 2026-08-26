@@ -1,5 +1,6 @@
 //! D3D11 Kitty image uploads and layered placement draws.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
@@ -64,6 +65,7 @@ impl From<&KittyImage> for ImageKey {
 struct ImageInstance {
     destination: [f32; 4],
     source: [f32; 4],
+    source_clamp: [f32; 4],
 }
 
 #[repr(C)]
@@ -104,9 +106,11 @@ impl ImagePipeline {
 
         let destination = c"DESTINATION";
         let source = c"SOURCE";
+        let source_clamp = c"SOURCECLAMP";
         let layout = [
             input_element(destination, DXGI_FORMAT_R32G32B32A32_FLOAT, 0),
             input_element(source, DXGI_FORMAT_R32G32B32A32_FLOAT, 16),
+            input_element(source_clamp, DXGI_FORMAT_R32G32B32A32_FLOAT, 32),
         ];
         let mut input_layout = None;
         unsafe { device.CreateInputLayout(&layout, blob_slice(&vs_blob), Some(&mut input_layout)) }
@@ -316,7 +320,28 @@ fn image_instance(
             source_right as f32 / image.width as f32,
             source_bottom as f32 / image.height as f32,
         ],
+        source_clamp: [
+            (placement.source_x as f32 + 0.5) / image.width as f32,
+            (placement.source_y as f32 + 0.5) / image.height as f32,
+            (source_right as f32 - 0.5) / image.width as f32,
+            (source_bottom as f32 - 0.5) / image.height as f32,
+        ],
     })
+}
+
+fn premultiplied_rgba(rgba: &[u8]) -> Cow<'_, [u8]> {
+    let Some(first_translucent) = rgba.chunks_exact(4).position(|pixel| pixel[3] != u8::MAX) else {
+        return Cow::Borrowed(rgba);
+    };
+
+    let mut premultiplied = rgba.to_vec();
+    for pixel in premultiplied[first_translucent * 4..].chunks_exact_mut(4) {
+        let alpha = u16::from(pixel[3]);
+        for channel in &mut pixel[..3] {
+            *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+        }
+    }
+    Cow::Owned(premultiplied)
 }
 
 fn upload_texture(device: &ID3D11Device, image: &KittyImage) -> Result<ID3D11ShaderResourceView> {
@@ -336,6 +361,10 @@ fn upload_texture(device: &ID3D11Device, image: &KittyImage) -> Result<ID3D11Sha
         .width
         .checked_mul(4)
         .context("Kitty image row pitch overflow")?;
+    // Premultiply before the texture reaches LINEAR filtering. Multiplying in
+    // the pixel shader is too late: interpolation has already mixed RGB from
+    // transparent neighbours and produces dark fringes around scaled images.
+    let pixels = premultiplied_rgba(&image.rgba);
     let desc = D3D11_TEXTURE2D_DESC {
         Width: image.width,
         Height: image.height,
@@ -352,7 +381,7 @@ fn upload_texture(device: &ID3D11Device, image: &KittyImage) -> Result<ID3D11Sha
         MiscFlags: 0,
     };
     let initial = D3D11_SUBRESOURCE_DATA {
-        pSysMem: image.rgba.as_ptr().cast(),
+        pSysMem: pixels.as_ptr().cast(),
         SysMemPitch: pitch,
         SysMemSlicePitch: 0,
     };
@@ -446,4 +475,57 @@ fn upload_value<T: Copy>(
     value: &T,
 ) -> Result<()> {
     upload_slice(context, buffer, std::slice::from_ref(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::vt::{KittyImage, KittyPlacement};
+
+    use super::{image_instance, premultiplied_rgba};
+
+    #[test]
+    fn texture_upload_premultiplies_translucent_rgb() {
+        let rgba = [
+            10, 20, 30, 255, // opaque prefix remains exact
+            200, 100, 50, 128, // rounded half alpha
+            255, 128, 64, 0, // hidden RGB is eliminated
+        ];
+
+        assert_eq!(
+            premultiplied_rgba(&rgba).as_ref(),
+            &[10, 20, 30, 255, 100, 50, 25, 128, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn cropped_source_uvs_stay_inside_edge_texel_centres() {
+        let placement = KittyPlacement {
+            image: Arc::new(KittyImage {
+                id: 1,
+                generation: 2,
+                width: 4,
+                height: 4,
+                rgba: vec![0; 4 * 4 * 4].into(),
+            }),
+            placement_id: 3,
+            z: 0,
+            viewport_col: 2,
+            viewport_row: 1,
+            cell_x_offset: 3,
+            cell_y_offset: 4,
+            pixel_width: 20,
+            pixel_height: 10,
+            source_x: 1,
+            source_y: 1,
+            source_width: 2,
+            source_height: 1,
+        };
+
+        let instance = image_instance(&placement, 10, 20).expect("valid image placement");
+        assert_eq!(instance.destination, [23.0, 24.0, 43.0, 34.0]);
+        assert_eq!(instance.source, [0.25, 0.25, 0.75, 0.5]);
+        assert_eq!(instance.source_clamp, [0.375, 0.375, 0.625, 0.375]);
+    }
 }

@@ -1,6 +1,6 @@
-// Kitty image placement pipeline. Source textures contain straight-alpha
-// RGBA8; the pixel shader premultiplies before source-over blending into the
-// renderer's premultiplied BGRA target.
+// Kitty image placement pipeline. Source textures are uploaded as
+// premultiplied RGBA8 so LINEAR filtering cannot mix hidden RGB from
+// transparent neighbours into visible edge pixels.
 
 cbuffer ImageGlobals : register(b0) {
     float2 invViewport;
@@ -10,11 +10,13 @@ cbuffer ImageGlobals : register(b0) {
 struct ImageInstance {
     float4 destination : DESTINATION; // left, top, right, bottom in pixels
     float4 source      : SOURCE;      // u0, v0, u1, v1
+    float4 sourceClamp : SOURCECLAMP; // first/last source texel centres
 };
 
 struct VSOut {
     float4 pos : SV_Position;
     float2 uv  : TEXCOORD0;
+    nointerpolation float4 sourceClamp : TEXCOORD1;
 };
 
 VSOut vs_main(uint vid : SV_VertexID, ImageInstance inst) {
@@ -34,6 +36,7 @@ VSOut vs_main(uint vid : SV_VertexID, ImageInstance inst) {
         corner.x == 0 ? inst.source.x : inst.source.z,
         corner.y == 0 ? inst.source.y : inst.source.w
     );
+    o.sourceClamp = inst.sourceClamp;
     return o;
 }
 
@@ -41,6 +44,6 @@ Texture2D<float4> image : register(t0);
 SamplerState imageSampler : register(s0);
 
 float4 ps_main(VSOut i) : SV_Target {
-    float4 color = image.Sample(imageSampler, i.uv);
-    return float4(color.rgb * color.a, color.a);
+    float2 uv = clamp(i.uv, i.sourceClamp.xy, i.sourceClamp.zw);
+    return image.Sample(imageSampler, uv);
 }
