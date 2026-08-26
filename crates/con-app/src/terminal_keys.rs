@@ -128,7 +128,7 @@ fn printable_text(keystroke: &Keystroke) -> Option<&str> {
         })
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 fn conservative_unshifted_codepoint(text: &str, shift: bool) -> Option<char> {
     let mut chars = text.chars();
     let ch = chars.next()?;
@@ -139,10 +139,15 @@ fn conservative_unshifted_codepoint(text: &str, shift: bool) -> Option<char> {
         return Some(ch);
     }
 
-    // GPUI retains Shift for cased letters but commonly consumes it for
-    // shifted punctuation. Lowercase a single cased codepoint so Kitty can
-    // identify and release non-ASCII keys such as Ä/ä without guessing a
-    // keyboard layout. Multi-codepoint case mappings stay unidentified.
+    // GPUI can retain Shift while reporting an already-lowercase key_char for
+    // shortcut chords such as Ctrl+Shift+P. Preserve that cased identity so
+    // Kitty does not fall back to emitting bare text. Shifted punctuation is
+    // intentionally excluded because its physical unshifted key is layout-
+    // dependent. Otherwise lowercase one cased codepoint so non-ASCII keys
+    // such as Ä/ä remain identifiable without guessing a keyboard layout.
+    if ch.is_lowercase() {
+        return Some(ch);
+    }
     let mut lowercase = ch.to_lowercase();
     let unshifted = lowercase.next()?;
     (lowercase.next().is_none() && unshifted != ch).then_some(unshifted)
@@ -202,7 +207,15 @@ pub fn ctrl_chord_to_c0(key: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ctrl_chord_to_c0, ctrl_key_to_c0};
+    use super::{conservative_unshifted_codepoint, ctrl_chord_to_c0, ctrl_key_to_c0};
+
+    #[test]
+    fn shifted_lowercase_retains_kitty_key_identity() {
+        assert_eq!(conservative_unshifted_codepoint("p", true), Some('p'));
+        assert_eq!(conservative_unshifted_codepoint("Ä", true), Some('ä'));
+        assert_eq!(conservative_unshifted_codepoint("*", true), None);
+        assert_eq!(conservative_unshifted_codepoint("ss", true), None);
+    }
 
     #[test]
     fn ctrl_key_maps_letters_to_c0() {
