@@ -565,6 +565,17 @@ impl ConWorkspace {
                 return;
             }
 
+            if !self.config.appearance.close_to_quit {
+                // Keep the window open: create a fresh tab, then close the
+                // old one. Creating the new tab first lets it inherit the
+                // current working directory before the old terminal is torn
+                // down. After new_tab we have two tabs (old at 0, new at 1),
+                // so the recursive close takes the normal multi-tab path.
+                self.new_tab(&NewTab, window, cx);
+                self.close_tab_by_index(0, window, cx);
+                return;
+            }
+
             self.close_window_from_last_tab(window, cx);
             return;
         }

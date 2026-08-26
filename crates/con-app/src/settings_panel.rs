@@ -216,6 +216,7 @@ pub struct SettingsPanel {
     background_image_fit_select: Entity<SelectState<Vec<String>>>,
     background_image_repeat: bool,
     hide_pane_title_bar: bool,
+    close_to_quit: bool,
     save_error: Option<String>,
     save_error_kind: Option<SettingsSaveErrorKind>,
     last_saved_at: Option<std::time::SystemTime>,
@@ -1654,6 +1655,7 @@ impl SettingsPanel {
             background_image_fit_select,
             background_image_repeat: config.appearance.background_image_repeat,
             hide_pane_title_bar: config.appearance.hide_pane_title_bar,
+            close_to_quit: config.appearance.close_to_quit,
             save_error: None,
             save_error_kind: None,
             last_saved_at: std::fs::metadata(Config::config_path())
@@ -1868,6 +1870,7 @@ impl SettingsPanel {
         });
         self.background_image_repeat = self.config.appearance.background_image_repeat;
         self.hide_pane_title_bar = self.config.appearance.hide_pane_title_bar;
+        self.close_to_quit = self.config.appearance.close_to_quit;
         self.provider_model_fetching = false;
         self.provider_model_status = None;
         self.provider_model_status_error = false;
@@ -3818,6 +3821,38 @@ impl SettingsPanel {
                                     }
                                     if let Some(snapshot) = &mut this.preview_snapshot {
                                         snapshot.appearance.hide_pane_title_bar = *checked;
+                                    }
+                                    this.save_error = None;
+                                    this.save_error_kind = None;
+                                    cx.emit(AppearancePreview);
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(toggle_row(
+                            "Quit on Last Tab Close",
+                            "Close the window when the last tab is closed. When off, a fresh tab opens instead.",
+                            Switch::new("close-to-quit-toggle")
+                                .checked(self.close_to_quit)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    let previous = this.config.appearance.close_to_quit;
+                                    this.close_to_quit = *checked;
+                                    this.config.appearance.close_to_quit = *checked;
+                                    if let Err(err) = this.config.save() {
+                                        this.close_to_quit = previous;
+                                        this.config.appearance.close_to_quit = previous;
+                                        log::warn!(
+                                            "settings: persist close_to_quit failed: {err}"
+                                        );
+                                        this.save_error = Some(err.to_string());
+                                        this.save_error_kind = Some(SettingsSaveErrorKind::Other);
+                                        cx.notify();
+                                        return;
+                                    }
+                                    if let Some(snapshot) = &mut this.preview_snapshot {
+                                        snapshot.appearance.close_to_quit = *checked;
                                     }
                                     this.save_error = None;
                                     this.save_error_kind = None;
