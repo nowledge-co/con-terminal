@@ -28,7 +28,7 @@ mod font_loader;
 mod image_pipeline;
 mod pipeline;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -50,7 +50,7 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_WAS_STILL_DRAWING;
 
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
-use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, ScreenSnapshot};
+use super::vt::{ATTR_INVERSE, ATTR_STRIKE, ATTR_UNDERLINE, Cell, KittyPlacement, ScreenSnapshot};
 use atlas::{GlyphCache, GlyphKey};
 use image_pipeline::{ImageLayer, ImagePipeline};
 use pipeline::{Globals, Instance, Pipeline, instance_for_cell};
@@ -375,6 +375,10 @@ impl Renderer {
             .last_generation
             .lock()
             .expect("last_generation mutex poisoned in rebuild_atlas()") = u64::MAX;
+        *self
+            .has_full_frame
+            .lock()
+            .expect("has_full_frame mutex poisoned in rebuild_atlas()") = false;
         Ok(())
     }
 
@@ -552,7 +556,7 @@ impl Renderer {
                 self.context.ClearRenderTargetView(&self.rtv, &clear);
             }
 
-            self.draw_terminal(snapshot, config)?;
+            let cell_metrics = self.draw_terminal(snapshot, config)?;
             draw_ms = draw_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);
@@ -562,17 +566,25 @@ impl Renderer {
             // so by the next prepaint the GPU will have run them all
             // and the staging texture will be ready to Map().
             let submit_started = perf_trace_enabled().then(Instant::now);
+            // Image damage is relative to the last frame handed to GPUI.
+            // Partial patches are safe only when no older mailbox slot can be
+            // presented first and change that baseline.
             let can_partial_readback = in_flight_before_submit == 0
                 && *self
                     .has_full_frame
                     .lock()
                     .expect("has_full_frame mutex poisoned checking partial readback");
-            let readback_regions = self.readback_regions(snapshot, sel_hash, can_partial_readback);
+            let kitty_visuals = KittyVisualState::from_placements(
+                &snapshot.kitty_placements,
+                [cell_metrics.cell_width_px, cell_metrics.cell_height_px],
+            );
+            let readback_regions =
+                self.readback_regions(snapshot, sel_hash, can_partial_readback, &kitty_visuals);
             submitted = Some(ring.submit_copy_mailbox(
                 &self.context,
                 &self.rt_texture,
                 &readback_regions,
-                !snapshot.kitty_placements.is_empty(),
+                kitty_visuals,
             ));
             submit_ms = submit_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
@@ -782,17 +794,9 @@ impl Renderer {
         snapshot: &ScreenSnapshot,
         sel_hash: u64,
         allow_partial: bool,
+        kitty_visuals: &KittyVisualState,
     ) -> Vec<ReadbackRegion> {
-        let force_full_for_images = {
-            let has_images = !snapshot.kitty_placements.is_empty();
-            let mut state = self
-                .kitty_readback
-                .lock()
-                .expect("kitty_readback mutex poisoned");
-            state.submitted(has_images)
-        };
         if !allow_partial
-            || force_full_for_images
             || sel_hash != 0
             || snapshot.dirty_rows.is_empty()
             || snapshot.dirty_rows.len() >= snapshot.rows as usize
@@ -800,19 +804,16 @@ impl Renderer {
             return vec![ReadbackRegion::full(self.height_px)];
         }
 
-        let cell_h = self.metrics().cell_height_px.max(1);
-        let mut regions: Vec<ReadbackRegion> = Vec::new();
+        let cell_h = kitty_visuals.cell_size[1].max(1);
+        let mut regions = self
+            .kitty_readback
+            .lock()
+            .expect("kitty_readback mutex poisoned")
+            .damage_regions(kitty_visuals, self.height_px);
         for row in snapshot.dirty_rows.iter().copied() {
             let y = u32::from(row).saturating_mul(cell_h).min(self.height_px);
             let bottom = y.saturating_add(cell_h).min(self.height_px);
             if y >= bottom {
-                continue;
-            }
-            if let Some(last) = regions.last_mut()
-                && last.y.saturating_add(last.height) >= y
-            {
-                let merged_bottom = last.y.saturating_add(last.height).max(bottom);
-                last.height = merged_bottom.saturating_sub(last.y);
                 continue;
             }
             regions.push(ReadbackRegion {
@@ -820,6 +821,7 @@ impl Renderer {
                 height: bottom - y,
             });
         }
+        merge_readback_regions(&mut regions, self.height_px);
         if regions.is_empty() {
             vec![ReadbackRegion::full(self.height_px)]
         } else {
@@ -855,14 +857,11 @@ impl Renderer {
     }
 
     fn frame_from_readback(&self, mut readback: Readback) -> FrameBgra {
+        self.kitty_readback
+            .lock()
+            .expect("kitty_readback mutex poisoned in frame_from_readback()")
+            .presented(std::mem::take(&mut readback.kitty_visuals));
         if readback.regions.len() == 1 && readback.regions[0].is_full(self.height_px) {
-            if !readback.has_kitty_images {
-                let mut state = self
-                    .kitty_readback
-                    .lock()
-                    .expect("kitty_readback mutex poisoned in frame_from_readback()");
-                state.presented_without_images();
-            }
             *self
                 .has_full_frame
                 .lock()
@@ -910,7 +909,11 @@ impl Renderer {
         }
     }
 
-    fn draw_terminal(&self, snapshot: &ScreenSnapshot, config: &RendererConfig) -> Result<()> {
+    fn draw_terminal(
+        &self,
+        snapshot: &ScreenSnapshot,
+        config: &RendererConfig,
+    ) -> Result<CellMetrics> {
         let selection = *self
             .selection
             .lock()
@@ -1163,7 +1166,7 @@ impl Renderer {
         image_pipeline.draw_layer(&self.context, ImageLayer::AboveText);
         drop(image_pipeline);
         drop(pipeline);
-        Ok(())
+        Ok(metrics)
     }
 }
 
@@ -1326,31 +1329,150 @@ struct StagingSlot {
     /// flight.)
     seq: u64,
     regions: Vec<ReadbackRegion>,
-    has_kitty_images: bool,
+    kitty_visuals: KittyVisualState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KittyVisual {
+    image_id: u32,
+    image_generation: u64,
+    image_size: [u32; 2],
+    z: i32,
+    viewport: [i32; 2],
+    cell_offset: [u32; 2],
+    pixel_size: [u32; 2],
+    source: [u32; 4],
+}
+
+impl From<&KittyPlacement> for KittyVisual {
+    fn from(placement: &KittyPlacement) -> Self {
+        Self {
+            image_id: placement.image.id,
+            image_generation: placement.image.generation,
+            image_size: [placement.image.width, placement.image.height],
+            z: placement.z,
+            viewport: [placement.viewport_col, placement.viewport_row],
+            cell_offset: [placement.cell_x_offset, placement.cell_y_offset],
+            pixel_size: [placement.pixel_width, placement.pixel_height],
+            source: [
+                placement.source_x,
+                placement.source_y,
+                placement.source_width,
+                placement.source_height,
+            ],
+        }
+    }
+}
+
+impl KittyVisual {
+    fn vertical_region(self, cell_height: u32, viewport_height: u32) -> Option<ReadbackRegion> {
+        let top = i64::from(self.viewport[1])
+            .saturating_mul(i64::from(cell_height))
+            .saturating_add(i64::from(self.cell_offset[1]));
+        let bottom = top.saturating_add(i64::from(self.pixel_size[1]));
+        let viewport_height = i64::from(viewport_height);
+        let top = top.clamp(0, viewport_height) as u32;
+        let bottom = bottom.clamp(0, viewport_height) as u32;
+        (top < bottom).then_some(ReadbackRegion {
+            y: top,
+            height: bottom - top,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct KittyVisualState {
+    cell_size: [u32; 2],
+    placements: Arc<[KittyVisual]>,
+}
+
+impl KittyVisualState {
+    fn from_placements(placements: &[KittyPlacement], cell_size: [u32; 2]) -> Self {
+        Self {
+            cell_size,
+            placements: placements
+                .iter()
+                .map(KittyVisual::from)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct KittyReadbackState {
-    /// Image moves/removals can invalidate arbitrary rows. This stays set
-    /// until a no-image full frame is actually drained and presented, rather
-    /// than merely submitted into the lossy mailbox.
-    requires_full: bool,
-    latest_submit_has_images: bool,
+    /// Exact image state represented by the last readback handed to GPUI.
+    /// Submitted states are deliberately not authoritative: staging slots are
+    /// a lossy mailbox and may be replaced before presentation.
+    presented: KittyVisualState,
 }
 
 impl KittyReadbackState {
-    fn submitted(&mut self, has_images: bool) -> bool {
-        self.latest_submit_has_images = has_images;
-        self.requires_full |= has_images;
-        self.requires_full
+    fn damage_regions(
+        &self,
+        current: &KittyVisualState,
+        viewport_height: u32,
+    ) -> Vec<ReadbackRegion> {
+        let mut regions = Vec::new();
+        append_kitty_transition_regions(&self.presented, current, viewport_height, &mut regions);
+        regions
     }
 
-    fn presented_without_images(&mut self) {
-        // A stale no-image readback may be drained while a newer image frame
-        // is already in flight. Only the latest submitted state may release
-        // the full-frame requirement.
-        if !self.latest_submit_has_images {
-            self.requires_full = false;
+    fn presented(&mut self, visuals: KittyVisualState) {
+        self.presented = visuals;
+    }
+}
+
+fn append_kitty_transition_regions(
+    previous: &KittyVisualState,
+    current: &KittyVisualState,
+    viewport_height: u32,
+    regions: &mut Vec<ReadbackRegion>,
+) {
+    if previous == current {
+        return;
+    }
+
+    let (prefix, suffix) = if previous.cell_size == current.cell_size {
+        let prefix = previous
+            .placements
+            .iter()
+            .zip(current.placements.iter())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let suffix_limit = previous
+            .placements
+            .len()
+            .min(current.placements.len())
+            .saturating_sub(prefix);
+        let suffix = previous
+            .placements
+            .iter()
+            .rev()
+            .zip(current.placements.iter().rev())
+            .take(suffix_limit)
+            .take_while(|(left, right)| left == right)
+            .count();
+        (prefix, suffix)
+    } else {
+        (0, 0)
+    };
+
+    let previous_end = previous.placements.len().saturating_sub(suffix);
+    let current_end = current.placements.len().saturating_sub(suffix);
+    regions.reserve(
+        previous_end
+            .saturating_sub(prefix)
+            .saturating_add(current_end.saturating_sub(prefix)),
+    );
+    for visual in &previous.placements[prefix..previous_end] {
+        if let Some(region) = visual.vertical_region(previous.cell_size[1], viewport_height) {
+            regions.push(region);
+        }
+    }
+    for visual in &current.placements[prefix..current_end] {
+        if let Some(region) = visual.vertical_region(current.cell_size[1], viewport_height) {
+            regions.push(region);
         }
     }
 }
@@ -1363,7 +1485,7 @@ struct SubmittedCopy {
     readback_rows: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadbackRegion {
     y: u32,
     height: u32,
@@ -1379,10 +1501,40 @@ impl ReadbackRegion {
     }
 }
 
+fn merge_readback_regions(regions: &mut Vec<ReadbackRegion>, viewport_height: u32) {
+    regions.sort_unstable_by_key(|region| region.y);
+    let mut write = 0usize;
+    for read in 0..regions.len() {
+        let y = regions[read].y.min(viewport_height);
+        let bottom = regions[read]
+            .y
+            .saturating_add(regions[read].height)
+            .min(viewport_height);
+        if y >= bottom {
+            continue;
+        }
+
+        if write > 0 {
+            let previous = &mut regions[write - 1];
+            let previous_bottom = previous.y.saturating_add(previous.height);
+            if previous_bottom >= y {
+                previous.height = previous_bottom.max(bottom) - previous.y;
+                continue;
+            }
+        }
+        regions[write] = ReadbackRegion {
+            y,
+            height: bottom - y,
+        };
+        write += 1;
+    }
+    regions.truncate(write);
+}
+
 struct Readback {
     bytes: Vec<u8>,
     regions: Vec<ReadbackRegion>,
-    has_kitty_images: bool,
+    kitty_visuals: KittyVisualState,
 }
 
 /// Two-slot staging ring. See `Renderer::render` for the state machine.
@@ -1410,7 +1562,7 @@ impl StagingRing {
                 in_flight: false,
                 seq: 0,
                 regions: vec![ReadbackRegion::full(height)],
-                has_kitty_images: false,
+                kitty_visuals: KittyVisualState::default(),
             });
         }
         Ok(Self {
@@ -1433,7 +1585,7 @@ impl StagingRing {
                 in_flight: false,
                 seq: 0,
                 regions: vec![ReadbackRegion::full(height)],
-                has_kitty_images: false,
+                kitty_visuals: KittyVisualState::default(),
             });
         }
         self.slots = new_slots;
@@ -1449,7 +1601,7 @@ impl StagingRing {
         ctx: &ID3D11DeviceContext,
         source: &ID3D11Texture2D,
         regions: &[ReadbackRegion],
-        has_kitty_images: bool,
+        kitty_visuals: KittyVisualState,
     ) -> SubmittedCopy {
         let clean_idx = self
             .slots
@@ -1506,7 +1658,7 @@ impl StagingRing {
         slot.in_flight = true;
         slot.seq = self.next_seq;
         slot.regions = regions;
-        slot.has_kitty_images = has_kitty_images;
+        slot.kitty_visuals = kitty_visuals;
         self.next_seq = self.next_seq.wrapping_add(1);
         self.next_idx = (idx + 1) % self.slots.len();
         SubmittedCopy {
@@ -1582,7 +1734,6 @@ impl StagingRing {
         }
 
         let regions = slot.regions.clone();
-        let has_kitty_images = slot.has_kitty_images;
         let full = regions.len() == 1 && regions[0].is_full(self.height);
         let row_bytes = width * 4;
         let len = if full {
@@ -1621,10 +1772,11 @@ impl StagingRing {
             ctx.Unmap(&slot.texture, 0);
         }
         slot.in_flight = false;
+        let kitty_visuals = std::mem::take(&mut slot.kitty_visuals);
         Ok(Some(Readback {
             bytes: out,
             regions,
-            has_kitty_images,
+            kitty_visuals,
         }))
     }
 }
@@ -1737,27 +1889,92 @@ fn create_staging_texture(
 
 #[cfg(test)]
 mod tests {
-    use super::KittyReadbackState;
+    use std::sync::Arc;
 
-    #[test]
-    fn kitty_image_removal_requires_a_presented_full_frame() {
-        let mut state = KittyReadbackState::default();
-        assert!(state.submitted(true));
-        assert!(state.submitted(false));
-        assert!(state.submitted(false));
+    use super::{
+        KittyReadbackState, KittyVisual, KittyVisualState, ReadbackRegion, merge_readback_regions,
+    };
 
-        state.presented_without_images();
-        assert!(!state.submitted(false));
+    const VIEWPORT_HEIGHT: u32 = 100;
+
+    fn visual(row: i32) -> KittyVisual {
+        KittyVisual {
+            image_id: 1,
+            image_generation: 2,
+            image_size: [8, 8],
+            z: 0,
+            viewport: [0, row],
+            cell_offset: [0, 0],
+            pixel_size: [8, 10],
+            source: [0, 0, 8, 8],
+        }
+    }
+
+    fn visual_state(placements: Vec<KittyVisual>) -> KittyVisualState {
+        KittyVisualState {
+            cell_size: [8, 10],
+            placements: Arc::from(placements),
+        }
+    }
+
+    fn damage(state: &KittyReadbackState, current: &KittyVisualState) -> Vec<ReadbackRegion> {
+        let mut regions = state.damage_regions(current, VIEWPORT_HEIGHT);
+        merge_readback_regions(&mut regions, VIEWPORT_HEIGHT);
+        regions
     }
 
     #[test]
-    fn stale_no_image_readback_cannot_clear_a_newer_image_requirement() {
-        let mut state = KittyReadbackState::default();
-        assert!(state.submitted(true));
-        assert!(state.submitted(false));
-        assert!(state.submitted(true));
+    fn unchanged_kitty_images_add_no_readback_damage() {
+        let current = visual_state(vec![visual(2)]);
+        let state = KittyReadbackState {
+            presented: current.clone(),
+        };
 
-        state.presented_without_images();
-        assert!(state.submitted(true));
+        assert!(damage(&state, &current).is_empty());
+    }
+
+    #[test]
+    fn moved_kitty_image_damages_old_and_new_rows() {
+        let previous = visual_state(vec![visual(1)]);
+        let current = visual_state(vec![visual(5)]);
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![
+                ReadbackRegion { y: 10, height: 10 },
+                ReadbackRegion { y: 50, height: 10 },
+            ]
+        );
+    }
+
+    #[test]
+    fn inserted_kitty_image_preserves_common_prefix_and_suffix() {
+        let previous = visual_state(vec![visual(1), visual(7)]);
+        let current = visual_state(vec![visual(1), visual(4), visual(7)]);
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![ReadbackRegion { y: 40, height: 10 }]
+        );
+    }
+
+    #[test]
+    fn removed_kitty_image_damages_its_previous_rows() {
+        let previous = visual_state(vec![visual(7)]);
+        let current = visual_state(Vec::new());
+        let state = KittyReadbackState {
+            presented: previous,
+        };
+
+        assert_eq!(
+            damage(&state, &current),
+            vec![ReadbackRegion { y: 70, height: 10 }]
+        );
     }
 }
