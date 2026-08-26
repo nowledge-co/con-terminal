@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
@@ -59,18 +60,65 @@ fn theme_colors_to_vt(colors: &TerminalColors) -> ThemeColors {
 enum LinuxPtyBackend {
     Local {
         master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
-        writer: Arc<Mutex<Box<dyn Write + Send>>>,
         child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     },
     HostBridge {
-        stream_writer: Arc<Mutex<std::os::unix::net::UnixStream>>,
+        stream_shutdown: std::os::unix::net::UnixStream,
         socket_path: PathBuf,
         child: Mutex<std::process::Child>,
     },
 }
 
+#[derive(Clone)]
+enum LinuxPtyInput {
+    Local(PtyWriteQueue),
+    HostBridge(PtyWriteQueue),
+}
+
+impl LinuxPtyInput {
+    fn write_data(&self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Local(queue) => queue.enqueue(data),
+            Self::HostBridge(queue) => {
+                if data.len() > MAX_BRIDGE_FRAME_BYTES {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "host PTY input frame is too large",
+                    ));
+                }
+
+                let mut frame = Vec::with_capacity(5 + data.len());
+                frame.push(0x00); // TAG_DATA
+                frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                frame.extend_from_slice(data);
+                queue.enqueue_owned(frame.into_boxed_slice())
+            }
+        }
+    }
+
+    fn resize(&self, size: &SurfaceSize) -> std::io::Result<()> {
+        let Self::HostBridge(queue) = self else {
+            return Ok(());
+        };
+
+        let cols = size.columns.max(1);
+        let rows = size.rows.max(1);
+        let width_px = size.width_px.min(u32::from(u16::MAX)) as u16;
+        let height_px = size.height_px.min(u32::from(u16::MAX)) as u16;
+        let mut frame = [0u8; 9];
+        frame[0] = 0x01; // TAG_RESIZE
+        frame[1..3].copy_from_slice(&cols.to_be_bytes());
+        frame[3..5].copy_from_slice(&rows.to_be_bytes());
+        frame[5..7].copy_from_slice(&width_px.to_be_bytes());
+        frame[7..9].copy_from_slice(&height_px.to_be_bytes());
+        queue.enqueue(&frame)
+    }
+}
+
 pub struct LinuxPtySession {
     backend: LinuxPtyBackend,
+    input: LinuxPtyInput,
+    input_worker: PtyWriteWorker,
     shared: Arc<SessionShared>,
     size: Mutex<SurfaceSize>,
     title: Option<String>,
@@ -200,22 +248,11 @@ impl LinuxPtySession {
                     .resize(pty_size_from_surface(&size))
                     .context("failed to resize linux pty")?;
             }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                let cols = size.columns.max(1);
-                let rows = size.rows.max(1);
-                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
-                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
-                let mut buf = [0u8; 9];
-                buf[0] = 0x01; // TAG_RESIZE
-                buf[1..3].copy_from_slice(&cols.to_be_bytes());
-                buf[3..5].copy_from_slice(&rows.to_be_bytes());
-                buf[5..7].copy_from_slice(&wp.to_be_bytes());
-                buf[7..9].copy_from_slice(&hp.to_be_bytes());
-                let mut guard = stream_writer.lock();
-                let _ = guard.write_all(&buf);
-                let _ = guard.flush();
-            }
+            LinuxPtyBackend::HostBridge { .. } => {}
         }
+        self.input
+            .resize(&size)
+            .context("failed to queue linux pty resize")?;
 
         self.mark_needs_render();
         Ok(())
@@ -240,22 +277,11 @@ impl LinuxPtySession {
                     .resize(pty_size_from_surface(&size))
                     .context("failed to resize linux pty")?;
             }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                let cols = size.columns.max(1);
-                let rows = size.rows.max(1);
-                let wp = size.width_px.min(u32::from(u16::MAX)) as u16;
-                let hp = size.height_px.min(u32::from(u16::MAX)) as u16;
-                let mut buf = [0u8; 9];
-                buf[0] = 0x01; // TAG_RESIZE
-                buf[1..3].copy_from_slice(&cols.to_be_bytes());
-                buf[3..5].copy_from_slice(&rows.to_be_bytes());
-                buf[5..7].copy_from_slice(&wp.to_be_bytes());
-                buf[7..9].copy_from_slice(&hp.to_be_bytes());
-                let mut guard = stream_writer.lock();
-                let _ = guard.write_all(&buf);
-                let _ = guard.flush();
-            }
+            LinuxPtyBackend::HostBridge { .. } => {}
         }
+        self.input
+            .resize(&size)
+            .context("failed to queue linux pty resize")?;
 
         self.mark_needs_render();
         Ok(())
@@ -270,31 +296,9 @@ impl LinuxPtySession {
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
         self.scroll_viewport_to_bottom();
-        match &self.backend {
-            LinuxPtyBackend::Local { writer, .. } => {
-                writer
-                    .lock()
-                    .write_all(data)
-                    .context("failed to write to linux pty")?;
-            }
-            LinuxPtyBackend::HostBridge { stream_writer, .. } => {
-                if data.len() > MAX_BRIDGE_FRAME_BYTES {
-                    bail!("host PTY input frame is too large");
-                }
-                let len = data.len() as u32;
-                let mut guard = stream_writer.lock();
-                guard
-                    .write_all(&[0x00])
-                    .context("failed to write data tag")?;
-                guard
-                    .write_all(&len.to_be_bytes())
-                    .context("failed to write data len")?;
-                guard
-                    .write_all(data)
-                    .context("failed to write data payload")?;
-                guard.flush().context("failed to flush socket")?;
-            }
-        }
+        self.input
+            .write_data(data)
+            .context("failed to queue linux pty input")?;
         self.input_generation.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -446,13 +450,22 @@ impl Drop for LinuxPtySession {
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate linux pty child during drop: {err}");
                 }
+                // portable_pty exposes the master writer only as `dyn Write`,
+                // so there is no safe way to cancel a syscall blocked by a
+                // descendant that inherited the slave. Close the queue and
+                // detach the worker rather than hanging the UI during teardown.
+                self.input_worker.close_without_join();
             }
             LinuxPtyBackend::HostBridge {
-                child, socket_path, ..
+                child,
+                stream_shutdown,
+                socket_path,
             } => {
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate host pty bridge child during drop: {err}");
                 }
+                let _ = stream_shutdown.shutdown(std::net::Shutdown::Both);
+                self.input_worker.shutdown();
                 let _ = std::fs::remove_file(socket_path);
             }
         }
@@ -486,11 +499,14 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         .master
         .try_clone_reader()
         .context("failed to clone linux pty reader")?;
-    let writer = Arc::new(Mutex::new(
-        pair.master
-            .take_writer()
-            .context("failed to take linux pty writer")?,
-    ));
+    let mut writer = pair
+        .master
+        .take_writer()
+        .context("failed to take linux pty writer")?;
+    let (input_queue, input_worker) =
+        PtyWriteQueue::spawn("con-linux-pty-writer", move |data| writer.write_all(data))
+            .context("failed to spawn linux pty writer")?;
+    let input = LinuxPtyInput::Local(input_queue);
     let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
     let screen = Arc::new(
         VtScreen::new_with_write_pty(
@@ -498,8 +514,8 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             options.size.rows.max(1),
             theme_owned.as_ref(),
             Some({
-                let writer = writer.clone();
-                Arc::new(move |data: &[u8]| writer.lock().write_all(data))
+                let input = input.clone();
+                Arc::new(move |data: &[u8]| input.write_data(data))
             }),
         )
         .context("failed to create linux vt screen")?,
@@ -532,9 +548,10 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
     Ok(LinuxPtySession {
         backend: LinuxPtyBackend::Local {
             master: Mutex::new(pair.master),
-            writer,
             child: Mutex::new(child),
         },
+        input,
+        input_worker,
         shared,
         size: Mutex::new(options.size),
         title: Some(default_title(
@@ -645,8 +662,14 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         stream.ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
     let stream_writer = stream.try_clone().context("clone socket writer")?;
     let stream_reader = stream.try_clone().context("clone socket reader")?;
-    let stream_writer_mutex = Arc::new(Mutex::new(stream_writer));
-    let writer_for_vt = stream_writer_mutex.clone();
+    let mut stream_writer = stream_writer;
+    let (input_queue, input_worker) =
+        PtyWriteQueue::spawn("con-linux-pty-bridge-writer", move |frame| {
+            stream_writer.write_all(frame)?;
+            stream_writer.flush()
+        })
+        .context("failed to spawn host pty bridge writer")?;
+    let input = LinuxPtyInput::HostBridge(input_queue);
 
     let theme_owned = options.theme.as_ref().map(theme_colors_to_vt);
     let screen = Arc::new(
@@ -654,20 +677,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             options.size.columns.max(1),
             options.size.rows.max(1),
             theme_owned.as_ref(),
-            Some(Arc::new(move |data: &[u8]| {
-                if data.len() > MAX_BRIDGE_FRAME_BYTES {
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidInput,
-                        "host PTY input frame is too large",
-                    ));
-                }
-                let len = data.len() as u32;
-                let mut guard = writer_for_vt.lock();
-                guard.write_all(&[0x00])?;
-                guard.write_all(&len.to_be_bytes())?;
-                guard.write_all(data)?;
-                guard.flush()
-            })),
+            Some({
+                let input = input.clone();
+                Arc::new(move |data: &[u8]| input.write_data(data))
+            }),
         )
         .context("failed to create linux vt screen")?,
     );
@@ -695,10 +708,12 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
 
     Ok(LinuxPtySession {
         backend: LinuxPtyBackend::HostBridge {
-            stream_writer: stream_writer_mutex,
+            stream_shutdown: stream,
             socket_path,
             child: Mutex::new(child),
         },
+        input,
+        input_worker,
         shared,
         size: Mutex::new(options.size),
         title: Some(default_title(

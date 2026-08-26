@@ -46,6 +46,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PWSTR;
 
+use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
+
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -133,34 +135,36 @@ impl Drop for PendingPseudoConsole {
 ///
 /// libghostty-vt callbacks receive this instead of the full `ConPty` so
 /// terminal replies cannot re-enter `RenderSession` while the VT lock is
-/// held. The shared mutex also keeps user input and terminal-generated
-/// replies from interleaving within a pipe write.
+/// held. One bounded writer queue preserves ordering with user input without
+/// allowing a blocked child pipe to stall parser output or rendering.
 #[derive(Clone)]
 pub(crate) struct ConPtyWriter {
-    inner: Arc<Mutex<OwnedHandle>>,
+    queue: PtyWriteQueue,
 }
 
 impl ConPtyWriter {
-    pub(crate) fn write_all(&self, mut bytes: &[u8]) -> io::Result<()> {
-        let guard = self.inner.lock();
-        while !bytes.is_empty() {
-            let mut written = 0u32;
-            // SAFETY: the mutex guard keeps the pipe handle valid and
-            // exclusively borrowed for the duration of the write.
-            unsafe {
-                WriteFile(guard.as_handle(), Some(bytes), Some(&mut written), None)
-                    .map_err(|e| io::Error::other(e.message()))?;
-            }
-            if written == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::WriteZero,
-                    "ConPTY input pipe accepted zero bytes",
-                ));
-            }
-            bytes = &bytes[written as usize..];
-        }
-        Ok(())
+    pub(crate) fn write_all(&self, bytes: &[u8]) -> io::Result<()> {
+        self.queue.enqueue(bytes)
     }
+}
+
+fn write_conpty_input(handle: &OwnedHandle, mut bytes: &[u8]) -> io::Result<()> {
+    while !bytes.is_empty() {
+        let mut written = 0u32;
+        // SAFETY: the dedicated writer thread exclusively owns this handle.
+        unsafe {
+            WriteFile(handle.as_handle(), Some(bytes), Some(&mut written), None)
+                .map_err(|e| io::Error::other(e.message()))?;
+        }
+        if written == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "ConPTY input pipe accepted zero bytes",
+            ));
+        }
+        bytes = &bytes[written as usize..];
+    }
+    Ok(())
 }
 
 /// Pipe endpoints created before the child process starts.
@@ -170,6 +174,7 @@ impl ConPtyWriter {
 pub(crate) struct PreparedConPty {
     input_read: OwnedHandle,
     input_writer: ConPtyWriter,
+    input_worker: PtyWriteWorker,
     output_read: OwnedHandle,
     output_write: OwnedHandle,
 }
@@ -202,6 +207,9 @@ pub struct ConPty {
     pcon: Arc<Mutex<Option<HPCON>>>,
     /// Host end of the pipe the child reads from.
     input_writer: ConPtyWriter,
+    /// Sole owner of the blocking pipe handle. Joined only after the child and
+    /// pseudo-console have been terminated so a pending write cannot hang Drop.
+    input_worker: PtyWriteWorker,
     /// Process handle (kept so callers can `WaitForSingleObject` for exit).
     process: OwnedHandle,
     /// Child thread handle.
@@ -227,11 +235,14 @@ impl ConPty {
     pub(crate) fn prepare() -> Result<PreparedConPty> {
         let (input_read, input_write) = create_pipe().context("input pipe")?;
         let (output_read, output_write) = create_pipe().context("output pipe")?;
+        let (input_queue, input_worker) = PtyWriteQueue::spawn("con-conpty-writer", move |bytes| {
+            write_conpty_input(&input_write, bytes)
+        })
+        .context("spawn ConPTY writer")?;
         Ok(PreparedConPty {
             input_read,
-            input_writer: ConPtyWriter {
-                inner: Arc::new(Mutex::new(input_write)),
-            },
+            input_writer: ConPtyWriter { queue: input_queue },
+            input_worker,
             output_read,
             output_write,
         })
@@ -264,6 +275,7 @@ impl ConPty {
         let PreparedConPty {
             input_read,
             input_writer,
+            input_worker,
             output_read,
             output_write,
         } = prepared;
@@ -416,6 +428,7 @@ impl ConPty {
         Ok(Self {
             pcon,
             input_writer,
+            input_worker,
             process,
             _thread: thread,
             output_thread: Some(output_thread),
@@ -492,6 +505,7 @@ impl Drop for ConPty {
         // Close the pseudo-console (idempotent with the watcher's
         // close via `close_hpcon_slot`).
         close_hpcon_slot(&self.pcon);
+        self.input_worker.shutdown();
 
         if let Some(handle) = self.output_thread.take() {
             let _ = handle.join();

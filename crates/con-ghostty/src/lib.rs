@@ -37,6 +37,9 @@ pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod transcript;
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod pty_write;
+
 #[cfg(target_os = "macos")]
 pub mod ffi;
 #[cfg(target_os = "macos")]
