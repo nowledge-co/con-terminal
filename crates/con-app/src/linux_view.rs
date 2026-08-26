@@ -1969,11 +1969,9 @@ fn render_kitty_image_layer(
     scale_factor: f32,
     top_offset: f32,
 ) -> AnyElement {
-    div()
-        .absolute()
-        .size_full()
-        .overflow_hidden()
-        .children(placements.iter().filter_map(|placement| {
+    let paint_records = placements
+        .iter()
+        .filter_map(|placement| {
             if !layer.contains(placement.z) {
                 return None;
             }
@@ -1981,27 +1979,50 @@ fn render_kitty_image_layer(
             let image = images.get(&key)?.clone();
             let geometry =
                 kitty_placement_geometry(placement, cell_width, cell_height, scale_factor)?;
-            Some(
-                div()
-                    .absolute()
-                    .left(px(geometry.left))
-                    .top(px(geometry.top + top_offset))
-                    .w(px(geometry.width))
-                    .h(px(geometry.height))
-                    .overflow_hidden()
-                    .child(
-                        img(ImageSource::Render(image))
-                            .absolute()
-                            .left(px(geometry.image_left))
-                            .top(px(geometry.image_top))
-                            .w(px(geometry.image_width))
-                            .h(px(geometry.image_height))
-                            .object_fit(ObjectFit::Fill),
-                    )
-                    .into_any_element(),
-            )
-        }))
-        .into_any_element()
+            Some((image, geometry))
+        })
+        .collect::<Vec<_>>();
+
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for (image, geometry) in paint_records {
+                let crop_bounds = Bounds::new(
+                    point(
+                        bounds.origin.x + px(geometry.left),
+                        bounds.origin.y + px(geometry.top + top_offset),
+                    ),
+                    size(px(geometry.width), px(geometry.height)),
+                );
+                if !crop_bounds.intersects(&bounds) {
+                    continue;
+                }
+
+                let image_bounds = Bounds::new(
+                    point(
+                        crop_bounds.origin.x + px(geometry.image_left),
+                        crop_bounds.origin.y + px(geometry.image_top),
+                    ),
+                    size(px(geometry.image_width), px(geometry.image_height)),
+                );
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: crop_bounds.intersect(&bounds),
+                    }),
+                    |window| {
+                        if let Err(err) =
+                            window.paint_image(image_bounds, Default::default(), image, 0, false)
+                        {
+                            log::debug!("failed to paint Kitty image placement: {err:#}");
+                        }
+                    },
+                );
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
