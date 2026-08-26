@@ -1594,7 +1594,7 @@ unsafe extern "C" fn read_clipboard_callback(
             let wants_text = requested
                 .iter()
                 .copied()
-                .any(|mime| clipboard_mime_is_text(mime));
+                .any(|mime| clipboard_c_mime_is_text(mime));
             if !wants_text {
                 return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_UNAVAILABLE;
             }
@@ -1708,7 +1708,7 @@ unsafe extern "C" fn write_clipboard_callback(
             let items = std::slice::from_raw_parts(content, content_count);
 
             for item in items {
-                if !clipboard_mime_is_text(item.mime) || (item.data.is_null() && item.len > 0) {
+                if !clipboard_c_mime_is_text(item.mime) || (item.data.is_null() && item.len > 0) {
                     continue;
                 }
                 let data = if item.len == 0 {
@@ -1737,14 +1737,11 @@ unsafe extern "C" fn write_clipboard_callback(
     }
 }
 
-unsafe fn clipboard_mime_is_text(mime: *const std::os::raw::c_char) -> bool {
+unsafe fn clipboard_c_mime_is_text(mime: *const std::os::raw::c_char) -> bool {
     if mime.is_null() {
         return false;
     }
-    matches!(
-        unsafe { CStr::from_ptr(mime) }.to_bytes(),
-        b"text/plain" | b"text/plain;charset=utf-8" | b"UTF8_STRING" | b"TEXT" | b"STRING"
-    )
+    crate::clipboard_mime_is_text(unsafe { CStr::from_ptr(mime) }.to_bytes())
 }
 
 unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_alive: bool) {

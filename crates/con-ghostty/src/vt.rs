@@ -2617,13 +2617,7 @@ fn ghostty_string_is_supported_text(value: GhosttyString) -> bool {
     } else {
         unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
     };
-    bytes.eq_ignore_ascii_case(TEXT_PLAIN_MIME)
-        || bytes.eq_ignore_ascii_case(b"UTF8_STRING")
-        || bytes.eq_ignore_ascii_case(b"text")
-        || bytes
-            .iter()
-            .position(|byte| *byte == b';')
-            .is_some_and(|separator| bytes[..separator].eq_ignore_ascii_case(TEXT_PLAIN_MIME))
+    crate::clipboard_mime_is_text(bytes)
 }
 
 unsafe extern "C" fn vt_write_pty_callback(
@@ -3933,24 +3927,6 @@ mod tests {
             .expect_err("oversized paste must be rejected");
 
         assert!(err.to_string().contains("safety limit"));
-    }
-
-    #[test]
-    fn clipboard_text_mime_matching_is_exact_and_case_insensitive() {
-        let supported = |value: &[u8]| {
-            ghostty_string_is_supported_text(GhosttyString {
-                ptr: value.as_ptr(),
-                len: value.len(),
-            })
-        };
-
-        assert!(supported(b"text/plain"));
-        assert!(supported(b"TEXT/PLAIN"));
-        assert!(supported(b"text/plain;charset=utf-8"));
-        assert!(supported(b"UTF8_STRING"));
-        assert!(supported(b"text"));
-        assert!(!supported(b"text/plainEVIL"));
-        assert!(!supported(b"image/png"));
     }
 
     #[test]

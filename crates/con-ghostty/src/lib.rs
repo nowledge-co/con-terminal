@@ -34,6 +34,17 @@ pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     (!output.trim().is_empty()).then_some(output)
 }
 
+pub(crate) fn clipboard_mime_is_text(mime: &[u8]) -> bool {
+    let media_type = mime
+        .iter()
+        .position(|byte| *byte == b';')
+        .map_or(mime, |separator| &mime[..separator]);
+    mime.eq_ignore_ascii_case(b"UTF8_STRING")
+        || mime.eq_ignore_ascii_case(b"TEXT")
+        || mime.eq_ignore_ascii_case(b"STRING")
+        || media_type.eq_ignore_ascii_case(b"text/plain")
+}
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod transcript;
 
@@ -105,3 +116,20 @@ pub use stub::{
     GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton, SurfaceSize,
     TerminalColors,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::clipboard_mime_is_text;
+
+    #[test]
+    fn clipboard_text_mime_matching_is_exact_and_case_insensitive() {
+        assert!(clipboard_mime_is_text(b"text/plain"));
+        assert!(clipboard_mime_is_text(b"TEXT/PLAIN"));
+        assert!(clipboard_mime_is_text(b"text/plain;charset=utf-8"));
+        assert!(clipboard_mime_is_text(b"UTF8_STRING"));
+        assert!(clipboard_mime_is_text(b"text"));
+        assert!(clipboard_mime_is_text(b"STRING"));
+        assert!(!clipboard_mime_is_text(b"text/plainEVIL"));
+        assert!(!clipboard_mime_is_text(b"image/png"));
+    }
+}
