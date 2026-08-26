@@ -23,6 +23,9 @@ const GHOSTTY_REV: &str = "8867c37c55b578b9eb4cfaba41cb9023e557176d";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
+const REQUIRED_ZIG_VERSION: &str = "0.16.0";
+const MAX_PREFETCH_PACKAGES: usize = 256;
+const MAX_PREFETCH_ARCHIVE_BYTES: &str = "134217728";
 
 fn main() {
     // Rerun the build script when any of our own env vars flip — cargo
@@ -59,13 +62,15 @@ fn main() {
 // ── macOS ─────────────────────────────────────────────────────────────
 
 fn build_macos() {
+    let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
+    let zig_global_cache_dir = zig_global_cache_dir("macos");
+    require_zig_version(&zig_bin, zig_global_cache_dir.as_deref(), "macos");
+
     let ghostty_dir = resolve_ghostty_source();
     let ghostty_dir = patchable_ghostty_source(ghostty_dir);
     let initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
     let include_dir = ghostty_dir.join("include");
     let optimize = ghostty_optimize();
-    let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
-    let zig_global_cache_dir = zig_global_cache_dir("macos");
 
     let mut ffi_abi = cc::Build::new();
     ffi_abi
@@ -255,50 +260,7 @@ fn build_vt_backend(target_os: &str) {
         println!("cargo:warning=using zig global cache dir {}", dir.display());
     }
 
-    let mut zig_probe_cmd = Command::new(&zig_bin);
-    configure_zig_command(&mut zig_probe_cmd, zig_global_cache_dir.as_deref());
-    let zig_probe = zig_probe_cmd.arg("version").output();
-    match zig_probe {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            println!(
-                "cargo:warning=using zig {} (from `{}`)",
-                version,
-                zig_bin.to_string_lossy()
-            );
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            panic!(
-                "\n\n========================================================\n\
-                 con-ghostty: `{bin} version` exited with status {status}.\n\
-                 stderr:\n{stderr}\n\
-                 ========================================================\n",
-                bin = zig_bin.to_string_lossy(),
-                status = output.status,
-                stderr = stderr,
-            );
-        }
-        Err(err) => {
-            let path = env::var("PATH").unwrap_or_default();
-            panic!(
-                "\n\n========================================================\n\
-                 con-ghostty: could not spawn `{bin} version`: {err}\n\n\
-                 Zig 0.16.0 exactly is required to build libghostty-vt for {target_os}.\n\
-                 Install it from https://ziglang.org/download/ and ensure\n\
-                 the `zig` executable is on PATH, or set CON_ZIG_BIN to\n\
-                 the absolute path of the zig executable.\n\n\
-                 Current PATH: {path}\n\n\
-                 To skip this step entirely (the terminal backend will\n\
-                 fail to link), set CON_SKIP_GHOSTTY_VT=1.\n\
-                 ========================================================\n",
-                bin = zig_bin.to_string_lossy(),
-                err = err,
-                target_os = target_os,
-                path = path,
-            );
-        }
-    }
+    require_zig_version(&zig_bin, zig_global_cache_dir.as_deref(), target_os);
 
     let ghostty_dir = resolve_ghostty_source();
 
@@ -717,10 +679,14 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     // bump can invalidate any one of these anchors; validating the complete
     // patch first prevents an anchor mismatch from leaving the cached checkout
     // in a partially patched, internally inconsistent state.
-    let mut embedded_text = read_file_text(&embedded)?;
-    let mut surface_text = read_file_text(&surface)?;
-    let mut exec_text = read_file_text(&exec)?;
-    let mut header_text = read_file_text(&header)?;
+    let embedded_original = read_file_text(&embedded)?;
+    let surface_original = read_file_text(&surface)?;
+    let exec_original = read_file_text(&exec)?;
+    let header_original = read_file_text(&header)?;
+    let mut embedded_text = embedded_original.clone();
+    let mut surface_text = surface_original.clone();
+    let mut exec_text = exec_original.clone();
+    let mut header_text = header_original.clone();
 
     patch_text_once(
         &embedded,
@@ -792,14 +758,16 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         )],
     )?;
 
-    for (path, text) in [
-        (&embedded, embedded_text.as_str()),
-        (&surface, surface_text.as_str()),
-        (&exec, exec_text.as_str()),
-        (&header, header_text.as_str()),
-    ] {
-        write_file_atomic(path, text)?;
-    }
+    write_patch_files_with_rollback(&[
+        (
+            &embedded,
+            embedded_original.as_str(),
+            embedded_text.as_str(),
+        ),
+        (&surface, surface_original.as_str(), surface_text.as_str()),
+        (&exec, exec_original.as_str(), exec_text.as_str()),
+        (&header, header_original.as_str(), header_text.as_str()),
+    ])?;
 
     println!("cargo:rustc-cfg=con_ghostty_embedded_initial_output");
     println!("cargo:rerun-if-changed={}", embedded.display());
@@ -849,6 +817,71 @@ fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         format!("failed to replace {}: {err}", path.display())
     })
+}
+
+fn write_patch_files_with_rollback(files: &[(&Path, &str, &str)]) -> Result<(), String> {
+    let mut replaced = 0;
+    for (path, _, patched) in files {
+        if let Err(write_err) = write_file_atomic(path, patched) {
+            let mut rollback_errors = Vec::new();
+            for (rollback_path, original, _) in files[..replaced].iter().rev() {
+                if let Err(err) = write_file_atomic(rollback_path, original) {
+                    rollback_errors.push(err);
+                }
+            }
+            if !rollback_errors.is_empty() {
+                panic!(
+                    "con-ghostty: Ghostty patch write failed and rollback could not restore the \
+                     cached source tree. Refusing to continue with mixed source files. Write error: \
+                     {write_err}. Rollback error(s): {}",
+                    rollback_errors.join("; ")
+                );
+            }
+            return Err(write_err);
+        }
+        replaced += 1;
+    }
+    Ok(())
+}
+
+fn require_zig_version(zig_bin: &OsStr, zig_global_cache_dir: Option<&Path>, target_os: &str) {
+    let mut command = Command::new(zig_bin);
+    configure_zig_command(&mut command, zig_global_cache_dir);
+    let output = command.arg("version").output().unwrap_or_else(|err| {
+        let path = env::var("PATH").unwrap_or_default();
+        panic!(
+            "\n\n========================================================\n\
+             con-ghostty: could not spawn `{bin} version`: {err}\n\n\
+             Zig {required} exactly is required to build Ghostty for {target_os}.\n\
+             Install it from https://ziglang.org/download/ and ensure the `zig`\n\
+             executable is on PATH, or set CON_ZIG_BIN to its absolute path.\n\n\
+             Current PATH: {path}\n\n\
+             ========================================================\n",
+            bin = zig_bin.to_string_lossy(),
+            required = REQUIRED_ZIG_VERSION,
+        )
+    });
+    if !output.status.success() {
+        panic!(
+            "con-ghostty: `{}` version failed with status {}: {}",
+            zig_bin.to_string_lossy(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version != REQUIRED_ZIG_VERSION {
+        panic!(
+            "con-ghostty: Zig {REQUIRED_ZIG_VERSION} exactly is required for {target_os}, \
+             but `{}` reports {version}. Set CON_ZIG_BIN to the validated Zig executable.",
+            zig_bin.to_string_lossy()
+        );
+    }
+    println!(
+        "cargo:warning=using zig {version} (from `{}`)",
+        zig_bin.to_string_lossy()
+    );
 }
 
 fn current_git_rev(repo_dir: &PathBuf) -> Option<String> {
@@ -942,6 +975,15 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
         for url in extract_zon_urls(&text) {
             if !seen_urls.insert(url.clone()) {
                 continue;
+            }
+            if seen_urls.len() > MAX_PREFETCH_PACKAGES {
+                println!(
+                    "cargo:warning=con-ghostty: refusing to prefetch more than \
+                     {MAX_PREFETCH_PACKAGES} unique Zig packages"
+                );
+                failed += 1;
+                zon_queue.clear();
+                break;
             }
 
             match prefetch_zig_url(zig_bin, root, &url, zig_global_cache_dir) {
@@ -1039,7 +1081,25 @@ fn prefetch_zig_url(
     ));
 
     let curl_status = Command::new("curl")
-        .args(["-fL", "--retry", "3", "--retry-delay", "1", url, "-o"])
+        .args([
+            "-fL",
+            "--retry",
+            "3",
+            "--retry-delay",
+            "1",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            "300",
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            "30",
+            "--max-filesize",
+            MAX_PREFETCH_ARCHIVE_BYTES,
+            url,
+            "-o",
+        ])
         .arg(&tmp)
         .status();
     match curl_status {
