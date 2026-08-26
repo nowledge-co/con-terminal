@@ -82,11 +82,16 @@ const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 10_000_000;
 const KITTY_PNG_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const KITTY_PNG_MAX_DIMENSION: u32 = 10_000;
 const KITTY_PNG_DECODER_MAX_ALLOC_BYTES: u64 = 32 * 1024 * 1024;
+const TERMINAL_PASTE_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 // A single tiny image can have an effectively unbounded number of explicit
 // placements upstream. Bound each render snapshot so hostile terminal output
 // cannot force either renderer to allocate and lay out millions of quads in
 // one frame. This is intentionally far above a dense visible terminal grid.
 const KITTY_PLACEMENT_SNAPSHOT_LIMIT: usize = 4_096;
+// Rejected and virtual placements do not consume the render budget, but their
+// iterator entries still cost FFI calls. Keep a separate traversal ceiling so
+// invalid entries cannot turn one snapshot into unbounded parser work.
+const KITTY_PLACEMENT_SCAN_LIMIT: usize = KITTY_PLACEMENT_SNAPSHOT_LIMIT * 4;
 
 const GHOSTTY_MODS_SHIFT: u16 = 1 << 0;
 const GHOSTTY_MODS_CTRL: u16 = 1 << 1;
@@ -1139,7 +1144,12 @@ struct VtCallbackState {
     /// Last clipboard text the user explicitly chose to paste. Only a
     /// Kitty one-time paste grant can read this through the terminal
     /// clipboard effect; unsolicited OSC reads are denied.
-    clipboard_text: Option<Box<str>>,
+    clipboard_text: Mutex<Option<Arc<str>>>,
+    /// WRITE_PTY is a void callback in libghostty's C ABI. Capture its first
+    /// host I/O failure so synchronous user operations such as paste can still
+    /// return an error instead of reporting bytes as written when they were
+    /// rejected by the host queue.
+    write_error: Mutex<Option<String>>,
     rows: AtomicU16,
     cols: AtomicU16,
     cell_width: AtomicU32,
@@ -1468,7 +1478,8 @@ impl VtScreen {
             Box::new(VtCallbackState {
                 write_pty,
                 enquiry_response: b"con".to_vec().into_boxed_slice(),
-                clipboard_text: None,
+                clipboard_text: Mutex::new(None),
+                write_error: Mutex::new(None),
                 rows: AtomicU16::new(rows),
                 cols: AtomicU16::new(cols),
                 cell_width: AtomicU32::new(1),
@@ -1828,10 +1839,22 @@ impl VtScreen {
         source: VtPasteSource,
         allow_unsafe: bool,
     ) -> anyhow::Result<VtPasteResult> {
-        let mut inner = self.inner.lock();
-        if inner.callback_state.is_none() {
-            anyhow::bail!("terminal paste requires a WRITE_PTY callback");
+        if text.len() > TERMINAL_PASTE_LIMIT_BYTES {
+            anyhow::bail!(
+                "terminal paste exceeds the {} byte safety limit",
+                TERMINAL_PASTE_LIMIT_BYTES
+            );
         }
+
+        let inner = self.inner.lock();
+        let Some(callback_state) = inner.callback_state.as_ref() else {
+            anyhow::bail!("terminal paste requires a WRITE_PTY callback");
+        };
+        // Every new paste intent invalidates both an older Kitty clipboard
+        // grant and an unrelated callback error. A fresh grant is minted only
+        // after this exact clipboard-origin paste emits a Kitty event.
+        callback_state.clipboard_text.lock().take();
+        callback_state.write_error.lock().take();
 
         let mime = GhosttyString {
             ptr: TEXT_PLAIN_MIME.as_ptr(),
@@ -1858,17 +1881,16 @@ impl VtScreen {
         };
         let mut written = false;
         let rc = unsafe { ghostty_terminal_paste(inner.terminal, &paste, &mut written) };
+        if let Some(err) = callback_state.write_error.lock().take() {
+            anyhow::bail!("terminal paste failed to enqueue PTY bytes: {err}");
+        }
         match rc {
             GHOSTTY_SUCCESS => {
                 if written && !reader.served && source == VtPasteSource::Clipboard {
                     // Ghostty does not call the MIME reader for a Kitty paste
                     // event. Retain the exact user-selected text for the
                     // event's later one-time granted read.
-                    inner
-                        .callback_state
-                        .as_mut()
-                        .expect("callback state checked above")
-                        .clipboard_text = Some(text.into());
+                    *callback_state.clipboard_text.lock() = Some(Arc::from(text));
                 }
                 Ok(if written {
                     VtPasteResult::Written
@@ -2452,12 +2474,16 @@ unsafe extern "C" fn vt_clipboard_read_callback(
     };
     let mut contents_len = 0;
 
+    // Do not hold a Rust mutex across the foreign reply callback: libghostty
+    // may synchronously advance another effect while consuming this payload.
+    // Arc keeps the bytes stable for the callback without copying the paste.
+    let clipboard_text = state.clipboard_text.lock().clone();
     let listing_only = read.list && read.mimes_len == 0;
     if read.location != GhosttyClipboardLocation::Standard {
         result = GhosttyClipboardReadResult::Unsupported;
     } else if !listing_only && !read.granted {
         result = GhosttyClipboardReadResult::Denied;
-    } else if let Some(text) = state.clipboard_text.as_deref() {
+    } else if let Some(text) = clipboard_text.as_deref() {
         if read.list {
             available = GhosttyString {
                 ptr: TEXT_PLAIN_MIME.as_ptr(),
@@ -2507,6 +2533,12 @@ unsafe extern "C" fn vt_clipboard_read_callback(
         remember: false,
     };
     unsafe { reply(read, &reply_value) };
+    if contents_len > 0 {
+        // The reply callback consumes the borrowed content synchronously. Drop
+        // the host copy immediately so the one-time Ghostty password is backed
+        // by one-time data ownership as well.
+        state.clipboard_text.lock().take();
+    }
 }
 
 fn ghostty_string_eq(value: GhosttyString, expected: &[u8]) -> bool {
@@ -2555,7 +2587,12 @@ unsafe extern "C" fn vt_write_pty_callback(
         // The libghostty callback ABI cannot return an I/O error to the
         // parser. Keep terminal-generated replies best-effort, while direct
         // key encoding propagates the same callback error to its caller.
-        log::debug!("vt WRITE_PTY callback failed: {err}");
+        let message = err.to_string();
+        let mut write_error = state.write_error.lock();
+        if write_error.is_none() {
+            *write_error = Some(message.clone());
+        }
+        log::debug!("vt WRITE_PTY callback failed: {message}");
     }
 }
 
@@ -2663,7 +2700,6 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
     if inner.kitty_snapshot_generation == inner.generation {
         return inner.kitty_placements.clone();
     }
-    inner.kitty_snapshot_generation = inner.generation;
 
     let mut graphics: GhosttyKittyGraphics = std::ptr::null_mut();
     let rc = unsafe {
@@ -2673,9 +2709,14 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
             &mut graphics as *mut _ as *mut c_void,
         )
     };
-    if rc != GHOSTTY_SUCCESS || graphics.is_null() || inner.kitty_placement_iter.is_null() {
+    if rc != GHOSTTY_SUCCESS || inner.kitty_placement_iter.is_null() {
+        log::debug!("could not read Kitty graphics state for the current terminal generation");
+        return inner.kitty_placements.clone();
+    }
+    if graphics.is_null() {
         inner.kitty_image_cache.clear();
         inner.kitty_placements = Arc::from([]);
+        inner.kitty_snapshot_generation = inner.generation;
         return inner.kitty_placements.clone();
     }
 
@@ -2687,22 +2728,19 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
         )
     };
     if rc != GHOSTTY_SUCCESS {
-        inner.kitty_image_cache.clear();
-        inner.kitty_placements = Arc::from([]);
+        log::debug!("could not reset the Kitty placement iterator; retaining the prior snapshot");
         return inner.kitty_placements.clone();
     }
 
     let mut images: HashMap<u32, Arc<KittyImage>> = HashMap::new();
     let mut placements = Vec::new();
-    let mut placement_count = 0_usize;
+    let mut scanned = 0_usize;
     while unsafe { ghostty_kitty_graphics_placement_next(inner.kitty_placement_iter) } {
-        if placement_count >= KITTY_PLACEMENT_SNAPSHOT_LIMIT {
-            log::debug!(
-                "truncating Kitty graphics snapshot at {KITTY_PLACEMENT_SNAPSHOT_LIMIT} placements"
-            );
+        if scanned >= KITTY_PLACEMENT_SCAN_LIMIT {
+            log::debug!("stopping Kitty placement scan after {KITTY_PLACEMENT_SCAN_LIMIT} entries");
             break;
         }
-        placement_count += 1;
+        scanned += 1;
 
         let mut image_id = 0_u32;
         let mut placement_id = 0_u32;
@@ -2764,6 +2802,12 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
         {
             continue;
         }
+        if placements.len() >= KITTY_PLACEMENT_SNAPSHOT_LIMIT {
+            log::debug!(
+                "truncating Kitty graphics snapshot at {KITTY_PLACEMENT_SNAPSHOT_LIMIT} visible placements"
+            );
+            break;
+        }
 
         let image = if let Some(image) = images.get(&image_id) {
             image.clone()
@@ -2801,6 +2845,7 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
     placements.sort_by_key(|placement| placement.z);
     inner.kitty_image_cache = images;
     inner.kitty_placements = placements.into();
+    inner.kitty_snapshot_generation = inner.generation;
     inner.kitty_placements.clone()
 }
 
@@ -3773,6 +3818,18 @@ mod tests {
                 .any(|window| window == b"ZXZlbnQgc2VjcmV0"),
             "one-time paste grant did not expose cached text"
         );
+        assert!(
+            screen
+                .inner
+                .lock()
+                .callback_state
+                .as_ref()
+                .expect("callback state")
+                .clipboard_text
+                .lock()
+                .is_none(),
+            "host retained clipboard text after the granted read"
+        );
 
         output.lock().clear();
         screen.feed(&read);
@@ -3788,6 +3845,26 @@ mod tests {
                 .windows(b"ZXZlbnQgc2VjcmV0".len())
                 .any(|window| window == b"ZXZlbnQgc2VjcmV0")
         );
+    }
+
+    #[test]
+    fn terminal_paste_rejects_payloads_over_the_memory_limit() {
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(|_| {
+                panic!("oversized paste reached the PTY callback")
+            })),
+        )
+        .expect("create vt screen");
+        let oversized = "x".repeat(TERMINAL_PASTE_LIMIT_BYTES + 1);
+
+        let err = screen
+            .paste_text(&oversized, VtPasteSource::Clipboard, false)
+            .expect_err("oversized paste must be rejected");
+
+        assert!(err.to_string().contains("safety limit"));
     }
 
     #[test]
