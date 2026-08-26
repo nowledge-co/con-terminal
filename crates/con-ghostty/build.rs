@@ -11,15 +11,15 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// macOS full-libghostty build or the Windows libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
 ///
-/// 2026-08-25 bump: from `ca7516bea6...` to `8867c37c55...`. This is the
-/// exact upstream revision audited for the Zig 0.16 migration and the
-/// portable Kitty protocol work; do not replace it with a moving branch.
+/// 2026-08-26 bump: from `8867c37c55...` to `5f5b988c52...`. The 27 upstream
+/// commits were audited with unchanged public C headers and revalidated
+/// against Con's private embedding patch and portable VT bindings.
 ///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "8867c37c55b578b9eb4cfaba41cb9023e557176d";
+const GHOSTTY_REV: &str = "5f5b988c5236facfe8d2439203d9ee9d5b636cf8";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
