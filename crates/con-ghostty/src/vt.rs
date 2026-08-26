@@ -1173,9 +1173,9 @@ struct VtCallbackState {
     /// a parser reply therefore cannot overtake the already-encoded key.
     write_order: Arc<Mutex<()>>,
     enquiry_response: Box<[u8]>,
-    /// Last clipboard text the user explicitly chose to paste. Only a
-    /// Kitty one-time paste grant can read this through the terminal
-    /// clipboard effect; unsolicited OSC reads are denied.
+    /// Last clipboard text the user explicitly chose to paste. Kitty grants
+    /// are one-time capabilities, but multiple outstanding grants read this
+    /// shared current value. Unsolicited OSC reads remain denied.
     clipboard_text: Mutex<Option<Arc<str>>>,
     /// Active only during `ghostty_terminal_paste`. The C callback cannot
     /// return an I/O result, so buffer the complete logical paste and perform
@@ -1886,10 +1886,6 @@ impl VtScreen {
         let Some(callback_state) = inner.callback_state.as_ref() else {
             anyhow::bail!("terminal paste requires a WRITE_PTY callback");
         };
-        // Every new paste intent invalidates an older Kitty clipboard grant.
-        // A fresh grant is minted only after this exact clipboard-origin paste
-        // emits a Kitty event and its complete output reaches the host queue.
-        callback_state.clipboard_text.lock().take();
         let previous = callback_state
             .pending_paste_write
             .lock()
@@ -2588,12 +2584,6 @@ unsafe extern "C" fn vt_clipboard_read_callback(
         remember: false,
     };
     unsafe { reply(read, &reply_value) };
-    if contents_len > 0 {
-        // The reply callback consumes the borrowed content synchronously. Drop
-        // the host copy immediately so the one-time Ghostty password is backed
-        // by one-time data ownership as well.
-        state.clipboard_text.lock().take();
-    }
 }
 
 fn ghostty_string_eq(value: GhosttyString, expected: &[u8]) -> bool {
@@ -3825,88 +3815,102 @@ mod tests {
     }
 
     #[test]
-    fn kitty_paste_event_exposes_only_the_user_pasted_text_once() {
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let output_for_callback = output.clone();
-        let screen = VtScreen::new_with_write_pty(
-            80,
-            24,
-            None,
-            Some(Arc::new(move |bytes| {
-                output_for_callback.lock().extend_from_slice(bytes);
-                Ok(())
-            })),
-        )
-        .expect("create vt screen");
-        screen.feed(b"\x1b[?5522h");
+    fn kitty_paste_grants_share_the_current_clipboard_without_becoming_reusable() {
+        fn grant_read(event: &[u8]) -> Vec<u8> {
+            let password_prefix = b"\x1b]5522;type=read:status=OK:pw=";
+            assert!(event.starts_with(password_prefix));
+            let password_end = event[password_prefix.len()..]
+                .windows(2)
+                .position(|window| window == b"\x1b\\")
+                .expect("paste event password terminator")
+                + password_prefix.len();
 
-        assert_eq!(
-            screen
-                .paste_text("dropped path", VtPasteSource::Text, false)
-                .expect("text insertion with Kitty paste events enabled"),
-            VtPasteResult::Written
-        );
-        assert_eq!(output.lock().as_slice(), b"dropped path");
-        output.lock().clear();
+            let mut read = b"\x1b]5522;type=read:pw=".to_vec();
+            read.extend_from_slice(&event[password_prefix.len()..password_end]);
+            read.extend_from_slice(b":name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\");
+            read
+        }
 
-        assert_eq!(
-            screen
-                .paste_text("event secret", VtPasteSource::Clipboard, false)
-                .expect("Kitty paste event"),
-            VtPasteResult::Written
-        );
-        let event = output.lock().clone();
-        assert!(!event.windows(6).any(|window| window == b"secret"));
+        fn verify_redemption_order(order: [usize; 2]) {
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let output_for_callback = output.clone();
+            let screen = VtScreen::new_with_write_pty(
+                80,
+                24,
+                None,
+                Some(Arc::new(move |bytes| {
+                    output_for_callback.lock().extend_from_slice(bytes);
+                    Ok(())
+                })),
+            )
+            .expect("create vt screen");
+            screen.feed(b"\x1b[?5522h");
 
-        let password_prefix = b"\x1b]5522;type=read:status=OK:pw=";
-        assert!(event.starts_with(password_prefix));
-        let password_end = event[password_prefix.len()..]
-            .windows(2)
-            .position(|window| window == b"\x1b\\")
-            .expect("paste event password terminator")
-            + password_prefix.len();
-        let password = &event[password_prefix.len()..password_end];
+            assert_eq!(
+                screen
+                    .paste_text("dropped path", VtPasteSource::Text, false)
+                    .expect("text insertion with Kitty paste events enabled"),
+                VtPasteResult::Written
+            );
+            assert_eq!(output.lock().as_slice(), b"dropped path");
 
-        let mut read = b"\x1b]5522;type=read:pw=".to_vec();
-        read.extend_from_slice(password);
-        read.extend_from_slice(b":name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\");
+            let mut reads = Vec::new();
+            for text in ["first clipboard", "current clipboard"] {
+                output.lock().clear();
+                assert_eq!(
+                    screen
+                        .paste_text(text, VtPasteSource::Clipboard, false)
+                        .expect("Kitty paste event"),
+                    VtPasteResult::Written
+                );
+                let event = output.lock().clone();
+                assert!(
+                    !event
+                        .windows(text.len())
+                        .any(|window| window == text.as_bytes())
+                );
+                reads.push(grant_read(&event));
+            }
 
-        output.lock().clear();
-        screen.feed(&read);
-        let first_read = output.lock().clone();
-        assert!(
-            first_read
-                .windows(b"ZXZlbnQgc2VjcmV0".len())
-                .any(|window| window == b"ZXZlbnQgc2VjcmV0"),
-            "one-time paste grant did not expose cached text"
-        );
-        assert!(
-            screen
-                .inner
-                .lock()
-                .callback_state
-                .as_ref()
-                .expect("callback state")
-                .clipboard_text
-                .lock()
-                .is_none(),
-            "host retained clipboard text after the granted read"
-        );
+            for index in order {
+                output.lock().clear();
+                screen.feed(&reads[index]);
+                let response = output.lock().clone();
+                assert!(
+                    response
+                        .windows(b"Y3VycmVudCBjbGlwYm9hcmQ=".len())
+                        .any(|window| window == b"Y3VycmVudCBjbGlwYm9hcmQ="),
+                    "valid paste grant did not expose the current clipboard"
+                );
 
-        output.lock().clear();
-        screen.feed(&read);
-        let second_read = output.lock().clone();
-        assert!(
-            second_read
-                .windows(b"status=EPERM".len())
-                .any(|window| window == b"status=EPERM"),
-            "one-time paste grant was reusable"
-        );
-        assert!(
-            !second_read
-                .windows(b"ZXZlbnQgc2VjcmV0".len())
-                .any(|window| window == b"ZXZlbnQgc2VjcmV0")
-        );
+                output.lock().clear();
+                screen.feed(&reads[index]);
+                assert!(
+                    output
+                        .lock()
+                        .windows(b"status=EPERM".len())
+                        .any(|window| window == b"status=EPERM"),
+                    "one-time paste grant was reusable"
+                );
+            }
+
+            assert_eq!(
+                screen
+                    .inner
+                    .lock()
+                    .callback_state
+                    .as_ref()
+                    .expect("callback state")
+                    .clipboard_text
+                    .lock()
+                    .as_deref(),
+                Some("current clipboard"),
+                "grant redemption discarded the current clipboard"
+            );
+        }
+
+        verify_redemption_order([0, 1]);
+        verify_redemption_order([1, 0]);
     }
 
     #[test]
