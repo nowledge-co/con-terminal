@@ -550,7 +550,13 @@ impl GhosttyView {
         }
 
         self.clear_selection();
-        terminal.resize_surface(size);
+        if let Err(err) = terminal.resize_surface(size) {
+            // Do not cache a resize that never reached the PTY. A later layout
+            // or render pass can retry the same dimensions after backpressure
+            // on the Flatpak host bridge clears.
+            log::debug!("linux pty resize failed: {err}");
+            return false;
+        }
         self.last_surface_size = Some(size);
         false
     }

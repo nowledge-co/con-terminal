@@ -241,12 +241,12 @@ impl LinuxGhosttyTerminal {
         }
     }
 
-    pub fn resize_surface(&self, size: SurfaceSize) {
-        if let Some(session) = self.inner.lock().as_ref() {
-            if let Err(err) = session.resize(size) {
-                log::debug!("linux pty resize failed: {err:#}");
-            }
-        }
+    pub fn resize_surface(&self, size: SurfaceSize) -> Result<(), String> {
+        let guard = self.inner.lock();
+        let Some(session) = guard.as_ref() else {
+            return Err("linux terminal is not attached".to_string());
+        };
+        session.resize(size).map_err(|err| format!("{err:#}"))
     }
 
     pub fn size(&self) -> SurfaceSize {

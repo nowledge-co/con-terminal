@@ -124,7 +124,7 @@ impl LinuxPtyInput {
         frame[3..5].copy_from_slice(&rows.to_be_bytes());
         frame[5..7].copy_from_slice(&width_px.to_be_bytes());
         frame[7..9].copy_from_slice(&height_px.to_be_bytes());
-        queue.enqueue(&frame)
+        queue.enqueue_control(&frame)
     }
 }
 
