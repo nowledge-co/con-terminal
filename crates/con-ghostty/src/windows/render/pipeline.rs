@@ -1,17 +1,8 @@
-//! D3D11 pipeline: HLSL compile, IA layout, buffers, draw state.
+//! D3D11 cell pipeline: HLSL compile, IA layout, buffers, and layered draws.
 //!
-//! Matches [`shaders.hlsl`] one-for-one:
-//!
-//! - vertex shader: `vs_main` — 6 vertices per quad, per-instance IA
-//!   inputs `CELLPOS`/`ATLAS`/`FGCOLOR`/`BGCOLOR`/`ATTRS`.
-//! - pixel shader: `ps_main` — samples the grayscale glyph atlas (t0)
-//!   through `samp` (s0), lerps bg→fg by coverage.
-//! - constant buffer at b0: `Globals { invViewport, cellSize,
-//!   gridCols, gridRows, _pad }`.
-//!
-//! One `DrawIndexedInstanced(6, cell_count, 0, 0, 0)` per frame. No
-//! separate background pass — the grayscale pattern composites bg and
-//! fg in the pixel shader.
+//! One uploaded instance buffer is replayed for cell backgrounds, the cursor,
+//! and glyphs. This leaves room for Kitty image draws between those passes
+//! without duplicating per-cell CPU work.
 
 use std::ffi::CString;
 
@@ -22,11 +13,14 @@ use windows::Win32::Graphics::Direct3D::Fxc::{
 use windows::Win32::Graphics::Direct3D::{D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_BIND_CONSTANT_BUFFER, D3D11_BIND_INDEX_BUFFER, D3D11_BIND_VERTEX_BUFFER,
-    D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE, D3D11_CULL_NONE, D3D11_FILL_SOLID,
-    D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA, D3D11_MAP_WRITE_DISCARD,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_RASTERIZER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DYNAMIC,
-    D3D11_USAGE_IMMUTABLE, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext, ID3D11InputLayout,
-    ID3D11PixelShader, ID3D11RasterizerState, ID3D11SamplerState, ID3D11VertexShader,
+    D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
+    D3D11_BUFFER_DESC, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_CPU_ACCESS_WRITE, D3D11_CULL_NONE,
+    D3D11_FILL_SOLID, D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA,
+    D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE, D3D11_RASTERIZER_DESC,
+    D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SUBRESOURCE_DATA, D3D11_USAGE_DYNAMIC,
+    D3D11_USAGE_IMMUTABLE, ID3D11BlendState, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext,
+    ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState, ID3D11SamplerState,
+    ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32G32_UINT};
 
@@ -69,10 +63,14 @@ pub struct Globals {
 }
 
 pub struct Pipeline {
-    pub vs: ID3D11VertexShader,
-    pub ps: ID3D11PixelShader,
+    text_vs: ID3D11VertexShader,
+    cell_vs: ID3D11VertexShader,
+    background_ps: ID3D11PixelShader,
+    cursor_ps: ID3D11PixelShader,
+    text_ps: ID3D11PixelShader,
     pub input_layout: ID3D11InputLayout,
     pub sampler: ID3D11SamplerState,
+    alpha_blend: ID3D11BlendState,
     /// Explicit no-cull rasterizer — guarantees both triangles of
     /// each cell-quad are rendered regardless of the winding we
     /// happen to produce. Cheaper than reasoning about
@@ -91,22 +89,17 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn new(device: &ID3D11Device, initial_instance_capacity: u32) -> Result<Self> {
-        let vs_blob = compile_shader("vs_main", "vs_5_0")?;
-        let ps_blob = compile_shader("ps_main", "ps_5_0")?;
+        let text_vs_blob = compile_shader(HLSL_SOURCE, "vs_text", "vs_5_0")?;
+        let cell_vs_blob = compile_shader(HLSL_SOURCE, "vs_cell", "vs_5_0")?;
+        let background_ps_blob = compile_shader(HLSL_SOURCE, "ps_background", "ps_5_0")?;
+        let cursor_ps_blob = compile_shader(HLSL_SOURCE, "ps_cursor", "ps_5_0")?;
+        let text_ps_blob = compile_shader(HLSL_SOURCE, "ps_text", "ps_5_0")?;
 
-        let vs_bytes = blob_slice(&vs_blob);
-        let ps_bytes = blob_slice(&ps_blob);
-
-        // SAFETY: blob lifetimes exceed the Create* calls.
-        let mut vs: Option<ID3D11VertexShader> = None;
-        unsafe { device.CreateVertexShader(vs_bytes, None, Some(&mut vs)) }
-            .context("CreateVertexShader failed")?;
-        let vs = vs.context("CreateVertexShader produced no shader")?;
-
-        let mut ps: Option<ID3D11PixelShader> = None;
-        unsafe { device.CreatePixelShader(ps_bytes, None, Some(&mut ps)) }
-            .context("CreatePixelShader failed")?;
-        let ps = ps.context("CreatePixelShader produced no shader")?;
+        let text_vs = create_vertex_shader(device, &text_vs_blob)?;
+        let cell_vs = create_vertex_shader(device, &cell_vs_blob)?;
+        let background_ps = create_pixel_shader(device, &background_ps_blob)?;
+        let cursor_ps = create_pixel_shader(device, &cursor_ps_blob)?;
+        let text_ps = create_pixel_shader(device, &text_ps_blob)?;
 
         // Matches the `VSInstance` struct in shaders.hlsl. All per-instance.
         let cellpos = CString::new("CELLPOS").unwrap();
@@ -127,12 +120,15 @@ impl Pipeline {
 
         let mut input_layout: Option<ID3D11InputLayout> = None;
         // SAFETY: layout and vs_bytes live for the call.
-        unsafe { device.CreateInputLayout(&layout, vs_bytes, Some(&mut input_layout)) }
-            .context("CreateInputLayout failed")?;
+        unsafe {
+            device.CreateInputLayout(&layout, blob_slice(&text_vs_blob), Some(&mut input_layout))
+        }
+        .context("CreateInputLayout failed")?;
         let input_layout = input_layout.context("CreateInputLayout produced no layout")?;
 
         // Sampler: point clamp — pixel-accurate atlas reads.
         let sampler = create_point_sampler(device)?;
+        let alpha_blend = create_premultiplied_alpha_blend(device)?;
 
         // No-cull rasterizer: we compose each cell from two triangles
         // and don't want to worry about which winding happens to face
@@ -151,10 +147,14 @@ impl Pipeline {
         let globals_buffer = create_dynamic_cbuffer(device, std::mem::size_of::<Globals>() as u32)?;
 
         Ok(Self {
-            vs,
-            ps,
+            text_vs,
+            cell_vs,
+            background_ps,
+            cursor_ps,
+            text_ps,
             input_layout,
             sampler,
+            alpha_blend,
             rasterizer,
             index_buffer,
             instance_buffer,
@@ -229,47 +229,74 @@ impl Pipeline {
         Ok(())
     }
 
-    pub fn bind_and_draw(
-        &self,
-        context: &ID3D11DeviceContext,
-        atlas_srv: &windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
-        instance_count: u32,
-    ) {
-        // SAFETY: all parameters are owned by self / caller for the
-        // duration of the draw call; D3D11 DeviceContext is single-threaded.
+    fn bind_common(&self, context: &ID3D11DeviceContext) {
         unsafe {
             context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             context.IASetInputLayout(&self.input_layout);
             context.RSSetState(&self.rasterizer);
 
-            let stride: u32 = std::mem::size_of::<Instance>() as u32;
-            let offset: u32 = 0;
+            let stride = std::mem::size_of::<Instance>() as u32;
             context.IASetVertexBuffers(
                 0,
                 1,
                 Some(&Some(self.instance_buffer.clone())),
                 Some(&stride),
-                Some(&offset),
+                Some(&0),
             );
             context.IASetIndexBuffer(
                 &self.index_buffer,
                 windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
                 0,
             );
-
-            context.VSSetShader(&self.vs, None);
-            context.PSSetShader(&self.ps, None);
-
             context.VSSetConstantBuffers(0, Some(&[Some(self.globals_buffer.clone())]));
-            // Also bind Globals to the PS — ps_main reads `cellSize` to
-            // size the underline / strikethrough band. Without this,
-            // the PS's b0 is uninitialized (cellSize.y == 0), so
-            // `pxUV = 1.0 / max(0, 1) = 1.0` and the band check matches
-            // every pixel → whole cell fills with fg for under/strike.
             context.PSSetConstantBuffers(0, Some(&[Some(self.globals_buffer.clone())]));
+        }
+    }
+
+    pub fn draw_backgrounds(
+        &self,
+        context: &ID3D11DeviceContext,
+        first_instance: u32,
+        instance_count: u32,
+    ) {
+        if instance_count == 0 {
+            return;
+        }
+        self.bind_common(context);
+        unsafe {
+            context.OMSetBlendState(None, None, u32::MAX);
+            context.VSSetShader(&self.cell_vs, None);
+            context.PSSetShader(&self.background_ps, None);
+            context.DrawIndexedInstanced(6, instance_count, 0, 0, first_instance);
+        }
+    }
+
+    pub fn draw_cursor(&self, context: &ID3D11DeviceContext, instance: Option<u32>) {
+        let Some(instance) = instance else {
+            return;
+        };
+        self.bind_common(context);
+        unsafe {
+            context.OMSetBlendState(None, None, u32::MAX);
+            context.VSSetShader(&self.cell_vs, None);
+            context.PSSetShader(&self.cursor_ps, None);
+            context.DrawIndexedInstanced(6, 1, 0, 0, instance);
+        }
+    }
+
+    pub fn draw_text(
+        &self,
+        context: &ID3D11DeviceContext,
+        atlas_srv: &windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
+        instance_count: u32,
+    ) {
+        self.bind_common(context);
+        unsafe {
+            context.OMSetBlendState(&self.alpha_blend, None, u32::MAX);
+            context.VSSetShader(&self.text_vs, None);
+            context.PSSetShader(&self.text_ps, None);
             context.PSSetShaderResources(0, Some(&[Some(atlas_srv.clone())]));
             context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-
             context.DrawIndexedInstanced(6, instance_count, 0, 0, 0);
         }
     }
@@ -277,8 +304,8 @@ impl Pipeline {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-fn compile_shader(entry: &str, target: &str) -> Result<ID3DBlob> {
-    let src_bytes = HLSL_SOURCE.as_bytes();
+pub(super) fn compile_shader(source: &str, entry: &str, target: &str) -> Result<ID3DBlob> {
+    let src_bytes = source.as_bytes();
     let entry_c = CString::new(entry).unwrap();
     let target_c = CString::new(target).unwrap();
 
@@ -323,13 +350,33 @@ fn compile_shader(entry: &str, target: &str) -> Result<ID3DBlob> {
     blob.context("D3DCompile produced no blob")
 }
 
-fn blob_slice(blob: &ID3DBlob) -> &[u8] {
+pub(super) fn blob_slice(blob: &ID3DBlob) -> &[u8] {
     // SAFETY: blob outlives the slice use at the call site.
     unsafe {
         let ptr = blob.GetBufferPointer() as *const u8;
         let len = blob.GetBufferSize();
         std::slice::from_raw_parts(ptr, len)
     }
+}
+
+pub(super) fn create_vertex_shader(
+    device: &ID3D11Device,
+    blob: &ID3DBlob,
+) -> Result<ID3D11VertexShader> {
+    let mut shader = None;
+    unsafe { device.CreateVertexShader(blob_slice(blob), None, Some(&mut shader)) }
+        .context("CreateVertexShader failed")?;
+    shader.context("CreateVertexShader produced no shader")
+}
+
+pub(super) fn create_pixel_shader(
+    device: &ID3D11Device,
+    blob: &ID3DBlob,
+) -> Result<ID3D11PixelShader> {
+    let mut shader = None;
+    unsafe { device.CreatePixelShader(blob_slice(blob), None, Some(&mut shader)) }
+        .context("CreatePixelShader failed")?;
+    shader.context("CreatePixelShader produced no shader")
 }
 
 fn instance_elem(
@@ -349,7 +396,7 @@ fn instance_elem(
     }
 }
 
-fn create_no_cull_rasterizer(device: &ID3D11Device) -> Result<ID3D11RasterizerState> {
+pub(super) fn create_no_cull_rasterizer(device: &ID3D11Device) -> Result<ID3D11RasterizerState> {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
@@ -367,6 +414,25 @@ fn create_no_cull_rasterizer(device: &ID3D11Device) -> Result<ID3D11RasterizerSt
     unsafe { device.CreateRasterizerState(&desc, Some(&mut out)) }
         .context("CreateRasterizerState failed")?;
     out.context("CreateRasterizerState produced no state")
+}
+
+pub(super) fn create_premultiplied_alpha_blend(device: &ID3D11Device) -> Result<ID3D11BlendState> {
+    let target = D3D11_RENDER_TARGET_BLEND_DESC {
+        BlendEnable: true.into(),
+        SrcBlend: D3D11_BLEND_ONE,
+        DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+        BlendOp: D3D11_BLEND_OP_ADD,
+        SrcBlendAlpha: D3D11_BLEND_ONE,
+        DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
+        BlendOpAlpha: D3D11_BLEND_OP_ADD,
+        RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+    };
+    let mut desc = D3D11_BLEND_DESC::default();
+    desc.RenderTarget[0] = target;
+    let mut state = None;
+    unsafe { device.CreateBlendState(&desc, Some(&mut state)) }
+        .context("CreateBlendState failed")?;
+    state.context("CreateBlendState produced no state")
 }
 
 fn create_point_sampler(device: &ID3D11Device) -> Result<ID3D11SamplerState> {
@@ -459,7 +525,7 @@ pub fn instance_for_cell(
     glyph: GlyphRect,
     fg: u32,
     bg: u32,
-    attrs: u8,
+    attrs: u32,
 ) -> Instance {
     Instance {
         cell_pos: [col as u32, row as u32],
@@ -467,6 +533,6 @@ pub fn instance_for_cell(
         atlas_size: [glyph.w as u32, glyph.h as u32],
         fg,
         bg,
-        attrs: attrs as u32,
+        attrs,
     }
 }
