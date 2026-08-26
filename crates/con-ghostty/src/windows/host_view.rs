@@ -182,6 +182,15 @@ impl RenderSession {
             )
             .context("VtScreen::new failed")?,
         );
+        let metrics = renderer.metrics();
+        let cell_w = metrics.cell_width_px.max(1);
+        let cell_h = metrics.cell_height_px.max(1);
+        // The renderer already owns an initial render target of the requested
+        // size, so initialize only libghostty's pixel geometry here. Waiting
+        // for the next size change leaves cell-based Kitty placements at 0px
+        // indefinitely when the pane opens at its final dimensions.
+        vt.resize(cols, rows, cell_w, cell_h)
+            .context("initial VtScreen::resize failed")?;
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
             .as_deref()
@@ -201,7 +210,9 @@ impl RenderSession {
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell = super::conpty::default_shell_command();
         let shell_cwd = resolve_shell_cwd(cwd);
-        log::info!("RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?}");
+        log::info!(
+            "RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?} cell={cell_w}x{cell_h}"
+        );
         let conpty = prepared_conpty
             .spawn(
                 &shell,

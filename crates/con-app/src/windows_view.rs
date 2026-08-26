@@ -1320,7 +1320,9 @@ impl GhosttyView {
                     return true;
                 }
                 "v" => {
-                    self.paste_from_clipboard(cx);
+                    if self.paste_from_clipboard(cx) {
+                        cx.notify();
+                    }
                     return true;
                 }
                 _ => {}
