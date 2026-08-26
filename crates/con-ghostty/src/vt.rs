@@ -83,6 +83,12 @@ const KITTY_PNG_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const KITTY_PNG_MAX_DIMENSION: u32 = 10_000;
 const KITTY_PNG_DECODER_MAX_ALLOC_BYTES: u64 = 32 * 1024 * 1024;
 const TERMINAL_PASTE_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+// libghostty may split one paste into framing and content callbacks. Collect
+// those callbacks before handing them to the bounded host queue so a queue
+// rejection cannot leave a partial bracketed paste in the child process.
+// Protocol framing should be tiny; the second input-sized allowance keeps a
+// malformed upstream expansion bounded without constraining valid text.
+const TERMINAL_PASTE_OUTPUT_LIMIT_BYTES: usize = TERMINAL_PASTE_LIMIT_BYTES * 2;
 // A single tiny image can have an effectively unbounded number of explicit
 // placements upstream. Bound each render snapshot so hostile terminal output
 // cannot force either renderer to allocate and lay out millions of quads in
@@ -1138,18 +1144,43 @@ struct VtPasteReader<'a> {
     served: bool,
 }
 
+enum PendingPasteWrite {
+    Buffer(Vec<u8>),
+    TooLarge,
+}
+
+impl PendingPasteWrite {
+    fn append(&mut self, bytes: &[u8]) {
+        let Self::Buffer(buffer) = self else {
+            return;
+        };
+        let Some(total) = buffer.len().checked_add(bytes.len()) else {
+            *self = Self::TooLarge;
+            return;
+        };
+        if total > TERMINAL_PASTE_OUTPUT_LIMIT_BYTES {
+            *self = Self::TooLarge;
+            return;
+        }
+        buffer.extend_from_slice(bytes);
+    }
+}
+
 struct VtCallbackState {
     write_pty: PtyWriteCallback,
+    /// Serializes host callback entry. `send_key` acquires this while it still
+    /// owns the VT mutex, then releases the VT mutex before invoking the host;
+    /// a parser reply therefore cannot overtake the already-encoded key.
+    write_order: Arc<Mutex<()>>,
     enquiry_response: Box<[u8]>,
     /// Last clipboard text the user explicitly chose to paste. Only a
     /// Kitty one-time paste grant can read this through the terminal
     /// clipboard effect; unsolicited OSC reads are denied.
     clipboard_text: Mutex<Option<Arc<str>>>,
-    /// WRITE_PTY is a void callback in libghostty's C ABI. Capture its first
-    /// host I/O failure so synchronous user operations such as paste can still
-    /// return an error instead of reporting bytes as written when they were
-    /// rejected by the host queue.
-    write_error: Mutex<Option<String>>,
+    /// Active only during `ghostty_terminal_paste`. The C callback cannot
+    /// return an I/O result, so buffer the complete logical paste and perform
+    /// one fallible host enqueue after libghostty returns.
+    pending_paste_write: Mutex<Option<PendingPasteWrite>>,
     rows: AtomicU16,
     cols: AtomicU16,
     cell_width: AtomicU32,
@@ -1477,9 +1508,10 @@ impl VtScreen {
         let mut callback_state = write_pty.map(|write_pty| {
             Box::new(VtCallbackState {
                 write_pty,
+                write_order: Arc::new(Mutex::new(())),
                 enquiry_response: b"con".to_vec().into_boxed_slice(),
                 clipboard_text: Mutex::new(None),
-                write_error: Mutex::new(None),
+                pending_paste_write: Mutex::new(None),
                 rows: AtomicU16::new(rows),
                 cols: AtomicU16::new(cols),
                 cell_width: AtomicU32::new(1),
@@ -1732,6 +1764,7 @@ impl VtScreen {
             anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
         };
         let write_pty = callback_state.write_pty.clone();
+        let write_order = callback_state.write_order.clone();
 
         let mut kitty_flags = 0_u8;
         let kitty_flags_rc = unsafe {
@@ -1811,13 +1844,16 @@ impl VtScreen {
             &inline[..len]
         };
 
-        // PTY writes may block. Keep the encoder and terminal mode snapshot
-        // serialized above, but release the VT mutex before entering host I/O
-        // so parser feeds and renderer snapshots cannot be stalled behind it.
-        drop(inner);
         if !bytes.is_empty() {
+            // Reserve the next host-write position before releasing the VT
+            // state. PTY feeds may then parse concurrently, but any generated
+            // reply waits behind this key instead of overtaking it. The real
+            // host callbacks enqueue into a non-blocking bounded queue.
+            let write_guard = write_order.lock();
+            drop(inner);
             write_pty(bytes)
                 .map_err(|err| anyhow::anyhow!("failed to write encoded key: {err}"))?;
+            drop(write_guard);
         }
 
         Ok(VtKeySend {
@@ -1850,11 +1886,15 @@ impl VtScreen {
         let Some(callback_state) = inner.callback_state.as_ref() else {
             anyhow::bail!("terminal paste requires a WRITE_PTY callback");
         };
-        // Every new paste intent invalidates both an older Kitty clipboard
-        // grant and an unrelated callback error. A fresh grant is minted only
-        // after this exact clipboard-origin paste emits a Kitty event.
+        // Every new paste intent invalidates an older Kitty clipboard grant.
+        // A fresh grant is minted only after this exact clipboard-origin paste
+        // emits a Kitty event and its complete output reaches the host queue.
         callback_state.clipboard_text.lock().take();
-        callback_state.write_error.lock().take();
+        let previous = callback_state
+            .pending_paste_write
+            .lock()
+            .replace(PendingPasteWrite::Buffer(Vec::new()));
+        debug_assert!(previous.is_none(), "paste writes must not nest");
 
         let mime = GhosttyString {
             ptr: TEXT_PLAIN_MIME.as_ptr(),
@@ -1881,11 +1921,26 @@ impl VtScreen {
         };
         let mut written = false;
         let rc = unsafe { ghostty_terminal_paste(inner.terminal, &paste, &mut written) };
-        if let Some(err) = callback_state.write_error.lock().take() {
-            anyhow::bail!("terminal paste failed to enqueue PTY bytes: {err}");
-        }
+        let pending_write = callback_state
+            .pending_paste_write
+            .lock()
+            .take()
+            .expect("paste write capture initialized");
         match rc {
             GHOSTTY_SUCCESS => {
+                let PendingPasteWrite::Buffer(output) = pending_write else {
+                    anyhow::bail!("terminal paste produced too much PTY output");
+                };
+                if !output.is_empty() {
+                    // The real host callback is a non-blocking bounded queue.
+                    // Keep the VT lock through this single enqueue so the
+                    // one-time Kitty grant is installed before a program can
+                    // react to the event and request its clipboard payload.
+                    let _write_guard = callback_state.write_order.lock();
+                    (callback_state.write_pty)(&output).map_err(|err| {
+                        anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}")
+                    })?;
+                }
                 if written && !reader.served && source == VtPasteSource::Clipboard {
                     // Ghostty does not call the MIME reader for a Kitty paste
                     // event. Retain the exact user-selected text for the
@@ -2583,16 +2638,20 @@ unsafe extern "C" fn vt_write_pty_callback(
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-    if let Err(err) = (state.write_pty)(bytes) {
-        // The libghostty callback ABI cannot return an I/O error to the
-        // parser. Keep terminal-generated replies best-effort, while direct
-        // key encoding propagates the same callback error to its caller.
-        let message = err.to_string();
-        let mut write_error = state.write_error.lock();
-        if write_error.is_none() {
-            *write_error = Some(message.clone());
+    {
+        let mut pending = state.pending_paste_write.lock();
+        if let Some(pending) = pending.as_mut() {
+            pending.append(bytes);
+            return;
         }
-        log::debug!("vt WRITE_PTY callback failed: {message}");
+    }
+
+    let _write_guard = state.write_order.lock();
+    if let Err(err) = (state.write_pty)(bytes) {
+        // Asynchronous terminal replies are best-effort because libghostty's
+        // callback ABI has no error return. Keys and paste invoke the same
+        // host callback directly and propagate their enqueue failures.
+        log::debug!("vt WRITE_PTY callback failed: {err}");
     }
 }
 
@@ -3714,11 +3773,14 @@ mod tests {
     fn paste_applies_terminal_modes_and_requires_confirmation_for_command_injection() {
         let output = Arc::new(Mutex::new(Vec::new()));
         let output_for_callback = output.clone();
+        let callback_calls = Arc::new(Mutex::new(0_usize));
+        let callback_calls_for_callback = callback_calls.clone();
         let screen = VtScreen::new_with_write_pty(
             80,
             24,
             None,
             Some(Arc::new(move |bytes| {
+                *callback_calls_for_callback.lock() += 1;
                 output_for_callback.lock().extend_from_slice(bytes);
                 Ok(())
             })),
@@ -3752,6 +3814,7 @@ mod tests {
         assert_eq!(output.lock().as_slice(), b"echo first\recho second");
 
         output.lock().clear();
+        *callback_calls.lock() = 0;
         screen.feed(b"\x1b[?2004h");
         assert_eq!(
             screen
@@ -3760,6 +3823,11 @@ mod tests {
             VtPasteResult::Written
         );
         assert_eq!(output.lock().as_slice(), b"\x1b[200~first\nsecond\x1b[201~");
+        assert_eq!(
+            *callback_calls.lock(),
+            1,
+            "one logical paste must reach the bounded host queue atomically"
+        );
     }
 
     #[test]
