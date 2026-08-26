@@ -13,14 +13,15 @@
 //! and layout state. The Windows D3D11 path remains the model for the
 //! eventual native renderer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
 use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
-    GhosttySplitDirection, GhosttyTerminal, ScreenSnapshot, SurfaceSize, VtCell, VtCursor,
+    GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
+    SurfaceSize, VtCell, VtCursor,
 };
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
@@ -28,6 +29,8 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::menu::ContextMenuExt;
 use gpui_component::{ActiveTheme, Sizable as _};
+use image::{Frame, RgbaImage};
+use smallvec::SmallVec;
 
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
@@ -42,6 +45,7 @@ const DEFAULT_CELL_WIDTH_RATIO: f32 = 0.62;
 const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
 const TERMINAL_PADDING_X_PX: f32 = 12.0;
 const TERMINAL_PADDING_Y_PX: f32 = 10.0;
+const KITTY_BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
 
 /// Resolved logical font size used for both the cell-grid estimate
 /// (`estimate_surface_size`) and the actual paint (`render`). Both
@@ -65,6 +69,18 @@ fn cell_width_px(font_size_px: f32) -> f32 {
 
 fn cell_height_px(font_size_px: f32) -> f32 {
     (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0)
+}
+
+fn physical_cell_size(font_size_px: f32, scale_factor: f32) -> (u32, u32) {
+    let scale_factor = scale_factor.max(f32::EPSILON);
+    (
+        (cell_width_px(font_size_px) * scale_factor)
+            .round()
+            .max(1.0) as u32,
+        (cell_height_px(font_size_px) * scale_factor)
+            .round()
+            .max(1.0) as u32,
+    )
 }
 
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -100,6 +116,8 @@ pub struct GhosttyView {
     row_cache_cursor: Option<VtCursor>,
     row_cache_style: Option<RowCacheStyleKey>,
     row_cache_shape: Option<(u16, u16)>,
+    kitty_images: HashMap<KittyImageKey, Arc<RenderImage>>,
+    failed_kitty_images: HashSet<KittyImageKey>,
     /// Latched after the first PTY snapshot that contained any
     /// printable content. Used to gate the "Waiting for shell
     /// prompt…" placeholder so it disappears the moment bash echoes
@@ -195,6 +213,8 @@ impl GhosttyView {
             row_cache_cursor: None,
             row_cache_style: None,
             row_cache_shape: None,
+            kitty_images: HashMap::new(),
+            failed_kitty_images: HashSet::new(),
             seen_any_output: false,
             pane_bounds: None,
             scale_factor: 1.0,
@@ -299,6 +319,8 @@ impl GhosttyView {
         self.row_cache_cursor = None;
         self.row_cache_style = None;
         self.row_cache_shape = None;
+        self.kitty_images.clear();
+        self.failed_kitty_images.clear();
         self.seen_any_output = false;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
@@ -491,15 +513,20 @@ impl GhosttyView {
         {
             return false;
         }
-        // Latch once the parser has handed us any printable cell.
+        // Latch once the parser has handed us any visible terminal output.
         // Used to suppress the "Waiting for shell prompt…" placeholder
         // for the lifetime of the PTY session — important for TUIs
         // (htop, vim, less, fzf, …) that switch to the alternate
         // screen and leave the grid empty for ~hundreds of ms before
         // drawing their UI. Without this latch the placeholder would
         // briefly flash over a black backdrop on every alt-screen
-        // entry and look like a regression in shell readiness.
-        if !self.seen_any_output && snapshot.cells.iter().any(|c| c.codepoint != 0) {
+        // entry and look like a regression in shell readiness. Image-only
+        // applications count too, otherwise the placeholder would shift
+        // their Kitty placements down by one synthetic row indefinitely.
+        if !self.seen_any_output
+            && (snapshot.cells.iter().any(|c| c.codepoint != 0)
+                || !snapshot.kitty_placements.is_empty())
+        {
             self.seen_any_output = true;
         }
         self.clear_selection();
@@ -539,9 +566,13 @@ impl GhosttyView {
         // actually paint at — picking different floors here would
         // make text overrun the estimated column count and lines
         // wrap unexpectedly on the alternate screen.
-        let font_size_px = effective_font_size(self.initial_font_size) * scale_factor;
-        let cell_width = cell_width_px(font_size_px) as u32;
-        let cell_height = cell_height_px(font_size_px) as u32;
+        let font_size_px = effective_font_size(self.initial_font_size);
+        // GPUI paints in logical pixels and applies the display scale after
+        // layout. Scale those exact logical cell metrics for libghostty too;
+        // recalculating the ratios from an already-scaled font can round to a
+        // different device size (for example 9 px logical became 17 px at 2x),
+        // which makes Kitty placements drift away from their text columns.
+        let (cell_width, cell_height) = physical_cell_size(font_size_px, scale_factor);
         let columns = (width_px / cell_width.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
@@ -1075,6 +1106,35 @@ impl GhosttyView {
         ))
     }
 
+    fn sync_kitty_image_cache(&mut self, placements: &[KittyPlacement]) {
+        let active = placements
+            .iter()
+            .map(|placement| KittyImageKey::from(placement.image.as_ref()))
+            .collect::<HashSet<_>>();
+        self.kitty_images.retain(|key, _| active.contains(key));
+        self.failed_kitty_images.retain(|key| active.contains(key));
+
+        for placement in placements {
+            let key = KittyImageKey::from(placement.image.as_ref());
+            if self.kitty_images.contains_key(&key) || self.failed_kitty_images.contains(&key) {
+                continue;
+            }
+            if let Some(image) = kitty_image_to_render_image(&placement.image) {
+                self.kitty_images.insert(key, image);
+            } else {
+                log::warn!(
+                    "ignoring invalid Kitty image {} generation {} ({}x{}, {} bytes)",
+                    key.id,
+                    key.generation,
+                    placement.image.width,
+                    placement.image.height,
+                    placement.image.rgba.len()
+                );
+                self.failed_kitty_images.insert(key);
+            }
+        }
+    }
+
     fn sync_row_cache(
         &mut self,
         default_fg: Hsla,
@@ -1253,6 +1313,27 @@ impl Render for GhosttyView {
         let pane_background = theme.background.opacity(pane_opacity);
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
+        let kitty_placements = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kitty_placements.clone())
+            .unwrap_or_default();
+        self.sync_kitty_image_cache(&kitty_placements);
+        let mut has_kitty_images = false;
+        let mut split_terminal_rows = false;
+        for placement in kitty_placements.iter() {
+            let key = KittyImageKey::from(placement.image.as_ref());
+            let valid = self.kitty_images.contains_key(&key)
+                && kitty_placement_geometry(
+                    placement,
+                    cell_width_px,
+                    line_height_px,
+                    self.scale_factor,
+                )
+                .is_some();
+            has_kitty_images |= valid;
+            split_terminal_rows |= valid && placement.z < 0;
+        }
         self.sync_row_cache(
             foreground,
             theme.background,
@@ -1265,6 +1346,9 @@ impl Render for GhosttyView {
             usize::from(self.snapshot.as_ref().map_or(0, |snapshot| snapshot.rows))
                 + if status_message.is_some() { 1 } else { 0 },
         );
+        let mut cell_backgrounds = split_terminal_rows.then(Vec::new);
+        let mut overlay_backgrounds = split_terminal_rows.then(Vec::new);
+        let status_row_offset = usize::from(status_message.is_some());
         if let Some(message) = status_message {
             rows.push(
                 div()
@@ -1295,18 +1379,50 @@ impl Render for GhosttyView {
                             Some(selection_cols),
                             selection_bg,
                         );
+                        if let (Some(backgrounds), Some(overlays)) =
+                            (cell_backgrounds.as_mut(), overlay_backgrounds.as_mut())
+                        {
+                            append_terminal_backgrounds(
+                                &row,
+                                row_idx + status_row_offset,
+                                backgrounds,
+                                overlays,
+                            );
+                            rows.push(render_terminal_foreground_row(
+                                &row,
+                                px(font_size_px),
+                                px(line_height_px),
+                            ));
+                        } else {
+                            rows.push(render_cached_terminal_row(
+                                &row,
+                                px(font_size_px),
+                                px(line_height_px),
+                            ));
+                        }
+                    }
+                } else if let Some(row) = self.row_cache.get(row_idx) {
+                    if let (Some(backgrounds), Some(overlays)) =
+                        (cell_backgrounds.as_mut(), overlay_backgrounds.as_mut())
+                    {
+                        append_terminal_backgrounds(
+                            row,
+                            row_idx + status_row_offset,
+                            backgrounds,
+                            overlays,
+                        );
+                        rows.push(render_terminal_foreground_row(
+                            row,
+                            px(font_size_px),
+                            px(line_height_px),
+                        ));
+                    } else {
                         rows.push(render_cached_terminal_row(
-                            &row,
+                            row,
                             px(font_size_px),
                             px(line_height_px),
                         ));
                     }
-                } else if let Some(row) = self.row_cache.get(row_idx) {
-                    rows.push(render_cached_terminal_row(
-                        row,
-                        px(font_size_px),
-                        px(line_height_px),
-                    ));
                 }
             }
         }
@@ -1323,20 +1439,105 @@ impl Render for GhosttyView {
             );
         }
 
-        let terminal_content = div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .overflow_hidden()
-            .bg(pane_background)
-            .px(px(TERMINAL_PADDING_X_PX))
-            .py(px(TERMINAL_PADDING_Y_PX))
-            .text_color(foreground)
-            .items_start()
-            .justify_start()
-            .children(rows);
+        let terminal_content = if has_kitty_images {
+            let row_layer = div()
+                .absolute()
+                .flex()
+                .flex_col()
+                .size_full()
+                .items_start()
+                .justify_start()
+                .text_color(foreground)
+                .children(rows);
+            let content_viewport = if split_terminal_rows {
+                div()
+                    .absolute()
+                    .left(px(TERMINAL_PADDING_X_PX))
+                    .right(px(TERMINAL_PADDING_X_PX))
+                    .top(px(TERMINAL_PADDING_Y_PX))
+                    .bottom(px(TERMINAL_PADDING_Y_PX))
+                    .overflow_hidden()
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::BelowBackground,
+                        cell_width_px,
+                        line_height_px,
+                        self.scale_factor,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+                    .child(render_terminal_background_layer(
+                        cell_backgrounds.unwrap_or_default(),
+                        px(cell_width_px),
+                        px(line_height_px),
+                    ))
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::BelowText,
+                        cell_width_px,
+                        line_height_px,
+                        self.scale_factor,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+                    .child(render_terminal_background_layer(
+                        overlay_backgrounds.unwrap_or_default(),
+                        px(cell_width_px),
+                        px(line_height_px),
+                    ))
+                    .child(row_layer)
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::AboveText,
+                        cell_width_px,
+                        line_height_px,
+                        self.scale_factor,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+            } else {
+                div()
+                    .absolute()
+                    .left(px(TERMINAL_PADDING_X_PX))
+                    .right(px(TERMINAL_PADDING_X_PX))
+                    .top(px(TERMINAL_PADDING_Y_PX))
+                    .bottom(px(TERMINAL_PADDING_Y_PX))
+                    .overflow_hidden()
+                    .child(row_layer)
+                    .child(render_kitty_image_layer(
+                        &kitty_placements,
+                        &self.kitty_images,
+                        KittyImageLayer::AboveText,
+                        cell_width_px,
+                        line_height_px,
+                        self.scale_factor,
+                        status_row_offset as f32 * line_height_px,
+                    ))
+            };
+            div()
+                .relative()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .bg(pane_background)
+                .child(content_viewport)
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .bg(pane_background)
+                .px(px(TERMINAL_PADDING_X_PX))
+                .py(px(TERMINAL_PADDING_Y_PX))
+                .text_color(foreground)
+                .items_start()
+                .justify_start()
+                .children(rows)
+        };
         let mut terminal_children = vec![terminal_content.into_any_element()];
         if let Some(overlay) = self.render_link_cursor_overlay(cell_width_px, line_height_px) {
             terminal_children.push(overlay);
@@ -1631,6 +1832,178 @@ impl Drop for GhosttyView {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct KittyImageKey {
+    id: u32,
+    generation: u64,
+}
+
+impl From<&KittyImage> for KittyImageKey {
+    fn from(image: &KittyImage) -> Self {
+        Self {
+            id: image.id,
+            generation: image.generation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyImageLayer {
+    BelowBackground,
+    BelowText,
+    AboveText,
+}
+
+impl KittyImageLayer {
+    fn contains(self, z: i32) -> bool {
+        match self {
+            Self::BelowBackground => z < KITTY_BELOW_BACKGROUND_LIMIT,
+            Self::BelowText => (KITTY_BELOW_BACKGROUND_LIMIT..0).contains(&z),
+            Self::AboveText => z >= 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct KittyPlacementGeometry {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    image_left: f32,
+    image_top: f32,
+    image_width: f32,
+    image_height: f32,
+}
+
+fn kitty_placement_geometry(
+    placement: &KittyPlacement,
+    cell_width: f32,
+    cell_height: f32,
+    scale_factor: f32,
+) -> Option<KittyPlacementGeometry> {
+    let image = &placement.image;
+    let source_right = placement.source_x.checked_add(placement.source_width)?;
+    let source_bottom = placement.source_y.checked_add(placement.source_height)?;
+    if placement.pixel_width == 0
+        || placement.pixel_height == 0
+        || placement.source_width == 0
+        || placement.source_height == 0
+        || image.width == 0
+        || image.height == 0
+        || source_right > image.width
+        || source_bottom > image.height
+        || !cell_width.is_finite()
+        || !cell_height.is_finite()
+        || !scale_factor.is_finite()
+        || cell_width <= 0.0
+        || cell_height <= 0.0
+        || scale_factor <= 0.0
+    {
+        return None;
+    }
+
+    let device_to_logical = 1.0_f64 / scale_factor as f64;
+    let width = placement.pixel_width as f64 * device_to_logical;
+    let height = placement.pixel_height as f64 * device_to_logical;
+    let source_scale_x = width / placement.source_width as f64;
+    let source_scale_y = height / placement.source_height as f64;
+    let values = KittyPlacementGeometry {
+        left: (placement.viewport_col as f64 * cell_width as f64
+            + placement.cell_x_offset as f64 * device_to_logical) as f32,
+        top: (placement.viewport_row as f64 * cell_height as f64
+            + placement.cell_y_offset as f64 * device_to_logical) as f32,
+        width: width as f32,
+        height: height as f32,
+        image_left: (-(placement.source_x as f64) * source_scale_x) as f32,
+        image_top: (-(placement.source_y as f64) * source_scale_y) as f32,
+        image_width: (image.width as f64 * source_scale_x) as f32,
+        image_height: (image.height as f64 * source_scale_y) as f32,
+    };
+    if [
+        values.left,
+        values.top,
+        values.width,
+        values.height,
+        values.image_left,
+        values.image_top,
+        values.image_width,
+        values.image_height,
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+    {
+        Some(values)
+    } else {
+        None
+    }
+}
+
+fn kitty_image_to_render_image(image: &KittyImage) -> Option<Arc<RenderImage>> {
+    let expected_len = (image.width as usize)
+        .checked_mul(image.height as usize)?
+        .checked_mul(4)?;
+    if image.width == 0 || image.height == 0 || image.rgba.len() != expected_len {
+        return None;
+    }
+
+    // GPUI's `RenderImage` byte contract is BGRA even though the image crate
+    // buffer type is named `RgbaImage`. Keep the shared VT snapshot in its
+    // renderer-neutral RGBA form and swizzle only once per image generation.
+    let mut bgra = image.rgba.to_vec();
+    for pixel in bgra.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    let buffer = RgbaImage::from_raw(image.width, image.height, bgra)?;
+    let frame = Frame::new(buffer);
+    let frames: SmallVec<[Frame; 1]> = SmallVec::from_buf([frame]);
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
+fn render_kitty_image_layer(
+    placements: &[KittyPlacement],
+    images: &HashMap<KittyImageKey, Arc<RenderImage>>,
+    layer: KittyImageLayer,
+    cell_width: f32,
+    cell_height: f32,
+    scale_factor: f32,
+    top_offset: f32,
+) -> AnyElement {
+    div()
+        .absolute()
+        .size_full()
+        .overflow_hidden()
+        .children(placements.iter().filter_map(|placement| {
+            if !layer.contains(placement.z) {
+                return None;
+            }
+            let key = KittyImageKey::from(placement.image.as_ref());
+            let image = images.get(&key)?.clone();
+            let geometry =
+                kitty_placement_geometry(placement, cell_width, cell_height, scale_factor)?;
+            Some(
+                div()
+                    .absolute()
+                    .left(px(geometry.left))
+                    .top(px(geometry.top + top_offset))
+                    .w(px(geometry.width))
+                    .h(px(geometry.height))
+                    .overflow_hidden()
+                    .child(
+                        img(ImageSource::Render(image))
+                            .absolute()
+                            .left(px(geometry.image_left))
+                            .top(px(geometry.image_top))
+                            .w(px(geometry.image_width))
+                            .h(px(geometry.image_height))
+                            .object_fit(ObjectFit::Fill),
+                    )
+                    .into_any_element(),
+            )
+        }))
+        .into_any_element()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TerminalSelection {
     anchor: (u16, u64),
@@ -1726,6 +2099,23 @@ fn extract_selection_text(
 struct CachedTerminalRow {
     text: SharedString,
     runs: Vec<TextRun>,
+    backgrounds: Vec<TerminalBackgroundRun>,
+}
+
+#[derive(Clone, Copy)]
+struct TerminalBackgroundRun {
+    start_col: usize,
+    len: usize,
+    color: Hsla,
+    overlay: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TerminalBackgroundQuad {
+    row: usize,
+    start_col: usize,
+    len: usize,
+    color: Hsla,
 }
 
 #[derive(Clone, PartialEq)]
@@ -1796,6 +2186,76 @@ fn render_cached_terminal_row(
         .into_any_element()
 }
 
+fn append_terminal_backgrounds(
+    row: &CachedTerminalRow,
+    display_row: usize,
+    backgrounds: &mut Vec<TerminalBackgroundQuad>,
+    overlays: &mut Vec<TerminalBackgroundQuad>,
+) {
+    for run in &row.backgrounds {
+        let quad = TerminalBackgroundQuad {
+            row: display_row,
+            start_col: run.start_col,
+            len: run.len,
+            color: run.color,
+        };
+        if run.overlay {
+            overlays.push(quad);
+        } else {
+            backgrounds.push(quad);
+        }
+    }
+}
+
+fn render_terminal_background_layer(
+    backgrounds: Vec<TerminalBackgroundQuad>,
+    cell_width: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for background in backgrounds {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(
+                            bounds.origin.x + cell_width * background.start_col as f32,
+                            bounds.origin.y + line_height * background.row as f32,
+                        ),
+                        size(cell_width * background.len as f32, line_height),
+                    ),
+                    background.color,
+                ));
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
+}
+
+fn render_terminal_foreground_row(
+    row: &CachedTerminalRow,
+    font_size: Pixels,
+    line_height: Pixels,
+) -> AnyElement {
+    let mut runs = row.runs.clone();
+    for run in &mut runs {
+        run.background_color = None;
+    }
+
+    div()
+        .w_full()
+        .h(line_height)
+        .min_h(line_height)
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(font_size)
+        .line_height(line_height)
+        .child(StyledText::new(row.text.clone()).with_runs(runs))
+        .into_any_element()
+}
+
 /// Build a single GPUI row element from a slice of `VtCell`s. We
 /// collapse runs of cells that share `(fg, bg, attrs)` into one
 /// `TextRun` so each row is a single `StyledText` element. That keeps
@@ -1842,9 +2302,11 @@ fn build_terminal_row(
 
     let mut text = String::with_capacity(kept.len());
     let mut runs: Vec<TextRun> = Vec::new();
+    let mut backgrounds = Vec::new();
     let mut last_signature: Option<(u32, u32, u8, bool, bool)> = None;
     let mut active_run_len: usize = 0;
     let mut active_style: Option<RowStyle> = None;
+    let mut active_background: Option<(usize, Hsla, bool)> = None;
 
     fn flush_run(
         runs: &mut Vec<TextRun>,
@@ -1881,6 +2343,19 @@ fn build_terminal_row(
             selection_bg,
         );
 
+        let background = style.bg.map(|color| (color, is_cursor || is_selected));
+        if active_background.map(|(_, color, overlay)| (color, overlay)) != background {
+            if let Some((start_col, color, overlay)) = active_background.take() {
+                backgrounds.push(TerminalBackgroundRun {
+                    start_col,
+                    len: col_idx - start_col,
+                    color,
+                    overlay,
+                });
+            }
+            active_background = background.map(|(color, overlay)| (col_idx, color, overlay));
+        }
+
         let glyph: char = match cell.codepoint {
             0 => ' ',
             cp => char::from_u32(cp).unwrap_or('\u{FFFD}'),
@@ -1897,6 +2372,14 @@ fn build_terminal_row(
     }
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
+    if let Some((start_col, color, overlay)) = active_background {
+        backgrounds.push(TerminalBackgroundRun {
+            start_col,
+            len: kept.len() - start_col,
+            color,
+            overlay,
+        });
+    }
 
     let text = if text.is_empty() {
         let mut fallback = String::with_capacity(1);
@@ -1917,6 +2400,7 @@ fn build_terminal_row(
     CachedTerminalRow {
         text: text.into(),
         runs,
+        backgrounds,
     }
 }
 
@@ -2023,12 +2507,17 @@ fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_FONT_SIZE, MIN_FONT_SIZE_PX, TerminalSelection, build_terminal_row, cell_height_px,
-        cell_width_px, effective_font_size, extract_selection_text, rows_needing_refresh,
-        vt_color_to_hsla,
+        DEFAULT_FONT_SIZE, KITTY_BELOW_BACKGROUND_LIMIT, KittyImageLayer, MIN_FONT_SIZE_PX,
+        TerminalSelection, build_terminal_row, cell_height_px, cell_width_px, effective_font_size,
+        extract_selection_text, kitty_image_to_render_image, kitty_placement_geometry,
+        physical_cell_size, rows_needing_refresh, vt_color_to_hsla,
     };
-    use con_ghostty::{ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, ScreenSnapshot, VtCell, VtCursor};
+    use con_ghostty::{
+        ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, KittyImage, KittyPlacement, ScreenSnapshot,
+        VtCell, VtCursor,
+    };
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, Hsla, Rgba};
+    use std::sync::Arc;
 
     fn base_font() -> Font {
         Font {
@@ -2082,6 +2571,68 @@ mod tests {
         assert_eq!(effective_font_size(8.0), MIN_FONT_SIZE_PX);
         assert_eq!(cell_width_px(14.0), 9.0);
         assert_eq!(cell_height_px(14.0), 20.0);
+        assert_eq!(physical_cell_size(14.0, 2.0), (18, 40));
+    }
+
+    #[test]
+    fn kitty_placement_maps_device_pixels_and_source_crop() {
+        let placement = KittyPlacement {
+            image: Arc::new(KittyImage {
+                id: 1,
+                generation: 2,
+                width: 4,
+                height: 2,
+                rgba: vec![0; 4 * 2 * 4].into(),
+            }),
+            placement_id: 3,
+            z: 0,
+            viewport_col: -1,
+            viewport_row: 2,
+            cell_x_offset: 4,
+            cell_y_offset: 6,
+            pixel_width: 20,
+            pixel_height: 10,
+            source_x: 1,
+            source_y: 0,
+            source_width: 2,
+            source_height: 1,
+        };
+
+        let geometry = kitty_placement_geometry(&placement, 10.0, 20.0, 2.0).unwrap();
+        assert_eq!(geometry.left, -8.0);
+        assert_eq!(geometry.top, 43.0);
+        assert_eq!(geometry.width, 10.0);
+        assert_eq!(geometry.height, 5.0);
+        assert_eq!(geometry.image_left, -5.0);
+        assert_eq!(geometry.image_top, 0.0);
+        assert_eq!(geometry.image_width, 20.0);
+        assert_eq!(geometry.image_height, 10.0);
+    }
+
+    #[test]
+    fn kitty_layers_match_protocol_z_boundaries() {
+        assert!(KittyImageLayer::BelowBackground.contains(i32::MIN));
+        assert!(!KittyImageLayer::BelowBackground.contains(KITTY_BELOW_BACKGROUND_LIMIT));
+        assert!(KittyImageLayer::BelowText.contains(KITTY_BELOW_BACKGROUND_LIMIT));
+        assert!(KittyImageLayer::BelowText.contains(-1));
+        assert!(!KittyImageLayer::BelowText.contains(0));
+        assert!(KittyImageLayer::AboveText.contains(0));
+    }
+
+    #[test]
+    fn kitty_rgba_is_swizzled_for_gpui_render_images() {
+        let image = KittyImage {
+            id: 1,
+            generation: 1,
+            width: 1,
+            height: 1,
+            rgba: vec![0x11, 0x22, 0x33, 0x44].into(),
+        };
+        let render_image = kitty_image_to_render_image(&image).unwrap();
+        assert_eq!(
+            render_image.as_bytes(0),
+            Some(&[0x33, 0x22, 0x11, 0x44][..])
+        );
     }
 
     #[test]
@@ -2095,6 +2646,40 @@ mod tests {
         let _no_cursor = build_terminal_row(&cells, fg(), bg(), &base_font(), None, None, bg());
         let _with_cursor =
             build_terminal_row(&cells, fg(), bg(), &base_font(), Some(2), None, bg());
+    }
+
+    #[test]
+    fn cursor_and_selection_backgrounds_render_above_negative_z_images() {
+        let cells = [
+            make_cell('a', 0, 0, 0x112233FF),
+            make_cell('b', 0, 0, 0x112233FF),
+            make_cell('c', 0, 0, 0x112233FF),
+        ];
+        let row = build_terminal_row(
+            &cells,
+            fg(),
+            bg(),
+            &base_font(),
+            Some(2),
+            Some((1, 1)),
+            bg(),
+        );
+
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 0 && run.len == 1 && !run.overlay)
+        );
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 1 && run.len == 1 && run.overlay)
+        );
+        assert!(
+            row.backgrounds
+                .iter()
+                .any(|run| run.start_col == 2 && run.len == 1 && run.overlay)
+        );
     }
 
     #[test]

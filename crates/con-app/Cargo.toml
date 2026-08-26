@@ -92,6 +92,10 @@ smallvec = "1"
 raw-window-handle = "0.6"
 unicode-width.workspace = true
 x11rb = "0.13.2"
+# Linux wraps shared libghostty-vt Kitty RGBA snapshots in GPUI
+# `RenderImage`s, whose constructor exposes these concrete crate types.
+image = { version = "0.25", default-features = false }
+smallvec = "1"
 
 [target.'cfg(unix)'.dependencies]
 socket2 = "0.6"

@@ -89,7 +89,7 @@ pub use stub::{
 #[cfg(target_os = "linux")]
 pub use vt::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, Cell as VtCell,
-    Cursor as VtCursor, ScreenSnapshot,
+    Cursor as VtCursor, KittyImage, KittyPlacement, ScreenSnapshot,
 };
 
 #[cfg(all(

@@ -82,6 +82,11 @@ const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 10_000_000;
 const KITTY_PNG_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const KITTY_PNG_MAX_DIMENSION: u32 = 10_000;
 const KITTY_PNG_DECODER_MAX_ALLOC_BYTES: u64 = 32 * 1024 * 1024;
+// A single tiny image can have an effectively unbounded number of explicit
+// placements upstream. Bound each render snapshot so hostile terminal output
+// cannot force either renderer to allocate and lay out millions of quads in
+// one frame. This is intentionally far above a dense visible terminal grid.
+const KITTY_PLACEMENT_SNAPSHOT_LIMIT: usize = 4_096;
 
 const GHOSTTY_MODS_SHIFT: u16 = 1 << 0;
 const GHOSTTY_MODS_CTRL: u16 = 1 << 1;
@@ -2689,7 +2694,16 @@ fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
 
     let mut images: HashMap<u32, Arc<KittyImage>> = HashMap::new();
     let mut placements = Vec::new();
+    let mut placement_count = 0_usize;
     while unsafe { ghostty_kitty_graphics_placement_next(inner.kitty_placement_iter) } {
+        if placement_count >= KITTY_PLACEMENT_SNAPSHOT_LIMIT {
+            log::debug!(
+                "truncating Kitty graphics snapshot at {KITTY_PLACEMENT_SNAPSHOT_LIMIT} placements"
+            );
+            break;
+        }
+        placement_count += 1;
+
         let mut image_id = 0_u32;
         let mut placement_id = 0_u32;
         let mut is_virtual = false;
