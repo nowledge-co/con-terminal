@@ -1279,7 +1279,7 @@ unsafe impl Sync for GhosttyTerminal {}
 
 // ── Public types ────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceSize {
     pub columns: u16,
     pub rows: u16,

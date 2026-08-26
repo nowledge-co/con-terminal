@@ -129,7 +129,7 @@ pub struct GhosttyView {
     scale_factor: f32,
     ime_marked_text: Option<String>,
     ime_selected_range: Option<Range<usize>>,
-    last_surface_size: Option<(u32, u32, u16, u16)>,
+    last_surface_size: Option<SurfaceSize>,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -304,7 +304,7 @@ impl GhosttyView {
         true
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
         self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
@@ -319,7 +319,9 @@ impl GhosttyView {
         self.row_cache_cursor = None;
         self.row_cache_style = None;
         self.row_cache_shape = None;
-        self.kitty_images.clear();
+        for image in self.kitty_images.drain().map(|(_, image)| image) {
+            cx.drop_image(image, window.as_deref_mut());
+        }
         self.failed_kitty_images.clear();
         self.seen_any_output = false;
         self.ime_marked_text = None;
@@ -543,14 +545,13 @@ impl GhosttyView {
         };
 
         let size = self.estimate_surface_size(bounds, scale_factor);
-        let signature = (size.width_px, size.height_px, size.columns, size.rows);
-        if self.last_surface_size == Some(signature) {
+        if self.last_surface_size == Some(size) {
             return false;
         }
 
         self.clear_selection();
         terminal.resize_surface(size);
-        self.last_surface_size = Some(signature);
+        self.last_surface_size = Some(size);
         false
     }
 
@@ -1106,12 +1107,27 @@ impl GhosttyView {
         ))
     }
 
-    fn sync_kitty_image_cache(&mut self, placements: &[KittyPlacement]) {
+    fn sync_kitty_image_cache(
+        &mut self,
+        placements: &[KittyPlacement],
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let active = placements
             .iter()
             .map(|placement| KittyImageKey::from(placement.image.as_ref()))
             .collect::<HashSet<_>>();
-        self.kitty_images.retain(|key, _| active.contains(key));
+        let mut stale = Vec::new();
+        self.kitty_images.retain(|key, image| {
+            let keep = active.contains(key);
+            if !keep {
+                stale.push(image.clone());
+            }
+            keep
+        });
+        for image in stale {
+            cx.drop_image(image, Some(window));
+        }
         self.failed_kitty_images.retain(|key| active.contains(key));
 
         for placement in placements {
@@ -1261,8 +1277,15 @@ impl TerminalImeView for GhosttyView {
 }
 
 impl Render for GhosttyView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let unsafe_paste_confirmation = self.render_unsafe_paste_confirmation(cx);
+        let kitty_placements = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.kitty_placements.clone())
+            .unwrap_or_default();
+        self.sync_kitty_image_cache(&kitty_placements, window, cx);
+
         let theme = cx.theme();
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
@@ -1274,6 +1297,10 @@ impl Render for GhosttyView {
         let font_size_px = effective_font_size(self.initial_font_size);
         let line_height_px = cell_height_px(font_size_px);
         let cell_width_px = cell_width_px(font_size_px);
+        let physical_cell = self
+            .last_surface_size
+            .map(|size| (size.cell_width_px, size.cell_height_px))
+            .unwrap_or_else(|| physical_cell_size(font_size_px, self.scale_factor));
         let mono_font = Font {
             family: theme.mono_font_family.clone(),
             features: FontFeatures::default(),
@@ -1313,12 +1340,6 @@ impl Render for GhosttyView {
         let pane_background = theme.background.opacity(pane_opacity);
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
-        let kitty_placements = self
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.kitty_placements.clone())
-            .unwrap_or_default();
-        self.sync_kitty_image_cache(&kitty_placements);
         let mut has_kitty_images = false;
         let mut split_terminal_rows = false;
         for placement in kitty_placements.iter() {
@@ -1328,7 +1349,8 @@ impl Render for GhosttyView {
                     placement,
                     cell_width_px,
                     line_height_px,
-                    self.scale_factor,
+                    physical_cell.0,
+                    physical_cell.1,
                 )
                 .is_some();
             has_kitty_images |= valid;
@@ -1463,7 +1485,8 @@ impl Render for GhosttyView {
                         KittyImageLayer::BelowBackground,
                         cell_width_px,
                         line_height_px,
-                        self.scale_factor,
+                        physical_cell.0,
+                        physical_cell.1,
                         status_row_offset as f32 * line_height_px,
                     ))
                     .child(render_terminal_background_layer(
@@ -1477,7 +1500,8 @@ impl Render for GhosttyView {
                         KittyImageLayer::BelowText,
                         cell_width_px,
                         line_height_px,
-                        self.scale_factor,
+                        physical_cell.0,
+                        physical_cell.1,
                         status_row_offset as f32 * line_height_px,
                     ))
                     .child(render_terminal_background_layer(
@@ -1492,7 +1516,8 @@ impl Render for GhosttyView {
                         KittyImageLayer::AboveText,
                         cell_width_px,
                         line_height_px,
-                        self.scale_factor,
+                        physical_cell.0,
+                        physical_cell.1,
                         status_row_offset as f32 * line_height_px,
                     ))
             } else {
@@ -1510,7 +1535,8 @@ impl Render for GhosttyView {
                         KittyImageLayer::AboveText,
                         cell_width_px,
                         line_height_px,
-                        self.scale_factor,
+                        physical_cell.0,
+                        physical_cell.1,
                         status_row_offset as f32 * line_height_px,
                     ))
             };
@@ -1880,7 +1906,8 @@ fn kitty_placement_geometry(
     placement: &KittyPlacement,
     cell_width: f32,
     cell_height: f32,
-    scale_factor: f32,
+    physical_cell_width: u32,
+    physical_cell_height: u32,
 ) -> Option<KittyPlacementGeometry> {
     let image = &placement.image;
     let source_right = placement.source_x.checked_add(placement.source_width)?;
@@ -1895,24 +1922,29 @@ fn kitty_placement_geometry(
         || source_bottom > image.height
         || !cell_width.is_finite()
         || !cell_height.is_finite()
-        || !scale_factor.is_finite()
         || cell_width <= 0.0
         || cell_height <= 0.0
-        || scale_factor <= 0.0
+        || physical_cell_width == 0
+        || physical_cell_height == 0
     {
         return None;
     }
 
-    let device_to_logical = 1.0_f64 / scale_factor as f64;
-    let width = placement.pixel_width as f64 * device_to_logical;
-    let height = placement.pixel_height as f64 * device_to_logical;
+    // libghostty positions placements in the integer physical cell geometry
+    // supplied by `resize_surface`. Derive each axis from that exact quantized
+    // size instead of dividing by the fractional display scale, which drifts
+    // away from GPUI's logical text grid after several columns.
+    let device_to_logical_x = cell_width as f64 / physical_cell_width as f64;
+    let device_to_logical_y = cell_height as f64 / physical_cell_height as f64;
+    let width = placement.pixel_width as f64 * device_to_logical_x;
+    let height = placement.pixel_height as f64 * device_to_logical_y;
     let source_scale_x = width / placement.source_width as f64;
     let source_scale_y = height / placement.source_height as f64;
     let values = KittyPlacementGeometry {
         left: (placement.viewport_col as f64 * cell_width as f64
-            + placement.cell_x_offset as f64 * device_to_logical) as f32,
+            + placement.cell_x_offset as f64 * device_to_logical_x) as f32,
         top: (placement.viewport_row as f64 * cell_height as f64
-            + placement.cell_y_offset as f64 * device_to_logical) as f32,
+            + placement.cell_y_offset as f64 * device_to_logical_y) as f32,
         width: width as f32,
         height: height as f32,
         image_left: (-(placement.source_x as f64) * source_scale_x) as f32,
@@ -1966,7 +1998,8 @@ fn render_kitty_image_layer(
     layer: KittyImageLayer,
     cell_width: f32,
     cell_height: f32,
-    scale_factor: f32,
+    physical_cell_width: u32,
+    physical_cell_height: u32,
     top_offset: f32,
 ) -> AnyElement {
     let paint_records = placements
@@ -1977,8 +2010,13 @@ fn render_kitty_image_layer(
             }
             let key = KittyImageKey::from(placement.image.as_ref());
             let image = images.get(&key)?.clone();
-            let geometry =
-                kitty_placement_geometry(placement, cell_width, cell_height, scale_factor)?;
+            let geometry = kitty_placement_geometry(
+                placement,
+                cell_width,
+                cell_height,
+                physical_cell_width,
+                physical_cell_height,
+            )?;
             Some((image, geometry))
         })
         .collect::<Vec<_>>();
@@ -2619,7 +2657,7 @@ mod tests {
             source_height: 1,
         };
 
-        let geometry = kitty_placement_geometry(&placement, 10.0, 20.0, 2.0).unwrap();
+        let geometry = kitty_placement_geometry(&placement, 10.0, 20.0, 20, 40).unwrap();
         assert_eq!(geometry.left, -8.0);
         assert_eq!(geometry.top, 43.0);
         assert_eq!(geometry.width, 10.0);
@@ -2628,6 +2666,40 @@ mod tests {
         assert_eq!(geometry.image_top, 0.0);
         assert_eq!(geometry.image_width, 20.0);
         assert_eq!(geometry.image_height, 10.0);
+    }
+
+    #[test]
+    fn kitty_placement_stays_aligned_after_fractional_cell_rounding() {
+        let placement = KittyPlacement {
+            image: Arc::new(KittyImage {
+                id: 1,
+                generation: 2,
+                width: 140,
+                height: 30,
+                rgba: vec![0; 140 * 30 * 4].into(),
+            }),
+            placement_id: 3,
+            z: 0,
+            viewport_col: 40,
+            viewport_row: 2,
+            cell_x_offset: 14,
+            cell_y_offset: 0,
+            pixel_width: 140,
+            pixel_height: 30,
+            source_x: 0,
+            source_y: 0,
+            source_width: 140,
+            source_height: 30,
+        };
+
+        // A 9px logical cell rounds to 14 physical pixels at 1.5x. The
+        // placement must advance exactly one logical cell for every 14 device
+        // pixels rather than using 1 / 1.5 and accumulating column drift.
+        let geometry = kitty_placement_geometry(&placement, 9.0, 20.0, 14, 30).unwrap();
+        assert_eq!(geometry.left, 369.0);
+        assert_eq!(geometry.top, 40.0);
+        assert_eq!(geometry.width, 90.0);
+        assert_eq!(geometry.height, 20.0);
     }
 
     #[test]

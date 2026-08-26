@@ -539,7 +539,7 @@ impl GhosttyView {
         }
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
         self.native_view_visible.set(false);
 
         if let Some(ref terminal) = self.terminal {

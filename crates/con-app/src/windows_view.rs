@@ -302,7 +302,7 @@ impl GhosttyView {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
-    pub fn shutdown_surface(&mut self) {
+    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
         self.release_tracked_keys();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
