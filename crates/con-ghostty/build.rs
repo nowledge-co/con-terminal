@@ -128,7 +128,24 @@ fn build_macos() {
     // carries Zig compiler-rt memcpy/memmove. The final archive applies
     // Ghostty's libSystem override, which avoids a measured PTY throughput
     // regression in scroll-heavy workloads.
-    let lib_path = find_lib(&ghostty_dir, "libghostty-internal.a");
+    let xcframework_arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64",
+        Ok("x86_64") => "x86_64",
+        Ok(arch) => panic!("unsupported macOS Ghostty architecture: {arch}"),
+        Err(err) => panic!("CARGO_CFG_TARGET_ARCH is not set: {err}"),
+    };
+    let lib_path = ghostty_dir
+        .join("macos")
+        .join("GhosttyKit.xcframework")
+        .join(format!("macos-{xcframework_arch}"))
+        .join("libghostty-internal.a");
+    if !lib_path.is_file() {
+        panic!(
+            "Could not find installed final archive {} after building ghostty source at {}",
+            lib_path.display(),
+            ghostty_dir.display()
+        );
+    }
     println!(
         "cargo:rustc-link-search=native={}",
         lib_path.parent().unwrap().display()
@@ -377,47 +394,27 @@ fn build_vt_backend(target_os: &str) {
         }
     }
 
-    // Zig produces both a shared library (`ghostty-vt.dll` +
-    // `ghostty-vt.lib` import-stub on MSVC) and a static archive
-    // (`ghostty-vt-static.lib`). We want the static archive — linking
-    // the import stub would leave `con-app.exe` dependent on
-    // `ghostty-vt.dll` at runtime, which we don't ship.
-    //
-    // `cfg!()` at build.rs compile time reflects the *host*, not the
-    // target. Use the runtime env the cargo build passes us.
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-    let (static_lib_name, static_link_name, fallback_lib_name, fallback_link_name) =
-        if target_env == "msvc" {
-            (
-                "ghostty-vt-static.lib",
-                "ghostty-vt-static",
-                "ghostty-vt.lib",
-                "ghostty-vt",
-            )
-        } else {
-            (
-                "libghostty-vt-static.a",
-                "ghostty-vt-static",
-                "libghostty-vt.a",
-                "ghostty-vt",
-            )
-        };
-
-    // Prefer static; fall back to the import-lib variant with a loud
-    // warning so the user notices the runtime DLL dependency.
-    let (lib_path, link_name) = match try_find_lib(&ghostty_dir, static_lib_name) {
-        Some(p) => (p, static_link_name),
-        None => {
-            println!(
-                "cargo:warning=libghostty-vt-static not found; linking shared `{fallback_lib_name}` \
-                 instead. The resulting executable will depend on ghostty-vt.dll at runtime — \
-                 ship it alongside the .exe or bump the Ghostty pin to a revision that emits \
-                 the static archive."
-            );
-            let path = find_lib(&ghostty_dir, fallback_lib_name);
-            (path, fallback_link_name)
-        }
+    // Link the static archive installed by the build we just ran. Do not scan
+    // `.zig-cache`: one Ghostty checkout can contain cached archives for many
+    // targets, and mtime cannot tell a Linux archive from a newer Mach-O one.
+    // On Windows the distinct name also prevents accidentally linking the DLL
+    // import library, which would create an unshipped runtime dependency.
+    let (static_lib_name, link_name) = if target_os == "windows" {
+        ("ghostty-vt-static.lib", "ghostty-vt-static")
+    } else {
+        ("libghostty-vt.a", "ghostty-vt")
     };
+    let lib_path = ghostty_dir
+        .join("zig-out")
+        .join("lib")
+        .join(static_lib_name);
+    if !lib_path.is_file() {
+        panic!(
+            "Could not find installed static archive {} after building ghostty source at {}",
+            lib_path.display(),
+            ghostty_dir.display()
+        );
+    }
 
     println!(
         "cargo:rustc-link-search=native={}",
@@ -852,80 +849,6 @@ fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
         let _ = fs::remove_file(&tmp);
         format!("failed to replace {}: {err}", path.display())
     })
-}
-
-fn try_find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> Option<PathBuf> {
-    let zig_cache = ghostty_dir.join(".zig-cache");
-    if zig_cache.exists() {
-        if let Ok(output) = Command::new("find")
-            .args([zig_cache.to_str().unwrap(), "-name", lib_name, "-type", "f"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut candidates: Vec<PathBuf> = stdout
-                .lines()
-                .map(PathBuf::from)
-                .filter(|p| p.exists())
-                .collect();
-            candidates.sort_by(|a, b| {
-                let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-                let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-                b_time.cmp(&a_time)
-            });
-            if let Some(path) = candidates.first() {
-                return Some(path.clone());
-            }
-        }
-    }
-    for relative in ["zig-out/lib", "zig-out\\lib", "macos/build/Debug"] {
-        let candidate = ghostty_dir.join(relative).join(lib_name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> PathBuf {
-    let zig_cache = ghostty_dir.join(".zig-cache");
-    if zig_cache.exists() {
-        let output = Command::new("find")
-            .args([zig_cache.to_str().unwrap(), "-name", lib_name, "-type", "f"])
-            .output();
-
-        if let Ok(output) = output {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut candidates: Vec<PathBuf> = stdout
-                .lines()
-                .map(PathBuf::from)
-                .filter(|p| p.exists())
-                .collect();
-
-            candidates.sort_by(|a, b| {
-                let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
-                let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
-                b_time.cmp(&a_time)
-            });
-
-            if let Some(path) = candidates.first() {
-                return path.clone();
-            }
-        }
-    }
-
-    // Cross-platform fallback walk for systems without `find` (e.g.
-    // Windows without WSL). Manual scan of common output dirs.
-    for relative in ["zig-out/lib", "macos/build/Debug"] {
-        let candidate = ghostty_dir.join(relative).join(lib_name);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-
-    panic!(
-        "Could not find {lib_name} after building ghostty source at {}",
-        ghostty_dir.display()
-    );
 }
 
 fn current_git_rev(repo_dir: &PathBuf) -> Option<String> {
