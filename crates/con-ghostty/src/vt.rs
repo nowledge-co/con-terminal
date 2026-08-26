@@ -28,6 +28,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
+use std::collections::HashMap;
 use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
@@ -62,6 +63,9 @@ pub type GhosttyRowIterator = *mut c_void;
 pub type GhosttyRowCells = *mut c_void;
 pub type GhosttyKeyEncoder = *mut c_void;
 pub type GhosttyKeyEvent = *mut c_void;
+pub type GhosttyKittyGraphics = *mut c_void;
+pub type GhosttyKittyGraphicsImage = *mut c_void;
+pub type GhosttyKittyGraphicsPlacementIterator = *mut c_void;
 pub type GhosttyAllocator = c_void;
 pub type GhosttyResult = c_int;
 
@@ -187,6 +191,52 @@ pub enum GhosttyTerminalOption {
 #[derive(Debug, Clone, Copy)]
 enum GhosttySysOption {
     DecodePng = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+enum GhosttyKittyGraphicsData {
+    PlacementIterator = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+enum GhosttyKittyGraphicsPlacementData {
+    ImageId = 1,
+    PlacementId = 2,
+    IsVirtual = 3,
+    XOffset = 4,
+    YOffset = 5,
+    Z = 12,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+enum GhosttyKittyGraphicsImageData {
+    Width = 3,
+    Height = 4,
+    Format = 5,
+    Compression = 6,
+    DataPtr = 7,
+    DataLen = 8,
+    Generation = 9,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyKittyImageFormat {
+    Rgb = 0,
+    Rgba = 1,
+    Png = 2,
+    GrayAlpha = 3,
+    Gray = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyKittyImageCompression {
+    None = 0,
+    ZlibDeflate = 1,
 }
 
 /// `GHOSTTY_RENDER_STATE_DATA_*` keys for `ghostty_render_state_get`.
@@ -431,6 +481,23 @@ struct GhosttySysImage {
     data_len: usize,
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct GhosttyKittyGraphicsPlacementRenderInfo {
+    size: usize,
+    pixel_width: u32,
+    pixel_height: u32,
+    grid_cols: u32,
+    grid_rows: u32,
+    viewport_col: i32,
+    viewport_row: i32,
+    viewport_visible: bool,
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+}
+
 type GhosttySysDecodePngFn = unsafe extern "C" fn(
     userdata: *mut c_void,
     allocator: *const GhosttyAllocator,
@@ -446,6 +513,7 @@ const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
 const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
 const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
+const _: [(); 56] = [(); std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>()];
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -657,6 +725,53 @@ unsafe extern "C" {
     pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent, composing: bool);
     pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: *const c_char, len: usize);
     pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+
+    // Kitty graphics storage (`kitty_graphics.h`). Handles are borrowed from
+    // the terminal and remain valid only while its mutex is held.
+    fn ghostty_kitty_graphics_get(
+        graphics: GhosttyKittyGraphics,
+        data: GhosttyKittyGraphicsData,
+        out: *mut c_void,
+    ) -> GhosttyResult;
+    fn ghostty_kitty_graphics_image(
+        graphics: GhosttyKittyGraphics,
+        image_id: u32,
+    ) -> GhosttyKittyGraphicsImage;
+    fn ghostty_kitty_graphics_image_get(
+        image: GhosttyKittyGraphicsImage,
+        data: GhosttyKittyGraphicsImageData,
+        out: *mut c_void,
+    ) -> GhosttyResult;
+    fn ghostty_kitty_graphics_image_get_multi(
+        image: GhosttyKittyGraphicsImage,
+        count: usize,
+        keys: *const GhosttyKittyGraphicsImageData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+    fn ghostty_kitty_graphics_placement_iterator_new(
+        allocator: *const GhosttyAllocator,
+        out_iterator: *mut GhosttyKittyGraphicsPlacementIterator,
+    ) -> GhosttyResult;
+    fn ghostty_kitty_graphics_placement_iterator_free(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+    );
+    fn ghostty_kitty_graphics_placement_next(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+    ) -> bool;
+    fn ghostty_kitty_graphics_placement_get_multi(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        count: usize,
+        keys: *const GhosttyKittyGraphicsPlacementData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
+    fn ghostty_kitty_graphics_placement_render_info(
+        iterator: GhosttyKittyGraphicsPlacementIterator,
+        image: GhosttyKittyGraphicsImage,
+        terminal: GhosttyTerminal,
+        out_info: *mut GhosttyKittyGraphicsPlacementRenderInfo,
+    ) -> GhosttyResult;
 
     // Render state (`render.h`)
     pub fn ghostty_render_state_new(
@@ -910,11 +1025,40 @@ pub struct Cursor {
     pub visible: bool,
 }
 
+#[derive(Debug)]
+pub struct KittyImage {
+    pub id: u32,
+    pub generation: u64,
+    pub width: u32,
+    pub height: u32,
+    /// Straight-alpha RGBA8 pixels, normalized once when the upstream image
+    /// generation changes and shared by every placement and renderer frame.
+    pub rgba: Arc<[u8]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KittyPlacement {
+    pub image: Arc<KittyImage>,
+    pub placement_id: u32,
+    pub z: i32,
+    pub viewport_col: i32,
+    pub viewport_row: i32,
+    pub cell_x_offset: u32,
+    pub cell_y_offset: u32,
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ScreenSnapshot {
     pub cols: u16,
     pub rows: u16,
     pub cells: Vec<Cell>,
+    pub kitty_placements: Arc<[KittyPlacement]>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Cursor,
     pub alternate_screen: bool,
@@ -1006,6 +1150,10 @@ struct VtInner {
     row_cells: GhosttyRowCells,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
+    kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
+    kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
+    kitty_placements: Arc<[KittyPlacement]>,
+    kitty_snapshot_generation: u64,
     callback_state: Option<Box<VtCallbackState>>,
     cols: u16,
     rows: u16,
@@ -1432,10 +1580,34 @@ impl VtScreen {
             );
         }
 
+        let mut kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator = std::ptr::null_mut();
+        let rc = unsafe {
+            ghostty_kitty_graphics_placement_iterator_new(
+                std::ptr::null(),
+                &mut kitty_placement_iter,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS || kitty_placement_iter.is_null() {
+            unsafe {
+                if !row_cells.is_null() {
+                    ghostty_render_state_row_cells_free(row_cells);
+                }
+                if !row_iter.is_null() {
+                    ghostty_render_state_row_iterator_free(row_iter);
+                }
+                if !render_state.is_null() {
+                    ghostty_render_state_free(render_state);
+                }
+                ghostty_terminal_free(terminal);
+            }
+            anyhow::bail!("ghostty_kitty_graphics_placement_iterator_new failed: rc={rc}");
+        }
+
         let mut key_encoder: GhosttyKeyEncoder = std::ptr::null_mut();
         let rc = unsafe { ghostty_key_encoder_new(std::ptr::null(), &mut key_encoder) };
         if rc != GHOSTTY_SUCCESS || key_encoder.is_null() {
             unsafe {
+                ghostty_kitty_graphics_placement_iterator_free(kitty_placement_iter);
                 if !row_cells.is_null() {
                     ghostty_render_state_row_cells_free(row_cells);
                 }
@@ -1455,6 +1627,7 @@ impl VtScreen {
         if rc != GHOSTTY_SUCCESS || key_event.is_null() {
             unsafe {
                 ghostty_key_encoder_free(key_encoder);
+                ghostty_kitty_graphics_placement_iterator_free(kitty_placement_iter);
                 if !row_cells.is_null() {
                     ghostty_render_state_row_cells_free(row_cells);
                 }
@@ -1481,6 +1654,10 @@ impl VtScreen {
                 row_cells,
                 key_encoder,
                 key_event,
+                kitty_placement_iter,
+                kitty_image_cache: HashMap::new(),
+                kitty_placements: Arc::from([]),
+                kitty_snapshot_generation: u64::MAX,
                 callback_state,
                 cols,
                 rows,
@@ -1760,6 +1937,7 @@ impl VtScreen {
                 cols: fallback_cols,
                 rows: fallback_rows,
                 cells: Vec::new(),
+                kitty_placements: Arc::from([]),
                 dirty_rows: Vec::new(),
                 cursor: Cursor::default(),
                 alternate_screen: false,
@@ -2000,6 +2178,7 @@ impl VtScreen {
         }
         dirty_rows.sort_unstable();
 
+        let kitty_placements = snapshot_kitty_placements(&mut inner);
         let clone_started = perf_trace_enabled().then(Instant::now);
         let cells = inner.scratch.clone();
         let clone_elapsed_ms =
@@ -2008,6 +2187,7 @@ impl VtScreen {
             cols,
             rows,
             cells,
+            kitty_placements,
             dirty_rows,
             cursor,
             alternate_screen,
@@ -2464,6 +2644,7 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         cols,
         rows,
         cells: Vec::new(),
+        kitty_placements: Arc::from([]),
         dirty_rows: Vec::new(),
         cursor: Cursor::default(),
         alternate_screen: false,
@@ -2471,6 +2652,265 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         title: None,
         generation,
     }
+}
+
+fn snapshot_kitty_placements(inner: &mut VtInner) -> Arc<[KittyPlacement]> {
+    if inner.kitty_snapshot_generation == inner.generation {
+        return inner.kitty_placements.clone();
+    }
+    inner.kitty_snapshot_generation = inner.generation;
+
+    let mut graphics: GhosttyKittyGraphics = std::ptr::null_mut();
+    let rc = unsafe {
+        ghostty_terminal_get(
+            inner.terminal,
+            GhosttyTerminalData::KittyGraphics,
+            &mut graphics as *mut _ as *mut c_void,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS || graphics.is_null() || inner.kitty_placement_iter.is_null() {
+        inner.kitty_image_cache.clear();
+        inner.kitty_placements = Arc::from([]);
+        return inner.kitty_placements.clone();
+    }
+
+    let rc = unsafe {
+        ghostty_kitty_graphics_get(
+            graphics,
+            GhosttyKittyGraphicsData::PlacementIterator,
+            &mut inner.kitty_placement_iter as *mut _ as *mut c_void,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS {
+        inner.kitty_image_cache.clear();
+        inner.kitty_placements = Arc::from([]);
+        return inner.kitty_placements.clone();
+    }
+
+    let mut images: HashMap<u32, Arc<KittyImage>> = HashMap::new();
+    let mut placements = Vec::new();
+    while unsafe { ghostty_kitty_graphics_placement_next(inner.kitty_placement_iter) } {
+        let mut image_id = 0_u32;
+        let mut placement_id = 0_u32;
+        let mut is_virtual = false;
+        let mut cell_x_offset = 0_u32;
+        let mut cell_y_offset = 0_u32;
+        let mut z = 0_i32;
+        let keys = [
+            GhosttyKittyGraphicsPlacementData::ImageId,
+            GhosttyKittyGraphicsPlacementData::PlacementId,
+            GhosttyKittyGraphicsPlacementData::IsVirtual,
+            GhosttyKittyGraphicsPlacementData::XOffset,
+            GhosttyKittyGraphicsPlacementData::YOffset,
+            GhosttyKittyGraphicsPlacementData::Z,
+        ];
+        let mut values = [
+            &mut image_id as *mut _ as *mut c_void,
+            &mut placement_id as *mut _ as *mut c_void,
+            &mut is_virtual as *mut _ as *mut c_void,
+            &mut cell_x_offset as *mut _ as *mut c_void,
+            &mut cell_y_offset as *mut _ as *mut c_void,
+            &mut z as *mut _ as *mut c_void,
+        ];
+        let rc = unsafe {
+            ghostty_kitty_graphics_placement_get_multi(
+                inner.kitty_placement_iter,
+                keys.len(),
+                keys.as_ptr(),
+                values.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+        if rc != GHOSTTY_SUCCESS || is_virtual {
+            continue;
+        }
+
+        let image_handle = unsafe { ghostty_kitty_graphics_image(graphics, image_id) };
+        if image_handle.is_null() {
+            continue;
+        }
+        let mut info = GhosttyKittyGraphicsPlacementRenderInfo {
+            size: std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
+            ..GhosttyKittyGraphicsPlacementRenderInfo::default()
+        };
+        let rc = unsafe {
+            ghostty_kitty_graphics_placement_render_info(
+                inner.kitty_placement_iter,
+                image_handle,
+                inner.terminal,
+                &mut info,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS
+            || !info.viewport_visible
+            || info.pixel_width == 0
+            || info.pixel_height == 0
+            || info.source_width == 0
+            || info.source_height == 0
+        {
+            continue;
+        }
+
+        let image = if let Some(image) = images.get(&image_id) {
+            image.clone()
+        } else {
+            let Some(image) = snapshot_kitty_image(
+                image_handle,
+                image_id,
+                inner.kitty_image_cache.get(&image_id),
+            ) else {
+                continue;
+            };
+            images.insert(image_id, image.clone());
+            image
+        };
+        placements.push(KittyPlacement {
+            image,
+            placement_id,
+            z,
+            viewport_col: info.viewport_col,
+            viewport_row: info.viewport_row,
+            cell_x_offset,
+            cell_y_offset,
+            pixel_width: info.pixel_width,
+            pixel_height: info.pixel_height,
+            source_x: info.source_x,
+            source_y: info.source_y,
+            source_width: info.source_width,
+            source_height: info.source_height,
+        });
+    }
+
+    // Draw lower z-index placements first. `sort_by_key` is stable, preserving
+    // libghostty's iterator order for equal z values where the C API exposes no
+    // additional ordering key.
+    placements.sort_by_key(|placement| placement.z);
+    inner.kitty_image_cache = images;
+    inner.kitty_placements = placements.into();
+    inner.kitty_placements.clone()
+}
+
+fn snapshot_kitty_image(
+    image: GhosttyKittyGraphicsImage,
+    image_id: u32,
+    cached: Option<&Arc<KittyImage>>,
+) -> Option<Arc<KittyImage>> {
+    let mut generation = 0_u64;
+    let rc = unsafe {
+        ghostty_kitty_graphics_image_get(
+            image,
+            GhosttyKittyGraphicsImageData::Generation,
+            &mut generation as *mut _ as *mut c_void,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS || generation == 0 {
+        return None;
+    }
+    if let Some(cached) = cached.filter(|cached| cached.generation == generation) {
+        return Some(cached.clone());
+    }
+
+    let mut width = 0_u32;
+    let mut height = 0_u32;
+    let mut format_raw = GhosttyKittyImageFormat::Rgba as c_int;
+    let mut compression_raw = GhosttyKittyImageCompression::None as c_int;
+    let mut data_ptr: *const u8 = std::ptr::null();
+    let mut data_len = 0_usize;
+    let keys = [
+        GhosttyKittyGraphicsImageData::Width,
+        GhosttyKittyGraphicsImageData::Height,
+        GhosttyKittyGraphicsImageData::Format,
+        GhosttyKittyGraphicsImageData::Compression,
+        GhosttyKittyGraphicsImageData::DataPtr,
+        GhosttyKittyGraphicsImageData::DataLen,
+    ];
+    let mut values = [
+        &mut width as *mut _ as *mut c_void,
+        &mut height as *mut _ as *mut c_void,
+        &mut format_raw as *mut _ as *mut c_void,
+        &mut compression_raw as *mut _ as *mut c_void,
+        &mut data_ptr as *mut _ as *mut c_void,
+        &mut data_len as *mut _ as *mut c_void,
+    ];
+    let rc = unsafe {
+        ghostty_kitty_graphics_image_get_multi(
+            image,
+            keys.len(),
+            keys.as_ptr(),
+            values.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if rc != GHOSTTY_SUCCESS
+        || width == 0
+        || height == 0
+        || data_ptr.is_null()
+        || compression_raw != GhosttyKittyImageCompression::None as c_int
+    {
+        return None;
+    }
+
+    // Read C enums through their integer representation so a future upstream
+    // format cannot create an invalid Rust enum discriminant before the ABI
+    // manifest check reports the drift.
+    let format = match format_raw {
+        value if value == GhosttyKittyImageFormat::Rgb as c_int => GhosttyKittyImageFormat::Rgb,
+        value if value == GhosttyKittyImageFormat::Rgba as c_int => GhosttyKittyImageFormat::Rgba,
+        value if value == GhosttyKittyImageFormat::GrayAlpha as c_int => {
+            GhosttyKittyImageFormat::GrayAlpha
+        }
+        value if value == GhosttyKittyImageFormat::Gray as c_int => GhosttyKittyImageFormat::Gray,
+        _ => return None,
+    };
+
+    let bytes_per_pixel = match format {
+        GhosttyKittyImageFormat::Rgb => 3,
+        GhosttyKittyImageFormat::Rgba => 4,
+        GhosttyKittyImageFormat::GrayAlpha => 2,
+        GhosttyKittyImageFormat::Gray => 1,
+        GhosttyKittyImageFormat::Png => return None,
+    };
+    let expected_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(bytes_per_pixel)?;
+    if data_len != expected_len || data_len > KITTY_IMAGE_STORAGE_LIMIT_BYTES as usize {
+        return None;
+    }
+    let source = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+    let rgba: Arc<[u8]> = match format {
+        GhosttyKittyImageFormat::Rgba => Arc::from(source),
+        GhosttyKittyImageFormat::Rgb => {
+            let mut rgba = Vec::with_capacity(source.len() / 3 * 4);
+            for &[red, green, blue] in source.as_chunks::<3>().0 {
+                rgba.extend_from_slice(&[red, green, blue, 0xFF]);
+            }
+            rgba.into()
+        }
+        GhosttyKittyImageFormat::GrayAlpha => {
+            let mut rgba = Vec::with_capacity(source.len() / 2 * 4);
+            for &[gray, alpha] in source.as_chunks::<2>().0 {
+                rgba.extend_from_slice(&[gray, gray, gray, alpha]);
+            }
+            rgba.into()
+        }
+        GhosttyKittyImageFormat::Gray => {
+            let mut rgba = Vec::with_capacity(source.len() * 4);
+            for gray in source {
+                rgba.extend_from_slice(&[*gray, *gray, *gray, 0xFF]);
+            }
+            rgba.into()
+        }
+        GhosttyKittyImageFormat::Png => return None,
+    };
+
+    Some(Arc::new(KittyImage {
+        id: image_id,
+        generation,
+        width,
+        height,
+        rgba,
+    }))
 }
 
 fn read_scrollbar(terminal: GhosttyTerminal) -> Option<GhosttyScrollbar> {
@@ -2646,6 +3086,12 @@ impl Drop for VtScreen {
                 unsafe { ghostty_key_encoder_free(inner.key_encoder) };
                 inner.key_encoder = std::ptr::null_mut();
             }
+            if !inner.kitty_placement_iter.is_null() {
+                unsafe {
+                    ghostty_kitty_graphics_placement_iterator_free(inner.kitty_placement_iter)
+                };
+                inner.kitty_placement_iter = std::ptr::null_mut();
+            }
             if !inner.row_cells.is_null() {
                 unsafe { ghostty_render_state_row_cells_free(inner.row_cells) };
                 inner.row_cells = std::ptr::null_mut();
@@ -2751,6 +3197,11 @@ mod tests {
                 std::mem::size_of::<GhosttySysImage>(),
                 std::mem::align_of::<GhosttySysImage>(),
             ),
+            (
+                "GhosttyKittyGraphicsPlacementRenderInfo",
+                std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
+                std::mem::align_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
+            ),
         ] {
             assert_eq!(
                 types[name]["size"].as_u64(),
@@ -2825,6 +3276,79 @@ mod tests {
             types["GhosttySysOption"]["values"]["DECODE_PNG"].as_i64(),
             Some(GhosttySysOption::DecodePng as i64)
         );
+        assert_eq!(
+            types["GhosttyKittyGraphicsData"]["values"]["PLACEMENT_ITERATOR"].as_i64(),
+            Some(GhosttyKittyGraphicsData::PlacementIterator as i64)
+        );
+        for (name, value) in [
+            ("IMAGE_ID", GhosttyKittyGraphicsPlacementData::ImageId),
+            (
+                "PLACEMENT_ID",
+                GhosttyKittyGraphicsPlacementData::PlacementId,
+            ),
+            ("IS_VIRTUAL", GhosttyKittyGraphicsPlacementData::IsVirtual),
+            ("X_OFFSET", GhosttyKittyGraphicsPlacementData::XOffset),
+            ("Y_OFFSET", GhosttyKittyGraphicsPlacementData::YOffset),
+            ("Z", GhosttyKittyGraphicsPlacementData::Z),
+        ] {
+            assert_eq!(
+                types["GhosttyKittyGraphicsPlacementData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyKittyGraphicsPlacementData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("WIDTH", GhosttyKittyGraphicsImageData::Width),
+            ("HEIGHT", GhosttyKittyGraphicsImageData::Height),
+            ("FORMAT", GhosttyKittyGraphicsImageData::Format),
+            ("COMPRESSION", GhosttyKittyGraphicsImageData::Compression),
+            ("DATA_PTR", GhosttyKittyGraphicsImageData::DataPtr),
+            ("DATA_LEN", GhosttyKittyGraphicsImageData::DataLen),
+            ("GENERATION", GhosttyKittyGraphicsImageData::Generation),
+        ] {
+            assert_eq!(
+                types["GhosttyKittyGraphicsImageData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyKittyGraphicsImageData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("RGB", GhosttyKittyImageFormat::Rgb),
+            ("RGBA", GhosttyKittyImageFormat::Rgba),
+            ("PNG", GhosttyKittyImageFormat::Png),
+            ("GRAY_ALPHA", GhosttyKittyImageFormat::GrayAlpha),
+            ("GRAY", GhosttyKittyImageFormat::Gray),
+        ] {
+            assert_eq!(
+                types["GhosttyKittyImageFormat"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyKittyImageFormat::{name}"
+            );
+        }
+        for (name, value) in [
+            ("NONE", GhosttyKittyImageCompression::None),
+            ("ZLIB_DEFLATE", GhosttyKittyImageCompression::ZlibDeflate),
+        ] {
+            assert_eq!(
+                types["GhosttyKittyImageCompression"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyKittyImageCompression::{name}"
+            );
+        }
+        let render_info = &types["GhosttyKittyGraphicsPlacementRenderInfo"]["fields"];
+        for (name, offset) in [
+            ("size", 0),
+            ("pixel_width", 8),
+            ("viewport_visible", 32),
+            ("source_x", 36),
+            ("source_height", 48),
+        ] {
+            assert_eq!(
+                render_info[name]["offset"].as_u64(),
+                Some(offset),
+                "GhosttyKittyGraphicsPlacementRenderInfo::{name} offset"
+            );
+        }
         assert_eq!(
             types["GhosttyKittyKeyFlags"]["size"].as_u64(),
             Some(std::mem::size_of::<u8>() as u64)
@@ -2902,6 +3426,40 @@ mod tests {
         ] {
             assert_eq!(keys[name].as_i64(), Some(key as i64), "GhosttyKey::{key:?}");
         }
+    }
+
+    #[test]
+    fn kitty_graphics_snapshot_decodes_png_and_reuses_unchanged_pixels() {
+        let screen = VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_| Ok(()))))
+            .expect("create vt screen");
+        screen.resize(80, 24, 8, 16).expect("set cell size");
+        screen.feed(
+            b"\x1b_Ga=T,f=100,q=2;\
+              iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA\
+              DUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==\
+              \x1b\\",
+        );
+
+        let first = screen.snapshot();
+        assert_eq!(first.kitty_placements.len(), 1);
+        let placement = &first.kitty_placements[0];
+        assert_eq!((placement.image.width, placement.image.height), (1, 1));
+        assert_eq!(placement.image.rgba.as_ref(), &[0xFF, 0, 0, 0xFF]);
+        assert_eq!(
+            (
+                placement.source_x,
+                placement.source_y,
+                placement.source_width,
+                placement.source_height,
+            ),
+            (0, 0, 1, 1)
+        );
+
+        let pixels = placement.image.clone();
+        screen.bump_generation();
+        let second = screen.snapshot();
+        assert_eq!(second.kitty_placements.len(), 1);
+        assert!(Arc::ptr_eq(&pixels, &second.kitty_placements[0].image));
     }
 
     #[test]

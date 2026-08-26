@@ -23,6 +23,9 @@ typedef void* GhosttyRowIterator;
 typedef void* GhosttyRowCells;
 typedef void* GhosttyKeyEncoder;
 typedef void* GhosttyKeyEvent;
+typedef void* GhosttyKittyGraphics;
+typedef void* GhosttyKittyGraphicsImage;
+typedef void* GhosttyKittyGraphicsPlacementIterator;
 typedef int   GhosttyResult;
 
 union GhosttyTerminalScrollViewportValue {
@@ -107,6 +110,74 @@ GhosttyResult ghostty_terminal_paste(
     (void)terminal; (void)paste;
     if (out_written) { *out_written = false; }
     return 0;
+}
+
+/* ── Kitty graphics ────────────────────────────────────────────── */
+
+GhosttyResult ghostty_kitty_graphics_get(
+    GhosttyKittyGraphics graphics, int data, void* out
+) {
+    (void)graphics; (void)data; (void)out;
+    return 1;
+}
+
+GhosttyKittyGraphicsImage ghostty_kitty_graphics_image(
+    GhosttyKittyGraphics graphics, uint32_t image_id
+) {
+    (void)graphics; (void)image_id;
+    return NULL;
+}
+
+GhosttyResult ghostty_kitty_graphics_image_get(
+    GhosttyKittyGraphicsImage image, int data, void* out
+) {
+    (void)image; (void)data; (void)out;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_image_get_multi(
+    GhosttyKittyGraphicsImage image, size_t count,
+    const int* keys, void** values, size_t* out_written
+) {
+    (void)image; (void)count; (void)keys; (void)values; (void)out_written;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_iterator_new(
+    const void* allocator, GhosttyKittyGraphicsPlacementIterator* out_iterator
+) {
+    (void)allocator;
+    if (out_iterator) { *out_iterator = (void*)(uintptr_t)7; }
+    return 0;
+}
+
+void ghostty_kitty_graphics_placement_iterator_free(
+    GhosttyKittyGraphicsPlacementIterator iterator
+) {
+    (void)iterator;
+}
+
+bool ghostty_kitty_graphics_placement_next(
+    GhosttyKittyGraphicsPlacementIterator iterator
+) {
+    (void)iterator;
+    return false;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_get_multi(
+    GhosttyKittyGraphicsPlacementIterator iterator, size_t count,
+    const int* keys, void** values, size_t* out_written
+) {
+    (void)iterator; (void)count; (void)keys; (void)values; (void)out_written;
+    return 1;
+}
+
+GhosttyResult ghostty_kitty_graphics_placement_render_info(
+    GhosttyKittyGraphicsPlacementIterator iterator,
+    GhosttyKittyGraphicsImage image, GhosttyTerminal terminal, void* out_info
+) {
+    (void)iterator; (void)image; (void)terminal; (void)out_info;
+    return 1;
 }
 
 /* ── Key encoder ────────────────────────────────────────────────── */

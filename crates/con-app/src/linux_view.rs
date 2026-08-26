@@ -2103,6 +2103,7 @@ mod tests {
             cols: 5,
             rows: 3,
             cells: Vec::new(),
+            kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
                 col: 0,
@@ -2134,6 +2135,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells,
+            kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
                 col: 0,
@@ -2163,6 +2165,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells: vec![Default::default(); 12],
+            kitty_placements: Default::default(),
             dirty_rows: vec![1],
             cursor: VtCursor {
                 col: 2,
