@@ -17,10 +17,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: con-gh-pages-publish
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build windows-x86_64
@@ -400,6 +396,9 @@ jobs:
 
   update-appcast:
     name: Update Sparkle appcast (windows-x86_64)
+    concurrency:
+      group: con-gh-pages-publish
+      cancel-in-progress: false
     # Run on macOS because Sparkle's `sign_update` tool ships only in
     # the macOS Sparkle distribution. The signing key is the same
     # Ed25519 keypair used for macOS artifacts — the Windows client

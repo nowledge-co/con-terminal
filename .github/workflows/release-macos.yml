@@ -9,10 +9,6 @@ permissions:
   contents: write
   pages: write
 
-concurrency:
-  group: con-gh-pages-publish
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build ${{ matrix.arch }}
@@ -221,6 +217,9 @@ jobs:
 
   update-appcast:
     name: Update Sparkle appcast
+    concurrency:
+      group: con-gh-pages-publish
+      cancel-in-progress: false
     runs-on: macos-15
     needs: publish
 

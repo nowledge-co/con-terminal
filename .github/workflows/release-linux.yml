@@ -20,10 +20,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: con-gh-pages-publish
-  cancel-in-progress: false
-
 jobs:
   build:
     name: Build linux-x86_64
@@ -226,6 +222,9 @@ jobs:
 
   update-appcast:
     name: Update Sparkle appcast (linux-x86_64)
+    concurrency:
+      group: con-gh-pages-publish
+      cancel-in-progress: false
     # Run on macOS because Sparkle's `sign_update` tool ships only in
     # the macOS Sparkle distribution. Identical pattern to
     # release-windows.yml's appcast job — same Ed25519 keypair, same
