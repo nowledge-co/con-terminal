@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.85` - unreleased
+## `v0.1.0-beta.86` - unreleased
 
 ### Added
 
@@ -15,6 +15,21 @@ con is still pre-release, so entries may group related beta work while the produ
   for notification permission. _(PR
   [#290](https://github.com/nowledge-co/con-terminal/pull/290) by
   [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Windows, Linux**
+
+- Added portable Kitty keyboard encoding, mediated clipboard paste, and
+  bounded static image rendering while retaining each platform's native PTY
+  and renderer. _(PR
+  [#297](https://github.com/nowledge-co/con-terminal/pull/297) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Window Management**
+
+- Added an option to keep a window open after its last tab is closed. When
+  enabled, Con opens a fresh tab in that window instead of closing it. _(PR
+  [#295](https://github.com/nowledge-co/con-terminal/pull/295) by
+  [@zhangmo8](https://github.com/zhangmo8))_
 
 **Packaging**
 
