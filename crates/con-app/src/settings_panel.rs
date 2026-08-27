@@ -2581,26 +2581,29 @@ impl SettingsPanel {
 
     pub fn request_standalone_close(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.standalone {
-            return self.request_close_internal(_window, cx, /* close_window_on_accept */ true);
+        if !self.request_close_internal(cx) {
+            return false;
         }
-        // Overlay path (#181): always go through the same dirty guard.
-        self.request_close_internal(_window, cx, /* close_window_on_accept */ false)
+
+        if self.standalone {
+            window.remove_window();
+        } else {
+            // Keyboard dismissal must close the overlay as well as the
+            // standalone window. The dirty guard only decides whether the
+            // close is allowed; it does not perform the mode-specific close.
+            self.toggle(window, cx);
+        }
+        true
     }
 
     /// Shared close path used by both the standalone window and the
     /// in-workspace overlay. Returns `true` if it is safe to proceed
     /// with closing (no unsaved changes); `false` if the confirmation
     /// prompt is now visible and the caller should NOT close.
-    fn request_close_internal(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-        _close_window_on_accept: bool,
-    ) -> bool {
+    fn request_close_internal(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.has_unsaved_changes(cx) {
             self.close_confirmation_visible = false;
             // No unsaved changes — but `revert_preview` still clears
@@ -5752,11 +5755,7 @@ impl Render for SettingsPanel {
                 }
                 match event.keystroke.key.as_str() {
                     "escape" => {
-                        if this.request_standalone_close(window, cx) {
-                            if this.standalone {
-                                window.remove_window();
-                            }
-                        }
+                        this.request_standalone_close(window, cx);
                     }
                     "enter" if event.keystroke.modifiers.platform => {
                         this.save(window, cx);
@@ -5765,11 +5764,7 @@ impl Render for SettingsPanel {
                         this.save(window, cx);
                     }
                     "w" if event.keystroke.modifiers.platform => {
-                        if this.request_standalone_close(window, cx) {
-                            if this.standalone {
-                                window.remove_window();
-                            }
-                        }
+                        this.request_standalone_close(window, cx);
                     }
                     _ => {}
                 }
@@ -6095,12 +6090,7 @@ impl Render for SettingsPanel {
                     // Route through the same dirty guard as Esc / ⌘W so
                     // the user gets a chance to keep editing or
                     // discard explicitly.
-                    if this.request_standalone_close(window, cx) {
-                        // No unsaved changes — close normally. The
-                        // toggle() path is the canonical overlay-close
-                        // path; reuse it.
-                        this.toggle(window, cx);
-                    }
+                    this.request_standalone_close(window, cx);
                 }),
             );
 
