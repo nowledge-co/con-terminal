@@ -139,10 +139,10 @@ jobs:
               "repos/${GH_REPO}/actions/workflows/${wf}/runs?head_sha=${HEAD_SHA}&event=push&per_page=20")
 
             total_count=$(jq -r '.total_count' <<<"$runs_json")
-            latest=$(jq -r --arg sha "$HEAD_SHA" '\
-              [.workflow_runs[] | select(.head_sha == $sha)]\
-              | sort_by(.updated_at) | last // {}\
-              | [.status // "missing", .conclusion // "", .id // ""]\
+            latest=$(jq -r --arg sha "$HEAD_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha)]
+              | sort_by(.updated_at) | last // {}
+              | [.status // "missing", .conclusion // "", .id // ""]
               | @tsv' <<<"$runs_json")
             read -r latest_status latest_conclusion latest_id <<<"$latest"
 
