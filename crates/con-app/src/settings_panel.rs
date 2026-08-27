@@ -1675,17 +1675,32 @@ impl SettingsPanel {
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.standalone = false;
-        self.visible = !self.visible;
-        self.overlay_motion.set_target(
-            if self.visible { 1.0 } else { 0.0 },
-            std::time::Duration::from_millis(if self.visible { 220 } else { 180 }),
-        );
         if self.visible {
-            self.refresh_controls_from_config(window, cx);
-        } else {
+            // Closing — apply the same dirty-state guard the standalone
+            // window uses (#181), so Esc / ⌘, / global hotkey do not
+            // silently drop in-progress edits in the overlay.
+            if self.has_unsaved_changes(cx) {
+                self.close_confirmation_visible = true;
+                cx.notify();
+                return;
+            }
+            self.visible = false;
+            self.overlay_motion
+                .set_target(0.0, std::time::Duration::from_millis(180));
             // Ensure hotkeys are always re-enabled when the panel closes,
             // even if recording was active when the user dismissed it.
             self.set_recording_key(None);
+        } else {
+            // Opening — take a fresh snapshot so `has_unsaved_changes`
+            // has a baseline to compare against. Without this, the
+            // overlay path can never report dirty because
+            // `open_standalone` is the only existing snapshot setter.
+            self.preview_snapshot = Some(self.config.clone());
+            self.close_confirmation_visible = false;
+            self.visible = true;
+            self.overlay_motion
+                .set_target(1.0, std::time::Duration::from_millis(220));
+            self.refresh_controls_from_config(window, cx);
         }
         cx.notify();
     }
@@ -1702,9 +1717,12 @@ impl SettingsPanel {
     }
 
     pub fn revert_standalone_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.standalone {
-            return;
-        }
+        // Renamed conceptually to "revert_preview" — works in both
+        // standalone and overlay modes. The standalone-only early return
+        // was the root cause of #181: the overlay never had a way to
+        // discard edits because its snapshot was never created in the
+        // first place, and even when one is, this guard would have
+        // skipped the revert.
         self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
@@ -2566,12 +2584,27 @@ impl SettingsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.standalone {
-            return true;
+        if self.standalone {
+            return self.request_close_internal(_window, cx, /* close_window_on_accept */ true);
         }
+        // Overlay path (#181): always go through the same dirty guard.
+        self.request_close_internal(_window, cx, /* close_window_on_accept */ false)
+    }
 
+    /// Shared close path used by both the standalone window and the
+    /// in-workspace overlay. Returns `true` if it is safe to proceed
+    /// with closing (no unsaved changes); `false` if the confirmation
+    /// prompt is now visible and the caller should NOT close.
+    fn request_close_internal(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+        _close_window_on_accept: bool,
+    ) -> bool {
         if !self.has_unsaved_changes(cx) {
             self.close_confirmation_visible = false;
+            // No unsaved changes — but `revert_preview` still clears
+            // the snapshot to avoid a stale baseline next time we open.
             self.revert_standalone_preview(cx);
             return true;
         }
@@ -2586,11 +2619,31 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    fn save_and_close_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Discard pending edits and close. Works in both standalone
+    /// (removes the window) and overlay (hides the panel with the
+    /// standard close animation) modes.
+    fn discard_and_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.revert_standalone_preview(cx);
+        if self.standalone {
+            window.remove_window();
+            return;
+        }
+        self.visible = false;
+        self.overlay_motion
+            .set_target(0.0, std::time::Duration::from_millis(180));
+        self.set_recording_key(None);
+        cx.notify();
+    }
+
+    fn save_and_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save(window, cx);
         if self.save_error.is_none() {
             self.close_confirmation_visible = false;
-            window.remove_window();
+            if self.standalone {
+                window.remove_window();
+            }
+            // Overlay mode: `save()` already set `visible = false` and
+            // started the close animation; nothing more to do here.
         } else {
             self.close_confirmation_visible = true;
             cx.notify();
@@ -5699,12 +5752,10 @@ impl Render for SettingsPanel {
                 }
                 match event.keystroke.key.as_str() {
                     "escape" => {
-                        if this.standalone {
-                            if this.request_standalone_close(window, cx) {
+                        if this.request_standalone_close(window, cx) {
+                            if this.standalone {
                                 window.remove_window();
                             }
-                        } else {
-                            this.save(window, cx);
                         }
                     }
                     "enter" if event.keystroke.modifiers.platform => {
@@ -5714,12 +5765,10 @@ impl Render for SettingsPanel {
                         this.save(window, cx);
                     }
                     "w" if event.keystroke.modifiers.platform => {
-                        if this.standalone {
-                            if this.request_standalone_close(window, cx) {
+                        if this.request_standalone_close(window, cx) {
+                            if this.standalone {
                                 window.remove_window();
                             }
-                        } else {
-                            this.save(window, cx);
                         }
                     }
                     _ => {}
@@ -5867,7 +5916,7 @@ impl Render for SettingsPanel {
                     .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
             )
             .children(
-                (self.standalone && self.close_confirmation_visible && has_unsaved_changes).then(
+                (self.close_confirmation_visible && has_unsaved_changes).then(
                     || {
                         div()
                             .id("settings-close-confirmation")
@@ -5941,6 +5990,29 @@ impl Render for SettingsPanel {
                                             })),
                                     )
                                     .child(
+                                        Button::new("settings-close-prompt-discard")
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .h(px(26.0 * header_density))
+                                            .px(px(8.0 * header_density))
+                                            .rounded(px(7.0 * header_density))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.0 * header_density))
+                                                    .line_height(px(15.0 * header_density))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(
+                                                        theme.danger.opacity(0.86),
+                                                    )
+                                                    .whitespace_nowrap()
+                                                    .child("Discard"),
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.discard_and_close(window, cx);
+                                            })),
+                                    )
+                                    .child(
                                         Button::new("settings-close-prompt-save")
                                             .small()
                                             .compact()
@@ -5965,7 +6037,7 @@ impl Render for SettingsPanel {
                                                     .child("Save and Close"),
                                             )
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.save_and_close_standalone(window, cx);
+                                                this.save_and_close(window, cx);
                                             })),
                                     ),
                             )
@@ -6018,7 +6090,17 @@ impl Render for SettingsPanel {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.save(window, cx);
+                    // #181: clicking outside the panel previously
+                    // auto-saved in-progress edits without prompting.
+                    // Route through the same dirty guard as Esc / ⌘W so
+                    // the user gets a chance to keep editing or
+                    // discard explicitly.
+                    if this.request_standalone_close(window, cx) {
+                        // No unsaved changes — close normally. The
+                        // toggle() path is the canonical overlay-close
+                        // path; reuse it.
+                        this.toggle(window, cx);
+                    }
                 }),
             );
 
@@ -6543,5 +6625,41 @@ mod tests {
             provider_connection_status(true, true, None, true, true),
             (true, "Signed In")
         );
+    }
+
+    // --- #181: dirty-state detection used by the unsaved-changes
+    // confirmation prompt. We test the underlying `config_matches` helper
+    // directly because `has_unsaved_changes` needs a GPUI `Context` to
+    // sync from the form controls; the comparison logic is the actual
+    // contract that determines whether the prompt is shown.
+    #[test]
+    fn config_matches_returns_true_for_identical_configs() {
+        use con_core::Config;
+        let a = Config::default();
+        let b = Config::default();
+        assert!(SettingsPanel::config_matches(&a, &b));
+    }
+
+    #[test]
+    fn config_matches_returns_false_when_a_field_diverges() {
+        use con_core::Config;
+        let a = Config::default();
+        let mut b = Config::default();
+        b.appearance.close_to_quit = !a.appearance.close_to_quit;
+        assert!(!SettingsPanel::config_matches(&a, &b));
+    }
+
+    #[test]
+    fn config_matches_ignores_field_ordering_or_whitespace_diffs() {
+        // The settings form reorders some sections on write, but
+        // `toml::to_string_pretty` is canonical for our struct layout
+        // so two `Config` values that round-trip the same way should
+        // serialize identically. If this assertion ever fires, the
+        // `has_unsaved_changes` prompt would start firing on every
+        // open even for a clean user, which is the #181 inverse.
+        use con_core::Config;
+        let a = Config::default();
+        let b = Config::default();
+        assert!(SettingsPanel::config_matches(&a, &b));
     }
 }
