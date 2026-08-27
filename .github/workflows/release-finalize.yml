@@ -46,10 +46,10 @@ name: Finalize release
 #   tag name (e.g. `v0.1.0-beta.35`). We use it to derive the tag,
 #   and we use `head_sha` to correlate runs across the three sibling
 #   workflows.
-# - `gh release edit --draft=false` is idempotent for an already-
-#   published release, so concurrent finalize runs (which can fire
-#   roughly simultaneously when the slowest two platforms finish
-#   close together) are safe.
+# - Every completion event gets its own finalizer run. Do not collapse
+#   these events into one concurrency group: GitHub keeps only one
+#   pending run per group, so a later platform completion can otherwise
+#   cancel the event that would have promoted the release.
 
 on:
   workflow_run:
@@ -64,13 +64,12 @@ permissions:
   contents: write
   actions: read
 
-# Serialize finalize attempts per-tag so two near-simultaneous
-# triggering completions don't both call `gh release edit` at the
-# same instant. Cheap insurance — the operation is idempotent, but
-# this also avoids two concurrent runs racing to compute the
-# "all green?" result with a stale cache.
+# Keep each workflow_run completion independent. GitHub concurrency has
+# one running slot and one pending slot per group; sharing a tag or
+# repository-wide group silently drops completion events. The source
+# run ID is unique, so all three completion events get a chance to run.
 concurrency:
-  group: con-gh-pages-publish
+  group: release-finalize-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
@@ -110,8 +109,9 @@ jobs:
           HEAD_SHA: ${{ steps.ctx.outputs.sha }}
         # Strategy: for each of the three release workflow files,
         # query its workflow_runs filtered by head_sha and event=push.
-        # If at least one of those runs has conclusion=success, that
-        # platform is "done". If all three are done, we promote.
+        # The newest matching run must be completed successfully. A
+        # previous success is not enough: a later retry may have failed.
+        # If all three latest runs are successful, we promote.
         # Otherwise we exit cleanly — the next sibling's completion
         # will trigger another finalize attempt.
         #
@@ -138,15 +138,17 @@ jobs:
             runs_json=$(gh api \
               "repos/${GH_REPO}/actions/workflows/${wf}/runs?head_sha=${HEAD_SHA}&event=push&per_page=20")
 
-            success_count=$(jq -r \
-              '[.workflow_runs[] | select(.conclusion == "success")] | length' \
-              <<<"$runs_json")
-
             total_count=$(jq -r '.total_count' <<<"$runs_json")
+            latest=$(jq -r --arg sha "$HEAD_SHA" '\
+              [.workflow_runs[] | select(.head_sha == $sha)]\
+              | sort_by(.updated_at) | last // {}\
+              | [.status // "missing", .conclusion // "", .id // ""]\
+              | @tsv' <<<"$runs_json")
+            read -r latest_status latest_conclusion latest_id <<<"$latest"
 
-            echo "${wf}: head_sha=${HEAD_SHA} total=${total_count} success=${success_count}"
+            echo "${wf}: head_sha=${HEAD_SHA} total=${total_count} latest_run=${latest_id} status=${latest_status} conclusion=${latest_conclusion}"
 
-            if [[ "$success_count" -lt 1 ]]; then
+            if [[ "$latest_status" != "completed" || "$latest_conclusion" != "success" ]]; then
               all_done=0
             fi
           done
