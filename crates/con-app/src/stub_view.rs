@@ -94,6 +94,8 @@ impl GhosttyView {
         None
     }
 
+    pub fn release_mouse_selection(&mut self, _cx: &mut Context<Self>) {}
+
     pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {}
 
     pub fn set_surface_focus_state(&mut self, _focused: bool) {}

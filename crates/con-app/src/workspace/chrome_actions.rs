@@ -558,7 +558,7 @@ impl ConWorkspace {
         self.prompt_for_workspace_layout_path(window, cx, true);
     }
 
-    pub(super) fn release_active_terminal_mouse_selection(&self, cx: &App) {
+    pub(super) fn release_active_terminal_mouse_selection(&self, cx: &mut App) {
         if self.active_tab >= self.tabs.len() {
             return;
         }
