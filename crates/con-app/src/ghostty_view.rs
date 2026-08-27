@@ -31,12 +31,13 @@ use gpui_component::ActiveTheme;
 use gpui_component::menu::ContextMenuExt;
 
 use crate::mouse_sequence::MouseButtonSequence;
+use crate::terminal_find::{TerminalFind, TerminalFindDismissed};
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
 use crate::terminal_restore::key_down_may_write_terminal;
 
-// Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
+// Actions owned by the embedded terminal view.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[cfg(target_os = "macos")]
@@ -120,6 +121,13 @@ impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 
+#[derive(Default)]
+struct PendingTerminalFind {
+    needle: String,
+    total: Option<Option<usize>>,
+    selected: Option<Option<usize>>,
+}
+
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -183,12 +191,13 @@ pub struct GhosttyView {
     /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
     ime_marked_text: Option<String>,
+    terminal_find: Option<Entity<TerminalFind>>,
+    pending_terminal_find: Option<PendingTerminalFind>,
+    restore_terminal_focus: bool,
 }
 
-/// Register ghostty key bindings. Call once at startup.
+/// Register ghostty view key bindings. Call once at startup.
 pub fn init(cx: &mut App) {
-    // Bind Tab/Shift-Tab to our consume actions within the GhosttyTerminal context.
-    // This prevents Root's Tab handler from intercepting Tab when the terminal is focused.
     cx.bind_keys([
         KeyBinding::new("tab", ConsumeTab, Some("GhosttyTerminal")),
         KeyBinding::new("shift-tab", ConsumeTabPrev, Some("GhosttyTerminal")),
@@ -248,6 +257,64 @@ impl GhosttyView {
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
             ime_marked_text: None,
+            terminal_find: None,
+            pending_terminal_find: None,
+            restore_terminal_focus: false,
+        }
+    }
+
+    pub(crate) fn show_terminal_find(
+        &mut self,
+        needle: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(find) = self.terminal_find.as_ref() {
+            find.update(cx, |find, cx| find.set_needle(needle, window, cx));
+            return;
+        }
+
+        let Some(terminal) = self.terminal.clone() else {
+            return;
+        };
+        let terminal_focus = self.focus_handle.clone();
+        let find = cx.new(|cx| TerminalFind::new(terminal, terminal_focus, needle, window, cx));
+        let find_id = find.entity_id();
+        cx.subscribe_in(
+            &find,
+            window,
+            move |this, _, _: &TerminalFindDismissed, _window, cx| {
+                if this
+                    .terminal_find
+                    .as_ref()
+                    .is_some_and(|active| active.entity_id() == find_id)
+                {
+                    this.terminal_find = None;
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        find.update(cx, |find, cx| find.focus(window, cx));
+        self.terminal_find = Some(find);
+        cx.notify();
+    }
+
+    fn flush_pending_terminal_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_terminal_find.take() else {
+            return;
+        };
+
+        self.show_terminal_find(pending.needle, window, cx);
+        if let Some(find) = self.terminal_find.as_ref() {
+            find.update(cx, |find, cx| {
+                if let Some(total) = pending.total {
+                    find.set_total(total, cx);
+                }
+                if let Some(selected) = pending.selected {
+                    find.set_selected(selected, cx);
+                }
+            });
         }
     }
 
@@ -274,6 +341,34 @@ impl GhosttyView {
                 GhosttySurfaceEvent::PwdChanged(cwd) => {
                     self.last_cwd = Some(cwd.clone());
                     cx.emit(GhosttyCwdChanged(Some(cwd)));
+                }
+                GhosttySurfaceEvent::StartSearch(needle) => {
+                    self.pending_terminal_find = Some(PendingTerminalFind {
+                        needle,
+                        ..PendingTerminalFind::default()
+                    });
+                }
+                GhosttySurfaceEvent::EndSearch => {
+                    let mut had_find = self.pending_terminal_find.take().is_some();
+                    if let Some(find) = self.terminal_find.take() {
+                        had_find = true;
+                        find.update(cx, |find, _cx| find.mark_ended());
+                    }
+                    self.restore_terminal_focus |= had_find;
+                }
+                GhosttySurfaceEvent::SearchTotal(total) => {
+                    if let Some(find) = self.terminal_find.as_ref() {
+                        find.update(cx, |find, cx| find.set_total(total, cx));
+                    } else if let Some(pending) = self.pending_terminal_find.as_mut() {
+                        pending.total = Some(total);
+                    }
+                }
+                GhosttySurfaceEvent::SearchSelected(selected) => {
+                    if let Some(find) = self.terminal_find.as_ref() {
+                        find.update(cx, |find, cx| find.set_selected(selected, cx));
+                    } else if let Some(pending) = self.pending_terminal_find.as_mut() {
+                        pending.selected = Some(selected);
+                    }
                 }
             }
         }
@@ -554,9 +649,15 @@ impl GhosttyView {
         }
     }
 
-    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
+    pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, cx: &mut App) {
         self.finish_active_mouse_sequences();
         self.native_view_visible.set(false);
+
+        if let Some(find) = self.terminal_find.take() {
+            find.update(cx, |find, _cx| find.end());
+        }
+        self.pending_terminal_find = None;
+        self.restore_terminal_focus = false;
 
         if let Some(ref terminal) = self.terminal {
             terminal.set_focus(false);
@@ -1481,6 +1582,10 @@ impl GhosttyView {
         ) || crate::terminal_shortcuts::key_down_starts_action_binding(
             event,
             window,
+            &crate::FindInTerminal,
+        ) || crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
             &crate::FocusFiles,
         ) || crate::terminal_shortcuts::key_down_starts_action_binding(
             event,
@@ -1504,6 +1609,13 @@ impl GhosttyView {
                 "d" => return false,
                 // Agent & input
                 "l" | "i" => return false,
+                // Terminal find
+                "f" if !keystroke.modifiers.shift
+                    && !keystroke.modifiers.alt
+                    && !keystroke.modifiers.control =>
+                {
+                    return false;
+                }
                 // Edit menu (handled by OS)
                 "c" | "v" | "x" | "z" | "a" => return false,
                 // Command palette (cmd-shift-p)
@@ -1883,7 +1995,18 @@ impl Focusable for GhosttyView {
 }
 
 impl Render for GhosttyView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_terminal_find.is_some() {
+            let entity = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = entity.update(cx, |this, cx| this.flush_pending_terminal_find(window, cx));
+            });
+        }
+        if std::mem::take(&mut self.restore_terminal_focus) {
+            let focus = self.focus_handle.clone();
+            window.defer(cx, move |window, cx| window.focus(&focus, cx));
+        }
+
         let focus = self.focus_handle.clone();
         let input_focus = focus.clone();
         let context_focus = focus.clone();
@@ -1894,6 +2017,7 @@ impl Render for GhosttyView {
         let mono_font_size = cx.theme().mono_font_size;
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
+        let terminal_find = self.terminal_find.clone();
 
         // Preedit overlay: render IME composition text at the cursor position.
         let preedit_overlay: Option<gpui::AnyElement> = self
@@ -1987,6 +2111,15 @@ impl Render for GhosttyView {
             })
             .key_context("GhosttyTerminal")
             .track_focus(&focus)
+            .on_action(cx.listener(|this, _: &crate::FindInTerminal, window, cx| {
+                if !this.focus_handle.contains_focused(window, cx) {
+                    return;
+                }
+                this.ensure_initialized_for_control(window, cx);
+                this.show_terminal_find(String::new(), window, cx);
+                window.prevent_default();
+                cx.stop_propagation();
+            }))
             // Consume Tab/Shift-Tab so Root's focus cycling doesn't intercept them.
             // The actual Tab key is forwarded to ghostty via on_key_down below.
             .on_action(cx.listener(|this, _: &ConsumeTab, window, _cx| {
@@ -2223,6 +2356,7 @@ impl Render for GhosttyView {
                 .size_full(),
             )
             .children(preedit_overlay)
+            .children(terminal_find)
             .context_menu(move |menu, window, cx| {
                 // An empty PopupMenu renders nothing (ContextMenu checks
                 // `is_empty`), so suppress con's menu when the terminal app

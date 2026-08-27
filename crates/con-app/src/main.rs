@@ -23,6 +23,8 @@ mod global_hotkey;
 mod macos_windowing;
 #[cfg(target_os = "macos")]
 mod quick_terminal;
+#[cfg(target_os = "macos")]
+mod terminal_find;
 
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
@@ -150,6 +152,7 @@ actions!(
         ToggleLeftPanel,
         FocusFiles,
         SearchFiles,
+        FindInTerminal,
         CheckForUpdates,
         EditorMoveLeft,
         EditorMoveRight,
@@ -1394,6 +1397,7 @@ enum BindingScope {
     Global,
     Input,
     EditorView,
+    GhosttyTerminal,
 }
 
 impl BindingScope {
@@ -1402,6 +1406,7 @@ impl BindingScope {
             BindingScope::Global => None,
             BindingScope::Input => Some("Input"),
             BindingScope::EditorView => Some("EditorView"),
+            BindingScope::GhosttyTerminal => Some("GhosttyTerminal"),
         }
     }
 }
@@ -1468,6 +1473,8 @@ impl BindingSpec {
 
 const GLOBAL_SCOPES: &[BindingScope] = &[BindingScope::Global];
 const EDITOR_SCOPES: &[BindingScope] = &[BindingScope::EditorView];
+#[cfg(target_os = "macos")]
+const GHOSTTY_TERMINAL_SCOPES: &[BindingScope] = &[BindingScope::GhosttyTerminal];
 #[cfg_attr(not(test), allow(dead_code))]
 const APP_OVERRIDE_SCOPES: &[BindingScope] = &[
     BindingScope::Global,
@@ -1541,6 +1548,8 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     // app navigation, so bind them explicitly in those focused contexts too.
     push_app_override::<FocusFiles>(&mut specs, &kb.focus_files);
     push_app_override::<SearchFiles>(&mut specs, &kb.search_files);
+    #[cfg(target_os = "macos")]
+    push_scoped::<FindInTerminal>(&mut specs, &kb.find_in_terminal, GHOSTTY_TERMINAL_SCOPES);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
 
     specs
@@ -1871,9 +1880,9 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
 mod tests {
     use super::{
         BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd,
-        FileSidebarShortcutBindings, FocusFiles, FocusInput, NewTab, SearchFiles, SelectTab1,
-        ToggleAgentPanel, Undo, binding_specs, command_palette, keystroke_matches_single_binding,
-        push_app_override,
+        FileSidebarShortcutBindings, FindInTerminal, FocusFiles, FocusInput, NewTab, SearchFiles,
+        SelectTab1, ToggleAgentPanel, Undo, binding_specs, command_palette,
+        keystroke_matches_single_binding, push_app_override,
     };
     use con_core::config::KeybindingConfig;
     use gpui::Keystroke;
@@ -2037,6 +2046,17 @@ mod tests {
                 "{name} must work from terminals, inputs, and editor panes"
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn terminal_find_shortcut_is_scoped_to_ghostty_terminal() {
+        let specs = default_specs();
+
+        assert_eq!(
+            scope_names(&specs_for_action::<FindInTerminal>(&specs)),
+            vec![Some("GhosttyTerminal")]
+        );
     }
 
     #[test]
@@ -2704,6 +2724,10 @@ fn main() {
                     MenuItem::os_action("Paste", Paste, OsAction::Paste),
                     MenuItem::separator(),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+                    #[cfg(target_os = "macos")]
+                    MenuItem::separator(),
+                    #[cfg(target_os = "macos")]
+                    MenuItem::action("Find in Terminal", FindInTerminal),
                 ],
                 disabled: false,
             },

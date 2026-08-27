@@ -224,6 +224,14 @@ fn default_search_files() -> String {
     // Matches the common editor convention: Cmd/Ctrl+Shift+F.
     "secondary-shift-f".into()
 }
+#[cfg(target_os = "macos")]
+fn default_find_in_terminal() -> String {
+    "secondary-f".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_find_in_terminal() -> String {
+    String::new()
+}
 
 #[cfg(target_os = "macos")]
 fn default_new_tab() -> String {
@@ -469,6 +477,7 @@ pub struct KeybindingConfig {
     pub toggle_left_panel: String,
     pub focus_files: String,
     pub search_files: String,
+    pub find_in_terminal: String,
     pub collapse_sidebar: String,
     pub new_surface: String,
     pub new_surface_split_right: String,
@@ -529,6 +538,8 @@ impl KeybindingConfig {
             ("Toggle Left Sidebar", self.toggle_left_panel.as_str()),
             ("Focus Files", self.focus_files.as_str()),
             ("Search Files", self.search_files.as_str()),
+            #[cfg(target_os = "macos")]
+            ("Find in Terminal", self.find_in_terminal.as_str()),
             ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
             ("New Surface Tab", self.new_surface.as_str()),
             (
@@ -613,6 +624,7 @@ impl Default for KeybindingConfig {
             toggle_left_panel: default_toggle_left_panel(),
             focus_files: default_focus_files(),
             search_files: default_search_files(),
+            find_in_terminal: default_find_in_terminal(),
             collapse_sidebar: default_collapse_sidebar(),
             new_surface: default_new_surface(),
             new_surface_split_right: default_new_surface_split_right(),
@@ -1124,6 +1136,24 @@ restore_terminal_text = false
     }
 
     #[test]
+    fn default_keybindings_enable_terminal_find_only_on_macos() {
+        let config = Config::default();
+        let shortcuts = config.keybindings.active_shortcuts();
+
+        if cfg!(target_os = "macos") {
+            assert_eq!(config.keybindings.find_in_terminal, "secondary-f");
+            assert!(shortcuts.contains(&("Find in Terminal", "secondary-f")));
+        } else {
+            assert!(config.keybindings.find_in_terminal.is_empty());
+            assert!(
+                !shortcuts
+                    .iter()
+                    .any(|(label, _)| *label == "Find in Terminal")
+            );
+        }
+    }
+
+    #[test]
     fn default_keybindings_include_reachable_surface_cycle_shortcuts() {
         let config = Config::default();
         let (expected_next, expected_previous) = if cfg!(target_os = "macos") {
@@ -1188,6 +1218,14 @@ command_palette = "secondary-shift-p"
 
         assert_eq!(config.keybindings.focus_files, expected_focus);
         assert_eq!(config.keybindings.search_files, "secondary-shift-f");
+        assert_eq!(
+            config.keybindings.find_in_terminal,
+            if cfg!(target_os = "macos") {
+                "secondary-f"
+            } else {
+                ""
+            }
+        );
     }
 
     #[test]

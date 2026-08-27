@@ -484,6 +484,20 @@ impl ConWorkspace {
         }
     }
 
+    pub(super) fn find_in_terminal(
+        &mut self,
+        _: &FindInTerminal,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        if self.has_active_tab()
+            && let Some(terminal) = self.try_active_terminal()
+        {
+            terminal.show_terminal_find(_window, _cx);
+        }
+    }
+
     pub(super) fn clear_restored_terminal_history_action(
         &mut self,
         _: &ClearRestoredTerminalHistory,

@@ -377,6 +377,24 @@ pub struct ghostty_action_command_finished_s {
     pub duration: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_start_search_s {
+    pub needle: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_search_total_s {
+    pub total: isize,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_search_selected_s {
+    pub selected: isize,
+}
+
 /// Action payload for SCROLLBAR.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -425,6 +443,9 @@ pub union ghostty_action_u {
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub command_finished: ghostty_action_command_finished_s,
+    pub start_search: ghostty_action_start_search_s,
+    pub search_total: ghostty_action_search_total_s,
+    pub search_selected: ghostty_action_search_selected_s,
     pub open_url: ghostty_action_open_url_s,
     pub child_exited: ghostty_surface_message_childexited_s,
 }
@@ -439,6 +460,9 @@ pub struct ghostty_action_s {
 // must exactly match ghostty.h at the pinned Ghostty revision.
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_desktop_notification_s>()];
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_surface_message_childexited_s>()];
+const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_start_search_s>()];
+const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_total_s>()];
+const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_selected_s>()];
 const _: [(); 24] = [(); std::mem::size_of::<ghostty_action_u>()];
 const _: [(); 32] = [(); std::mem::size_of::<ghostty_action_s>()];
 

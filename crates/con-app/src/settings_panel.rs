@@ -2773,6 +2773,7 @@ impl SettingsPanel {
             "toggle_left_panel" => self.config.keybindings.toggle_left_panel = binding,
             "focus_files" => self.config.keybindings.focus_files = binding,
             "search_files" => self.config.keybindings.search_files = binding,
+            "find_in_terminal" => self.config.keybindings.find_in_terminal = binding,
             "collapse_sidebar" => self.config.keybindings.collapse_sidebar = binding,
             "new_surface" => self.config.keybindings.new_surface = binding,
             "new_surface_split_right" => self.config.keybindings.new_surface_split_right = binding,
@@ -2818,6 +2819,7 @@ impl SettingsPanel {
             "toggle_left_panel" => &self.config.keybindings.toggle_left_panel,
             "focus_files" => &self.config.keybindings.focus_files,
             "search_files" => &self.config.keybindings.search_files,
+            "find_in_terminal" => &self.config.keybindings.find_in_terminal,
             "collapse_sidebar" => &self.config.keybindings.collapse_sidebar,
             "new_surface" => &self.config.keybindings.new_surface,
             "new_surface_split_right" => &self.config.keybindings.new_surface_split_right,
@@ -5017,6 +5019,8 @@ impl SettingsPanel {
         ];
 
         let pane_keys: &[(&str, &str)] = &[
+            #[cfg(target_os = "macos")]
+            ("Find in Terminal", "find_in_terminal"),
             ("Split Right", "split_right"),
             ("Split Down", "split_down"),
             ("Toggle Pane Zoom", "toggle_pane_zoom"),

@@ -755,6 +755,10 @@ impl ConWorkspace {
                     }
                 }
             }
+            #[cfg(target_os = "macos")]
+            "find-in-terminal" => {
+                self.find_in_terminal(&FindInTerminal, window, cx);
+            }
             "clear-restored-terminal-history" => {
                 self.clear_restored_terminal_history(window, cx);
             }

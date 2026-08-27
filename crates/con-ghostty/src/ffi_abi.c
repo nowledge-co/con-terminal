@@ -94,6 +94,12 @@ _Static_assert(sizeof(ghostty_action_command_finished_s) == 16,
                "ghostty command-finished payload changed layout");
 _Static_assert(offsetof(ghostty_action_command_finished_s, duration) == 8,
                "ghostty command-finished duration changed offset");
+_Static_assert(sizeof(ghostty_action_start_search_s) == sizeof(void *),
+               "ghostty start-search payload changed layout");
+_Static_assert(sizeof(ghostty_action_search_total_s) == sizeof(ssize_t),
+               "ghostty search-total payload changed layout");
+_Static_assert(sizeof(ghostty_action_search_selected_s) == sizeof(ssize_t),
+               "ghostty search-selected payload changed layout");
 
 _Static_assert(GHOSTTY_CLIPBOARD_STANDARD == 0,
                "ghostty standard clipboard changed value");

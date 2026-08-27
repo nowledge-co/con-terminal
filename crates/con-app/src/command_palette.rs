@@ -129,6 +129,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         shortcut: "secondary-k",
         category: "Terminal",
     },
+    #[cfg(target_os = "macos")]
+    PaletteAction {
+        id: "find-in-terminal",
+        label: "Find in Terminal",
+        shortcut: "",
+        category: "Terminal",
+    },
     PaletteAction {
         id: "clear-restored-terminal-history",
         label: "Clear Restored Terminal History",

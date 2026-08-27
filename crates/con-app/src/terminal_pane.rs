@@ -66,6 +66,14 @@ impl TerminalPane {
         });
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn show_terminal_find(&self, window: &mut Window, cx: &mut App) {
+        self.entity.update(cx, |view, cx| {
+            view.ensure_initialized_for_control(window, cx);
+            view.show_terminal_find(String::new(), window, cx);
+        });
+    }
+
     pub fn sync_surface_layout(&self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         self.entity.update(cx, |view, cx| {
             view.sync_surface_layout_for_host(bounds, window, cx)
