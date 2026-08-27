@@ -218,7 +218,10 @@ jobs:
   update-appcast:
     name: Update Sparkle appcast
     concurrency:
-      group: con-gh-pages-publish
+      # Keep macOS retries independent from the other platform jobs. The
+      # push below rebases against the shared branch when another platform
+      # publishes first.
+      group: con-gh-pages-publish-macos
       cancel-in-progress: false
     runs-on: macos-15
     needs: publish
@@ -364,9 +367,18 @@ jobs:
             exit 0
           fi
           git commit -m "Update appcast for $GITHUB_REF_NAME"
-          # Pull-rebase to handle concurrent pushes gracefully
-          git pull --rebase origin gh-pages 2>/dev/null || true
-          git push origin gh-pages
+          for attempt in 1 2 3 4 5; do
+            git fetch origin gh-pages
+            if git rebase origin/gh-pages && git push origin gh-pages; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "::error::Unable to push macOS appcast after $attempt attempts"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+          done
 
   update-homebrew:
     name: Update Homebrew cask

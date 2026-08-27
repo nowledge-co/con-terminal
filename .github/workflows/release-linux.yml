@@ -223,7 +223,10 @@ jobs:
   update-appcast:
     name: Update Sparkle appcast (linux-x86_64)
     concurrency:
-      group: con-gh-pages-publish
+      # Each platform owns a different appcast file. Do not put these jobs
+      # in one GitHub concurrency group: it has only one pending slot, so a
+      # later platform completion silently cancels an earlier appcast job.
+      group: con-gh-pages-publish-linux
       cancel-in-progress: false
     # Run on macOS because Sparkle's `sign_update` tool ships only in
     # the macOS Sparkle distribution. Identical pattern to
@@ -392,5 +395,15 @@ jobs:
             exit 0
           fi
           git commit -m "Update Linux appcast for $GITHUB_REF_NAME"
-          git pull --rebase origin gh-pages 2>/dev/null || true
-          git push origin gh-pages
+          for attempt in 1 2 3 4 5; do
+            git fetch origin gh-pages
+            if git rebase origin/gh-pages && git push origin gh-pages; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "::error::Unable to push Linux appcast after $attempt attempts"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+          done

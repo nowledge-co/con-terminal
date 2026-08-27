@@ -397,7 +397,9 @@ jobs:
   update-appcast:
     name: Update Sparkle appcast (windows-x86_64)
     concurrency:
-      group: con-gh-pages-publish
+      # Keep Windows appcast publication independent from Linux/macOS. The
+      # three jobs update different appcast files and rebase before pushing.
+      group: con-gh-pages-publish-windows
       cancel-in-progress: false
     # Run on macOS because Sparkle's `sign_update` tool ships only in
     # the macOS Sparkle distribution. The signing key is the same
@@ -551,5 +553,15 @@ jobs:
             exit 0
           fi
           git commit -m "Update Windows appcast for $GITHUB_REF_NAME"
-          git pull --rebase origin gh-pages 2>/dev/null || true
-          git push origin gh-pages
+          for attempt in 1 2 3 4 5; do
+            git fetch origin gh-pages
+            if git rebase origin/gh-pages && git push origin gh-pages; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "::error::Unable to push Windows appcast after $attempt attempts"
+              exit 1
+            fi
+            sleep $((attempt * 2))
+          done
