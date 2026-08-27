@@ -96,6 +96,99 @@ impl Default for TerminalConfig {
     }
 }
 
+/// User-defined terminal launch profiles.
+///
+/// This is the configuration contract only. Terminal creation does not consume
+/// these values yet, so an empty configuration deliberately preserves the
+/// existing platform shell discovery behavior.
+///
+/// # Example
+/// ```toml
+/// [profiles]
+/// default = "ubuntu"
+///
+/// [[profiles.list]]
+/// id = "pwsh"
+/// name = "PowerShell"
+/// program = "pwsh.exe"
+/// args = ["-NoLogo"]
+/// starting_directory = "%USERPROFILE%"
+/// startup_command = "Invoke-ConBootstrap"
+/// theme = "flexoki-light"
+///
+/// [[profiles.list]]
+/// id = "ubuntu"
+/// name = "Ubuntu 24.04"
+/// kind = "wsl"
+/// distribution = "Ubuntu-24.04"
+/// program = "/bin/zsh"
+/// args = ["-l"]
+/// theme = "flexoki-dark"
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfilesConfig {
+    /// Stable profile id used when a new terminal does not explicitly choose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Explicit user profiles in menu order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub list: Vec<TerminalProfileConfig>,
+}
+
+impl ProfilesConfig {
+    fn is_empty(&self) -> bool {
+        self.default.is_none() && self.list.is_empty()
+    }
+}
+
+/// One terminal launch profile.
+///
+/// `id` and `name` are intentionally required. Optional values inherit Con's
+/// global terminal settings or the platform's normal shell discovery behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalProfileConfig {
+    /// Stable, user-controlled identifier referenced by [`ProfilesConfig::default`].
+    pub id: String,
+    /// Human-readable name shown by future profile pickers.
+    pub name: String,
+    /// Native shell or WSL launch behavior.
+    #[serde(default, skip_serializing_if = "TerminalProfileKind::is_shell")]
+    pub kind: TerminalProfileKind,
+    /// Local executable, or the shell executable inside WSL for a WSL profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    /// Arguments passed to `program` without platform-specific quoting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Initial working directory. Platform environment variables may be used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starting_directory: Option<String>,
+    /// Command to run once the interactive shell is ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_command: Option<String>,
+    /// WSL distribution name, used only when `kind = "wsl"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<String>,
+    /// Per-profile terminal theme. `None` inherits [`TerminalConfig::theme`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalProfileKind {
+    #[default]
+    Shell,
+    Wsl,
+}
+
+impl TerminalProfileKind {
+    fn is_shell(&self) -> bool {
+        matches!(self, Self::Shell)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
@@ -757,6 +850,8 @@ impl NetworkConfig {
 #[serde(default)]
 pub struct Config {
     pub terminal: TerminalConfig,
+    #[serde(default, skip_serializing_if = "ProfilesConfig::is_empty")]
+    pub profiles: ProfilesConfig,
     pub appearance: AppearanceConfig,
     pub agent: AgentConfig,
     pub keybindings: KeybindingConfig,
@@ -992,8 +1087,8 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 mod tests {
     use super::{
         Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig, TabsOrientation,
-        config_declares_agent_provider_provenance, migrate_agent_provider_provenance,
-        sanitize_terminal_font_family,
+        TerminalProfileKind, config_declares_agent_provider_provenance,
+        migrate_agent_provider_provenance, sanitize_terminal_font_family,
     };
     use con_agent::ProviderKind;
 
@@ -1070,6 +1165,128 @@ mod tests {
             sanitize_terminal_font_family("JetBrains Mono"),
             "JetBrains Mono"
         );
+    }
+
+    #[test]
+    fn legacy_configs_receive_empty_profiles() {
+        let content = r#"
+[terminal]
+font_size = 14.0
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert!(config.profiles.default.is_none());
+        assert!(config.profiles.list.is_empty());
+    }
+
+    #[test]
+    fn default_config_omits_empty_profiles_table() {
+        let encoded = toml::to_string(&Config::default()).unwrap();
+        let document: toml::Value = toml::from_str(&encoded).unwrap();
+
+        assert!(document.get("profiles").is_none());
+    }
+
+    #[test]
+    fn terminal_profile_defaults_inherit_platform_behavior() {
+        let content = r#"
+[[profiles.list]]
+id = "fish"
+name = "Fish"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        let profile = &config.profiles.list[0];
+
+        assert_eq!(profile.kind, TerminalProfileKind::Shell);
+        assert!(profile.program.is_none());
+        assert!(profile.args.is_empty());
+        assert!(profile.starting_directory.is_none());
+        assert!(profile.startup_command.is_none());
+        assert!(profile.distribution.is_none());
+        assert!(profile.theme.is_none());
+    }
+
+    #[test]
+    fn terminal_profiles_parse_shell_and_wsl_fields() {
+        let content = r#"
+[profiles]
+default = "ubuntu"
+
+[[profiles.list]]
+id = "pwsh"
+name = "PowerShell"
+program = "pwsh.exe"
+args = ["-NoLogo"]
+starting_directory = "%USERPROFILE%"
+startup_command = "Invoke-ConBootstrap"
+theme = "flexoki-light"
+
+[[profiles.list]]
+id = "ubuntu"
+name = "Ubuntu 24.04"
+kind = "wsl"
+distribution = "Ubuntu-24.04"
+program = "/bin/zsh"
+args = ["-l"]
+starting_directory = "/home/eric"
+startup_command = "source ~/.config/con/bootstrap.sh"
+theme = "flexoki-dark"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        let pwsh = &config.profiles.list[0];
+        let ubuntu = &config.profiles.list[1];
+
+        assert_eq!(config.profiles.default.as_deref(), Some("ubuntu"));
+        assert_eq!(pwsh.kind, TerminalProfileKind::Shell);
+        assert_eq!(pwsh.program.as_deref(), Some("pwsh.exe"));
+        assert_eq!(pwsh.args, ["-NoLogo"]);
+        assert_eq!(pwsh.starting_directory.as_deref(), Some("%USERPROFILE%"));
+        assert_eq!(pwsh.startup_command.as_deref(), Some("Invoke-ConBootstrap"));
+        assert_eq!(pwsh.theme.as_deref(), Some("flexoki-light"));
+        assert_eq!(ubuntu.kind, TerminalProfileKind::Wsl);
+        assert_eq!(ubuntu.distribution.as_deref(), Some("Ubuntu-24.04"));
+        assert_eq!(ubuntu.program.as_deref(), Some("/bin/zsh"));
+        assert_eq!(ubuntu.args, ["-l"]);
+        assert_eq!(ubuntu.starting_directory.as_deref(), Some("/home/eric"));
+        assert_eq!(
+            ubuntu.startup_command.as_deref(),
+            Some("source ~/.config/con/bootstrap.sh")
+        );
+        assert_eq!(ubuntu.theme.as_deref(), Some("flexoki-dark"));
+    }
+
+    #[test]
+    fn terminal_profiles_round_trip_through_toml() {
+        let content = r#"
+[profiles]
+default = "ubuntu"
+
+[[profiles.list]]
+id = "pwsh"
+name = "PowerShell"
+program = "pwsh.exe"
+args = ["-NoLogo"]
+starting_directory = "%USERPROFILE%"
+startup_command = "Invoke-ConBootstrap"
+theme = "flexoki-light"
+
+[[profiles.list]]
+id = "ubuntu"
+name = "Ubuntu 24.04"
+kind = "wsl"
+distribution = "Ubuntu-24.04"
+program = "/bin/zsh"
+args = ["-l"]
+theme = "flexoki-dark"
+"#;
+        let original: Config = toml::from_str(content).unwrap();
+        let encoded = toml::to_string_pretty(&original).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.profiles, original.profiles);
+        assert!(encoded.contains("[[profiles.list]]"));
+        assert!(encoded.contains("kind = \"wsl\""));
+        assert!(!encoded.contains("kind = \"shell\""));
     }
 
     #[test]
