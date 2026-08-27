@@ -1145,6 +1145,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::split_left))
             .on_action(cx.listener(Self::split_up))
             .on_action(cx.listener(Self::clear_terminal))
+            .on_action(cx.listener(Self::find_in_terminal))
             .on_action(cx.listener(Self::clear_restored_terminal_history_action))
             .on_action(cx.listener(Self::export_workspace_layout))
             .on_action(cx.listener(Self::add_workspace_layout_tabs))

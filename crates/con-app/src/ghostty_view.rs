@@ -38,7 +38,7 @@ use crate::terminal_paste::{
 use crate::terminal_restore::key_down_may_write_terminal;
 
 // Actions owned by the embedded terminal view.
-actions!(ghostty, [ConsumeTab, ConsumeTabPrev, FindTerminal]);
+actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[cfg(target_os = "macos")]
 use cocoa::appkit::NSWindowOrderingMode;
@@ -124,8 +124,8 @@ impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 #[derive(Default)]
 struct PendingTerminalFind {
     needle: String,
-    total: Option<usize>,
-    selected: Option<usize>,
+    total: Option<Option<usize>>,
+    selected: Option<Option<usize>>,
 }
 
 /// GPUI view wrapping a ghostty terminal surface.
@@ -201,7 +201,6 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", ConsumeTab, Some("GhosttyTerminal")),
         KeyBinding::new("shift-tab", ConsumeTabPrev, Some("GhosttyTerminal")),
-        KeyBinding::new("cmd-f", FindTerminal, Some("GhosttyTerminal")),
     ]);
 }
 
@@ -264,7 +263,12 @@ impl GhosttyView {
         }
     }
 
-    fn show_terminal_find(&mut self, needle: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_terminal_find(
+        &mut self,
+        needle: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(find) = self.terminal_find.as_ref() {
             find.update(cx, |find, cx| find.set_needle(needle, window, cx));
             return;
@@ -294,6 +298,24 @@ impl GhosttyView {
         find.update(cx, |find, cx| find.focus(window, cx));
         self.terminal_find = Some(find);
         cx.notify();
+    }
+
+    fn flush_pending_terminal_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_terminal_find.take() else {
+            return;
+        };
+
+        self.show_terminal_find(pending.needle, window, cx);
+        if let Some(find) = self.terminal_find.as_ref() {
+            find.update(cx, |find, cx| {
+                if let Some(total) = pending.total {
+                    find.set_total(total, cx);
+                }
+                if let Some(selected) = pending.selected {
+                    find.set_selected(selected, cx);
+                }
+            });
+        }
     }
 
     pub fn drain_surface_state(
@@ -338,14 +360,14 @@ impl GhosttyView {
                     if let Some(find) = self.terminal_find.as_ref() {
                         find.update(cx, |find, cx| find.set_total(total, cx));
                     } else if let Some(pending) = self.pending_terminal_find.as_mut() {
-                        pending.total = total;
+                        pending.total = Some(total);
                     }
                 }
                 GhosttySurfaceEvent::SearchSelected(selected) => {
                     if let Some(find) = self.terminal_find.as_ref() {
                         find.update(cx, |find, cx| find.set_selected(selected, cx));
                     } else if let Some(pending) = self.pending_terminal_find.as_mut() {
-                        pending.selected = selected;
+                        pending.selected = Some(selected);
                     }
                 }
             }
@@ -1560,6 +1582,10 @@ impl GhosttyView {
         ) || crate::terminal_shortcuts::key_down_starts_action_binding(
             event,
             window,
+            &crate::FindInTerminal,
+        ) || crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
             &crate::FocusFiles,
         ) || crate::terminal_shortcuts::key_down_starts_action_binding(
             event,
@@ -1970,14 +1996,11 @@ impl Focusable for GhosttyView {
 
 impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if let Some(pending) = self.pending_terminal_find.take() {
-            self.show_terminal_find(pending.needle, window, cx);
-            if let Some(find) = self.terminal_find.as_ref() {
-                find.update(cx, |find, cx| {
-                    find.set_total(pending.total, cx);
-                    find.set_selected(pending.selected, cx);
-                });
-            }
+        if self.pending_terminal_find.is_some() {
+            let entity = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = entity.update(cx, |this, cx| this.flush_pending_terminal_find(window, cx));
+            });
         }
         if std::mem::take(&mut self.restore_terminal_focus) {
             let focus = self.focus_handle.clone();
@@ -2088,7 +2111,7 @@ impl Render for GhosttyView {
             })
             .key_context("GhosttyTerminal")
             .track_focus(&focus)
-            .on_action(cx.listener(|this, _: &FindTerminal, window, cx| {
+            .on_action(cx.listener(|this, _: &crate::FindInTerminal, window, cx| {
                 if !this.focus_handle.contains_focused(window, cx) {
                     return;
                 }
