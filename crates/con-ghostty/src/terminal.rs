@@ -276,6 +276,10 @@ pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
     OpenUrl(String),
     PwdChanged(String),
+    StartSearch(String),
+    EndSearch,
+    SearchTotal(Option<usize>),
+    SearchSelected(Option<usize>),
 }
 
 /// Terminal state received via ghostty action callbacks.
@@ -821,6 +825,22 @@ impl GhosttyTerminal {
                 action.as_bytes().len(),
             )
         })
+    }
+
+    pub fn search(&self, needle: &str) -> Result<bool, String> {
+        self.perform_binding_action(&format!("search:{needle}"))
+    }
+
+    pub fn navigate_search_next(&self) -> Result<bool, String> {
+        self.perform_binding_action("navigate_search:next")
+    }
+
+    pub fn navigate_search_previous(&self) -> Result<bool, String> {
+        self.perform_binding_action("navigate_search:previous")
+    }
+
+    pub fn end_search(&self) -> Result<bool, String> {
+        self.perform_binding_action("end_search")
     }
 
     pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {
@@ -1512,6 +1532,46 @@ unsafe extern "C" fn action_callback(
                     exit_code,
                     duration,
                 });
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_START_SEARCH => {
+                let needle_ptr = action.action.start_search.needle;
+                let needle = if needle_ptr.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(needle_ptr).to_string_lossy().into_owned()
+                };
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::StartSearch(needle));
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_END_SEARCH => {
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::EndSearch);
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SEARCH_TOTAL => {
+                let total = action.action.search_total.total;
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::SearchTotal(
+                        (total >= 0).then_some(total as usize),
+                    ));
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SEARCH_SELECTED => {
+                let selected = action.action.search_selected.selected;
+                state
+                    .lock()
+                    .pending_events
+                    .push_back(GhosttySurfaceEvent::SearchSelected(
+                        (selected >= 0).then_some(selected as usize),
+                    ));
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHOW_CHILD_EXITED => {

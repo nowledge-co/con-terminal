@@ -23,6 +23,8 @@ mod global_hotkey;
 mod macos_windowing;
 #[cfg(target_os = "macos")]
 mod quick_terminal;
+#[cfg(target_os = "macos")]
+mod terminal_find;
 
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
@@ -2704,6 +2706,10 @@ fn main() {
                     MenuItem::os_action("Paste", Paste, OsAction::Paste),
                     MenuItem::separator(),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+                    #[cfg(target_os = "macos")]
+                    MenuItem::separator(),
+                    #[cfg(target_os = "macos")]
+                    MenuItem::action("Find in Terminal", ghostty_view::FindTerminal),
                 ],
                 disabled: false,
             },
