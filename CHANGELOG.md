@@ -6,6 +6,37 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.87` - unreleased
 
+### Added
+
+**macOS**
+
+- Added **Find in Terminal** with Cmd+F, match counts, next/previous
+  navigation, and selection highlights backed by Ghostty's native terminal
+  search. It is also available from the Edit menu, command palette, and
+  configurable shortcuts. _(PR
+  [#303](https://github.com/nowledge-co/con-terminal/pull/303) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+### Fixed
+
+**Settings**
+
+- Fixed the unsaved-changes confirmation flow for the Settings panel. Escape,
+  Cmd+W, and clicking outside the panel now close it consistently when it is
+  safe to do so, while preserving the option to keep editing, discard, or
+  save changes. _(PR
+  [#301](https://github.com/nowledge-co/con-terminal/pull/301) by
+  [@zhangmo8](https://github.com/zhangmo8))_
+
+**Terminal**
+
+- Fixed terminal mouse interactions that begin inside a pane and end outside
+  it. Con now completes the matching mouse release exactly once, including
+  during focus changes and pane teardown, so selections and mouse-aware TUIs
+  do not remain stuck. _(PR
+  [#302](https://github.com/nowledge-co/con-terminal/pull/302) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 ---
 
 ## `v0.1.0-beta.86` - 2026-08-27
