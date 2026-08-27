@@ -177,7 +177,9 @@ pub struct GhosttyView {
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
-    /// Whether the current right-button press was consumed by libghostty.
+    left_mouse_pressed: bool,
+    right_mouse_pressed: bool,
+    /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
     ime_marked_text: Option<String>,
 }
@@ -241,6 +243,8 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
                 .fetch_add(1, Ordering::Relaxed),
+            left_mouse_pressed: false,
+            right_mouse_pressed: false,
             right_click_consumed: Rc::new(Cell::new(false)),
             ime_marked_text: None,
         }
@@ -414,6 +418,16 @@ impl GhosttyView {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
+    pub fn release_mouse_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(position) = self.last_mouse_position else {
+            return;
+        };
+        if self.finish_mouse_sequence(MouseButton::Left, position, 0) {
+            self.drain_surface_state(true, cx);
+            cx.notify();
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
         if let Some(underlay_view) = self.native_underlay_view {
@@ -540,6 +554,7 @@ impl GhosttyView {
     }
 
     pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
+        self.finish_active_mouse_sequences();
         self.native_view_visible.set(false);
 
         if let Some(ref terminal) = self.terminal {
@@ -566,6 +581,9 @@ impl GhosttyView {
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
+        if !focused {
+            self.finish_active_mouse_sequences();
+        }
         let changed = self.surface_focused.replace(focused) != focused;
         if !changed {
             return;
@@ -1353,6 +1371,57 @@ impl GhosttyView {
         }
     }
 
+    fn begin_mouse_sequence(
+        &mut self,
+        button: MouseButton,
+        position: Point<Pixels>,
+        mods: i32,
+    ) -> Option<bool> {
+        self.last_mouse_position = Some(position);
+        self.finish_active_mouse_sequences();
+        let terminal = self.terminal.as_ref()?;
+        let (x, y) = self.view_local_pos(position);
+        terminal.send_mouse_pos(x, y, mods);
+        let consumed = terminal.send_mouse_button(true, button, mods);
+        match button {
+            MouseButton::Left => self.left_mouse_pressed = true,
+            MouseButton::Right => self.right_mouse_pressed = true,
+            MouseButton::Middle => {}
+        }
+        Some(consumed)
+    }
+
+    fn finish_mouse_sequence(
+        &mut self,
+        button: MouseButton,
+        position: Point<Pixels>,
+        mods: i32,
+    ) -> bool {
+        let pressed = match button {
+            MouseButton::Left => std::mem::take(&mut self.left_mouse_pressed),
+            MouseButton::Right => std::mem::take(&mut self.right_mouse_pressed),
+            MouseButton::Middle => false,
+        };
+        if !pressed {
+            return false;
+        }
+
+        let Some(terminal) = self.terminal.as_ref() else {
+            return false;
+        };
+        let (x, y) = self.view_local_pos(position);
+        terminal.send_mouse_pos(x, y, mods);
+        terminal.send_mouse_button(false, button, mods);
+        true
+    }
+
+    fn finish_active_mouse_sequences(&mut self) {
+        if let Some(position) = self.last_mouse_position {
+            self.finish_mouse_sequence(MouseButton::Left, position, 0);
+            self.finish_mouse_sequence(MouseButton::Right, position, 0);
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn refresh_mouse_modifiers(&self, modifiers: &Modifiers) {
         let (Some(terminal), Some(position)) = (self.terminal.as_ref(), self.last_mouse_position)
@@ -1793,6 +1862,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<(u32, u32)> {
 
 impl Drop for GhosttyView {
     fn drop(&mut self) {
+        self.finish_active_mouse_sequences();
         #[cfg(target_os = "macos")]
         {
             // The AppKit backing observer stores Ghostty's raw surface pointer.
@@ -1988,16 +2058,13 @@ impl Render for GhosttyView {
                     let right_click_consumed = right_click_consumed.clone();
                     move |this, event: &MouseDownEvent, window, cx| {
                         window.focus(&context_focus, cx);
-                        this.last_mouse_position = Some(event.position);
                         // Reset first so a click without a terminal can't
                         // carry a stale consumed state into the menu gate.
                         right_click_consumed.set(false);
-                        if let Some(ref terminal) = this.terminal {
-                            let (x, y) = this.view_local_pos(event.position);
-                            let mods = gpui_mods_to_ghostty(&event.modifiers);
-                            terminal.send_mouse_pos(x, y, mods);
-                            let consumed =
-                                terminal.send_mouse_button(true, MouseButton::Right, mods);
+                        let mods = gpui_mods_to_ghostty(&event.modifiers);
+                        if let Some(consumed) =
+                            this.begin_mouse_sequence(MouseButton::Right, event.position, mods)
+                        {
                             right_click_consumed.set(consumed);
                         }
                         cx.emit(GhosttyFocusChanged);
@@ -2009,13 +2076,8 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
-                    this.last_mouse_position = Some(event.position);
-                    if let Some(ref terminal) = this.terminal {
-                        let (x, y) = this.view_local_pos(event.position);
-                        let mods = gpui_mods_to_ghostty(&event.modifiers);
-                        terminal.send_mouse_pos(x, y, mods);
-                        terminal.send_mouse_button(true, MouseButton::Left, mods);
-                    }
+                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    this.begin_mouse_sequence(MouseButton::Left, event.position, mods);
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -2024,59 +2086,65 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.last_mouse_position = Some(event.position);
-                    if let Some(ref terminal) = this.terminal {
-                        let (x, y) = this.view_local_pos(event.position);
-                        let mods = gpui_mods_to_ghostty(&event.modifiers);
-                        terminal.send_mouse_pos(x, y, mods);
-                        terminal.send_mouse_button(false, MouseButton::Left, mods);
+                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    if this.finish_mouse_sequence(MouseButton::Left, event.position, mods)
+                        && this.drain_surface_state(true, cx)
+                    {
+                        cx.notify();
                     }
-                    let changed = this.drain_surface_state(true, cx);
-                    if changed {
+                }),
+            )
+            .on_mouse_up_out(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if !this.left_mouse_pressed {
+                        return;
+                    }
+                    this.last_mouse_position = Some(event.position);
+                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    if this.finish_mouse_sequence(MouseButton::Left, event.position, mods)
+                        && this.drain_surface_state(true, cx)
+                    {
                         cx.notify();
                     }
                 }),
             )
             .on_mouse_up(
                 gpui::MouseButton::Right,
-                cx.listener({
-                    let right_click_consumed = right_click_consumed.clone();
-                    move |this, event: &MouseUpEvent, _window, _cx| {
-                        this.last_mouse_position = Some(event.position);
-                        if right_click_consumed.get() {
-                            if let Some(ref terminal) = this.terminal {
-                                let (x, y) = this.view_local_pos(event.position);
-                                let mods = gpui_mods_to_ghostty(&event.modifiers);
-                                terminal.send_mouse_pos(x, y, mods);
-                                terminal.send_mouse_button(false, MouseButton::Right, mods);
-                            }
-                            right_click_consumed.set(false);
-                        }
+                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                    if !this.right_mouse_pressed {
+                        return;
                     }
+                    this.last_mouse_position = Some(event.position);
+                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
                 }),
             )
             .on_mouse_up_out(
                 gpui::MouseButton::Right,
-                cx.listener({
-                    let right_click_consumed = right_click_consumed.clone();
-                    move |this, event: &MouseUpEvent, _window, _cx| {
-                        this.last_mouse_position = Some(event.position);
-                        if right_click_consumed.get() {
-                            if let Some(ref terminal) = this.terminal {
-                                let (x, y) = this.view_local_pos(event.position);
-                                let mods = gpui_mods_to_ghostty(&event.modifiers);
-                                terminal.send_mouse_pos(x, y, mods);
-                                terminal.send_mouse_button(false, MouseButton::Right, mods);
-                            }
-                            right_click_consumed.set(false);
-                        }
+                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                    if !this.right_mouse_pressed {
+                        return;
                     }
+                    this.last_mouse_position = Some(event.position);
+                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, _cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 this.last_mouse_position = Some(event.position);
+                let mods = gpui_mods_to_ghostty(&event.modifiers);
+                if event.pressed_button.is_none() {
+                    let released_left =
+                        this.finish_mouse_sequence(MouseButton::Left, event.position, mods);
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
+                    if released_left && this.drain_surface_state(true, cx) {
+                        cx.notify();
+                    }
+                }
                 if let Some(ref terminal) = this.terminal {
                     let (x, y) = this.view_local_pos(event.position);
-                    terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(&event.modifiers));
+                    terminal.send_mouse_pos(x, y, mods);
                 }
             }))
             .on_modifiers_changed(cx.listener(

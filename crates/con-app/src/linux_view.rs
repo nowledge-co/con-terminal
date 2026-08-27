@@ -140,6 +140,7 @@ pub struct GhosttyView {
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
     terminal_mouse_right_consumed: Option<bool>,
+    terminal_mouse_right_pressed: bool,
     /// Shift state at the right-button press, reused for the matching
     /// release so a modifier change in between doesn't break pairing.
     terminal_mouse_right_shift: bool,
@@ -228,6 +229,7 @@ impl GhosttyView {
             selection: None,
             drag_anchor: None,
             terminal_mouse_right_consumed: None,
+            terminal_mouse_right_pressed: false,
             terminal_mouse_right_shift: false,
             keys_awaiting_release: HashMap::new(),
             pending_unsafe_paste: None,
@@ -281,6 +283,15 @@ impl GhosttyView {
         extract_selection_text(self.snapshot.as_ref()?, self.selection?)
     }
 
+    pub fn release_mouse_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(position) = self.last_mouse_position else {
+            return;
+        };
+        if self.finish_selection(position) {
+            cx.notify();
+        }
+    }
+
     fn clear_selection(&mut self) -> bool {
         let changed = self.selection.take().is_some() || self.drag_anchor.take().is_some();
         changed
@@ -306,6 +317,7 @@ impl GhosttyView {
 
     pub fn shutdown_surface(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
         self.release_tracked_keys();
+        self.cancel_pointer_interactions();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -334,6 +346,7 @@ impl GhosttyView {
         self.selection = None;
         self.drag_anchor = None;
         self.terminal_mouse_right_consumed = None;
+        self.terminal_mouse_right_pressed = false;
         self.terminal_mouse_right_shift = false;
         self.keys_awaiting_release.clear();
         self.pending_unsafe_paste = None;
@@ -342,6 +355,7 @@ impl GhosttyView {
     pub fn set_surface_focus_state(&mut self, focused: bool) {
         if !focused {
             self.release_tracked_keys();
+            self.cancel_pointer_interactions();
         }
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
@@ -658,7 +672,9 @@ impl GhosttyView {
 
     fn clear_hovered_link(&mut self) -> bool {
         let changed = self.hovered_link.take().is_some();
-        self.last_mouse_position = None;
+        if self.drag_anchor.is_none() && !self.terminal_mouse_right_pressed {
+            self.last_mouse_position = None;
+        }
         changed
     }
 
@@ -706,6 +722,34 @@ impl GhosttyView {
         }
         self.selection = Some(next);
         true
+    }
+
+    fn finish_right_mouse_sequence(&mut self, pos: Point<Pixels>) -> bool {
+        let pressed = std::mem::take(&mut self.terminal_mouse_right_pressed);
+        let shift = std::mem::take(&mut self.terminal_mouse_right_shift);
+        if !pressed {
+            return false;
+        }
+
+        if let Some(terminal) = self.terminal()
+            && let Some((col, row)) = self.clamped_cell_from_event_position(pos)
+        {
+            terminal.mouse_release(2, col, row, shift);
+        }
+        true
+    }
+
+    fn cancel_pointer_interactions(&mut self) {
+        self.mouse_down_link = None;
+        self.suppress_link_mouse_up = false;
+        let Some(position) = self.last_mouse_position else {
+            self.drag_anchor = None;
+            self.terminal_mouse_right_pressed = false;
+            self.terminal_mouse_right_shift = false;
+            return;
+        };
+        self.finish_selection(position);
+        self.finish_right_mouse_sequence(position);
     }
 
     fn selection_point_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u64)> {
@@ -1673,6 +1717,7 @@ impl Render for GhosttyView {
                     window.focus(&context_focus, cx);
                     let _ = this.ensure_session(cx);
                     this.last_mouse_position = Some(event.position);
+                    this.cancel_pointer_interactions();
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1689,6 +1734,8 @@ impl Render for GhosttyView {
                     } else {
                         None
                     };
+                    this.terminal_mouse_right_pressed =
+                        this.terminal_mouse_right_consumed == Some(true);
                     this.terminal_mouse_right_shift = shift_at_press;
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1700,6 +1747,7 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     let _ = this.ensure_session(cx);
                     this.last_mouse_position = Some(event.position);
+                    this.cancel_pointer_interactions();
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1746,6 +1794,9 @@ impl Render for GhosttyView {
                 } else if this.drag_anchor.is_some() {
                     changed |= this.finish_selection(event.position);
                 }
+                if event.pressed_button.is_none() && this.terminal_mouse_right_pressed {
+                    changed |= this.finish_right_mouse_sequence(event.position);
+                }
                 if changed {
                     cx.notify();
                 }
@@ -1775,26 +1826,40 @@ impl Render for GhosttyView {
                     }
                 }),
             )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if this.drag_anchor.is_none() && !this.suppress_link_mouse_up {
+                        return;
+                    }
+                    this.last_mouse_position = Some(event.position);
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    let mut changed = this.finish_selection(event.position);
+                    changed |= this.update_hovered_link(&event.modifiers);
+                    if changed {
+                        cx.notify();
+                    }
+                }),
+            )
             .on_mouse_up(
                 MouseButton::Right,
-                cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.last_mouse_position = Some(event.position);
-                    // Only release when the press was consumed by the app, so
-                    // plain right-clicks (menu path) never emit a stray release.
-                    if this.terminal_mouse_right_consumed == Some(true) {
-                        if let Some(terminal) = this.terminal() {
-                            if let Some((col, row)) =
-                                this.clamped_cell_from_event_position(event.position)
-                            {
-                                terminal.mouse_release(
-                                    2,
-                                    col,
-                                    row,
-                                    this.terminal_mouse_right_shift,
-                                );
-                            }
-                        }
-                        this.terminal_mouse_right_consumed = None;
+                    if this.finish_right_mouse_sequence(event.position) {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if !this.terminal_mouse_right_pressed {
+                        return;
+                    }
+                    this.last_mouse_position = Some(event.position);
+                    if this.finish_right_mouse_sequence(event.position) {
+                        cx.notify();
                     }
                 }),
             )
@@ -1860,6 +1925,7 @@ impl Render for GhosttyView {
 impl Drop for GhosttyView {
     fn drop(&mut self) {
         self.release_tracked_keys();
+        self.cancel_pointer_interactions();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }

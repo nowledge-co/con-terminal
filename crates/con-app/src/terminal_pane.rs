@@ -178,10 +178,9 @@ impl TerminalPane {
         self.entity.read(cx).selection_text()
     }
 
-    pub fn release_mouse_selection(&self, cx: &App) {
-        if let Some(terminal) = self.entity.read(cx).terminal() {
-            terminal.send_mouse_button(false, con_ghostty::MouseButton::Left, 0);
-        }
+    pub fn release_mouse_selection(&self, cx: &mut App) {
+        self.entity
+            .update(cx, |view, cx| view.release_mouse_selection(cx));
     }
 
     pub fn entity_id(&self) -> EntityId {

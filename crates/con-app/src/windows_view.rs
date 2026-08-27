@@ -302,8 +302,26 @@ impl GhosttyView {
         self.terminal.as_ref().and_then(|t| t.selection_text())
     }
 
+    pub fn release_mouse_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(position) = self.last_mouse_position else {
+            return;
+        };
+        if self.finish_terminal_mouse_sequence(
+            0,
+            position,
+            MouseEventMods {
+                shift: self.terminal_mouse_sequence_shift,
+                alt: false,
+                control: false,
+            },
+        ) {
+            cx.notify();
+        }
+    }
+
     pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, _cx: &mut App) {
         self.release_tracked_keys();
+        self.cancel_pointer_interactions();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
@@ -336,6 +354,7 @@ impl GhosttyView {
     pub fn set_surface_focus_state(&mut self, focused: bool) {
         if !focused {
             self.release_tracked_keys();
+            self.cancel_pointer_interactions();
         }
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
@@ -865,7 +884,9 @@ impl GhosttyView {
 
     fn clear_hovered_link(&mut self) -> bool {
         let changed = self.hovered_link.take().is_some();
-        self.last_mouse_position = None;
+        if !self.terminal_mouse_sequence_active {
+            self.last_mouse_position = None;
+        }
         changed
     }
 
@@ -956,6 +977,57 @@ impl GhosttyView {
                 }
             }
         }
+    }
+
+    fn finish_terminal_mouse_sequence(
+        &mut self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+    ) -> bool {
+        if !self.terminal_mouse_sequence_active
+            || self.terminal_mouse_sequence_button != Some(button)
+        {
+            return false;
+        }
+
+        self.terminal_mouse_sequence_active = false;
+        self.terminal_mouse_sequence_button = None;
+        self.forward_mouse_up(button, pos, mods, true);
+        if button == 0 {
+            self.terminal_mouse_sequence_shift = false;
+        } else if button == 2 {
+            self.terminal_mouse_right_shift = false;
+        }
+        true
+    }
+
+    fn cancel_pointer_interactions(&mut self) {
+        self.scrollbar_drag = None;
+        self.mouse_down_link = None;
+        self.suppress_link_mouse_up = false;
+        if let (Some(position), Some(button)) = (
+            self.last_mouse_position,
+            self.terminal_mouse_sequence_button,
+        ) {
+            self.finish_terminal_mouse_sequence(
+                button,
+                position,
+                MouseEventMods {
+                    shift: if button == 2 {
+                        self.terminal_mouse_right_shift
+                    } else {
+                        self.terminal_mouse_sequence_shift
+                    },
+                    alt: false,
+                    control: false,
+                },
+            );
+        }
+        self.terminal_mouse_sequence_active = false;
+        self.terminal_mouse_sequence_button = None;
+        self.terminal_mouse_sequence_shift = false;
+        self.terminal_mouse_right_shift = false;
     }
 
     fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) -> bool {
@@ -1743,6 +1815,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&context_focus, cx);
                     this.last_mouse_position = Some(event.position);
+                    this.cancel_pointer_interactions();
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1767,8 +1840,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     this.last_mouse_position = Some(event.position);
-                    this.terminal_mouse_sequence_active = false;
-                    this.terminal_mouse_sequence_button = None;
+                    this.cancel_pointer_interactions();
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1792,7 +1864,7 @@ impl Render for GhosttyView {
                     let tracking_active = this.terminal_mouse_tracking_active_at(event.position);
                     let consumed = this.forward_mouse_down(0, event.position, mods);
                     if consumed
-                        || (!tracking_active
+                        || ((!tracking_active || mods.shift)
                             && this.terminal().is_some()
                             && this.cell_from_event_position(event.position).is_some())
                     {
@@ -1869,29 +1941,18 @@ impl Render for GhosttyView {
                     );
                     cx.notify();
                 } else if event.pressed_button.is_none() && this.terminal_mouse_sequence_active {
-                    let button = this.terminal_mouse_sequence_button.unwrap_or(0);
-                    let release_mods = mouse_mods_from(&event.modifiers);
-                    let release_mods = if button == 2 {
-                        MouseEventMods {
-                            shift: this.terminal_mouse_right_shift,
+                    if let Some(button) = this.terminal_mouse_sequence_button {
+                        let release_mods = mouse_mods_from(&event.modifiers);
+                        let release_mods = MouseEventMods {
+                            shift: if button == 2 {
+                                this.terminal_mouse_right_shift
+                            } else {
+                                this.terminal_mouse_sequence_shift
+                            },
                             ..release_mods
-                        }
-                    } else if button == 0 {
-                        MouseEventMods {
-                            shift: this.terminal_mouse_sequence_shift,
-                            ..release_mods
-                        }
-                    } else {
-                        release_mods
-                    };
-                    this.forward_mouse_up(button, event.position, release_mods, true);
-                    if button == 2 {
-                        this.terminal_mouse_right_shift = false;
-                    } else if button == 0 {
-                        this.terminal_mouse_sequence_shift = false;
+                        };
+                        this.finish_terminal_mouse_sequence(button, event.position, release_mods);
                     }
-                    this.terminal_mouse_sequence_active = false;
-                    this.terminal_mouse_sequence_button = None;
                     cx.notify();
                 } else if hover_changed {
                     cx.notify();
@@ -1906,7 +1967,6 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    let had_terminal_mouse_sequence = this.terminal_mouse_sequence_active;
                     if this.suppress_link_mouse_up {
                         let down_link = this.mouse_down_link.take();
                         this.suppress_link_mouse_up = false;
@@ -1921,21 +1981,40 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    if had_terminal_mouse_sequence {
-                        let button = this.terminal_mouse_sequence_button.unwrap_or(0);
-                        this.forward_mouse_up(
-                            button,
-                            event.position,
-                            MouseEventMods {
-                                shift: this.terminal_mouse_sequence_shift,
-                                ..mouse_mods_from(&event.modifiers)
-                            },
-                            true,
-                        );
+                    this.finish_terminal_mouse_sequence(
+                        0,
+                        event.position,
+                        MouseEventMods {
+                            shift: this.terminal_mouse_sequence_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
+                    );
+                    let _ = this.update_hovered_link(&event.modifiers);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    let owns_sequence = this.scrollbar_drag.is_some()
+                        || this.suppress_link_mouse_up
+                        || (this.terminal_mouse_sequence_active
+                            && this.terminal_mouse_sequence_button == Some(0));
+                    if !owns_sequence {
+                        return;
                     }
-                    this.terminal_mouse_sequence_active = false;
-                    this.terminal_mouse_sequence_shift = false;
-                    this.terminal_mouse_sequence_button = None;
+                    this.last_mouse_position = Some(event.position);
+                    this.scrollbar_drag = None;
+                    this.mouse_down_link = None;
+                    this.suppress_link_mouse_up = false;
+                    this.finish_terminal_mouse_sequence(
+                        0,
+                        event.position,
+                        MouseEventMods {
+                            shift: this.terminal_mouse_sequence_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
+                    );
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
@@ -1944,21 +2023,35 @@ impl Render for GhosttyView {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.last_mouse_position = Some(event.position);
-                    if this.terminal_mouse_sequence_active {
-                        let button = this.terminal_mouse_sequence_button.unwrap_or(2);
-                        this.forward_mouse_up(
-                            button,
-                            event.position,
-                            MouseEventMods {
-                                shift: this.terminal_mouse_right_shift,
-                                ..mouse_mods_from(&event.modifiers)
-                            },
-                            true,
-                        );
-                        this.terminal_mouse_sequence_active = false;
-                        this.terminal_mouse_sequence_button = None;
+                    this.finish_terminal_mouse_sequence(
+                        2,
+                        event.position,
+                        MouseEventMods {
+                            shift: this.terminal_mouse_right_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
+                    );
+                    let _ = this.update_hovered_link(&event.modifiers);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    if !this.terminal_mouse_sequence_active
+                        || this.terminal_mouse_sequence_button != Some(2)
+                    {
+                        return;
                     }
-                    this.terminal_mouse_right_shift = false;
+                    this.last_mouse_position = Some(event.position);
+                    this.finish_terminal_mouse_sequence(
+                        2,
+                        event.position,
+                        MouseEventMods {
+                            shift: this.terminal_mouse_right_shift,
+                            ..mouse_mods_from(&event.modifiers)
+                        },
+                    );
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
@@ -2093,6 +2186,7 @@ impl Render for GhosttyView {
 impl Drop for GhosttyView {
     fn drop(&mut self) {
         self.release_tracked_keys();
+        self.cancel_pointer_interactions();
         if let Some(terminal) = &self.terminal {
             terminal.request_close();
         }
