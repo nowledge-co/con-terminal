@@ -30,6 +30,7 @@ use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::ActiveTheme;
 use gpui_component::menu::ContextMenuExt;
 
+use crate::mouse_sequence::MouseButtonSequence;
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
@@ -177,8 +178,8 @@ pub struct GhosttyView {
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
-    left_mouse_pressed: bool,
-    right_mouse_pressed: bool,
+    left_mouse_sequence: MouseButtonSequence<i32>,
+    right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
     ime_marked_text: Option<String>,
@@ -243,8 +244,8 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
                 .fetch_add(1, Ordering::Relaxed),
-            left_mouse_pressed: false,
-            right_mouse_pressed: false,
+            left_mouse_sequence: MouseButtonSequence::default(),
+            right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
             ime_marked_text: None,
         }
@@ -422,7 +423,7 @@ impl GhosttyView {
         let Some(position) = self.last_mouse_position else {
             return;
         };
-        if self.finish_mouse_sequence(MouseButton::Left, position, 0) {
+        if self.finish_mouse_sequence(MouseButton::Left, position, None) {
             self.drain_surface_state(true, cx);
             cx.notify();
         }
@@ -1378,14 +1379,14 @@ impl GhosttyView {
         mods: i32,
     ) -> Option<bool> {
         self.last_mouse_position = Some(position);
-        self.finish_active_mouse_sequences();
+        self.finish_mouse_sequence(button, position, None);
         let terminal = self.terminal.as_ref()?;
         let (x, y) = self.view_local_pos(position);
         terminal.send_mouse_pos(x, y, mods);
         let consumed = terminal.send_mouse_button(true, button, mods);
         match button {
-            MouseButton::Left => self.left_mouse_pressed = true,
-            MouseButton::Right => self.right_mouse_pressed = true,
+            MouseButton::Left => self.left_mouse_sequence.press_sent(mods),
+            MouseButton::Right => self.right_mouse_sequence.press_sent(mods),
             MouseButton::Middle => {}
         }
         Some(consumed)
@@ -1395,16 +1396,17 @@ impl GhosttyView {
         &mut self,
         button: MouseButton,
         position: Point<Pixels>,
-        mods: i32,
+        mods: Option<i32>,
     ) -> bool {
-        let pressed = match button {
-            MouseButton::Left => std::mem::take(&mut self.left_mouse_pressed),
-            MouseButton::Right => std::mem::take(&mut self.right_mouse_pressed),
-            MouseButton::Middle => false,
+        let press_modifiers = match button {
+            MouseButton::Left => self.left_mouse_sequence.finish(),
+            MouseButton::Right => self.right_mouse_sequence.finish(),
+            MouseButton::Middle => None,
         };
-        if !pressed {
+        let Some(press_modifiers) = press_modifiers else {
             return false;
-        }
+        };
+        let mods = mods.unwrap_or(press_modifiers);
 
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
@@ -1417,8 +1419,8 @@ impl GhosttyView {
 
     fn finish_active_mouse_sequences(&mut self) {
         if let Some(position) = self.last_mouse_position {
-            self.finish_mouse_sequence(MouseButton::Left, position, 0);
-            self.finish_mouse_sequence(MouseButton::Right, position, 0);
+            self.finish_mouse_sequence(MouseButton::Left, position, None);
+            self.finish_mouse_sequence(MouseButton::Right, position, None);
         }
     }
 
@@ -2087,7 +2089,7 @@ impl Render for GhosttyView {
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    if this.finish_mouse_sequence(MouseButton::Left, event.position, mods)
+                    if this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods))
                         && this.drain_surface_state(true, cx)
                     {
                         cx.notify();
@@ -2097,12 +2099,12 @@ impl Render for GhosttyView {
             .on_mouse_up_out(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    if !this.left_mouse_pressed {
+                    if !this.left_mouse_sequence.is_active() {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    if this.finish_mouse_sequence(MouseButton::Left, event.position, mods)
+                    if this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods))
                         && this.drain_surface_state(true, cx)
                     {
                         cx.notify();
@@ -2112,23 +2114,23 @@ impl Render for GhosttyView {
             .on_mouse_up(
                 gpui::MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
-                    if !this.right_mouse_pressed {
+                    if !this.right_mouse_sequence.is_active() {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, Some(mods));
                 }),
             )
             .on_mouse_up_out(
                 gpui::MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, _window, _cx| {
-                    if !this.right_mouse_pressed {
+                    if !this.right_mouse_sequence.is_active() {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, Some(mods));
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
@@ -2136,8 +2138,8 @@ impl Render for GhosttyView {
                 let mods = gpui_mods_to_ghostty(&event.modifiers);
                 if event.pressed_button.is_none() {
                     let released_left =
-                        this.finish_mouse_sequence(MouseButton::Left, event.position, mods);
-                    this.finish_mouse_sequence(MouseButton::Right, event.position, mods);
+                        this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods));
+                    this.finish_mouse_sequence(MouseButton::Right, event.position, Some(mods));
                     if released_left && this.drain_surface_state(true, cx) {
                         cx.notify();
                     }

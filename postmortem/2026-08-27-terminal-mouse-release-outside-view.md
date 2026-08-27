@@ -20,8 +20,12 @@ mouse state.
 Each terminal view now records the mouse sequences it starts and handles both
 inside and outside releases. Release and cancellation paths clear ownership
 before forwarding one matching release, so unrelated panes cannot receive a
-stray event. Windows and Linux keep their existing move-based recovery while
-also closing supported gestures at the real outside-release position.
+stray event. Left and right buttons keep independent ownership, so restarting
+one does not end the other's active gesture. Synthetic releases retain the
+press modifiers. Windows and Linux keep their existing move-based recovery
+while also closing supported gestures at the real outside-release position.
+Windows also owns Shift-bypassed local selection while terminal mouse tracking
+is active.
 
 ## What we learned
 

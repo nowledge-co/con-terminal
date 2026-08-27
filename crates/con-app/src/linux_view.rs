@@ -32,6 +32,7 @@ use gpui_component::{ActiveTheme, Sizable as _};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
+use crate::mouse_sequence::MouseButtonSequence;
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
@@ -140,10 +141,7 @@ pub struct GhosttyView {
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
     terminal_mouse_right_consumed: Option<bool>,
-    terminal_mouse_right_pressed: bool,
-    /// Shift state at the right-button press, reused for the matching
-    /// release so a modifier change in between doesn't break pairing.
-    terminal_mouse_right_shift: bool,
+    terminal_right_mouse_sequence: MouseButtonSequence<bool>,
     keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
     pending_unsafe_paste: Option<(String, VtPasteSource)>,
 }
@@ -229,8 +227,7 @@ impl GhosttyView {
             selection: None,
             drag_anchor: None,
             terminal_mouse_right_consumed: None,
-            terminal_mouse_right_pressed: false,
-            terminal_mouse_right_shift: false,
+            terminal_right_mouse_sequence: MouseButtonSequence::default(),
             keys_awaiting_release: HashMap::new(),
             pending_unsafe_paste: None,
         }
@@ -346,8 +343,7 @@ impl GhosttyView {
         self.selection = None;
         self.drag_anchor = None;
         self.terminal_mouse_right_consumed = None;
-        self.terminal_mouse_right_pressed = false;
-        self.terminal_mouse_right_shift = false;
+        self.terminal_right_mouse_sequence = MouseButtonSequence::default();
         self.keys_awaiting_release.clear();
         self.pending_unsafe_paste = None;
     }
@@ -672,7 +668,7 @@ impl GhosttyView {
 
     fn clear_hovered_link(&mut self) -> bool {
         let changed = self.hovered_link.take().is_some();
-        if self.drag_anchor.is_none() && !self.terminal_mouse_right_pressed {
+        if self.drag_anchor.is_none() && !self.terminal_right_mouse_sequence.is_active() {
             self.last_mouse_position = None;
         }
         changed
@@ -725,11 +721,9 @@ impl GhosttyView {
     }
 
     fn finish_right_mouse_sequence(&mut self, pos: Point<Pixels>) -> bool {
-        let pressed = std::mem::take(&mut self.terminal_mouse_right_pressed);
-        let shift = std::mem::take(&mut self.terminal_mouse_right_shift);
-        if !pressed {
+        let Some(shift) = self.terminal_right_mouse_sequence.finish() else {
             return false;
-        }
+        };
 
         if let Some(terminal) = self.terminal()
             && let Some((col, row)) = self.clamped_cell_from_event_position(pos)
@@ -739,16 +733,21 @@ impl GhosttyView {
         true
     }
 
-    fn cancel_pointer_interactions(&mut self) {
+    fn cancel_left_pointer_interactions(&mut self, position: Point<Pixels>) {
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
+        self.finish_selection(position);
+    }
+
+    fn cancel_pointer_interactions(&mut self) {
         let Some(position) = self.last_mouse_position else {
+            self.mouse_down_link = None;
+            self.suppress_link_mouse_up = false;
             self.drag_anchor = None;
-            self.terminal_mouse_right_pressed = false;
-            self.terminal_mouse_right_shift = false;
+            self.terminal_right_mouse_sequence.finish();
             return;
         };
-        self.finish_selection(position);
+        self.cancel_left_pointer_interactions(position);
         self.finish_right_mouse_sequence(position);
     }
 
@@ -1717,9 +1716,7 @@ impl Render for GhosttyView {
                     window.focus(&context_focus, cx);
                     let _ = this.ensure_session(cx);
                     this.last_mouse_position = Some(event.position);
-                    this.cancel_pointer_interactions();
-                    this.mouse_down_link = None;
-                    this.suppress_link_mouse_up = false;
+                    this.finish_right_mouse_sequence(event.position);
                     let _ = this.update_hovered_link(&event.modifiers);
                     // SGR button 2 = right; unconsumed when tracking is off.
                     // Record the press shift state so the matching release
@@ -1734,9 +1731,10 @@ impl Render for GhosttyView {
                     } else {
                         None
                     };
-                    this.terminal_mouse_right_pressed =
-                        this.terminal_mouse_right_consumed == Some(true);
-                    this.terminal_mouse_right_shift = shift_at_press;
+                    if this.terminal_mouse_right_consumed == Some(true) {
+                        this.terminal_right_mouse_sequence
+                            .press_sent(shift_at_press);
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1747,9 +1745,7 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     let _ = this.ensure_session(cx);
                     this.last_mouse_position = Some(event.position);
-                    this.cancel_pointer_interactions();
-                    this.mouse_down_link = None;
-                    this.suppress_link_mouse_up = false;
+                    this.cancel_left_pointer_interactions(event.position);
                     let _ = this.update_hovered_link(&event.modifiers);
                     if terminal_links::should_open_link(&event.modifiers)
                         && let Some(link) = this.link_at_position(event.position)
@@ -1770,31 +1766,40 @@ impl Render for GhosttyView {
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
                 this.last_mouse_position = Some(event.position);
                 if this.suppress_link_mouse_up {
-                    let mut changed = this.update_hovered_link(&event.modifiers);
-                    if event.pressed_button != Some(MouseButton::Left) {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        let mut changed = this.update_hovered_link(&event.modifiers);
+                        if let Some(down_link) = this.mouse_down_link.as_ref() {
+                            let still_on_same_link =
+                                this.link_at_position(event.position).as_ref() == Some(down_link);
+                            if !still_on_same_link {
+                                this.mouse_down_link = None;
+                                changed = true;
+                            }
+                        }
+                        cx.stop_propagation();
+                        if changed {
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    if event.pressed_button.is_none() {
+                        let mut changed = this.update_hovered_link(&event.modifiers);
                         changed |= this.mouse_down_link.take().is_some();
                         this.suppress_link_mouse_up = false;
-                    } else if let Some(down_link) = this.mouse_down_link.as_ref() {
-                        let still_on_same_link =
-                            this.link_at_position(event.position).as_ref() == Some(down_link);
-                        if !still_on_same_link {
-                            this.mouse_down_link = None;
-                            changed = true;
+                        cx.stop_propagation();
+                        if changed {
+                            cx.notify();
                         }
                     }
-                    cx.stop_propagation();
-                    if changed {
-                        cx.notify();
-                    }
-                    return;
                 }
                 let mut changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
                     changed |= this.update_selection_drag(event.position);
-                } else if this.drag_anchor.is_some() {
+                } else if event.pressed_button.is_none() && this.drag_anchor.is_some() {
                     changed |= this.finish_selection(event.position);
                 }
-                if event.pressed_button.is_none() && this.terminal_mouse_right_pressed {
+                if event.pressed_button.is_none() && this.terminal_right_mouse_sequence.is_active()
+                {
                     changed |= this.finish_right_mouse_sequence(event.position);
                 }
                 if changed {
@@ -1854,7 +1859,7 @@ impl Render for GhosttyView {
             .on_mouse_up_out(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    if !this.terminal_mouse_right_pressed {
+                    if !this.terminal_right_mouse_sequence.is_active() {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);

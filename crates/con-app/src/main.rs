@@ -64,6 +64,7 @@ mod input_bar;
 mod keycaps;
 mod model_registry;
 mod motion;
+mod mouse_sequence;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
