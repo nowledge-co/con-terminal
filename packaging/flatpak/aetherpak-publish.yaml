@@ -25,7 +25,7 @@ branding:
   logo_url: "https://con.nowledge.co/assets/icon_con_192.png"
   favicon_url: "https://con.nowledge.co/assets/icon_con_192.png"
   accent_color: "#ffc798"
-  footer_text: "&copy; 2026 Nowledge Labs"
+  footer_text: "&copy; 2026 Nowledge Labs, Inc."
   index_template: "packaging/flatpak/index-template.html"
 
 apps:

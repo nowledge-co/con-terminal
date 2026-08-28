@@ -1356,7 +1356,7 @@ impl Render for AboutView {
                         div()
                             .text_size(px(12.0))
                             .text_color(muted_text)
-                            .child("Copyright © 2026 Nowledge Labs, LLC"),
+                            .child("Copyright © 2026 Nowledge Labs, Inc."),
                     ),
             )
     }

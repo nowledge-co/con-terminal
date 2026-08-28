@@ -22,7 +22,7 @@
   <url type="homepage">https://con.nowledge.co/</url>
   <url type="bugtracker">https://github.com/nowledge-co/con-terminal/issues</url>
   <developer id="co.nowledge">
-    <name>Nowledge Labs</name>
+    <name>Nowledge Labs, Inc.</name>
   </developer>
   <provides>
     <binary>con</binary>
