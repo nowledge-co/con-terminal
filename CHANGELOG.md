@@ -4,7 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.88` - unreleased
+## `v0.1.0-beta.89` - unreleased
+
+### Changed
+
+**Branding**
+
+- Updated the company name shown in Con's About window, license, and Flatpak
+  metadata to **Nowledge Labs, Inc.** Apple signing and notarization settings
+  are unchanged. _(PR
+  [#306](https://github.com/nowledge-co/con-terminal/pull/306) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
+## `v0.1.0-beta.88` - 2026-08-28
 
 ### Added
 
