@@ -2750,40 +2750,8 @@ impl SettingsPanel {
         let binding = keystroke_to_binding(keystroke);
 
         // Write directly into config
-        match field.as_str() {
-            "global_summon" => self.config.keybindings.global_summon = binding,
-            "quick_terminal" => self.config.keybindings.quick_terminal = binding,
-            "new_window" => self.config.keybindings.new_window = binding,
-            "new_tab" => self.config.keybindings.new_tab = binding,
-            "close_tab" => self.config.keybindings.close_tab = binding,
-            "close_pane" => self.config.keybindings.close_pane = binding,
-            "toggle_pane_zoom" => self.config.keybindings.toggle_pane_zoom = binding,
-            "next_tab" => self.config.keybindings.next_tab = binding,
-            "previous_tab" => self.config.keybindings.previous_tab = binding,
-            "settings" => self.config.keybindings.settings = binding,
-            "command_palette" => self.config.keybindings.command_palette = binding,
-            "toggle_agent" => self.config.keybindings.toggle_agent = binding,
-            "toggle_input_bar" => self.config.keybindings.toggle_input_bar = binding,
-            "focus_input" => self.config.keybindings.focus_input = binding,
-            "ask_ai" => self.config.keybindings.ask_ai = binding,
-            "cycle_input_mode" => self.config.keybindings.cycle_input_mode = binding,
-            "split_right" => self.config.keybindings.split_right = binding,
-            "split_down" => self.config.keybindings.split_down = binding,
-            "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
-            "toggle_left_panel" => self.config.keybindings.toggle_left_panel = binding,
-            "focus_files" => self.config.keybindings.focus_files = binding,
-            "search_files" => self.config.keybindings.search_files = binding,
-            "find_in_terminal" => self.config.keybindings.find_in_terminal = binding,
-            "collapse_sidebar" => self.config.keybindings.collapse_sidebar = binding,
-            "new_surface" => self.config.keybindings.new_surface = binding,
-            "new_surface_split_right" => self.config.keybindings.new_surface_split_right = binding,
-            "new_surface_split_down" => self.config.keybindings.new_surface_split_down = binding,
-            "next_surface" => self.config.keybindings.next_surface = binding,
-            "previous_surface" => self.config.keybindings.previous_surface = binding,
-            "rename_surface" => self.config.keybindings.rename_surface = binding,
-            "close_surface" => self.config.keybindings.close_surface = binding,
-            "quit" => self.config.keybindings.quit = binding,
-            _ => {}
+        if let Some(slot) = keybinding_field_mut(&mut self.config.keybindings, &field) {
+            *slot = binding;
         }
         self.set_recording_key(None);
         sync_keybinding_conflict_error(
@@ -2794,43 +2762,39 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    /// Restore one keybinding to its shipped default. Draft-only, like
+    /// recording: changes persist when the settings are saved.
+    fn reset_keybinding(&mut self, field: &str, cx: &mut Context<Self>) {
+        if let Some(default_binding) = keybinding_default(field) {
+            if let Some(slot) = keybinding_field_mut(&mut self.config.keybindings, field) {
+                *slot = default_binding;
+            }
+            sync_keybinding_conflict_error(
+                &mut self.save_error,
+                &mut self.save_error_kind,
+                &self.config.keybindings,
+            );
+            cx.notify();
+        }
+    }
+
+    /// Restore every keybinding to its shipped default.
+    fn reset_all_keybindings(&mut self, cx: &mut Context<Self>) {
+        if self.recording_key.is_some() {
+            self.set_recording_key(None);
+        }
+        self.config.keybindings = con_core::config::KeybindingConfig::default();
+        sync_keybinding_conflict_error(
+            &mut self.save_error,
+            &mut self.save_error_kind,
+            &self.config.keybindings,
+        );
+        cx.notify();
+    }
+
     /// Get the current value of a keybinding by field name.
     fn binding_value(&self, field: &str) -> &str {
-        match field {
-            "global_summon" => &self.config.keybindings.global_summon,
-            "quick_terminal" => &self.config.keybindings.quick_terminal,
-            "new_window" => &self.config.keybindings.new_window,
-            "new_tab" => &self.config.keybindings.new_tab,
-            "close_tab" => &self.config.keybindings.close_tab,
-            "close_pane" => &self.config.keybindings.close_pane,
-            "toggle_pane_zoom" => &self.config.keybindings.toggle_pane_zoom,
-            "next_tab" => &self.config.keybindings.next_tab,
-            "previous_tab" => &self.config.keybindings.previous_tab,
-            "settings" => &self.config.keybindings.settings,
-            "command_palette" => &self.config.keybindings.command_palette,
-            "toggle_agent" => &self.config.keybindings.toggle_agent,
-            "toggle_input_bar" => &self.config.keybindings.toggle_input_bar,
-            "focus_input" => &self.config.keybindings.focus_input,
-            "ask_ai" => &self.config.keybindings.ask_ai,
-            "cycle_input_mode" => &self.config.keybindings.cycle_input_mode,
-            "split_right" => &self.config.keybindings.split_right,
-            "split_down" => &self.config.keybindings.split_down,
-            "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
-            "toggle_left_panel" => &self.config.keybindings.toggle_left_panel,
-            "focus_files" => &self.config.keybindings.focus_files,
-            "search_files" => &self.config.keybindings.search_files,
-            "find_in_terminal" => &self.config.keybindings.find_in_terminal,
-            "collapse_sidebar" => &self.config.keybindings.collapse_sidebar,
-            "new_surface" => &self.config.keybindings.new_surface,
-            "new_surface_split_right" => &self.config.keybindings.new_surface_split_right,
-            "new_surface_split_down" => &self.config.keybindings.new_surface_split_down,
-            "next_surface" => &self.config.keybindings.next_surface,
-            "previous_surface" => &self.config.keybindings.previous_surface,
-            "rename_surface" => &self.config.keybindings.rename_surface,
-            "close_surface" => &self.config.keybindings.close_surface,
-            "quit" => &self.config.keybindings.quit,
-            _ => "",
-        }
+        keybinding_field(&self.config.keybindings, field).unwrap_or("")
     }
 
     /// Updates the settings draft only. Normal Settings edits persist through
@@ -5060,6 +5024,62 @@ impl SettingsPanel {
                     crate::keycaps::keycaps_for_binding(&value, theme)
                 };
                 let field_str = field.to_string();
+                let reset_field = field.to_string();
+                let show_reset = !is_recording
+                    && keybinding_default(field)
+                        .is_some_and(|default| default != value);
+                let reset_button = if show_reset {
+                    Some(
+                        Button::new(SharedString::from(format!("key-reset-{field}")))
+                            .icon(Icon::default().path("phosphor/arrow-clockwise.svg"))
+                            .ghost()
+                            .small()
+                            .tooltip("Reset to default")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reset_keybinding(&reset_field, cx);
+                            })),
+                    )
+                } else {
+                    None
+                };
+                let badge_and_reset = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("key-badge-{field}")))
+                            .min_h(px(23.0))
+                            .px(px(4.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(5.0))
+                            .cursor_pointer()
+                            .bg(if is_recording {
+                                theme.primary.opacity(0.12)
+                            } else {
+                                theme.transparent
+                            })
+                            .text_color(if is_recording {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .hover(|s| s.bg(theme.muted.opacity(0.055)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_recording_key(Some(field_str.clone()));
+                                    cx.notify();
+                                }),
+                            )
+                            .child(badge),
+                    );
+                let badge_and_reset = if let Some(reset_button) = reset_button {
+                    badge_and_reset.child(reset_button)
+                } else {
+                    badge_and_reset
+                };
                 c = c.child(
                     div()
                         .id(SharedString::from(format!("key-{field}")))
@@ -5077,35 +5097,7 @@ impl SettingsPanel {
                                 .text_color(theme.foreground.opacity(0.86))
                                 .child(label.to_string()),
                         )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("key-badge-{field}")))
-                                .min_h(px(23.0))
-                                .px(px(4.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(5.0))
-                                .cursor_pointer()
-                                .bg(if is_recording {
-                                    theme.primary.opacity(0.12)
-                                } else {
-                                    theme.transparent
-                                })
-                                .text_color(if is_recording {
-                                    theme.primary
-                                } else {
-                                    theme.muted_foreground
-                                })
-                                .hover(|s| s.bg(theme.muted.opacity(0.055)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.set_recording_key(Some(field_str.clone()));
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(badge),
-                        ),
+                        .child(badge_and_reset),
                 );
             }
             c
@@ -5467,9 +5459,19 @@ impl SettingsPanel {
             .child(group_label("General", &theme))
             .child(general_card);
 
-        section_content(
+        let reset_all_btn = Button::new("keybindings-reset-all")
+            .label("Reset All")
+            .icon(Icon::default().path("phosphor/arrow-clockwise.svg"))
+            .small()
+            .ghost()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.reset_all_keybindings(cx);
+            }));
+
+        section_content_with_trailing(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
+            Some(reset_all_btn.into_any_element()),
             theme,
         )
         .child(shortcut_groups)
@@ -6163,18 +6165,36 @@ fn update_download_url(state: &crate::updater::CheckState) -> Option<String> {
 // ── Reusable building blocks ──────────────────────────────────────
 
 fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -> Div {
+    section_content_with_trailing(title, subtitle, None, theme)
+}
+
+fn section_content_with_trailing(
+    title: &str,
+    subtitle: &str,
+    trailing: Option<AnyElement>,
+    theme: &gpui_component::Theme,
+) -> Div {
+    let mut title_row = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_size(px(19.0))
+                .line_height(px(24.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title.to_string()),
+        );
+    if let Some(trailing) = trailing {
+        title_row = title_row.child(trailing);
+    }
+
     div().flex().flex_col().gap(px(20.0)).child(
         div()
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .child(
-                div()
-                    .text_size(px(19.0))
-                    .line_height(px(24.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title.to_string()),
-            )
+            .child(title_row)
             .child(
                 div()
                     .max_w(px(520.0))
@@ -6438,6 +6458,95 @@ fn stacked_input_field(
         .child(Input::new(input))
 }
 
+/// Access a keybinding config field by settings-panel field name.
+fn keybinding_field_mut<'a>(
+    kb: &'a mut con_core::config::KeybindingConfig,
+    field: &str,
+) -> Option<&'a mut String> {
+    match field {
+        "global_summon" => Some(&mut kb.global_summon),
+        "quick_terminal" => Some(&mut kb.quick_terminal),
+        "new_window" => Some(&mut kb.new_window),
+        "new_tab" => Some(&mut kb.new_tab),
+        "close_tab" => Some(&mut kb.close_tab),
+        "close_pane" => Some(&mut kb.close_pane),
+        "toggle_pane_zoom" => Some(&mut kb.toggle_pane_zoom),
+        "next_tab" => Some(&mut kb.next_tab),
+        "previous_tab" => Some(&mut kb.previous_tab),
+        "settings" => Some(&mut kb.settings),
+        "command_palette" => Some(&mut kb.command_palette),
+        "toggle_agent" => Some(&mut kb.toggle_agent),
+        "toggle_input_bar" => Some(&mut kb.toggle_input_bar),
+        "focus_input" => Some(&mut kb.focus_input),
+        "ask_ai" => Some(&mut kb.ask_ai),
+        "cycle_input_mode" => Some(&mut kb.cycle_input_mode),
+        "split_right" => Some(&mut kb.split_right),
+        "split_down" => Some(&mut kb.split_down),
+        "toggle_pane_scope" => Some(&mut kb.toggle_pane_scope),
+        "toggle_left_panel" => Some(&mut kb.toggle_left_panel),
+        "focus_files" => Some(&mut kb.focus_files),
+        "search_files" => Some(&mut kb.search_files),
+        "find_in_terminal" => Some(&mut kb.find_in_terminal),
+        "collapse_sidebar" => Some(&mut kb.collapse_sidebar),
+        "new_surface" => Some(&mut kb.new_surface),
+        "new_surface_split_right" => Some(&mut kb.new_surface_split_right),
+        "new_surface_split_down" => Some(&mut kb.new_surface_split_down),
+        "next_surface" => Some(&mut kb.next_surface),
+        "previous_surface" => Some(&mut kb.previous_surface),
+        "rename_surface" => Some(&mut kb.rename_surface),
+        "close_surface" => Some(&mut kb.close_surface),
+        "quit" => Some(&mut kb.quit),
+        _ => None,
+    }
+}
+
+fn keybinding_field<'a>(
+    kb: &'a con_core::config::KeybindingConfig,
+    field: &str,
+) -> Option<&'a str> {
+    match field {
+        "global_summon" => Some(&kb.global_summon),
+        "quick_terminal" => Some(&kb.quick_terminal),
+        "new_window" => Some(&kb.new_window),
+        "new_tab" => Some(&kb.new_tab),
+        "close_tab" => Some(&kb.close_tab),
+        "close_pane" => Some(&kb.close_pane),
+        "toggle_pane_zoom" => Some(&kb.toggle_pane_zoom),
+        "next_tab" => Some(&kb.next_tab),
+        "previous_tab" => Some(&kb.previous_tab),
+        "settings" => Some(&kb.settings),
+        "command_palette" => Some(&kb.command_palette),
+        "toggle_agent" => Some(&kb.toggle_agent),
+        "toggle_input_bar" => Some(&kb.toggle_input_bar),
+        "focus_input" => Some(&kb.focus_input),
+        "ask_ai" => Some(&kb.ask_ai),
+        "cycle_input_mode" => Some(&kb.cycle_input_mode),
+        "split_right" => Some(&kb.split_right),
+        "split_down" => Some(&kb.split_down),
+        "toggle_pane_scope" => Some(&kb.toggle_pane_scope),
+        "toggle_left_panel" => Some(&kb.toggle_left_panel),
+        "focus_files" => Some(&kb.focus_files),
+        "search_files" => Some(&kb.search_files),
+        "find_in_terminal" => Some(&kb.find_in_terminal),
+        "collapse_sidebar" => Some(&kb.collapse_sidebar),
+        "new_surface" => Some(&kb.new_surface),
+        "new_surface_split_right" => Some(&kb.new_surface_split_right),
+        "new_surface_split_down" => Some(&kb.new_surface_split_down),
+        "next_surface" => Some(&kb.next_surface),
+        "previous_surface" => Some(&kb.previous_surface),
+        "rename_surface" => Some(&kb.rename_surface),
+        "close_surface" => Some(&kb.close_surface),
+        "quit" => Some(&kb.quit),
+        _ => None,
+    }
+}
+
+/// The shipped default binding for a settings field, if the field exists.
+fn keybinding_default(field: &str) -> Option<String> {
+    let mut defaults = con_core::config::KeybindingConfig::default();
+    keybinding_field_mut(&mut defaults, field).cloned()
+}
+
 /// Convert a GPUI Keystroke to the binding format string (e.g. "cmd-shift-d").
 fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     let mut parts = Vec::new();
@@ -6580,7 +6689,10 @@ fn display_theme_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderKind, ProviderOAuthState, SettingsPanel, provider_connection_status};
+    use super::{
+        keybinding_default, keybinding_field, keybinding_field_mut, provider_connection_status,
+        ProviderKind, ProviderOAuthState, SettingsPanel,
+    };
 
     #[test]
     fn oauth_providers_are_ready_with_key_override() {
@@ -6655,5 +6767,33 @@ mod tests {
         let a = Config::default();
         let b = Config::default();
         assert!(SettingsPanel::config_matches(&a, &b));
+    }
+
+    #[test]
+    fn keybinding_default_returns_shipped_binding_for_known_fields() {
+        let defaults = con_core::config::KeybindingConfig::default();
+        assert_eq!(
+            keybinding_default("new_tab").as_deref(),
+            keybinding_field(&defaults, "new_tab"),
+        );
+        assert!(keybinding_default("rename_surface").is_some());
+        assert!(keybinding_default("not_a_real_field").is_none());
+    }
+
+    #[test]
+    fn keybinding_field_mut_writes_same_field_that_binding_value_reads() {
+        use con_core::config::KeybindingConfig;
+        let mut kb = KeybindingConfig::default();
+        if let Some(slot) = keybinding_field_mut(&mut kb, "rename_surface") {
+            *slot = "custom-chord".to_string();
+        }
+        assert_eq!(keybinding_field(&kb, "rename_surface"), Some("custom-chord"));
+        // Resetting through the accessor restores the shipped default.
+        *keybinding_field_mut(&mut kb, "rename_surface").unwrap() =
+            keybinding_default("rename_surface").unwrap();
+        assert_eq!(
+            keybinding_field(&kb, "rename_surface"),
+            keybinding_field(&KeybindingConfig::default(), "rename_surface"),
+        );
     }
 }

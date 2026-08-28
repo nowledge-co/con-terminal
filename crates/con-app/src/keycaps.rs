@@ -41,7 +41,19 @@ pub(crate) fn keycap_labels_for_stroke(stroke: &Keystroke) -> Vec<String> {
     if stroke.modifiers.alt {
         parts.push(alt_label().to_string());
     }
-    if stroke.modifiers.shift {
+    // GPUI's macOS event layer folds Shift into the key character for some
+    // chords (e.g. cmd-shift-X arrives as key "X" with shift unset), and
+    // bindings store that literal key so dispatch keeps matching. The keycap
+    // row would then read as if no Shift were involved, so restore it for
+    // display whenever the key itself carries an uppercase character.
+    let has_implicit_shift = !stroke.modifiers.shift
+        && stroke.key.chars().count() == 1
+        && stroke
+            .key
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_uppercase());
+    if stroke.modifiers.shift || has_implicit_shift {
         parts.push(shift_label().to_string());
     }
     if stroke.modifiers.platform {
@@ -162,4 +174,53 @@ pub(crate) fn first_action_keystroke(action: &dyn Action, window: &Window) -> Op
         .keystrokes()
         .first()
         .map(|keystroke| keystroke.as_keystroke().clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uppercase_key_implies_shift_cap() {
+        // Bindings recorded on macOS for chords like cmd-shift-X can store the
+        // shifted character literally ("cmd-X") because GPUI clears the shift
+        // flag for those keys; the cap row must still show Shift.
+        let stroke = Keystroke::parse("cmd-X").unwrap();
+        assert_eq!(
+            keycap_labels_for_stroke(&stroke),
+            vec![shift_label().to_string(), platform_label().to_string(), "X".to_string()],
+        );
+    }
+
+    #[test]
+    fn explicit_shift_binding_keeps_single_shift_cap() {
+        let stroke = Keystroke::parse("cmd-shift-x").unwrap();
+        assert_eq!(
+            keycap_labels_for_stroke(&stroke),
+            vec![shift_label().to_string(), platform_label().to_string(), "X".to_string()],
+        );
+    }
+
+    #[test]
+    fn lowercase_key_gets_no_phantom_shift() {
+        let stroke = Keystroke::parse("cmd-a").unwrap();
+        assert_eq!(
+            keycap_labels_for_stroke(&stroke),
+            vec![platform_label().to_string(), "A".to_string()],
+        );
+    }
+
+    #[test]
+    fn implicit_shift_orders_between_alt_and_platform() {
+        let stroke = Keystroke::parse("ctrl-alt-X").unwrap();
+        assert_eq!(
+            keycap_labels_for_stroke(&stroke),
+            vec![
+                control_label().to_string(),
+                alt_label().to_string(),
+                shift_label().to_string(),
+                "X".to_string(),
+            ],
+        );
+    }
 }
