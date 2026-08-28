@@ -4,7 +4,37 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.87` - unreleased
+## `v0.1.0-beta.88` - unreleased
+
+### Added
+
+**Settings**
+
+- Added per-shortcut and global reset actions in Keyboard Shortcuts, so custom
+  bindings can be restored without rebuilding the entire configuration. _(PR
+  [#305](https://github.com/nowledge-co/con-terminal/pull/305) by
+  [@zhangmo8](https://github.com/zhangmo8))_
+
+### Fixed
+
+**Updates and Releases**
+
+- Improved release and update reliability when macOS, Linux, and Windows
+  artifacts finish concurrently. Appcast publication now retries safely, and
+  incomplete releases remain unpublished instead of being exposed to users.
+  _(PR [#304](https://github.com/nowledge-co/con-terminal/pull/304) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Settings**
+
+- Fixed Shift disappearing from shortcut keycaps when macOS records the shifted
+  character directly. _(PR
+  [#305](https://github.com/nowledge-co/con-terminal/pull/305) by
+  [@zhangmo8](https://github.com/zhangmo8))_
+
+---
+
+## `v0.1.0-beta.87` - 2026-08-27
 
 ### Added
 
