@@ -386,7 +386,6 @@ impl GhosttyView {
                 .right(px(0.0))
                 .bottom(px(SCROLLBAR_INSET_PX))
                 .w(px(SCROLLBAR_HIT_WIDTH_PX))
-                .cursor_pointer()
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
