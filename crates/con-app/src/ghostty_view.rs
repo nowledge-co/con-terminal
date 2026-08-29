@@ -60,6 +60,14 @@ const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 #[cfg(target_os = "macos")]
 const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
 #[cfg(target_os = "macos")]
+const SCROLLBAR_INSET_PX: f32 = 6.0;
+#[cfg(target_os = "macos")]
+const SCROLLBAR_HIT_WIDTH_PX: f32 = 14.0;
+#[cfg(target_os = "macos")]
+const SCROLLBAR_THUMB_WIDTH_PX: f32 = 4.0;
+#[cfg(target_os = "macos")]
+const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
+#[cfg(target_os = "macos")]
 static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
 static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
@@ -261,6 +269,53 @@ impl GhosttyView {
             pending_terminal_find: None,
             restore_terminal_focus: false,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn render_terminal_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let terminal = self.terminal.as_ref()?;
+        let scrollbar = terminal.scrollbar()?;
+        if scrollbar.total <= scrollbar.len || scrollbar.len == 0 {
+            return None;
+        }
+
+        let bounds = self.last_bounds?;
+        let track_height = (bounds.size.height.as_f32() - SCROLLBAR_INSET_PX * 2.0).max(0.0);
+        if track_height <= 0.0 {
+            return None;
+        }
+
+        let thumb_height = ((scrollbar.len as f32 / scrollbar.total as f32) * track_height)
+            .clamp(SCROLLBAR_MIN_THUMB_PX.min(track_height), track_height);
+        let max_offset = scrollbar.total.saturating_sub(scrollbar.len).max(1);
+        let travel = (track_height - thumb_height).max(0.0);
+        let thumb_top = if travel == 0.0 {
+            0.0
+        } else {
+            (scrollbar.offset.min(max_offset) as f32 / max_offset as f32) * travel
+        };
+        let foreground = cx.theme().foreground;
+
+        Some(
+            div()
+                .absolute()
+                .top(px(SCROLLBAR_INSET_PX))
+                .right(px(0.0))
+                .bottom(px(SCROLLBAR_INSET_PX))
+                .w(px(SCROLLBAR_HIT_WIDTH_PX))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(thumb_top))
+                        .right(px((SCROLLBAR_HIT_WIDTH_PX - SCROLLBAR_THUMB_WIDTH_PX) / 2.0))
+                        .w(px(SCROLLBAR_THUMB_WIDTH_PX))
+                        .h(px(thumb_height))
+                        .rounded(px(SCROLLBAR_THUMB_WIDTH_PX / 2.0))
+                        .bg(foreground.opacity(0.2))
+                        .hover(|style| style.bg(foreground.opacity(0.38))),
+                )
+                .into_any_element(),
+        )
     }
 
     pub(crate) fn show_terminal_find(
@@ -2356,6 +2411,7 @@ impl Render for GhosttyView {
                 .size_full(),
             )
             .children(preedit_overlay)
+            .children(self.render_terminal_scrollbar(cx))
             .children(terminal_find)
             .context_menu(move |menu, window, cx| {
                 // An empty PopupMenu renders nothing (ContextMenu checks
