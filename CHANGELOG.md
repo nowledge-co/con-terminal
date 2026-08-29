@@ -19,6 +19,18 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Changed
 
+**macOS**
+
+- Added a subtle overlay scrollbar for terminal scrollback. It appears only
+  when a pane has history beyond the visible screen, without changing the
+  terminal's layout or transparency behavior. _(PR
+  [#309](https://github.com/nowledge-co/con-terminal/pull/309) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Clicking a scrollback scrollbar now also focuses its pane, so the next
+  keyboard input goes to the pane the user is working with. _(PR
+  [#310](https://github.com/nowledge-co/con-terminal/pull/310) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Branding**
 
 - Updated the company name shown in Con's About window, license, and Flatpak
