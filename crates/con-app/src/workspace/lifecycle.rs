@@ -795,8 +795,6 @@ impl ConWorkspace {
             workspace_focus: cx.focus_handle(),
         };
 
-        crate::app_icon::apply_app_icon(&workspace.app_icon);
-
         if let Some(cwd) = workspace
             .try_active_terminal()
             .and_then(|t| t.current_dir(cx))

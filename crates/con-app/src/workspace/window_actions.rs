@@ -693,7 +693,12 @@ impl ConWorkspace {
 
         self.cancel_all_sessions();
         self.flush_session_save(cx);
-        crate::app_icon::apply_app_icon(&crate::app_icon::saved_id());
+        // Only restore the saved Dock image if this window owns the live
+        // preview. Closing a different window must not wipe another
+        // window's unsaved icon selection.
+        if sanitize_app_icon(&self.app_icon) == crate::app_icon::applied_id() {
+            crate::app_icon::apply_app_icon(&crate::app_icon::saved_id());
+        }
 
         if let Some(settings_window) = self.settings_window.take() {
             self.settings_window_panel = None;

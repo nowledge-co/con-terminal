@@ -12,7 +12,7 @@ pub fn current_asset() -> &'static str {
 
 #[cfg(target_os = "macos")]
 fn current_id() -> String {
-    mutex_id(&APPLIED_APP_ICON)
+    applied_id()
 }
 
 fn mutex_id(slot: &Mutex<String>) -> String {
@@ -21,6 +21,10 @@ fn mutex_id(slot: &Mutex<String>) -> String {
         .filter(|id| !id.is_empty())
         .map(|id| id.clone())
         .unwrap_or_else(|| DEFAULT_APP_ICON.to_string())
+}
+
+pub fn applied_id() -> String {
+    mutex_id(&APPLIED_APP_ICON)
 }
 
 pub fn saved_id() -> String {

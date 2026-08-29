@@ -1731,6 +1731,7 @@ impl SettingsPanel {
         if let Some(snapshot) = self.preview_snapshot.take() {
             self.config = snapshot;
             self.adopt_saved_app_icon();
+            crate::app_icon::apply_app_icon(&self.config.appearance.app_icon);
             cx.emit(AppearancePreview);
             cx.notify();
         }
@@ -4185,6 +4186,7 @@ impl SettingsPanel {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.config.appearance.app_icon = icon_id.clone();
+                crate::app_icon::apply_app_icon(&icon_id);
                 cx.emit(AppearancePreview);
                 cx.notify();
             }))
