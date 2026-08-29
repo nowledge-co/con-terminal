@@ -8,7 +8,7 @@ use con_core::{
     config::{
         APP_ICON_GROUPS, APP_ICONS, AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY,
         MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, TabsOrientation, is_gpui_pseudo_font_family,
-        sanitize_terminal_font_family,
+        sanitize_app_icon, sanitize_terminal_font_family,
     },
 };
 use futures::{FutureExt, StreamExt};
@@ -1729,9 +1729,13 @@ impl SettingsPanel {
         self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
+            let owns_preview = sanitize_app_icon(&self.config.appearance.app_icon)
+                == crate::app_icon::applied_id();
             self.config = snapshot;
             self.adopt_saved_app_icon();
-            crate::app_icon::apply_app_icon(&self.config.appearance.app_icon);
+            if owns_preview {
+                crate::app_icon::apply_app_icon(&self.config.appearance.app_icon);
+            }
             cx.emit(AppearancePreview);
             cx.notify();
         }
