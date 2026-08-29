@@ -6,6 +6,17 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.89` - unreleased
 
+### Fixed
+
+**macOS**
+
+- Refined trackpad scrolling in shell scrollback by preserving precise input
+  deltas instead of applying an extra host-side speed multiplier. This keeps
+  slow, fine-grained scrolling from feeling unexpectedly fast while leaving
+  terminal applications' own scroll handling unchanged. _(PR
+  [#308](https://github.com/nowledge-co/con-terminal/pull/308) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ### Changed
 
 **Branding**

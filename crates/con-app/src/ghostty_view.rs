@@ -2293,11 +2293,11 @@ impl Render for GhosttyView {
                     let delta = match event.delta {
                         ScrollDelta::Lines(d) => (f64::from(d.x), f64::from(d.y)),
                         ScrollDelta::Pixels(d) => {
-                            // Match Ghostty's AppKit host: precise trackpad
-                            // deltas are sent as-is with a subjective 2x
-                            // multiplier and the ScrollMods precision bit.
-                            // Ghostty core then accumulates sub-row remainders.
-                            (f64::from(d.x) * 2.0, f64::from(d.y) * 2.0)
+                            // Preserve precise trackpad deltas. Ghostty owns
+                            // the precision/discrete multiplier and its
+                            // sub-row remainder, so the host must not apply a
+                            // second, device-independent scale factor here.
+                            (f64::from(d.x), f64::from(d.y))
                         }
                     };
                     terminal.send_mouse_scroll(
