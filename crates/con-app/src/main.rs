@@ -1070,6 +1070,21 @@ fn live_control_endpoint_exists() -> bool {
     false
 }
 
+fn has_open_windows(cx: &App) -> bool {
+    cx.window_stack()
+        .map(|windows| !windows.is_empty())
+        .unwrap_or(false)
+}
+
+/// Reload on-disk config and apply the saved Dock icon before opening a
+/// window. Used when the process is alive with no windows so an edited
+/// `app_icon` takes effect instead of the stale in-process saved id.
+fn open_window_from_disk(cx: &mut App) {
+    let config = con_core::Config::load().unwrap_or_default();
+    app_icon::apply_persisted(&config.appearance.app_icon);
+    open_con_window(config, fresh_window_session_with_history(), false, cx);
+}
+
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx
         .window_stack()
@@ -1082,8 +1097,7 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
     let app_is_active = cx.active_window().is_some();
 
     if !has_windows {
-        let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, fresh_window_session_with_history(), false, cx);
+        open_window_from_disk(cx);
         cx.activate(true);
         return;
     }
@@ -2535,17 +2549,12 @@ fn main() {
         ));
     log::info!("gpui application created");
     app.on_reopen(|cx| {
-        let has_windows = cx
-            .window_stack()
-            .map(|windows| !windows.is_empty())
-            .unwrap_or(false);
-        if has_windows {
+        if has_open_windows(cx) {
             cx.activate(true);
             return;
         }
 
-        let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, fresh_window_session_with_history(), false, cx);
+        open_window_from_disk(cx);
         cx.activate(true);
     });
     app.run(move |cx: &mut App| {
@@ -2585,8 +2594,12 @@ fn main() {
         macos_windowing::install_window_cycle_shortcuts();
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
-            let config = con_core::Config::load().unwrap_or_default();
-            open_con_window(config, fresh_window_session_with_history(), false, cx);
+            if has_open_windows(cx) {
+                let config = con_core::Config::load().unwrap_or_default();
+                open_con_window(config, fresh_window_session_with_history(), false, cx);
+            } else {
+                open_window_from_disk(cx);
+            }
         });
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
@@ -2608,8 +2621,12 @@ fn main() {
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
-                let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, fresh_window_session_with_history(), false, cx);
+                if has_open_windows(cx) {
+                    let config = con_core::Config::load().unwrap_or_default();
+                    open_con_window(config, fresh_window_session_with_history(), false, cx);
+                } else {
+                    open_window_from_disk(cx);
+                }
             }
         });
 

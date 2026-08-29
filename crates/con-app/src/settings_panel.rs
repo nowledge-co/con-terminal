@@ -8,7 +8,7 @@ use con_core::{
     config::{
         APP_ICON_GROUPS, APP_ICONS, AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY,
         MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, TabsOrientation, is_gpui_pseudo_font_family,
-        sanitize_app_icon, sanitize_terminal_font_family,
+        sanitize_terminal_font_family,
     },
 };
 use futures::{FutureExt, StreamExt};
@@ -173,6 +173,7 @@ pub struct SettingsPanel {
     standalone: bool,
     config: Config,
     preview_snapshot: Option<Config>,
+    icon_preview_owner: u64,
     registry: ModelRegistry,
     oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
@@ -1615,6 +1616,7 @@ impl SettingsPanel {
             standalone: false,
             config: config.clone(),
             preview_snapshot: None,
+            icon_preview_owner: crate::app_icon::new_preview_owner(),
             registry,
             oauth_runtime,
             focus_handle: cx.focus_handle(),
@@ -1729,13 +1731,9 @@ impl SettingsPanel {
         self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
-            let owns_preview = sanitize_app_icon(&self.config.appearance.app_icon)
-                == crate::app_icon::applied_id();
+            self.release_icon_preview();
             self.config = snapshot;
             self.adopt_saved_app_icon();
-            if owns_preview {
-                crate::app_icon::apply_app_icon(&self.config.appearance.app_icon);
-            }
             cx.emit(AppearancePreview);
             cx.notify();
         }
@@ -2841,7 +2839,12 @@ impl SettingsPanel {
         self.adopt_saved_app_icon_for_persist();
         self.config.save()?;
         crate::app_icon::remember_saved(&self.config.appearance.app_icon);
+        crate::app_icon::clear_preview_owner(self.icon_preview_owner);
         Ok(())
+    }
+
+    pub(crate) fn release_icon_preview(&self) {
+        crate::app_icon::restore_saved_if_owner(self.icon_preview_owner);
     }
 
     fn adopt_saved_app_icon(&mut self) {
@@ -4194,7 +4197,7 @@ impl SettingsPanel {
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.config.appearance.app_icon = icon_id.clone();
-                crate::app_icon::apply_app_icon(&icon_id);
+                crate::app_icon::apply_preview(this.icon_preview_owner, &icon_id);
                 cx.emit(AppearancePreview);
                 cx.notify();
             }))

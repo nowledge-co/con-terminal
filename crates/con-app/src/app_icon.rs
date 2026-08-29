@@ -1,9 +1,12 @@
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use con_core::config::{app_icon_asset, sanitize_app_icon, DEFAULT_APP_ICON};
+use con_core::config::{DEFAULT_APP_ICON, app_icon_asset, sanitize_app_icon};
 
 static APPLIED_APP_ICON: Mutex<String> = Mutex::new(String::new());
 static SAVED_APP_ICON: Mutex<String> = Mutex::new(String::new());
+static NEXT_PREVIEW_OWNER: AtomicU64 = AtomicU64::new(1);
+static PREVIEW_OWNER: Mutex<Option<u64>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 pub fn current_asset() -> &'static str {
@@ -38,11 +41,55 @@ pub fn remember_saved(id: &str) {
     }
 }
 
-/// Persist the last saved icon at process start so later windows can restore
-/// it after a live preview.
+/// Unique token for a Settings panel that can own the live Dock preview.
+pub fn new_preview_owner() -> u64 {
+    NEXT_PREVIEW_OWNER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Apply a live preview and record which panel last changed the Dock.
+///
+/// Updates ownership even when the icon id is unchanged, so a second
+/// Settings window that previews the same id becomes the owner.
+pub fn apply_preview(owner: u64, id: &str) {
+    apply_app_icon(id);
+    set_preview_owner(Some(owner));
+}
+
+/// Restore the saved Dock icon only if this panel still owns the preview.
+///
+/// Two Settings windows can preview the same unsaved id. Matching on that
+/// id would let either Discard cancel the other panel's preview.
+pub fn restore_saved_if_owner(owner: u64) {
+    if preview_owner() != Some(owner) {
+        return;
+    }
+    set_preview_owner(None);
+    apply_app_icon(&saved_id());
+}
+
+/// Drop preview ownership after a successful save without touching the Dock.
+pub fn clear_preview_owner(owner: u64) {
+    if preview_owner() == Some(owner) {
+        set_preview_owner(None);
+    }
+}
+
+fn preview_owner() -> Option<u64> {
+    PREVIEW_OWNER.lock().ok().and_then(|owner| *owner)
+}
+
+fn set_preview_owner(owner: Option<u64>) {
+    if let Ok(mut current) = PREVIEW_OWNER.lock() {
+        *current = owner;
+    }
+}
+
+/// Apply a saved icon at process start or when config is reloaded with no
+/// windows, and clear any live preview owner.
 pub fn apply_persisted(id: &str) {
     remember_saved(id);
     apply_app_icon(id);
+    set_preview_owner(None);
 }
 
 /// If this panel changed `app_icon` since its snapshot, that value wins.
@@ -113,14 +160,19 @@ fn set_application_icon_image(_png: &[u8]) {}
 mod tests {
     use super::*;
 
-    fn reset() {
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn reset() -> std::sync::MutexGuard<'static, ()> {
+        let guard = TEST_LOCK.lock().unwrap();
         *APPLIED_APP_ICON.lock().unwrap() = String::new();
         *SAVED_APP_ICON.lock().unwrap() = String::new();
+        set_preview_owner(None);
+        guard
     }
 
     #[test]
     fn take_for_save_merges_stale_panels_and_keeps_explicit_changes() {
-        reset();
+        let _guard = reset();
         remember_saved("raccoon-a1");
         assert_eq!(take_for_save("default", Some("default")), "raccoon-a1");
         assert_eq!(saved_id(), "raccoon-a1");
@@ -130,5 +182,17 @@ mod tests {
 
         remember_saved("raccoon-c1");
         assert_eq!(saved_id(), "raccoon-c1");
+    }
+
+    #[test]
+    fn restore_saved_only_when_this_owner_last_applied() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        apply_preview(1, "raccoon-a2");
+        apply_preview(2, "raccoon-a2");
+        restore_saved_if_owner(1);
+        assert_eq!(applied_id(), "raccoon-a2");
+        restore_saved_if_owner(2);
+        assert_eq!(applied_id(), "raccoon-a1");
     }
 }
