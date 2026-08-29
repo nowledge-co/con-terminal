@@ -83,9 +83,18 @@ pub fn restore_saved_if_owner(owner: u64) {
 }
 
 /// Drop this panel's preview after a successful save without touching the Dock.
+///
+/// If this panel was driving the Dock, older buried previews are also
+/// dropped. The save just committed that image; promoting a previous
+/// unsaved choice later would jump the Dock off the icon that was written.
 pub fn clear_preview_owner(owner: u64) {
     if let Ok(mut stack) = PREVIEW_STACK.lock() {
-        stack.retain(|(existing, _)| *existing != owner);
+        let was_top = stack.last().is_some_and(|(existing, _)| *existing == owner);
+        if was_top {
+            stack.clear();
+        } else {
+            stack.retain(|(existing, _)| *existing != owner);
+        }
     }
 }
 
@@ -175,10 +184,10 @@ mod tests {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn reset() -> std::sync::MutexGuard<'static, ()> {
-        let guard = TEST_LOCK.lock().unwrap();
-        *APPLIED_APP_ICON.lock().unwrap() = String::new();
-        *SAVED_APP_ICON.lock().unwrap() = String::new();
-        PREVIEW_STACK.lock().unwrap().clear();
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        *APPLIED_APP_ICON.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        *SAVED_APP_ICON.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
+        PREVIEW_STACK.lock().unwrap_or_else(|e| e.into_inner()).clear();
         guard
     }
 
@@ -213,7 +222,7 @@ mod tests {
         let _guard = reset();
         remember_saved("raccoon-a1");
         apply_preview(1, "raccoon-a2");
-        apply_preview(2, "raccoon-a3");
+        apply_preview(2, "raccoon-b1");
         restore_saved_if_owner(2);
         assert_eq!(applied_id(), "raccoon-a2");
         restore_saved_if_owner(1);
@@ -227,5 +236,33 @@ mod tests {
         let mut stale = "raccoon-a1".to_string();
         merge_saved_into(&mut stale);
         assert_eq!(stale, "raccoon-a2");
+    }
+
+    #[test]
+    fn saving_the_top_preview_does_not_leave_buried_entries() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        apply_preview(1, "raccoon-a2");
+        apply_preview(2, "raccoon-b1");
+        remember_saved("raccoon-b1");
+        clear_preview_owner(2);
+        assert_eq!(applied_id(), "raccoon-b1");
+
+        apply_preview(3, "raccoon-c1");
+        restore_saved_if_owner(3);
+        assert_eq!(applied_id(), "raccoon-b1");
+    }
+
+    #[test]
+    fn saving_a_buried_preview_keeps_the_live_top() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        apply_preview(1, "raccoon-a2");
+        apply_preview(2, "raccoon-b1");
+        remember_saved("raccoon-a2");
+        clear_preview_owner(1);
+        assert_eq!(applied_id(), "raccoon-b1");
+        restore_saved_if_owner(2);
+        assert_eq!(applied_id(), "raccoon-a2");
     }
 }
