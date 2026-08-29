@@ -43,14 +43,13 @@ pub fn apply_persisted(id: &str) {
 
 /// If this panel changed `app_icon` since its snapshot, that value wins.
 /// Otherwise keep the last saved icon so a stale window cannot clobber it.
+/// Does not update process-wide saved state; call [`remember_saved`] after
+/// the config actually reaches disk.
 pub fn take_for_save(panel_id: &str, snapshot_id: Option<&str>) -> String {
     let panel = sanitize_app_icon(panel_id);
     match snapshot_id {
         Some(snapshot) if sanitize_app_icon(snapshot) == panel => saved_id(),
-        _ => {
-            remember_saved(&panel);
-            panel
-        }
+        _ => panel,
     }
 }
 
@@ -123,6 +122,9 @@ mod tests {
         assert_eq!(saved_id(), "raccoon-a1");
 
         assert_eq!(take_for_save("raccoon-c1", Some("default")), "raccoon-c1");
+        assert_eq!(saved_id(), "raccoon-a1");
+
+        remember_saved("raccoon-c1");
         assert_eq!(saved_id(), "raccoon-c1");
     }
 }

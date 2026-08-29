@@ -1730,6 +1730,7 @@ impl SettingsPanel {
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
             self.config = snapshot;
+            self.adopt_saved_app_icon();
             cx.emit(AppearancePreview);
             cx.notify();
         }
@@ -2678,6 +2679,7 @@ impl SettingsPanel {
 
         match self.persist_config() {
             Ok(()) => {
+                crate::app_icon::remember_saved(&self.config.appearance.app_icon);
                 self.save_error = None;
                 self.save_error_kind = None;
                 self.last_saved_at = Some(std::time::SystemTime::now());
