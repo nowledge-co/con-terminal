@@ -2676,11 +2676,8 @@ impl SettingsPanel {
             return;
         }
 
-        self.adopt_saved_app_icon_for_persist();
-
         match self.persist_config() {
             Ok(()) => {
-                crate::app_icon::remember_saved(&self.config.appearance.app_icon);
                 self.save_error = None;
                 self.save_error_kind = None;
                 self.last_saved_at = Some(std::time::SystemTime::now());
@@ -2836,8 +2833,11 @@ impl SettingsPanel {
     pub fn appearance_config(&self) -> &con_core::config::AppearanceConfig {
         &self.config.appearance
     }
-    fn persist_config(&self) -> anyhow::Result<()> {
-        self.config.save()
+    fn persist_config(&mut self) -> anyhow::Result<()> {
+        self.adopt_saved_app_icon_for_persist();
+        self.config.save()?;
+        crate::app_icon::remember_saved(&self.config.appearance.app_icon);
+        Ok(())
     }
 
     fn adopt_saved_app_icon(&mut self) {
@@ -3855,7 +3855,7 @@ impl SettingsPanel {
                                     let previous = this.config.appearance.hide_pane_title_bar;
                                     this.hide_pane_title_bar = *checked;
                                     this.config.appearance.hide_pane_title_bar = *checked;
-                                    if let Err(err) = this.config.save() {
+                                    if let Err(err) = this.persist_config() {
                                         this.hide_pane_title_bar = previous;
                                         this.config.appearance.hide_pane_title_bar = previous;
                                         log::warn!(
@@ -3868,6 +3868,8 @@ impl SettingsPanel {
                                     }
                                     if let Some(snapshot) = &mut this.preview_snapshot {
                                         snapshot.appearance.hide_pane_title_bar = *checked;
+                                        snapshot.appearance.app_icon =
+                                            this.config.appearance.app_icon.clone();
                                     }
                                     this.save_error = None;
                                     this.save_error_kind = None;
@@ -3887,7 +3889,7 @@ impl SettingsPanel {
                                     let previous = this.config.appearance.close_to_quit;
                                     this.close_to_quit = *checked;
                                     this.config.appearance.close_to_quit = *checked;
-                                    if let Err(err) = this.config.save() {
+                                    if let Err(err) = this.persist_config() {
                                         this.close_to_quit = previous;
                                         this.config.appearance.close_to_quit = previous;
                                         log::warn!(
@@ -3900,6 +3902,8 @@ impl SettingsPanel {
                                     }
                                     if let Some(snapshot) = &mut this.preview_snapshot {
                                         snapshot.appearance.close_to_quit = *checked;
+                                        snapshot.appearance.app_icon =
+                                            this.config.appearance.app_icon.clone();
                                     }
                                     this.save_error = None;
                                     this.save_error_kind = None;
