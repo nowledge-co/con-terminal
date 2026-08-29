@@ -12,6 +12,7 @@
 #![allow(unexpected_cfgs)]
 
 mod agent_panel;
+mod app_icon;
 mod assets;
 mod chat_markdown;
 #[cfg(target_os = "macos")]
@@ -185,30 +186,6 @@ actions!(
         Minimize
     ]
 );
-
-/// Set the macOS dock icon at runtime (for `cargo run` — bundled apps use Info.plist).
-#[cfg(target_os = "macos")]
-fn set_dock_icon() {
-    use cocoa::appkit::{NSApp, NSApplication, NSImage};
-    use cocoa::base::nil;
-    use cocoa::foundation::NSData;
-    use objc::rc::autoreleasepool;
-
-    const ICON_PNG: &[u8] = include_bytes!("../../../assets/Con-macOS-Dark-256x256@2x.png");
-
-    autoreleasepool(|| unsafe {
-        let data = NSData::dataWithBytes_length_(
-            nil,
-            ICON_PNG.as_ptr() as *const std::ffi::c_void,
-            ICON_PNG.len() as u64,
-        );
-        let icon = NSImage::initWithData_(NSImage::alloc(nil), data);
-        NSApp().setApplicationIconImage_(icon);
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn set_dock_icon() {}
 
 #[cfg(target_os = "linux")]
 fn linux_uses_client_side_decorations() -> bool {
@@ -1304,9 +1281,14 @@ impl Render for AboutView {
                     .gap(px(14.0))
                     .child(
                         div().size(px(88.0)).p(px(2.0)).child(
-                            img("Con-macOS-Dark-256x256@2x.png")
-                                .size_full()
-                                .object_fit(ObjectFit::Contain),
+                            img(con_core::config::app_icon_asset(
+                                &con_core::Config::load()
+                                    .unwrap_or_default()
+                                    .appearance
+                                    .app_icon,
+                            ))
+                            .size_full()
+                            .object_fit(ObjectFit::Contain),
                         ),
                     )
                     .child(
@@ -2573,8 +2555,8 @@ fn main() {
         let channel = con_core::release_channel::init();
         log::info!("Release channel: {}", channel.display_name());
 
-        // Set dock icon for development (cargo run)
-        set_dock_icon();
+        // Set dock icon for development (`cargo run`) and any saved selection.
+        app_icon::apply_app_icon(&config.appearance.app_icon);
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);

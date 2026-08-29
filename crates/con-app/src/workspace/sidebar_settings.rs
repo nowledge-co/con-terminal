@@ -1078,6 +1078,8 @@ impl ConWorkspace {
             self.hide_pane_title_bar = next_hide_pane_title_bar;
             cx.notify();
         }
+
+        crate::app_icon::apply_app_icon(&appearance_config.app_icon);
     }
 
     /// Apply a new terminal theme to all panes and sync UI mode.

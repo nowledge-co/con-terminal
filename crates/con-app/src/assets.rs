@@ -13,6 +13,12 @@ struct ConIcons;
 #[include = "*.png"]
 struct ConImages;
 
+/// Alternate selectable raccoon app icons.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../assets/app-icons"]
+#[include = "*.png"]
+struct AppIcons;
+
 /// Asset source that serves con's icons first, then falls back to
 /// gpui-component's bundled icons (Lucide).
 pub struct ConAssets;
@@ -26,6 +32,12 @@ impl AssetSource for ConAssets {
         // Try con's own icons first
         if let Some(data) = ConIcons::get(path) {
             return Ok(Some(data.data));
+        }
+
+        if let Some(name) = path.strip_prefix("app-icons/") {
+            if let Some(data) = AppIcons::get(name) {
+                return Ok(Some(data.data));
+            }
         }
 
         if let Some(data) = ConImages::get(path) {
@@ -43,6 +55,12 @@ impl AssetSource for ConAssets {
             .collect();
 
         results.extend(
+            AppIcons::iter()
+                .map(|p| SharedString::from(format!("app-icons/{p}")))
+                .filter(|p| p.starts_with(path)),
+        );
+
+        results.extend(
             ConImages::iter()
                 .filter(|p| p.starts_with(path))
                 .map(|p| p.into()),
@@ -54,4 +72,13 @@ impl AssetSource for ConAssets {
 
         Ok(results)
     }
+}
+
+pub fn png_bytes(asset_path: &str) -> Option<Cow<'static, [u8]>> {
+    if let Some(name) = asset_path.strip_prefix("app-icons/") {
+        if let Some(file) = AppIcons::get(name) {
+            return Some(file.data);
+        }
+    }
+    ConImages::get(asset_path).map(|file| file.data)
 }
