@@ -4133,76 +4133,85 @@ impl SettingsPanel {
         choice: &con_core::config::AppIconChoice,
         is_sel: bool,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let icon_id = choice.id.to_string();
         let asset = SharedString::from(choice.asset);
-
-        div()
-            .id(SharedString::from(format!("app-icon-{icon_id}")))
-            .cursor_pointer()
-            .w(px(96.0))
-            .flex()
-            .flex_col()
-            .rounded(px(10.0))
-            .overflow_hidden()
-            .bg(if is_sel {
+        let style = ButtonCustomVariant::new(cx)
+            .color(if is_sel {
                 theme.primary.opacity(0.10)
             } else {
                 theme.muted.opacity(0.04)
             })
-            .hover(move |s| {
-                s.bg(if is_sel {
-                    theme.primary.opacity(0.14)
-                } else {
-                    theme.primary.opacity(0.06)
-                })
+            .foreground(if is_sel {
+                theme.primary
+            } else {
+                theme.muted_foreground
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.config.appearance.app_icon = icon_id.clone();
-                    cx.emit(AppearancePreview);
-                    cx.notify();
-                }),
-            )
+            .hover(if is_sel {
+                theme.primary.opacity(0.14)
+            } else {
+                theme.primary.opacity(0.06)
+            })
+            .active(theme.primary.opacity(0.14));
+
+        Button::new(SharedString::from(format!("app-icon-{icon_id}")))
+            .custom(style)
+            .compact()
+            .w(px(96.0))
+            .h(px(98.0))
+            .p(px(0.0))
+            .rounded(px(10.0))
+            .overflow_hidden()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.config.appearance.app_icon = icon_id.clone();
+                cx.emit(AppearancePreview);
+                cx.notify();
+            }))
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(72.0))
-                    .child(img(asset).size(px(48.0)).object_fit(ObjectFit::Contain)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(4.0))
-                    .h(px(26.0))
-                    .text_size(px(10.5))
-                    .font_weight(if is_sel {
-                        FontWeight::SEMIBOLD
-                    } else {
-                        FontWeight::MEDIUM
-                    })
-                    .text_color(if is_sel {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .children(if is_sel {
-                        Some(
-                            svg()
-                                .path("phosphor/check.svg")
-                                .size(px(10.0))
-                                .text_color(theme.primary),
-                        )
-                    } else {
-                        None
-                    })
-                    .child(choice.label.to_string()),
+                    .flex_col()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h(px(72.0))
+                            .child(img(asset).size(px(48.0)).object_fit(ObjectFit::Contain)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.0))
+                            .h(px(26.0))
+                            .text_size(px(10.5))
+                            .font_weight(if is_sel {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::MEDIUM
+                            })
+                            .text_color(if is_sel {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .children(if is_sel {
+                                Some(
+                                    svg()
+                                        .path("phosphor/check.svg")
+                                        .size(px(10.0))
+                                        .text_color(theme.primary),
+                                )
+                            } else {
+                                None
+                            })
+                            .child(choice.label.to_string()),
+                    ),
             )
     }
 

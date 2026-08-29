@@ -86,7 +86,8 @@ use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
 use con_core::config::{
-    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_terminal_font_family,
+    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_app_icon,
+    sanitize_terminal_font_family,
 };
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
@@ -159,6 +160,7 @@ pub struct ConWorkspace {
     terminal_opacity: f32,
     terminal_blur: bool,
     ui_opacity: f32,
+    app_icon: String,
     tab_accent_inactive_alpha: f32,
     tab_accent_inactive_hover_alpha: f32,
     background_image: Option<String>,

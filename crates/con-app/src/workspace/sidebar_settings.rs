@@ -1079,7 +1079,11 @@ impl ConWorkspace {
             cx.notify();
         }
 
-        crate::app_icon::apply_app_icon(&appearance_config.app_icon);
+        let next_app_icon = sanitize_app_icon(&appearance_config.app_icon);
+        if next_app_icon != self.app_icon {
+            self.app_icon = next_app_icon;
+            crate::app_icon::apply_app_icon(&self.app_icon);
+        }
     }
 
     /// Apply a new terminal theme to all panes and sync UI mode.
