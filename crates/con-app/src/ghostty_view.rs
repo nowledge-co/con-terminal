@@ -394,6 +394,8 @@ impl GhosttyView {
                     gpui::MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         if this.start_scrollbar_interaction(event.position, window) {
+                            window.focus(&this.focus_handle, cx);
+                            cx.emit(GhosttyFocusChanged);
                             cx.stop_propagation();
                             cx.notify();
                         }
