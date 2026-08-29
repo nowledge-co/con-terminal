@@ -236,6 +236,7 @@ impl ConWorkspace {
     ) {
         let mut next_config = self.config.clone();
         next_config.appearance.restore_terminal_text = false;
+        crate::app_icon::merge_saved_into(&mut next_config.appearance.app_icon);
         if let Err(err) = next_config.save() {
             Self::show_layout_profile_error(
                 window,

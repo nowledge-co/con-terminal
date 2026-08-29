@@ -697,6 +697,7 @@ impl ConWorkspace {
             terminal_opacity,
             terminal_blur,
             ui_opacity,
+            app_icon: sanitize_app_icon(&config.appearance.app_icon),
             tab_accent_inactive_alpha,
             tab_accent_inactive_hover_alpha,
             background_image,

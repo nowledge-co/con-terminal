@@ -6,6 +6,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.89` - unreleased
 
+### Added
+
+**Settings**
+
+- Appearance now includes a selectable raccoon app-icon grid. On macOS the
+  choice updates the Dock and Cmd-Tab image for the running app; Finder still
+  uses the bundled icon. _(PR
+  [#311](https://github.com/nowledge-co/con-terminal/pull/311) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ### Fixed
 
 **macOS**

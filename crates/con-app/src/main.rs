@@ -12,6 +12,7 @@
 #![allow(unexpected_cfgs)]
 
 mod agent_panel;
+mod app_icon;
 mod assets;
 mod chat_markdown;
 #[cfg(target_os = "macos")]
@@ -185,30 +186,6 @@ actions!(
         Minimize
     ]
 );
-
-/// Set the macOS dock icon at runtime (for `cargo run` — bundled apps use Info.plist).
-#[cfg(target_os = "macos")]
-fn set_dock_icon() {
-    use cocoa::appkit::{NSApp, NSApplication, NSImage};
-    use cocoa::base::nil;
-    use cocoa::foundation::NSData;
-    use objc::rc::autoreleasepool;
-
-    const ICON_PNG: &[u8] = include_bytes!("../../../assets/Con-macOS-Dark-256x256@2x.png");
-
-    autoreleasepool(|| unsafe {
-        let data = NSData::dataWithBytes_length_(
-            nil,
-            ICON_PNG.as_ptr() as *const std::ffi::c_void,
-            ICON_PNG.len() as u64,
-        );
-        let icon = NSImage::initWithData_(NSImage::alloc(nil), data);
-        NSApp().setApplicationIconImage_(icon);
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn set_dock_icon() {}
 
 #[cfg(target_os = "linux")]
 fn linux_uses_client_side_decorations() -> bool {
@@ -1093,6 +1070,21 @@ fn live_control_endpoint_exists() -> bool {
     false
 }
 
+fn has_open_windows(cx: &App) -> bool {
+    cx.window_stack()
+        .map(|windows| !windows.is_empty())
+        .unwrap_or(false)
+}
+
+/// Reload on-disk config and apply the saved Dock icon before opening a
+/// window. Used when the process is alive with no windows so an edited
+/// `app_icon` takes effect instead of the stale in-process saved id.
+fn open_window_from_disk(cx: &mut App) {
+    let config = con_core::Config::load().unwrap_or_default();
+    app_icon::apply_persisted(&config.appearance.app_icon);
+    open_con_window(config, fresh_window_session_with_history(), false, cx);
+}
+
 pub(crate) fn toggle_global_summon(cx: &mut App) {
     let frontmost_window = cx
         .window_stack()
@@ -1105,8 +1097,7 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
     let app_is_active = cx.active_window().is_some();
 
     if !has_windows {
-        let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, fresh_window_session_with_history(), false, cx);
+        open_window_from_disk(cx);
         cx.activate(true);
         return;
     }
@@ -1278,6 +1269,7 @@ struct AboutView {
     app_name: String,
     version: String,
     version_detail: String,
+    icon_asset: SharedString,
 }
 
 #[cfg(target_os = "macos")]
@@ -1304,7 +1296,7 @@ impl Render for AboutView {
                     .gap(px(14.0))
                     .child(
                         div().size(px(88.0)).p(px(2.0)).child(
-                            img("Con-macOS-Dark-256x256@2x.png")
+                            img(self.icon_asset.clone())
                                 .size_full()
                                 .object_fit(ObjectFit::Contain),
                         ),
@@ -1378,12 +1370,14 @@ fn show_about_window(cx: &mut App) {
     let app_name = about_panel_name();
     let version = app_display_version();
     let version_detail = about_panel_version_detail();
+    let icon_asset = SharedString::from(app_icon::current_asset());
 
     if let Err(err) = cx.open_window(options, move |window, cx| {
         let about = cx.new(|_| AboutView {
             app_name: app_name.clone(),
             version: version.clone(),
             version_detail: version_detail.clone(),
+            icon_asset: icon_asset.clone(),
         });
         cx.new(|cx| gpui_component::Root::new(about, window, cx).bg(cx.theme().background))
     }) {
@@ -2555,17 +2549,12 @@ fn main() {
         ));
     log::info!("gpui application created");
     app.on_reopen(|cx| {
-        let has_windows = cx
-            .window_stack()
-            .map(|windows| !windows.is_empty())
-            .unwrap_or(false);
-        if has_windows {
+        if has_open_windows(cx) {
             cx.activate(true);
             return;
         }
 
-        let config = con_core::Config::load().unwrap_or_default();
-        open_con_window(config, fresh_window_session_with_history(), false, cx);
+        open_window_from_disk(cx);
         cx.activate(true);
     });
     app.run(move |cx: &mut App| {
@@ -2573,8 +2562,8 @@ fn main() {
         let channel = con_core::release_channel::init();
         log::info!("Release channel: {}", channel.display_name());
 
-        // Set dock icon for development (cargo run)
-        set_dock_icon();
+        // Set dock icon for development (`cargo run`) and any saved selection.
+        app_icon::apply_persisted(&config.appearance.app_icon);
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);
@@ -2605,8 +2594,12 @@ fn main() {
         macos_windowing::install_window_cycle_shortcuts();
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
-            let config = con_core::Config::load().unwrap_or_default();
-            open_con_window(config, fresh_window_session_with_history(), false, cx);
+            if has_open_windows(cx) {
+                let config = con_core::Config::load().unwrap_or_default();
+                open_con_window(config, fresh_window_session_with_history(), false, cx);
+            } else {
+                open_window_from_disk(cx);
+            }
         });
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
@@ -2628,8 +2621,12 @@ fn main() {
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
-                let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, fresh_window_session_with_history(), false, cx);
+                if has_open_windows(cx) {
+                    let config = con_core::Config::load().unwrap_or_default();
+                    open_con_window(config, fresh_window_session_with_history(), false, cx);
+                } else {
+                    open_window_from_disk(cx);
+                }
             }
         });
 

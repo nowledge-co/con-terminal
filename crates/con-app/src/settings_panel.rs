@@ -6,8 +6,9 @@ use con_agent::{
 use con_core::{
     Config,
     config::{
-        AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY, MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE,
-        TabsOrientation, is_gpui_pseudo_font_family, sanitize_terminal_font_family,
+        APP_ICON_GROUPS, APP_ICONS, AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY,
+        MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, TabsOrientation, is_gpui_pseudo_font_family,
+        sanitize_terminal_font_family,
     },
 };
 use futures::{FutureExt, StreamExt};
@@ -172,6 +173,7 @@ pub struct SettingsPanel {
     standalone: bool,
     config: Config,
     preview_snapshot: Option<Config>,
+    icon_preview_owner: u64,
     registry: ModelRegistry,
     oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
@@ -1614,6 +1616,7 @@ impl SettingsPanel {
             standalone: false,
             config: config.clone(),
             preview_snapshot: None,
+            icon_preview_owner: crate::app_icon::new_preview_owner(),
             registry,
             oauth_runtime,
             focus_handle: cx.focus_handle(),
@@ -1695,6 +1698,7 @@ impl SettingsPanel {
             // has a baseline to compare against. Without this, the
             // overlay path can never report dirty because
             // `open_standalone` is the only existing snapshot setter.
+            self.adopt_saved_app_icon();
             self.preview_snapshot = Some(self.config.clone());
             self.close_confirmation_visible = false;
             self.visible = true;
@@ -1708,6 +1712,7 @@ impl SettingsPanel {
     pub fn open_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.standalone = true;
         self.visible = true;
+        self.adopt_saved_app_icon();
         self.preview_snapshot = Some(self.config.clone());
         self.close_confirmation_visible = false;
         self.overlay_motion
@@ -1726,7 +1731,9 @@ impl SettingsPanel {
         self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
+            self.release_icon_preview();
             self.config = snapshot;
+            self.adopt_saved_app_icon();
             cx.emit(AppearancePreview);
             cx.notify();
         }
@@ -2828,8 +2835,29 @@ impl SettingsPanel {
     pub fn appearance_config(&self) -> &con_core::config::AppearanceConfig {
         &self.config.appearance
     }
-    fn persist_config(&self) -> anyhow::Result<()> {
-        self.config.save()
+    fn persist_config(&mut self) -> anyhow::Result<()> {
+        self.adopt_saved_app_icon_for_persist();
+        self.config.save()?;
+        crate::app_icon::remember_saved(&self.config.appearance.app_icon);
+        crate::app_icon::clear_preview_owner(self.icon_preview_owner);
+        Ok(())
+    }
+
+    pub(crate) fn release_icon_preview(&self) {
+        crate::app_icon::restore_saved_if_owner(self.icon_preview_owner);
+    }
+
+    fn adopt_saved_app_icon(&mut self) {
+        self.config.appearance.app_icon = crate::app_icon::saved_id();
+    }
+
+    fn adopt_saved_app_icon_for_persist(&mut self) {
+        let snapshot = self
+            .preview_snapshot
+            .as_ref()
+            .map(|config| config.appearance.app_icon.as_str());
+        self.config.appearance.app_icon =
+            crate::app_icon::take_for_save(&self.config.appearance.app_icon, snapshot);
     }
 
     fn select_provider(
@@ -3610,6 +3638,8 @@ impl SettingsPanel {
             None
         };
 
+        let app_icon_picker = self.render_app_icon_picker(card_opacity, cx);
+
         // Now all mutable borrows are done — get theme for pure layout
         let theme = cx.theme();
 
@@ -3688,6 +3718,8 @@ impl SettingsPanel {
             "Tweak the Con's textures, tastes and feels.",
             theme,
         );
+
+        content = content.child(app_icon_picker);
 
         content = content.child(
             div()
@@ -3830,7 +3862,7 @@ impl SettingsPanel {
                                     let previous = this.config.appearance.hide_pane_title_bar;
                                     this.hide_pane_title_bar = *checked;
                                     this.config.appearance.hide_pane_title_bar = *checked;
-                                    if let Err(err) = this.config.save() {
+                                    if let Err(err) = this.persist_config() {
                                         this.hide_pane_title_bar = previous;
                                         this.config.appearance.hide_pane_title_bar = previous;
                                         log::warn!(
@@ -3843,6 +3875,8 @@ impl SettingsPanel {
                                     }
                                     if let Some(snapshot) = &mut this.preview_snapshot {
                                         snapshot.appearance.hide_pane_title_bar = *checked;
+                                        snapshot.appearance.app_icon =
+                                            this.config.appearance.app_icon.clone();
                                     }
                                     this.save_error = None;
                                     this.save_error_kind = None;
@@ -3862,7 +3896,7 @@ impl SettingsPanel {
                                     let previous = this.config.appearance.close_to_quit;
                                     this.close_to_quit = *checked;
                                     this.config.appearance.close_to_quit = *checked;
-                                    if let Err(err) = this.config.save() {
+                                    if let Err(err) = this.persist_config() {
                                         this.close_to_quit = previous;
                                         this.config.appearance.close_to_quit = previous;
                                         log::warn!(
@@ -3875,6 +3909,8 @@ impl SettingsPanel {
                                     }
                                     if let Some(snapshot) = &mut this.preview_snapshot {
                                         snapshot.appearance.close_to_quit = *checked;
+                                        snapshot.appearance.app_icon =
+                                            this.config.appearance.app_icon.clone();
                                     }
                                     this.save_error = None;
                                     this.save_error_kind = None;
@@ -4080,6 +4116,137 @@ impl SettingsPanel {
     }
 
     /// Render a grid of theme preview cards.
+    fn render_app_icon_picker(&self, card_opacity: f32, cx: &mut Context<Self>) -> Div {
+        let selected = self.config.appearance.app_icon.clone();
+        let mut group_grids = Vec::new();
+        for group in APP_ICON_GROUPS {
+            let mut grid = div().flex().flex_wrap().gap(px(10.0));
+            for choice in APP_ICONS.iter().filter(|icon| icon.group == *group) {
+                grid = grid.child(self.render_app_icon_choice(choice, selected == choice.id, cx));
+            }
+            group_grids.push((*group, grid));
+        }
+
+        let theme = cx.theme();
+        let hint = if cfg!(target_os = "macos") {
+            "Changes the Dock and Cmd-Tab icon while con is running."
+        } else {
+            "Saved with Appearance. Dock switching is currently macOS-only."
+        };
+
+        let mut groups = div().flex().flex_col().gap(px(12.0));
+        for (group, grid) in group_grids {
+            groups = groups.child(group_label(group, &theme)).child(grid);
+        }
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(group_label("App Icon", &theme))
+            .child(
+                card(&theme, card_opacity)
+                    .child(
+                        div()
+                            .px(px(16.0))
+                            .pt(px(12.0))
+                            .text_size(px(11.5))
+                            .line_height(px(17.0))
+                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .child(hint.to_string()),
+                    )
+                    .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(groups)),
+            )
+    }
+
+    fn render_app_icon_choice(
+        &self,
+        choice: &con_core::config::AppIconChoice,
+        is_sel: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let icon_id = choice.id.to_string();
+        let asset = SharedString::from(choice.asset);
+        let style = ButtonCustomVariant::new(cx)
+            .color(if is_sel {
+                theme.primary.opacity(0.10)
+            } else {
+                theme.muted.opacity(0.04)
+            })
+            .foreground(if is_sel {
+                theme.primary
+            } else {
+                theme.muted_foreground
+            })
+            .hover(if is_sel {
+                theme.primary.opacity(0.14)
+            } else {
+                theme.primary.opacity(0.06)
+            })
+            .active(theme.primary.opacity(0.14));
+
+        Button::new(SharedString::from(format!("app-icon-{icon_id}")))
+            .custom(style)
+            .compact()
+            .w(px(96.0))
+            .h(px(98.0))
+            .p(px(0.0))
+            .rounded(px(10.0))
+            .overflow_hidden()
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.config.appearance.app_icon = icon_id.clone();
+                crate::app_icon::apply_preview(this.icon_preview_owner, &icon_id);
+                cx.emit(AppearancePreview);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h(px(72.0))
+                            .child(img(asset).size(px(48.0)).object_fit(ObjectFit::Contain)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.0))
+                            .h(px(26.0))
+                            .text_size(px(10.5))
+                            .font_weight(if is_sel {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::MEDIUM
+                            })
+                            .text_color(if is_sel {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .children(if is_sel {
+                                Some(
+                                    svg()
+                                        .path("phosphor/check.svg")
+                                        .size(px(10.0))
+                                        .text_color(theme.primary),
+                                )
+                            } else {
+                                None
+                            })
+                            .child(choice.label.to_string()),
+                    ),
+            )
+    }
+
     fn render_theme_grid(
         &self,
         themes: &[&con_terminal::TerminalTheme],
@@ -5026,8 +5193,7 @@ impl SettingsPanel {
                 let field_str = field.to_string();
                 let reset_field = field.to_string();
                 let show_reset = !is_recording
-                    && keybinding_default(field)
-                        .is_some_and(|default| default != value);
+                    && keybinding_default(field).is_some_and(|default| default != value);
                 let reset_button = if show_reset {
                     Some(
                         Button::new(SharedString::from(format!("key-reset-{field}")))
@@ -5042,39 +5208,35 @@ impl SettingsPanel {
                 } else {
                     None
                 };
-                let badge_and_reset = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("key-badge-{field}")))
-                            .min_h(px(23.0))
-                            .px(px(4.0))
-                            .flex()
-                            .items_center()
-                            .rounded(px(5.0))
-                            .cursor_pointer()
-                            .bg(if is_recording {
-                                theme.primary.opacity(0.12)
-                            } else {
-                                theme.transparent
-                            })
-                            .text_color(if is_recording {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .hover(|s| s.bg(theme.muted.opacity(0.055)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.set_recording_key(Some(field_str.clone()));
-                                    cx.notify();
-                                }),
-                            )
-                            .child(badge),
-                    );
+                let badge_and_reset = div().flex().items_center().gap(px(2.0)).child(
+                    div()
+                        .id(SharedString::from(format!("key-badge-{field}")))
+                        .min_h(px(23.0))
+                        .px(px(4.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(5.0))
+                        .cursor_pointer()
+                        .bg(if is_recording {
+                            theme.primary.opacity(0.12)
+                        } else {
+                            theme.transparent
+                        })
+                        .text_color(if is_recording {
+                            theme.primary
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .hover(|s| s.bg(theme.muted.opacity(0.055)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.set_recording_key(Some(field_str.clone()));
+                                cx.notify();
+                            }),
+                        )
+                        .child(badge),
+                );
                 let badge_and_reset = if let Some(reset_button) = reset_button {
                     badge_and_reset.child(reset_button)
                 } else {
@@ -6174,35 +6336,26 @@ fn section_content_with_trailing(
     trailing: Option<AnyElement>,
     theme: &gpui_component::Theme,
 ) -> Div {
-    let mut title_row = div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-            div()
-                .text_size(px(19.0))
-                .line_height(px(24.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title.to_string()),
-        );
+    let mut title_row = div().flex().items_center().justify_between().child(
+        div()
+            .text_size(px(19.0))
+            .line_height(px(24.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(title.to_string()),
+    );
     if let Some(trailing) = trailing {
         title_row = title_row.child(trailing);
     }
 
     div().flex().flex_col().gap(px(20.0)).child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(title_row)
-            .child(
-                div()
-                    .max_w(px(520.0))
-                    .text_size(px(12.0))
-                    .line_height(px(19.0))
-                    .text_color(theme.muted_foreground.opacity(0.68))
-                    .child(subtitle.to_string()),
-            ),
+        div().flex().flex_col().gap(px(6.0)).child(title_row).child(
+            div()
+                .max_w(px(520.0))
+                .text_size(px(12.0))
+                .line_height(px(19.0))
+                .text_color(theme.muted_foreground.opacity(0.68))
+                .child(subtitle.to_string()),
+        ),
     )
 }
 
@@ -6690,8 +6843,8 @@ fn display_theme_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        keybinding_default, keybinding_field, keybinding_field_mut, provider_connection_status,
-        ProviderKind, ProviderOAuthState, SettingsPanel,
+        ProviderKind, ProviderOAuthState, SettingsPanel, keybinding_default, keybinding_field,
+        keybinding_field_mut, provider_connection_status,
     };
 
     #[test]
@@ -6787,7 +6940,10 @@ mod tests {
         if let Some(slot) = keybinding_field_mut(&mut kb, "rename_surface") {
             *slot = "custom-chord".to_string();
         }
-        assert_eq!(keybinding_field(&kb, "rename_surface"), Some("custom-chord"));
+        assert_eq!(
+            keybinding_field(&kb, "rename_surface"),
+            Some("custom-chord")
+        );
         // Resetting through the accessor restores the shipped default.
         *keybinding_field_mut(&mut kb, "rename_surface").unwrap() =
             keybinding_default("rename_surface").unwrap();

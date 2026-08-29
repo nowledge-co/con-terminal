@@ -127,6 +127,9 @@ pub struct AppearanceConfig {
     /// quits the app on Windows/Linux). When `false`, closing the last tab
     /// opens a fresh tab instead so the window stays open.
     pub close_to_quit: bool,
+    /// Selectable app icon id from [`APP_ICONS`]. Unknown values fall back to
+    /// [`DEFAULT_APP_ICON`].
+    pub app_icon: String,
 }
 
 impl Default for AppearanceConfig {
@@ -148,6 +151,7 @@ impl Default for AppearanceConfig {
             hide_pane_title_bar: false,
             tabs_orientation: TabsOrientation::Vertical,
             close_to_quit: true,
+            app_icon: default_app_icon(),
         }
     }
 }
@@ -183,7 +187,161 @@ impl AppearanceConfig {
             Self::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
         )
         .max(self.tab_accent_inactive_alpha);
+        self.app_icon = sanitize_app_icon(&self.app_icon);
     }
+}
+
+pub const DEFAULT_APP_ICON: &str = "default";
+pub const DEFAULT_APP_ICON_ASSET: &str = "Con-macOS-Dark-256x256@2x.png";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppIconChoice {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub group: &'static str,
+    pub asset: &'static str,
+}
+
+pub const APP_ICON_GROUPS: &[&str] = &["Classic", "Peek", "Suit", "Tail"];
+
+pub const APP_ICONS: &[AppIconChoice] = &[
+    AppIconChoice {
+        id: DEFAULT_APP_ICON,
+        label: "Classic",
+        group: "Classic",
+        asset: DEFAULT_APP_ICON_ASSET,
+    },
+    AppIconChoice {
+        id: "raccoon-a1",
+        label: "A1",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-A1.png",
+    },
+    AppIconChoice {
+        id: "raccoon-a2",
+        label: "A2",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-A2.png",
+    },
+    AppIconChoice {
+        id: "raccoon-b1",
+        label: "B1",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-B1.png",
+    },
+    AppIconChoice {
+        id: "raccoon-b2",
+        label: "B2",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-B2.png",
+    },
+    AppIconChoice {
+        id: "raccoon-c1",
+        label: "C1",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-C1.png",
+    },
+    AppIconChoice {
+        id: "raccoon-c2",
+        label: "C2",
+        group: "Peek",
+        asset: "app-icons/con-raccoon-C2.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a1",
+        label: "A1",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A1.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a2",
+        label: "A2",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A2.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a3",
+        label: "A3",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A3.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a4",
+        label: "A4",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A4.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a5",
+        label: "A5",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A5.png",
+    },
+    AppIconChoice {
+        id: "raccoon-suit-a6",
+        label: "A6",
+        group: "Suit",
+        asset: "app-icons/con-raccoon-suit-A6.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a1",
+        label: "A1",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A1.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a2",
+        label: "A2",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A2.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a3",
+        label: "A3",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A3.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a4",
+        label: "A4",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A4.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a5",
+        label: "A5",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A5.png",
+    },
+    AppIconChoice {
+        id: "raccoon-tail-a6",
+        label: "A6",
+        group: "Tail",
+        asset: "app-icons/con-raccoon-tail-A6.png",
+    },
+];
+
+fn default_app_icon() -> String {
+    DEFAULT_APP_ICON.to_string()
+}
+
+pub fn app_icon_by_id(id: &str) -> Option<&'static AppIconChoice> {
+    APP_ICONS.iter().find(|icon| icon.id == id)
+}
+
+pub fn sanitize_app_icon(id: &str) -> String {
+    let trimmed = id.trim();
+    if app_icon_by_id(trimmed).is_some() {
+        trimmed.to_string()
+    } else {
+        DEFAULT_APP_ICON.to_string()
+    }
+}
+
+pub fn app_icon_asset(id: &str) -> &'static str {
+    app_icon_by_id(id)
+        .map(|icon| icon.asset)
+        .unwrap_or(DEFAULT_APP_ICON_ASSET)
 }
 
 // Default keybindings are chosen per platform. On macOS the `secondary-`
@@ -1003,7 +1161,8 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig, TabsOrientation,
+        APP_ICONS, Config, DEFAULT_APP_ICON, DEFAULT_APP_ICON_ASSET, DEFAULT_TERMINAL_FONT_FAMILY,
+        NetworkConfig, SkillsConfig, TabsOrientation, app_icon_asset,
         config_declares_agent_provider_provenance, migrate_agent_provider_provenance,
         sanitize_terminal_font_family,
     };
@@ -1330,6 +1489,55 @@ close_to_quit = false
         assert!(serialized.contains("close_to_quit = false"));
         let reparsed: Config = toml::from_str(&serialized).unwrap();
         assert!(!reparsed.appearance.close_to_quit);
+    }
+
+    #[test]
+    fn new_configs_use_classic_app_icon_by_default() {
+        assert_eq!(Config::default().appearance.app_icon, DEFAULT_APP_ICON);
+    }
+
+    #[test]
+    fn loaded_legacy_configs_inherit_classic_app_icon_default() {
+        let content = r#"
+[appearance]
+terminal_opacity = 0.8
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+        config.normalize();
+
+        assert_eq!(config.appearance.app_icon, DEFAULT_APP_ICON);
+    }
+
+    #[test]
+    fn loaded_configs_preserve_explicit_app_icon() {
+        let content = r#"
+[appearance]
+app_icon = "raccoon-suit-a1"
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+        config.normalize();
+
+        assert_eq!(config.appearance.app_icon, "raccoon-suit-a1");
+    }
+
+    #[test]
+    fn normalize_falls_back_to_classic_app_icon_for_unknown_ids() {
+        let mut config = Config::default();
+        config.appearance.app_icon = "not-a-real-raccoon".into();
+        config.normalize();
+
+        assert_eq!(config.appearance.app_icon, DEFAULT_APP_ICON);
+    }
+
+    #[test]
+    fn app_icon_catalog_covers_every_choice_asset_path() {
+        assert!(APP_ICONS.iter().any(|icon| icon.id == DEFAULT_APP_ICON));
+        assert_eq!(APP_ICONS.len(), 19);
+        for icon in APP_ICONS {
+            assert!(!icon.asset.is_empty());
+            assert_eq!(app_icon_asset(icon.id), icon.asset);
+        }
+        assert_eq!(app_icon_asset("missing"), DEFAULT_APP_ICON_ASSET);
     }
 
     #[test]

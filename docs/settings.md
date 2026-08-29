@@ -42,10 +42,13 @@ Appearance controls the parts of con you look at all day:
 
 - terminal theme
 - terminal and UI fonts
+- app icon
 - terminal opacity and blur
 - background image
 - tab position
 - pane title bars in split layouts
+
+**App Icon** chooses which raccoon appears in the Dock and Cmd-Tab while con is running. The installed `.app` icon in Finder stays Classic. Save Appearance to keep the selection.
 
 Start with readability. Pick a theme with clear contrast, then adjust opacity or
 blur only if the terminal remains easy to scan.
