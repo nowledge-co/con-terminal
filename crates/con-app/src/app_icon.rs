@@ -1,8 +1,21 @@
 use std::sync::Mutex;
 
-use con_core::config::{app_icon_asset, sanitize_app_icon};
+use con_core::config::{DEFAULT_APP_ICON, app_icon_asset, sanitize_app_icon};
 
 static APPLIED_APP_ICON: Mutex<String> = Mutex::new(String::new());
+
+pub fn current_asset() -> &'static str {
+    app_icon_asset(&current_id())
+}
+
+fn current_id() -> String {
+    APPLIED_APP_ICON
+        .lock()
+        .ok()
+        .filter(|id| !id.is_empty())
+        .map(|id| id.clone())
+        .unwrap_or_else(|| DEFAULT_APP_ICON.to_string())
+}
 
 /// Apply the selected app icon. On macOS this updates the Dock and Cmd-Tab
 /// image for the running process. Finder / Launchpad still use the bundled

@@ -1255,6 +1255,7 @@ struct AboutView {
     app_name: String,
     version: String,
     version_detail: String,
+    icon_asset: SharedString,
 }
 
 #[cfg(target_os = "macos")]
@@ -1281,14 +1282,9 @@ impl Render for AboutView {
                     .gap(px(14.0))
                     .child(
                         div().size(px(88.0)).p(px(2.0)).child(
-                            img(con_core::config::app_icon_asset(
-                                &con_core::Config::load()
-                                    .unwrap_or_default()
-                                    .appearance
-                                    .app_icon,
-                            ))
-                            .size_full()
-                            .object_fit(ObjectFit::Contain),
+                            img(self.icon_asset.clone())
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
                         ),
                     )
                     .child(
@@ -1360,12 +1356,14 @@ fn show_about_window(cx: &mut App) {
     let app_name = about_panel_name();
     let version = app_display_version();
     let version_detail = about_panel_version_detail();
+    let icon_asset = SharedString::from(app_icon::current_asset());
 
     if let Err(err) = cx.open_window(options, move |window, cx| {
         let about = cx.new(|_| AboutView {
             app_name: app_name.clone(),
             version: version.clone(),
             version_detail: version_detail.clone(),
+            icon_asset: icon_asset.clone(),
         });
         cx.new(|cx| gpui_component::Root::new(about, window, cx).bg(cx.theme().background))
     }) {
