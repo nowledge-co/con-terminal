@@ -1303,7 +1303,27 @@ impl Render for InputBar {
             )
             .tooltip({
                 let mode_label = self.mode.tooltip().to_string();
-                move |window, cx| Tooltip::new(mode_label.clone()).build(window, cx)
+                move |window, cx| {
+                    let stroke =
+                        crate::keycaps::first_action_keystroke(&crate::CycleInputMode, window);
+                    let mode_label = mode_label.clone();
+                    Tooltip::element(move |_, cx| {
+                        let theme = cx.theme();
+                        let mut content = div().flex().items_center().gap(px(7.0)).child(
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.popover_foreground)
+                                .child(format!("{} · switch mode", mode_label)),
+                        );
+                        if let Some(stroke) = stroke.as_ref() {
+                            content =
+                                content.child(crate::keycaps::keycaps_for_stroke(stroke, theme));
+                        }
+                        content
+                    })
+                    .build(window, cx)
+                }
             })
             .child(
                 svg()
@@ -1426,8 +1446,13 @@ impl Render for InputBar {
                     }),
             );
 
-        // Keep all terminal-adjacent inputs in the mono family for consistency.
-        let input_font = theme.mono_font_family.clone();
+        // Shell input is terminal chrome; natural-language agent input uses
+        // the UI font so its prose reads like the agent panel.
+        let input_font = if self.mode == InputMode::Agent {
+            theme.font_family.clone()
+        } else {
+            theme.mono_font_family.clone()
+        };
         let input_text_size = match self.mode {
             InputMode::Agent => mono_px(theme, 14.0),
             _ => mono_px(theme, 13.0),
@@ -1436,10 +1461,9 @@ impl Render for InputBar {
             InputMode::Agent => rems(1.15),
             _ => rems(1.25),
         };
-        let input_vertical_offset = match self.mode {
-            InputMode::Agent => px(-4.0),
-            _ => px(0.0),
-        };
+        // All modes share the same centered row. Agent mode used to apply a
+        // negative offset, which made its placeholder visibly sit too high.
+        let input_vertical_offset = px(0.0);
         let show_inline_suggestion = self.mode != InputMode::Agent
             && input_cursor == input_value.len()
             && !input_value.is_empty()

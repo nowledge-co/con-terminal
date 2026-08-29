@@ -16,6 +16,17 @@ con is still pre-release, so entries may group related beta work while the produ
   [#306](https://github.com/nowledge-co/con-terminal/pull/306) by
   [@wey-gu](https://github.com/wey-gu))_
 
+### Fixed
+
+**Input Bar**
+
+- Restored the UI typeface for natural-language Agent input and aligned its
+  baseline with Smart and Shell modes. The mode control now also shows the
+  configured shortcut for switching modes with the same keycaps used elsewhere
+  in Con. _(PR
+  [#307](https://github.com/nowledge-co/con-terminal/pull/307) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ---
 
 ## `v0.1.0-beta.88` - 2026-08-28
