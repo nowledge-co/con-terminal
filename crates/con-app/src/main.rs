@@ -2554,7 +2554,7 @@ fn main() {
         log::info!("Release channel: {}", channel.display_name());
 
         // Set dock icon for development (`cargo run`) and any saved selection.
-        app_icon::apply_app_icon(&config.appearance.app_icon);
+        app_icon::apply_persisted(&config.appearance.app_icon);
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);

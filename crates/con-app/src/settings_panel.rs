@@ -1696,6 +1696,7 @@ impl SettingsPanel {
             // has a baseline to compare against. Without this, the
             // overlay path can never report dirty because
             // `open_standalone` is the only existing snapshot setter.
+            self.adopt_saved_app_icon();
             self.preview_snapshot = Some(self.config.clone());
             self.close_confirmation_visible = false;
             self.visible = true;
@@ -1709,6 +1710,7 @@ impl SettingsPanel {
     pub fn open_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.standalone = true;
         self.visible = true;
+        self.adopt_saved_app_icon();
         self.preview_snapshot = Some(self.config.clone());
         self.close_confirmation_visible = false;
         self.overlay_motion
@@ -2672,6 +2674,8 @@ impl SettingsPanel {
             return;
         }
 
+        self.adopt_saved_app_icon_for_persist();
+
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
@@ -2831,6 +2835,19 @@ impl SettingsPanel {
     }
     fn persist_config(&self) -> anyhow::Result<()> {
         self.config.save()
+    }
+
+    fn adopt_saved_app_icon(&mut self) {
+        self.config.appearance.app_icon = crate::app_icon::saved_id();
+    }
+
+    fn adopt_saved_app_icon_for_persist(&mut self) {
+        let snapshot = self
+            .preview_snapshot
+            .as_ref()
+            .map(|config| config.appearance.app_icon.as_str());
+        self.config.appearance.app_icon =
+            crate::app_icon::take_for_save(&self.config.appearance.app_icon, snapshot);
     }
 
     fn select_provider(

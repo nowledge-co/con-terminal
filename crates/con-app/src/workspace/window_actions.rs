@@ -693,6 +693,7 @@ impl ConWorkspace {
 
         self.cancel_all_sessions();
         self.flush_session_save(cx);
+        crate::app_icon::apply_app_icon(&crate::app_icon::saved_id());
 
         if let Some(settings_window) = self.settings_window.take() {
             self.settings_window_panel = None;
