@@ -201,6 +201,8 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     scrollbar_drag: Option<ScrollbarDrag>,
     #[cfg(target_os = "macos")]
+    last_scrollbar: Option<GhosttyScrollbar>,
+    #[cfg(target_os = "macos")]
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
@@ -268,6 +270,8 @@ impl GhosttyView {
             last_mouse_position: None,
             #[cfg(target_os = "macos")]
             scrollbar_drag: None,
+            #[cfg(target_os = "macos")]
+            last_scrollbar: None,
             #[cfg(target_os = "macos")]
             native_transition_underlay_visible: Cell::new(false),
             #[cfg(target_os = "macos")]
@@ -398,8 +402,10 @@ impl GhosttyView {
                 .on_mouse_up_out(
                     gpui::MouseButton::Left,
                     cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                        this.scrollbar_drag = None;
-                        cx.stop_propagation();
+                        if this.scrollbar_drag.take().is_some() {
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
                     }),
                 )
                 .child(
@@ -529,6 +535,15 @@ impl GhosttyView {
         }
 
         let _ = terminal.take_needs_render();
+
+        #[cfg(target_os = "macos")]
+        {
+            let scrollbar = terminal.scrollbar();
+            if scrollbar != self.last_scrollbar {
+                self.last_scrollbar = scrollbar;
+                changed = true;
+            }
+        }
 
         if !terminal.is_alive() && !self.process_exit_emitted {
             self.process_exit_emitted = true;
@@ -2429,6 +2444,7 @@ impl Render for GhosttyView {
                 {
                     this.drag_scrollbar(event.position);
                     cx.stop_propagation();
+                    cx.notify();
                     return;
                 }
                 this.last_mouse_position = Some(event.position);
