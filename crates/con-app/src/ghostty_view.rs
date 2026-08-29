@@ -22,6 +22,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use con_ghostty::GhosttyScrollbar;
 use con_ghostty::ffi;
 use con_ghostty::{
     GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
@@ -136,6 +138,12 @@ struct PendingTerminalFind {
     selected: Option<Option<usize>>,
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+struct ScrollbarDrag {
+    grab_offset: f32,
+}
+
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -190,6 +198,8 @@ pub struct GhosttyView {
     /// mouse-move event when the pointer is stationary.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
+    #[cfg(target_os = "macos")]
+    scrollbar_drag: Option<ScrollbarDrag>,
     #[cfg(target_os = "macos")]
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
@@ -257,6 +267,8 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             last_mouse_position: None,
             #[cfg(target_os = "macos")]
+            scrollbar_drag: None,
+            #[cfg(target_os = "macos")]
             native_transition_underlay_visible: Cell::new(false),
             #[cfg(target_os = "macos")]
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
@@ -272,7 +284,7 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    fn render_terminal_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn scrollbar_metrics(&self) -> Option<(GhosttyScrollbar, f32, f32, f32)> {
         let terminal = self.terminal.as_ref()?;
         let scrollbar = terminal.scrollbar()?;
         if scrollbar.total <= scrollbar.len || scrollbar.len == 0 {
@@ -294,6 +306,77 @@ impl GhosttyView {
         } else {
             (scrollbar.offset.min(max_offset) as f32 / max_offset as f32) * travel
         };
+        Some((scrollbar, track_height, thumb_height, thumb_top))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn scroll_to_row(&self, row: u64) {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return;
+        };
+        let _ = terminal.perform_binding_action(&format!("scroll_to_row:{row}"));
+        terminal.refresh();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn scroll_page(&self, upward: bool) {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return;
+        };
+        let action = if upward {
+            "scroll_page_up"
+        } else {
+            "scroll_page_down"
+        };
+        let _ = terminal.perform_binding_action(action);
+        terminal.refresh();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn start_scrollbar_interaction(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+    ) -> bool {
+        let Some((_scrollbar, _, thumb_height, thumb_top)) = self.scrollbar_metrics() else {
+            return false;
+        };
+        let (_, local_y) = self.view_local_pos(position);
+        let track_y = (local_y as f32 - SCROLLBAR_INSET_PX).clamp(0.0, f32::MAX);
+        if (thumb_top..=thumb_top + thumb_height).contains(&track_y) {
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                grab_offset: track_y - thumb_top,
+            });
+        } else {
+            self.scroll_page(track_y < thumb_top);
+        }
+        window.prevent_default();
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn drag_scrollbar(&mut self, position: Point<Pixels>) {
+        let Some(drag) = self.scrollbar_drag else {
+            return;
+        };
+        let Some((scrollbar, track_height, thumb_height, _)) = self.scrollbar_metrics() else {
+            self.scrollbar_drag = None;
+            return;
+        };
+        let (_, local_y) = self.view_local_pos(position);
+        let travel = (track_height - thumb_height).max(0.0);
+        if travel == 0.0 {
+            return;
+        }
+        let thumb_top = (local_y as f32 - SCROLLBAR_INSET_PX - drag.grab_offset).clamp(0.0, travel);
+        let max_offset = scrollbar.total.saturating_sub(scrollbar.len);
+        let row = ((thumb_top / travel) * max_offset as f32).round() as u64;
+        self.scroll_to_row(row.min(max_offset));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn render_terminal_scrollbar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_scrollbar, _track_height, thumb_height, thumb_top) = self.scrollbar_metrics()?;
         let foreground = cx.theme().foreground;
 
         Some(
@@ -303,8 +386,26 @@ impl GhosttyView {
                 .right(px(0.0))
                 .bottom(px(SCROLLBAR_INSET_PX))
                 .w(px(SCROLLBAR_HIT_WIDTH_PX))
+                .cursor_pointer()
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        if this.start_scrollbar_interaction(event.position, window) {
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_mouse_up_out(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                        this.scrollbar_drag = None;
+                        cx.stop_propagation();
+                    }),
+                )
                 .child(
                     div()
+                        .id("terminal-scrollbar-thumb")
                         .absolute()
                         .top(px(thumb_top))
                         .right(px((SCROLLBAR_HIT_WIDTH_PX - SCROLLBAR_THUMB_WIDTH_PX) / 2.0))
@@ -2275,6 +2376,7 @@ impl Render for GhosttyView {
             .on_mouse_up(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.scrollbar_drag = None;
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
                     if this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods))
@@ -2287,6 +2389,7 @@ impl Render for GhosttyView {
             .on_mouse_up_out(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.scrollbar_drag = None;
                     if !this.left_mouse_sequence.is_active() {
                         return;
                     }
@@ -2322,6 +2425,13 @@ impl Render for GhosttyView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                if event.pressed_button == Some(gpui::MouseButton::Left)
+                    && this.scrollbar_drag.is_some()
+                {
+                    this.drag_scrollbar(event.position);
+                    cx.stop_propagation();
+                    return;
+                }
                 this.last_mouse_position = Some(event.position);
                 let mods = gpui_mods_to_ghostty(&event.modifiers);
                 if event.pressed_button.is_none() {
