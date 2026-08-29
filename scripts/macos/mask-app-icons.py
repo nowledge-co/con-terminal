@@ -5,6 +5,9 @@
 Full-bleed squircles therefore look a size larger than bundled App Store
 icons. The artwork is scaled to ~80% of the canvas (Apple's 824/1024
 icon grid) and given a matching squircle mask.
+
+Reads originals from `.context/ip-as-logo` and writes `assets/app-icons`.
+Do not remask the destination in place; that shrinks already-padded art.
 """
 
 from __future__ import annotations
@@ -49,11 +52,15 @@ def main() -> None:
     dest_dir = repo / "assets" / "app-icons"
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    sources = sorted((repo / ".context" / "ip-as-logo").glob("con-raccoon*.png"))
+    # Sources must stay outside dest_dir. Remasking the already-padded
+    # assets/app-icons files in place shrinks the artwork on every run.
+    source_dir = repo / ".context" / "ip-as-logo"
+    sources = sorted(source_dir.glob("con-raccoon*.png"))
     if not sources:
-        sources = sorted(dest_dir.glob("con-raccoon*.png"))
-    if not sources:
-        raise SystemExit("no raccoon icon sources found")
+        raise SystemExit(
+            f"no raccoon sources in {source_dir.relative_to(repo)}; "
+            "refusing to remask assets/app-icons in place"
+        )
 
     mask = Image.new("L", (ICON_SIZE, ICON_SIZE))
     mask.putdata(squircle_alpha(ICON_SIZE))

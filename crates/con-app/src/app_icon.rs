@@ -52,11 +52,17 @@ fn set_application_icon_image(png: &[u8]) {
             png.len() as u64,
         );
         let icon = NSImage::initWithData_(NSImage::alloc(nil), data);
+        if icon == nil {
+            return;
+        }
         // PNGs otherwise report their pixel size in points, so a 512px
         // asset fills the Dock tile like an Electron/SPA icon. 128pt is
         // the usual Dock representation size.
         let _: () = msg_send![icon, setSize: cocoa::foundation::NSSize::new(128.0, 128.0)];
         NSApp().setApplicationIconImage_(icon);
+        // alloc/init is +1. NSApp retains the image, so drop our ownership
+        // or each switch leaks the previous 512px NSImage until exit.
+        let _: () = msg_send![icon, release];
     });
 }
 
