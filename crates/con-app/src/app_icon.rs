@@ -1,12 +1,12 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
-use con_core::config::{DEFAULT_APP_ICON, app_icon_asset, sanitize_app_icon};
+use con_core::config::{app_icon_asset, sanitize_app_icon, DEFAULT_APP_ICON};
 
 static APPLIED_APP_ICON: Mutex<String> = Mutex::new(String::new());
 static SAVED_APP_ICON: Mutex<String> = Mutex::new(String::new());
 static NEXT_PREVIEW_OWNER: AtomicU64 = AtomicU64::new(1);
-static PREVIEW_OWNER: Mutex<Option<u64>> = Mutex::new(None);
+static PREVIEW_STACK: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
 
 #[cfg(target_os = "macos")]
 pub fn current_asset() -> &'static str {
@@ -26,7 +26,8 @@ fn mutex_id(slot: &Mutex<String>) -> String {
         .unwrap_or_else(|| DEFAULT_APP_ICON.to_string())
 }
 
-pub fn applied_id() -> String {
+#[cfg(any(target_os = "macos", test))]
+fn applied_id() -> String {
     mutex_id(&APPLIED_APP_ICON)
 }
 
@@ -48,48 +49,59 @@ pub fn new_preview_owner() -> u64 {
 
 /// Apply a live preview and record which panel last changed the Dock.
 ///
-/// Updates ownership even when the icon id is unchanged, so a second
-/// Settings window that previews the same id becomes the owner.
+/// Re-applying from the same panel updates its stack entry and moves it
+/// to the top, even when the icon id is unchanged.
 pub fn apply_preview(owner: u64, id: &str) {
-    apply_app_icon(id);
-    set_preview_owner(Some(owner));
+    let id = sanitize_app_icon(id);
+    apply_app_icon(&id);
+    if let Ok(mut stack) = PREVIEW_STACK.lock() {
+        stack.retain(|(existing, _)| *existing != owner);
+        stack.push((owner, id));
+    }
 }
 
-/// Restore the saved Dock icon only if this panel still owns the preview.
+/// Restore the Dock when this panel releases its preview.
 ///
-/// Two Settings windows can preview the same unsaved id. Matching on that
-/// id would let either Discard cancel the other panel's preview.
+/// If another panel still has a live preview, that icon is promoted.
+/// Only an empty stack falls back to the saved icon.
 pub fn restore_saved_if_owner(owner: u64) {
-    if preview_owner() != Some(owner) {
-        return;
+    let next = {
+        let Ok(mut stack) = PREVIEW_STACK.lock() else {
+            return;
+        };
+        let was_top = stack.last().is_some_and(|(existing, _)| *existing == owner);
+        stack.retain(|(existing, _)| *existing != owner);
+        if !was_top {
+            return;
+        }
+        stack.last().map(|(_, id)| id.clone())
+    };
+    match next {
+        Some(id) => apply_app_icon(&id),
+        None => apply_app_icon(&saved_id()),
     }
-    set_preview_owner(None);
-    apply_app_icon(&saved_id());
 }
 
-/// Drop preview ownership after a successful save without touching the Dock.
+/// Drop this panel's preview after a successful save without touching the Dock.
 pub fn clear_preview_owner(owner: u64) {
-    if preview_owner() == Some(owner) {
-        set_preview_owner(None);
+    if let Ok(mut stack) = PREVIEW_STACK.lock() {
+        stack.retain(|(existing, _)| *existing != owner);
     }
 }
 
-fn preview_owner() -> Option<u64> {
-    PREVIEW_OWNER.lock().ok().and_then(|owner| *owner)
-}
-
-fn set_preview_owner(owner: Option<u64>) {
-    if let Ok(mut current) = PREVIEW_OWNER.lock() {
-        *current = owner;
-    }
+/// Keep the process-wide saved icon when a non-Settings path writes config.
+pub fn merge_saved_into(app_icon: &mut String) {
+    *app_icon = saved_id();
 }
 
 /// Apply a saved icon at process start or when config is reloaded with no
-/// windows, and clear any live preview owner.
+/// windows, and clear any live preview stack.
 pub fn apply_persisted(id: &str) {
     remember_saved(id);
     apply_app_icon(id);
-    set_preview_owner(None);
+    if let Ok(mut stack) = PREVIEW_STACK.lock() {
+        stack.clear();
+    }
 }
 
 /// If this panel changed `app_icon` since its snapshot, that value wins.
@@ -166,7 +178,7 @@ mod tests {
         let guard = TEST_LOCK.lock().unwrap();
         *APPLIED_APP_ICON.lock().unwrap() = String::new();
         *SAVED_APP_ICON.lock().unwrap() = String::new();
-        set_preview_owner(None);
+        PREVIEW_STACK.lock().unwrap().clear();
         guard
     }
 
@@ -194,5 +206,26 @@ mod tests {
         assert_eq!(applied_id(), "raccoon-a2");
         restore_saved_if_owner(2);
         assert_eq!(applied_id(), "raccoon-a1");
+    }
+
+    #[test]
+    fn restore_promotes_the_preceding_live_preview() {
+        let _guard = reset();
+        remember_saved("raccoon-a1");
+        apply_preview(1, "raccoon-a2");
+        apply_preview(2, "raccoon-a3");
+        restore_saved_if_owner(2);
+        assert_eq!(applied_id(), "raccoon-a2");
+        restore_saved_if_owner(1);
+        assert_eq!(applied_id(), "raccoon-a1");
+    }
+
+    #[test]
+    fn merge_saved_into_keeps_the_process_wide_icon() {
+        let _guard = reset();
+        remember_saved("raccoon-a2");
+        let mut stale = "raccoon-a1".to_string();
+        merge_saved_into(&mut stale);
+        assert_eq!(stale, "raccoon-a2");
     }
 }
