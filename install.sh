@@ -249,7 +249,7 @@ pass "extracted"
 #     LICENSE
 #     README.md
 #     co.nowledge.con.desktop
-#     con.png
+#     co.nowledge.con.png
 staged_root=""
 for d in "$extract_dir"/*; do
   [ -d "$d" ] && [ -f "$d/con" ] && staged_root="$d" && break
@@ -315,21 +315,29 @@ fi
 # desktops can show duplicate launcher icons or fail to group windows.
 linux_app_id="co.nowledge.con"
 if [ -f "$staged_root/${linux_app_id}.desktop" ]; then
-  sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/${linux_app_id}.desktop" \
+  sed -e "s|^TryExec=.*|TryExec=${target_bin}|" \
+      -e "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/${linux_app_id}.desktop" \
     > "${apps_dir}/${linux_app_id}.desktop"
   chmod 644 "${apps_dir}/${linux_app_id}.desktop"
   rm -f "${apps_dir}/con.desktop"
 elif [ -f "$staged_root/con.desktop" ]; then
   # Legacy tarballs before the reverse-DNS app_id change shipped con.desktop.
   # Preserve compatibility when CON_INSTALL_VERSION points at an older release.
-  sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/con.desktop" \
+  sed -e "s|^TryExec=.*|TryExec=${target_bin}|" \
+      -e "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/con.desktop" \
     > "${apps_dir}/con.desktop"
   chmod 644 "${apps_dir}/con.desktop"
   rm -f "${apps_dir}/${linux_app_id}.desktop"
 fi
 
-if [ -f "$staged_root/con.png" ]; then
+if [ -f "$staged_root/${linux_app_id}.png" ]; then
+  cp "$staged_root/${linux_app_id}.png" "${icons_dir}/${linux_app_id}.png"
+elif [ -f "$staged_root/con.png" ]; then
+  # Releases through beta.89 used the short icon name. Keep explicit-version
+  # installs working whether their desktop entry refers to `con` or the
+  # reverse-DNS application id used by current releases.
   cp "$staged_root/con.png" "${icons_dir}/con.png"
+  cp "$staged_root/con.png" "${icons_dir}/${linux_app_id}.png"
 fi
 
 # Refresh the desktop database so the new .desktop file is picked up
