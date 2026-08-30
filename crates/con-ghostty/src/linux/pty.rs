@@ -751,8 +751,14 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
     cmd.arg("--unset-env=FLATPAK_ID");
     cmd.arg("--unset-env=container");
 
-    let host_cli_probe = con_paths::host_command("con-cli").arg("--help").output();
-    let use_con_cli = host_cli_probe.map(|o| o.status.success()).unwrap_or(false);
+    let host_cli_probe = con_paths::host_command("con-cli")
+        .args(["pty-bridge", "--help"])
+        .output();
+    let use_con_cli = host_cli_probe
+        .map(|output| {
+            bridge_help_supports_literal_commands(output.status.success(), &output.stdout)
+        })
+        .unwrap_or(false);
 
     if use_con_cli {
         cmd.arg("con-cli");
@@ -891,6 +897,13 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         input_generation: AtomicU64::new(0),
         started_at,
     })
+}
+
+fn bridge_help_supports_literal_commands(status_success: bool, stdout: &[u8]) -> bool {
+    status_success
+        && stdout
+            .windows(b"--literal-command".len())
+            .any(|window| window == b"--literal-command")
 }
 
 fn spawn_bridge_reader_thread(
@@ -1222,9 +1235,25 @@ mod tests {
     use crate::vt::VtScreen;
 
     use super::{
-        LinuxPtyOptions, LinuxPtySession, SessionShared, duplicate_fd, set_fd_nonblocking,
-        write_all_cancellable,
+        LinuxPtyOptions, LinuxPtySession, SessionShared, bridge_help_supports_literal_commands,
+        duplicate_fd, set_fd_nonblocking, write_all_cancellable,
     };
+
+    #[test]
+    fn host_bridge_probe_requires_literal_command_capability() {
+        assert!(bridge_help_supports_literal_commands(
+            true,
+            b"Usage: con-cli pty-bridge [OPTIONS]\n    --literal-command"
+        ));
+        assert!(!bridge_help_supports_literal_commands(
+            true,
+            b"Usage: con-cli pty-bridge [OPTIONS]"
+        ));
+        assert!(!bridge_help_supports_literal_commands(
+            false,
+            b"--literal-command"
+        ));
+    }
 
     #[test]
     fn explicit_command_preserves_argument_boundaries() {

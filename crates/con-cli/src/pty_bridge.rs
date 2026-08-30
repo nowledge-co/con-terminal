@@ -114,7 +114,7 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let running_r = running.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
-        while running_r.load(Ordering::Relaxed) {
+        loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -194,9 +194,9 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let status = child.wait();
     running.store(false, Ordering::Relaxed);
 
-    // Stop waiting for more input from Con, then let the PTY reader finish its
-    // final DATA frame before this thread writes EXIT on another socket clone.
-    // This preserves the wire order DATA* -> EXIT without a blocked join.
+    // Stop waiting for more input from Con. The PTY reader deliberately ignores
+    // `running` and drains to EOF so output already buffered by a short-lived
+    // command is sent before EXIT.
     let _ = socket_reader_interrupt.shutdown(std::net::Shutdown::Read);
     let _ = reader_thread.join();
     let _ = socket_reader_thread.join();
@@ -231,15 +231,14 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn finite_command_reports_exit_without_waiting_for_socket_input() {
+    fn run_finite_command(iteration: usize) -> (Vec<u8>, i32) {
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("clock after unix epoch")
             .as_nanos();
         let socket = std::env::temp_dir().join(format!(
-            "con-pty-bridge-{}-{unique}.sock",
-            std::process::id()
+            "con-pty-bridge-{}-{unique}-{iteration}.sock",
+            std::process::id(),
         ));
         let listener = UnixListener::bind(&socket).expect("bind bridge test socket");
         listener
@@ -250,9 +249,9 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: None,
-            program: Some(OsString::from("/usr/bin/true")),
+            program: Some(OsString::from("/bin/sh")),
             literal_command: true,
-            args: Vec::new(),
+            args: vec![OsString::from("-c"), OsString::from("printf con-marker")],
         };
         let (done_tx, done_rx) = mpsc::channel();
 
@@ -288,6 +287,7 @@ mod tests {
             .read_to_end(&mut frames)
             .expect("read completed bridge stream");
         let mut frames = frames.as_slice();
+        let mut output = Vec::new();
         let exit_code = loop {
             let (&tag, rest) = frames
                 .split_first()
@@ -297,7 +297,8 @@ mod tests {
                 0x00 => {
                     let (len, rest) = frames.split_at(4);
                     let len = u32::from_be_bytes(len.try_into().expect("data frame length"));
-                    let (_, rest) = rest.split_at(len as usize);
+                    let (payload, rest) = rest.split_at(len as usize);
+                    output.extend_from_slice(payload);
                     frames = rest;
                 }
                 0x02 => {
@@ -307,7 +308,21 @@ mod tests {
                 tag => panic!("unexpected bridge frame tag {tag:#x}"),
             }
         };
-        assert_eq!(exit_code, 0);
         let _ = std::fs::remove_file(socket);
+        (output, exit_code)
+    }
+
+    #[test]
+    fn finite_command_drains_output_then_reports_exit_without_socket_input() {
+        for iteration in 0..64 {
+            let (output, exit_code) = run_finite_command(iteration);
+            assert_eq!(exit_code, 0, "iteration {iteration}");
+            assert!(
+                output
+                    .windows(b"con-marker".len())
+                    .any(|value| value == b"con-marker"),
+                "iteration {iteration} lost buffered PTY output: {output:?}"
+            );
+        }
     }
 }
