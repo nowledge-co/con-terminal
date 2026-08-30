@@ -1155,3 +1155,32 @@ fn render_pretty_json(value: &Value) -> Result<()> {
 fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_bridge_literal_command_keeps_leading_dash_arguments() {
+        let cli = Cli::try_parse_from([
+            "con-cli",
+            "pty-bridge",
+            "--socket",
+            "/tmp/con bridge.sock",
+            "--program",
+            "/bin/sh",
+            "--literal-command",
+            "--",
+            "-c",
+            "printf '%s' ready",
+        ])
+        .expect("parse literal PTY bridge command");
+
+        let Command::PtyBridge(args) = cli.command else {
+            panic!("expected PTY bridge command");
+        };
+        assert!(args.literal_command);
+        assert_eq!(args.program.as_deref(), Some("/bin/sh"));
+        assert_eq!(args.args, ["-c", "printf '%s' ready"]);
+    }
+}
