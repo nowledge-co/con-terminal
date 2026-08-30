@@ -1,4 +1,6 @@
-use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -135,6 +137,9 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     // Thread 2: Read frames from socket, dispatch DATA to host PTY or RESIZE to master
     let running_w = running.clone();
     let master_for_resize = master_mutex.clone();
+    let socket_reader_interrupt = stream
+        .try_clone()
+        .context("clone socket reader interrupt")?;
     let mut socket_reader = stream;
     let socket_reader_thread = std::thread::spawn(move || {
         while running_w.load(Ordering::Relaxed) {
@@ -188,8 +193,6 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
 
     let status = child.wait();
     running.store(false, Ordering::Relaxed);
-    let _ = reader_thread.join();
-    let _ = socket_reader_thread.join();
 
     let code = match status {
         Ok(status) => status.exit_code() as i32,
@@ -204,10 +207,106 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let _ = exit_writer.write_all(&exit_frame);
     let _ = exit_writer.flush();
 
+    // The socket reader may be blocked in read_exact with no more input coming
+    // from Con. Wake it only after the exit frame is queued for the peer.
+    let _ = socket_reader_interrupt.shutdown(std::net::Shutdown::Read);
+    let _ = reader_thread.join();
+    let _ = socket_reader_thread.join();
+
     Ok(())
 }
 
 #[cfg(not(unix))]
 pub fn run_pty_bridge(_args: PtyBridgeArgs) -> Result<()> {
     anyhow::bail!("pty-bridge is only supported on Unix targets");
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime};
+
+    use super::*;
+
+    #[test]
+    fn finite_command_reports_exit_without_waiting_for_socket_input() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after unix epoch")
+            .as_nanos();
+        let socket = std::env::temp_dir().join(format!(
+            "con-pty-bridge-{}-{unique}.sock",
+            std::process::id()
+        ));
+        let listener = UnixListener::bind(&socket).expect("bind bridge test socket");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let args = PtyBridgeArgs {
+            socket: socket.clone(),
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            program: Some(OsString::from("/usr/bin/true")),
+            literal_command: true,
+            args: Vec::new(),
+        };
+        let (done_tx, done_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let _ = done_tx.send(run_pty_bridge(args));
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Ok(result) = done_rx.try_recv() {
+                        result.expect("bridge should connect before returning");
+                        panic!("bridge returned without connecting");
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "bridge should connect within timeout"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept bridge connection: {err}"),
+            }
+        };
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("bridge should return after child exit")
+            .expect("bridge should exit cleanly");
+
+        let mut frames = Vec::new();
+        stream
+            .read_to_end(&mut frames)
+            .expect("read completed bridge stream");
+        let mut frames = frames.as_slice();
+        let exit_code = loop {
+            let (&tag, rest) = frames
+                .split_first()
+                .expect("bridge should send an exit frame");
+            frames = rest;
+            match tag {
+                0x00 => {
+                    let (len, rest) = frames.split_at(4);
+                    let len = u32::from_be_bytes(len.try_into().expect("data frame length"));
+                    let (_, rest) = rest.split_at(len as usize);
+                    frames = rest;
+                }
+                0x02 => {
+                    let (code, _) = frames.split_at(4);
+                    break i32::from_be_bytes(code.try_into().expect("exit status"));
+                }
+                tag => panic!("unexpected bridge frame tag {tag:#x}"),
+            }
+        };
+        assert_eq!(exit_code, 0);
+        let _ = std::fs::remove_file(socket);
+    }
 }

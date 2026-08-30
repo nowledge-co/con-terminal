@@ -756,10 +756,17 @@ fn open_con_window_with_startup(
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
             let command = startup.as_ref().and_then(|startup| startup.command.clone());
+            #[cfg(target_os = "linux")]
+            let working_directory = startup
+                .as_ref()
+                .and_then(startup_initial_terminal_directory);
+            #[cfg(not(target_os = "linux"))]
+            let working_directory = None;
             let view = cx.new(|cx| {
-                ConWorkspace::from_session_with_initial_command(
+                ConWorkspace::from_session_with_initial_terminal(
                     config.clone(),
                     restored_session,
+                    working_directory,
                     command,
                     window,
                     cx,
@@ -886,8 +893,7 @@ pub(crate) fn fresh_window_session_with_history_for_cwd(
             .collect()
     };
 
-    if let Some(cwd) = cwd {
-        let cwd = cwd.to_string_lossy().to_string();
+    if let Some(cwd) = cwd.and_then(|cwd| cwd.into_os_string().into_string().ok()) {
         if let Some(tab) = session.tabs.first_mut() {
             tab.cwd = Some(cwd.clone());
             if let Some(pane) = tab.panes.first_mut() {
@@ -897,6 +903,20 @@ pub(crate) fn fresh_window_session_with_history_for_cwd(
     }
 
     session
+}
+
+#[cfg(target_os = "linux")]
+fn startup_initial_terminal_directory(startup: &StartupArgs) -> Option<std::path::PathBuf> {
+    if let Some(cwd) = startup.working_directory.as_ref() {
+        return Some(cwd.clone());
+    }
+
+    let workspace = startup.workspace.as_ref()?;
+    if workspace.is_dir() && !WorkspaceLayout::default_path_for_root(workspace).exists() {
+        Some(workspace.clone())
+    } else {
+        None
+    }
 }
 
 fn fallback_cwd_for_workspace_path(path: &std::path::Path) -> Option<std::path::PathBuf> {

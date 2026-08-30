@@ -103,7 +103,7 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
-    initial_cwd: Option<String>,
+    initial_cwd: Option<std::path::PathBuf>,
     restored_screen_text: Option<Vec<String>>,
     initial_command: Option<crate::startup_args::TerminalCommand>,
     initial_font_size: f32,
@@ -160,7 +160,7 @@ pub fn init(cx: &mut App) {
 impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
-        cwd: Option<String>,
+        cwd: Option<std::path::PathBuf>,
         restored_screen_text: Option<Vec<String>>,
         command: Option<crate::startup_args::TerminalCommand>,
         font_size: f32,
@@ -266,7 +266,11 @@ impl GhosttyView {
         self.terminal
             .as_ref()
             .and_then(|terminal| terminal.current_dir())
-            .or_else(|| self.initial_cwd.clone())
+            .or_else(|| {
+                self.initial_cwd
+                    .as_ref()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            })
     }
 
     pub fn is_alive(&self) -> bool {

@@ -374,6 +374,7 @@ impl ConWorkspace {
                         restore_cwd,
                         restored_screen_text,
                         None,
+                        None,
                         font_size,
                         window,
                         cx,

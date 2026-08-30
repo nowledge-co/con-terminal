@@ -135,7 +135,7 @@ impl LinuxGhosttyApp {
         self.config.lock().clone()
     }
 
-    pub fn default_pty_options(&self, cwd: Option<&str>) -> LinuxPtyOptions {
+    pub fn default_pty_options(&self, cwd: Option<&std::path::Path>) -> LinuxPtyOptions {
         let config = self.backend_config();
         LinuxPtyOptions {
             cwd: cwd.map(PathBuf::from),
