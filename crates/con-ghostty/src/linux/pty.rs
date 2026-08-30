@@ -23,6 +23,9 @@ const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 // A 16 MiB Kitty clipboard response expands to about 22 MiB after base64.
 const MAX_BRIDGE_FRAME_BYTES: usize = 32 * 1024 * 1024;
+const BRIDGE_READY: u8 = 0x03;
+const BRIDGE_STARTUP_ERROR: u8 = 0x04;
+const MAX_BRIDGE_STARTUP_ERROR_BYTES: usize = 64 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -780,6 +783,87 @@ fn resolve_host_socket_dir() -> PathBuf {
     cache_dir
 }
 
+fn stop_host_bridge_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn await_fallback_bridge_startup(
+    stream: &mut UnixStream,
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::result::Result<(), LinuxPtySpawnError> {
+    if let Err(error) = stream.set_read_timeout(Some(timeout.max(Duration::from_millis(20)))) {
+        stop_host_bridge_child(child);
+        return Err(anyhow::Error::new(error)
+            .context("failed to configure fallback bridge startup timeout")
+            .into());
+    }
+
+    let mut tag = [0u8; 1];
+    if let Err(error) = stream.read_exact(&mut tag) {
+        let status = child.try_wait().ok().flatten();
+        stop_host_bridge_child(child);
+        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) {
+            return Err(anyhow::anyhow!("timeout waiting for fallback pty bridge startup").into());
+        }
+        return Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+            "fallback pty bridge exited before confirming terminal startup{}",
+            status.map_or_else(String::new, |status| format!(" ({status})"))
+        )));
+    }
+
+    match tag[0] {
+        BRIDGE_READY => {
+            if let Err(error) = stream.set_read_timeout(None) {
+                stop_host_bridge_child(child);
+                return Err(anyhow::Error::new(error)
+                    .context("failed to clear fallback bridge startup timeout")
+                    .into());
+            }
+            Ok(())
+        }
+        BRIDGE_STARTUP_ERROR => {
+            let mut len_bytes = [0u8; 4];
+            if let Err(error) = stream.read_exact(&mut len_bytes) {
+                stop_host_bridge_child(child);
+                return Err(LinuxPtySpawnError::permanent(
+                    anyhow::Error::new(error).context(
+                        "fallback pty bridge closed while reporting terminal startup failure",
+                    ),
+                ));
+            }
+            let len = u32::from_be_bytes(len_bytes) as usize;
+            if len > MAX_BRIDGE_STARTUP_ERROR_BYTES {
+                stop_host_bridge_child(child);
+                return Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+                    "fallback pty bridge reported an oversized startup error"
+                )));
+            }
+            let mut message = vec![0u8; len];
+            if let Err(error) = stream.read_exact(&mut message) {
+                stop_host_bridge_child(child);
+                return Err(LinuxPtySpawnError::permanent(
+                    anyhow::Error::new(error).context(
+                        "fallback pty bridge closed while reporting terminal startup failure",
+                    ),
+                ));
+            }
+            stop_host_bridge_child(child);
+            Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+                "failed to start host terminal command: {}",
+                String::from_utf8_lossy(&message)
+            )))
+        }
+        tag => {
+            stop_host_bridge_child(child);
+            Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+                "fallback pty bridge sent unknown startup frame 0x{tag:02x}"
+            )))
+        }
+    }
+}
+
 fn spawn_host_bridge(
     options: LinuxPtyOptions,
 ) -> std::result::Result<LinuxPtySession, LinuxPtySpawnError> {
@@ -891,7 +975,7 @@ fn spawn_host_bridge(
         }
     }
 
-    let stream = match stream {
+    let mut stream = match stream {
         Some(stream) => stream,
         None => {
             let status = child
@@ -907,6 +991,10 @@ fn spawn_host_bridge(
             return Err(anyhow::anyhow!("timeout waiting for host pty bridge connection").into());
         }
     };
+    if !use_con_cli {
+        let handshake_timeout = connect_deadline.saturating_duration_since(Instant::now());
+        await_fallback_bridge_startup(&mut stream, &mut child, handshake_timeout)?;
+    }
     let stream_writer = stream.try_clone().context("clone socket writer")?;
     let stream_reader = stream.try_clone().context("clone socket reader")?;
     let mut stream_writer = stream_writer;
@@ -1141,6 +1229,9 @@ import argparse, fcntl, os, pty, select, socket, struct, sys, termios, time
 
 PTY_EXIT_DRAIN_QUIET = 0.025
 PTY_EXIT_DRAIN_LIMIT = 0.250
+BRIDGE_READY = 0x03
+BRIDGE_STARTUP_ERROR = 0x04
+MAX_STARTUP_ERROR_BYTES = 64 * 1024
 
 def main():
     parser = argparse.ArgumentParser()
@@ -1178,43 +1269,81 @@ def main():
     except OSError:
         pass
 
+    exec_status_read, exec_status_write = os.pipe()
+    os.set_inheritable(exec_status_write, False)
     pid = os.fork()
     if pid == 0:
-        os.close(master)
-        os.setsid()
+        os.close(exec_status_read)
         try:
-            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            os.close(master)
+            os.setsid()
+            try:
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            except OSError:
+                pass
+            os.dup2(slave, 0)
+            os.dup2(slave, 1)
+            os.dup2(slave, 2)
+            if slave > 2:
+                os.close(slave)
+            os.environ['TERM'] = 'xterm-256color'
+            prog = args.program or os.environ.get('SHELL') or '/bin/bash'
+            argv = [prog]
+            if not args.literal_command:
+                shell_name = os.path.basename(prog)
+                if shell_name in ('bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh'):
+                    argv.append('-l')
+                elif shell_name == 'fish':
+                    argv.extend(['--login', '--interactive'])
+                elif shell_name == 'pwsh':
+                    argv.append('-NoLogo')
+                elif shell_name == 'nu':
+                    argv.append('--interactive')
+                elif shell_name == 'xonsh':
+                    argv.append('-i')
+            else:
+                argv.extend(remaining)
+            os.execvp(prog, argv)
+        except BaseException as e:
+            message = f"failed to start {args.program or 'host shell'}: {e}".encode('utf-8', errors='replace')
+            try:
+                os.write(exec_status_write, message[:MAX_STARTUP_ERROR_BYTES])
+            except OSError:
+                pass
+            os._exit(127)
+
+    os.close(exec_status_write)
+    os.close(slave)
+
+    exec_error = b''
+    while len(exec_error) < MAX_STARTUP_ERROR_BYTES:
+        try:
+            chunk = os.read(exec_status_read, MAX_STARTUP_ERROR_BYTES - len(exec_error))
+        except OSError as e:
+            exec_error = f"failed to confirm command startup: {e}".encode('utf-8', errors='replace')
+            break
+        if not chunk:
+            break
+        exec_error += chunk
+    os.close(exec_status_read)
+
+    if exec_error:
+        frame = bytes([BRIDGE_STARTUP_ERROR]) + struct.pack('>I', len(exec_error)) + exec_error
+        try:
+            sock.sendall(frame)
         except OSError:
             pass
-        os.dup2(slave, 0)
-        os.dup2(slave, 1)
-        os.dup2(slave, 2)
-        if slave > 2:
-            os.close(slave)
-        os.environ['TERM'] = 'xterm-256color'
-        prog = args.program or os.environ.get('SHELL') or '/bin/bash'
-        argv = [prog]
-        if not args.literal_command:
-            shell_name = os.path.basename(prog)
-            if shell_name in ('bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh'):
-                argv.append('-l')
-            elif shell_name == 'fish':
-                argv.extend(['--login', '--interactive'])
-            elif shell_name == 'pwsh':
-                argv.append('-NoLogo')
-            elif shell_name == 'nu':
-                argv.append('--interactive')
-            elif shell_name == 'xonsh':
-                argv.append('-i')
-        else:
-            argv.extend(remaining)
         try:
-            os.execvp(prog, argv)
-        except Exception as e:
-            sys.stderr.write(f"failed to exec {prog}: {e}\n")
-            sys.exit(127)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+        sock.close()
+        sys.exit(127)
 
-    os.close(slave)
+    try:
+        sock.sendall(bytes([BRIDGE_READY]))
+    except OSError:
+        sys.exit(1)
 
     child_status = None
     drain_deadline = None
@@ -1359,9 +1488,9 @@ mod tests {
     use crate::vt::VtScreen;
 
     use super::{
-        EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions, LinuxPtySession, SessionShared,
-        bridge_help_supports_literal_commands, duplicate_fd, set_fd_nonblocking,
-        write_all_cancellable,
+        BRIDGE_READY, BRIDGE_STARTUP_ERROR, EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions,
+        LinuxPtySession, SessionShared, bridge_help_supports_literal_commands, duplicate_fd,
+        set_fd_nonblocking, write_all_cancellable,
     };
 
     fn unique_test_socket(name: &str) -> std::path::PathBuf {
@@ -1450,6 +1579,7 @@ mod tests {
 
         assert!(status.success());
         assert!(started_at.elapsed() < Duration::from_secs(1));
+        assert_eq!(frames.first(), Some(&BRIDGE_READY));
         assert!(
             frames
                 .windows(b"con-marker".len())
@@ -1459,6 +1589,45 @@ mod tests {
         assert!(
             frames.len() >= 5 && frames[frames.len() - 5] == 0x02,
             "bridge stream should end with TAG_EXIT: {frames:?}"
+        );
+    }
+
+    #[test]
+    fn python_bridge_reports_exec_failure_before_ready() {
+        let socket = unique_test_socket("exec");
+        let listener = UnixListener::bind(&socket).expect("bind Python bridge test socket");
+        let mut bridge = Command::new("python3")
+            .arg("-c")
+            .arg(EMBEDDED_PYTHON_BRIDGE)
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--program")
+            .arg("/definitely/missing/con-terminal-test-program")
+            .arg("--literal-command")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn embedded Python bridge");
+        let (mut stream, _) = listener.accept().expect("accept Python bridge");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("bound bridge read");
+
+        let mut frames = Vec::new();
+        stream
+            .read_to_end(&mut frames)
+            .expect("read startup error frame");
+        let status = bridge.wait().expect("wait for Python bridge");
+        let _ = std::fs::remove_file(&socket);
+
+        assert_eq!(status.code(), Some(127));
+        assert_eq!(frames.first(), Some(&BRIDGE_STARTUP_ERROR));
+        assert_ne!(frames.first(), Some(&BRIDGE_READY));
+        assert!(
+            frames
+                .windows(b"failed to start".len())
+                .any(|window| window == b"failed to start"),
+            "startup error should explain the exec failure: {frames:?}"
         );
     }
 
