@@ -788,6 +788,16 @@ fn stop_host_bridge_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+fn fallback_python_option(name: &[u8], value: &OsStr) -> OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let mut argument = Vec::with_capacity(name.len() + 1 + value.as_bytes().len());
+    argument.extend_from_slice(name);
+    argument.push(b'=');
+    argument.extend_from_slice(value.as_bytes());
+    OsString::from_vec(argument)
+}
+
 fn await_fallback_bridge_startup(
     stream: &mut UnixStream,
     child: &mut std::process::Child,
@@ -923,14 +933,14 @@ fn spawn_host_bridge(
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
         if let Some(cwd) = &options.cwd {
-            cmd.arg("--cwd").arg(cwd);
+            cmd.arg(fallback_python_option(b"--cwd", cwd.as_os_str()));
         }
         if let Some(prog) = options
             .command_program
             .as_deref()
             .or_else(|| options.program.as_deref().map(OsStr::new))
         {
-            cmd.arg("--program").arg(prog);
+            cmd.arg(fallback_python_option(b"--program", prog));
         }
         if let Some(args) = options.command_args.as_ref() {
             cmd.arg("--literal-command");
@@ -1474,9 +1484,10 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::io::{ErrorKind, Read, Write};
     use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::net::UnixListener;
     use std::os::unix::net::UnixStream;
     use std::process::{Command, Stdio};
@@ -1490,7 +1501,7 @@ mod tests {
     use super::{
         BRIDGE_READY, BRIDGE_STARTUP_ERROR, EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions,
         LinuxPtySession, SessionShared, bridge_help_supports_literal_commands, duplicate_fd,
-        set_fd_nonblocking, write_all_cancellable,
+        fallback_python_option, set_fd_nonblocking, write_all_cancellable,
     };
 
     fn unique_test_socket(name: &str) -> std::path::PathBuf {
@@ -1518,6 +1529,20 @@ mod tests {
             false,
             b"--literal-command"
         ));
+    }
+
+    #[test]
+    fn fallback_python_options_preserve_leading_dashes_and_non_utf8_bytes() {
+        let value = OsStr::from_bytes(b"-tool-\xff");
+
+        assert_eq!(
+            fallback_python_option(b"--program", value).as_bytes(),
+            b"--program=-tool-\xff"
+        );
+        assert_eq!(
+            fallback_python_option(b"--cwd", value).as_bytes(),
+            b"--cwd=-tool-\xff"
+        );
     }
 
     #[test]
