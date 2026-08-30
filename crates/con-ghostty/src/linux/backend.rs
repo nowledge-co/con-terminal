@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::pty::{LinuxPtyOptions, LinuxPtySession, LinuxWakeCallback};
+use super::pty::{LinuxPtyOptions, LinuxPtySession, LinuxPtySpawnError, LinuxWakeCallback};
 use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
@@ -209,12 +209,12 @@ impl LinuxGhosttyTerminal {
         self.inner.lock().is_some()
     }
 
-    pub fn spawn_with_options(&self, options: LinuxPtyOptions) -> Result<(), String> {
+    pub fn spawn_with_options(&self, options: LinuxPtyOptions) -> Result<(), LinuxPtySpawnError> {
         let mut options = options;
         if options.wake_callback.is_none() {
             options.wake_callback = self.wake_callback.lock().clone();
         }
-        let session = LinuxPtySession::spawn(options).map_err(|err| err.to_string())?;
+        let session = LinuxPtySession::spawn(options)?;
         self.attach(session);
         Ok(())
     }

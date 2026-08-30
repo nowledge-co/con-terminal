@@ -26,6 +26,52 @@ const MAX_BRIDGE_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
+#[derive(Debug)]
+pub struct LinuxPtySpawnError {
+    source: anyhow::Error,
+    retryable: bool,
+}
+
+impl LinuxPtySpawnError {
+    fn permanent(source: anyhow::Error) -> Self {
+        Self {
+            source,
+            retryable: false,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        self.retryable
+    }
+}
+
+impl std::fmt::Display for LinuxPtySpawnError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:#}", self.source)
+    }
+}
+
+impl std::error::Error for LinuxPtySpawnError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+impl From<anyhow::Error> for LinuxPtySpawnError {
+    fn from(source: anyhow::Error) -> Self {
+        Self {
+            source,
+            retryable: true,
+        }
+    }
+}
+
+impl From<io::Error> for LinuxPtySpawnError {
+    fn from(source: io::Error) -> Self {
+        anyhow::Error::new(source).into()
+    }
+}
+
 #[derive(Clone)]
 pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
@@ -316,7 +362,7 @@ impl SessionShared {
 }
 
 impl LinuxPtySession {
-    pub fn spawn(options: LinuxPtyOptions) -> Result<Self> {
+    pub fn spawn(options: LinuxPtyOptions) -> std::result::Result<Self, LinuxPtySpawnError> {
         if con_paths::is_flatpak() {
             spawn_host_bridge(options)
         } else {
@@ -589,7 +635,9 @@ impl Drop for LinuxPtySession {
     }
 }
 
-fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
+fn spawn_local(
+    options: LinuxPtyOptions,
+) -> std::result::Result<LinuxPtySession, LinuxPtySpawnError> {
     let pty_system = native_pty_system();
     let pty_size = pty_size_from_surface(&options.size);
     let pair = pty_system
@@ -665,10 +713,11 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
     {
         screen.feed(output);
     }
-    let child = pair
-        .slave
-        .spawn_command(command)
-        .context("failed to spawn linux pty child process")?;
+    let child = pair.slave.spawn_command(command).map_err(|err| {
+        LinuxPtySpawnError::permanent(
+            anyhow::Error::new(err).context("failed to spawn linux pty child process"),
+        )
+    })?;
 
     let shared = Arc::new(SessionShared::new(
         screen,
@@ -733,7 +782,9 @@ fn resolve_host_socket_dir() -> PathBuf {
     cache_dir
 }
 
-fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
+fn spawn_host_bridge(
+    options: LinuxPtyOptions,
+) -> std::result::Result<LinuxPtySession, LinuxPtySpawnError> {
     use std::os::unix::net::UnixListener;
 
     let socket_dir = resolve_host_socket_dir();
@@ -809,7 +860,7 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         "spawn_host_bridge: executing flatpak host pty bridge (socket={})",
         socket_path.display()
     );
-    let child = cmd.spawn().context("failed to spawn host pty bridge")?;
+    let mut child = cmd.spawn().context("failed to spawn host pty bridge")?;
 
     listener.set_nonblocking(true)?;
     let connect_deadline = Instant::now() + Duration::from_secs(5);
@@ -824,12 +875,32 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Err(e) => return Err(e).context("error waiting for pty bridge connection"),
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(anyhow::Error::new(err)
+                    .context("error waiting for pty bridge connection")
+                    .into());
+            }
         }
     }
 
-    let stream =
-        stream.ok_or_else(|| anyhow::anyhow!("timeout waiting for host pty bridge connection"))?;
+    let stream = match stream {
+        Some(stream) => stream,
+        None => {
+            let status = child
+                .try_wait()
+                .context("failed to inspect host pty bridge after connection timeout")?;
+            if let Some(status) = status {
+                return Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+                    "host pty bridge exited before opening the terminal connection ({status})"
+                )));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow::anyhow!("timeout waiting for host pty bridge connection").into());
+        }
+    };
     let stream_writer = stream.try_clone().context("clone socket writer")?;
     let stream_reader = stream.try_clone().context("clone socket reader")?;
     let mut stream_writer = stream_writer;
@@ -1253,6 +1324,28 @@ mod tests {
             false,
             b"--literal-command"
         ));
+    }
+
+    #[test]
+    fn missing_explicit_program_is_a_permanent_startup_error() {
+        let result = LinuxPtySession::spawn(LinuxPtyOptions {
+            command_program: Some(OsString::from(
+                "/definitely/missing/con-terminal-test-program",
+            )),
+            command_args: Some(Vec::new()),
+            ..LinuxPtyOptions::default()
+        });
+
+        let error = match result {
+            Ok(_) => panic!("missing explicit program should fail"),
+            Err(error) => error,
+        };
+        assert!(!error.is_retryable());
+        assert!(
+            error
+                .to_string()
+                .contains("failed to spawn linux pty child")
+        );
     }
 
     #[test]

@@ -106,6 +106,7 @@ pub struct GhosttyView {
     initial_cwd: Option<std::path::PathBuf>,
     restored_screen_text: Option<Vec<String>>,
     initial_command: Option<crate::startup_args::TerminalCommand>,
+    startup_error: Option<String>,
     initial_font_size: f32,
     initialized: bool,
     process_exit_emitted: bool,
@@ -203,6 +204,7 @@ impl GhosttyView {
             initial_cwd: cwd,
             restored_screen_text,
             initial_command: command,
+            startup_error: None,
             initial_font_size: font_size,
             initialized: false,
             process_exit_emitted: false,
@@ -326,6 +328,7 @@ impl GhosttyView {
             terminal.request_close();
         }
         self.initialized = false;
+        self.startup_error = None;
         self.process_exit_emitted = false;
         self.last_title = None;
         self.pending_write = None;
@@ -418,7 +421,7 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
-        if !terminal.is_alive() && !self.process_exit_emitted {
+        if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {
             self.process_exit_emitted = true;
             changed = true;
             cx.emit(GhosttyProcessExited);
@@ -460,7 +463,7 @@ impl GhosttyView {
                 cx.emit(GhosttyCwdChanged(cwd));
             }
 
-            if !terminal.is_alive() && !self.process_exit_emitted {
+            if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {
                 self.process_exit_emitted = true;
                 changed = true;
                 cx.emit(GhosttyProcessExited);
@@ -479,6 +482,9 @@ impl GhosttyView {
     }
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.startup_error.is_some() {
+            return false;
+        }
         let Some(terminal) = self.terminal.as_ref().cloned() else {
             return false;
         };
@@ -511,7 +517,14 @@ impl GhosttyView {
             }
             Err(err) => {
                 log::error!("failed to start linux shell: {err}");
-                false
+                if err.is_retryable() {
+                    false
+                } else {
+                    self.startup_error = Some(format!("Unable to launch terminal: {err}"));
+                    self.initial_command = None;
+                    cx.notify();
+                    true
+                }
             }
         }
     }
@@ -1372,7 +1385,9 @@ impl Render for GhosttyView {
             style: FontStyle::Normal,
         };
 
-        let status_message = if !self.initialized {
+        let status_message = if let Some(error) = self.startup_error.as_deref() {
+            Some(error)
+        } else if !self.initialized {
             Some("Launching Linux shell…")
         } else if !self.is_alive() {
             Some("Linux shell exited")
