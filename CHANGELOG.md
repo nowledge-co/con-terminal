@@ -17,6 +17,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#317](https://github.com/nowledge-co/con-terminal/pull/317) by
   [@wey-gu](https://github.com/wey-gu))_
 
+### Fixed
+
+**Linux**
+
+- Matched the installed launcher icon name to Con's desktop application id, so
+  launchers can resolve the correct icon and group windows consistently. Older
+  release archives remain compatible with the installer. _(PR
+  [#318](https://github.com/nowledge-co/con-terminal/pull/318) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ---
 
 ## `v0.1.0-beta.89` - 2026-08-30
