@@ -133,7 +133,7 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     if let Some(cwd) = &args.cwd {
         cmd.cwd(cwd);
     }
-    if args.literal_command {
+    if args.literal_command || !args.args.is_empty() {
         for arg in &args.args {
             cmd.arg(arg);
         }
@@ -318,6 +318,7 @@ mod tests {
     fn run_finite_command(
         iteration: usize,
         script: &str,
+        literal_command: bool,
         completion_timeout: Duration,
     ) -> (Vec<u8>, i32) {
         let unique = SystemTime::now()
@@ -338,7 +339,7 @@ mod tests {
             rows: 24,
             cwd: None,
             program: Some(OsString::from("/bin/sh")),
-            literal_command: true,
+            literal_command,
             args: vec![OsString::from("-c"), OsString::from(script)],
         };
         let (done_tx, done_rx) = mpsc::channel();
@@ -404,7 +405,7 @@ mod tests {
     fn finite_command_drains_output_then_reports_exit_without_socket_input() {
         for iteration in 0..64 {
             let (output, exit_code) =
-                run_finite_command(iteration, "printf con-marker", Duration::from_secs(5));
+                run_finite_command(iteration, "printf con-marker", true, Duration::from_secs(5));
             assert_eq!(exit_code, 0, "iteration {iteration}");
             assert!(
                 output
@@ -417,14 +418,31 @@ mod tests {
 
     #[test]
     fn finite_command_does_not_wait_for_descendant_holding_slave_pty() {
-        let (output, exit_code) =
-            run_finite_command(65, "sleep 2 & printf con-marker", Duration::from_secs(1));
+        let (output, exit_code) = run_finite_command(
+            65,
+            "sleep 2 & printf con-marker",
+            true,
+            Duration::from_secs(1),
+        );
         assert_eq!(exit_code, 0);
         assert!(
             output
                 .windows(b"con-marker".len())
                 .any(|value| value == b"con-marker"),
             "bridge lost buffered output: {output:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_trailing_arguments_still_execute_without_literal_flag() {
+        let (output, exit_code) =
+            run_finite_command(66, "printf legacy-marker", false, Duration::from_secs(5));
+        assert_eq!(exit_code, 0);
+        assert!(
+            output
+                .windows(b"legacy-marker".len())
+                .any(|value| value == b"legacy-marker"),
+            "bridge ignored legacy trailing arguments: {output:?}"
         );
     }
 }

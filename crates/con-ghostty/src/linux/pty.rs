@@ -1299,7 +1299,7 @@ def main():
             os.environ['TERM'] = 'xterm-256color'
             prog = args.program or os.environ.get('SHELL') or '/bin/bash'
             argv = [prog]
-            if not args.literal_command:
+            if not args.literal_command and not remaining:
                 shell_name = os.path.basename(prog)
                 if shell_name in ('bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh'):
                     argv.append('-l')
@@ -1580,7 +1580,6 @@ mod tests {
             .arg(&socket)
             .arg("--program")
             .arg("/bin/sh")
-            .arg("--literal-command")
             .arg("--")
             .arg("-c")
             .arg("sleep 2 & printf con-marker")
