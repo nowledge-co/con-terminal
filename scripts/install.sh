@@ -249,7 +249,7 @@ pass "extracted"
 #     LICENSE
 #     README.md
 #     co.nowledge.con.desktop
-#     con.png
+#     co.nowledge.con.png
 staged_root=""
 for d in "$extract_dir"/*; do
   [ -d "$d" ] && [ -f "$d/con" ] && staged_root="$d" && break
@@ -330,8 +330,14 @@ elif [ -f "$staged_root/con.desktop" ]; then
   rm -f "${apps_dir}/${linux_app_id}.desktop"
 fi
 
-if [ -f "$staged_root/con.png" ]; then
+if [ -f "$staged_root/${linux_app_id}.png" ]; then
+  cp "$staged_root/${linux_app_id}.png" "${icons_dir}/${linux_app_id}.png"
+elif [ -f "$staged_root/con.png" ]; then
+  # Releases through beta.89 used the short icon name. Keep explicit-version
+  # installs working whether their desktop entry refers to `con` or the
+  # reverse-DNS application id used by current releases.
   cp "$staged_root/con.png" "${icons_dir}/con.png"
+  cp "$staged_root/con.png" "${icons_dir}/${linux_app_id}.png"
 fi
 
 # Refresh the desktop database so the new .desktop file is picked up
