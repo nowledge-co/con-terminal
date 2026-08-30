@@ -194,6 +194,13 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let status = child.wait();
     running.store(false, Ordering::Relaxed);
 
+    // Stop waiting for more input from Con, then let the PTY reader finish its
+    // final DATA frame before this thread writes EXIT on another socket clone.
+    // This preserves the wire order DATA* -> EXIT without a blocked join.
+    let _ = socket_reader_interrupt.shutdown(std::net::Shutdown::Read);
+    let _ = reader_thread.join();
+    let _ = socket_reader_thread.join();
+
     let code = match status {
         Ok(status) => status.exit_code() as i32,
         Err(err) => {
@@ -206,12 +213,6 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     exit_frame[1..5].copy_from_slice(&code.to_be_bytes());
     let _ = exit_writer.write_all(&exit_frame);
     let _ = exit_writer.flush();
-
-    // The socket reader may be blocked in read_exact with no more input coming
-    // from Con. Wake it only after the exit frame is queued for the peer.
-    let _ = socket_reader_interrupt.shutdown(std::net::Shutdown::Read);
-    let _ = reader_thread.join();
-    let _ = socket_reader_thread.join();
 
     Ok(())
 }
