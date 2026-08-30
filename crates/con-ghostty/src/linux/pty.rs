@@ -871,6 +871,14 @@ fn spawn_host_bridge(
                 break;
             }
             Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                if let Some(status) = child
+                    .try_wait()
+                    .context("failed to inspect host pty bridge while connecting")?
+                {
+                    return Err(LinuxPtySpawnError::permanent(anyhow::anyhow!(
+                        "host pty bridge exited before opening the terminal connection ({status})"
+                    )));
+                }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(err) => {
@@ -1129,7 +1137,10 @@ fn configure_shell_startup(program: &OsStr, command: &mut CommandBuilder) {
 }
 
 const EMBEDDED_PYTHON_BRIDGE: &str = r#"
-import argparse, fcntl, os, pty, select, socket, struct, sys, termios
+import argparse, fcntl, os, pty, select, socket, struct, sys, termios, time
+
+PTY_EXIT_DRAIN_QUIET = 0.025
+PTY_EXIT_DRAIN_LIMIT = 0.250
 
 def main():
     parser = argparse.ArgumentParser()
@@ -1142,6 +1153,16 @@ def main():
     args, remaining = parser.parse_known_args()
     if remaining and remaining[0] == '--':
         remaining = remaining[1:]
+
+    # Validate the host working directory before connecting. Exiting before the
+    # handshake lets Con classify this as a permanent launch error instead of
+    # attaching a shell in an unrelated inherited directory.
+    if args.cwd:
+        try:
+            os.chdir(args.cwd)
+        except OSError as e:
+            sys.stderr.write(f"failed to change directory to {args.cwd}: {e}\n")
+            sys.exit(126)
 
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1170,11 +1191,6 @@ def main():
         os.dup2(slave, 2)
         if slave > 2:
             os.close(slave)
-        if args.cwd:
-            try:
-                os.chdir(args.cwd)
-            except OSError:
-                pass
         os.environ['TERM'] = 'xterm-256color'
         prog = args.program or os.environ.get('SHELL') or '/bin/bash'
         argv = [prog]
@@ -1200,13 +1216,43 @@ def main():
 
     os.close(slave)
 
+    child_status = None
+    drain_deadline = None
+    quiet_deadline = None
+
     while True:
+        if child_status is None:
+            try:
+                exited_pid, status = os.waitpid(pid, os.WNOHANG)
+            except OSError:
+                exited_pid, status = pid, 0
+            if exited_pid == pid:
+                child_status = status
+                now = time.monotonic()
+                drain_deadline = now + PTY_EXIT_DRAIN_LIMIT
+                quiet_deadline = now + PTY_EXIT_DRAIN_QUIET
+
+        if child_status is None:
+            readable = [sock, master]
+            timeout = PTY_EXIT_DRAIN_QUIET
+        else:
+            now = time.monotonic()
+            timeout = min(drain_deadline - now, quiet_deadline - now)
+            if timeout <= 0:
+                break
+            readable = [master]
+
         try:
-            r, _, _ = select.select([sock, master], [], [])
+            r, _, _ = select.select(readable, [], [], timeout)
         except (OSError, select.error):
             break
 
-        if sock in r:
+        if not r:
+            if child_status is not None:
+                break
+            continue
+
+        if child_status is None and sock in r:
             try:
                 tag = sock.recv(1)
             except OSError:
@@ -1260,11 +1306,18 @@ def main():
             except OSError:
                 break
 
-    try:
-        _, status = os.waitpid(pid, 0)
-        exit_code = os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else (status >> 8)
-    except OSError:
-        exit_code = 0
+            if child_status is not None:
+                quiet_deadline = min(
+                    time.monotonic() + PTY_EXIT_DRAIN_QUIET,
+                    drain_deadline,
+                )
+
+    if child_status is None:
+        try:
+            _, child_status = os.waitpid(pid, 0)
+        except OSError:
+            child_status = 0
+    exit_code = os.waitstatus_to_exitcode(child_status) if hasattr(os, 'waitstatus_to_exitcode') else (child_status >> 8)
 
     try:
         frame = bytes([2]) + struct.pack('>i', exit_code)
@@ -1293,20 +1346,34 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::io::{ErrorKind, Write};
+    use std::io::{ErrorKind, Read, Write};
     use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixListener;
     use std::os::unix::net::UnixStream;
+    use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::VtScreen;
 
     use super::{
-        LinuxPtyOptions, LinuxPtySession, SessionShared, bridge_help_supports_literal_commands,
-        duplicate_fd, set_fd_nonblocking, write_all_cancellable,
+        EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions, LinuxPtySession, SessionShared,
+        bridge_help_supports_literal_commands, duplicate_fd, set_fd_nonblocking,
+        write_all_cancellable,
     };
+
+    fn unique_test_socket(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "con-python-bridge-{name}-{}-{unique}.sock",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn host_bridge_probe_requires_literal_command_capability() {
@@ -1322,6 +1389,77 @@ mod tests {
             false,
             b"--literal-command"
         ));
+    }
+
+    #[test]
+    fn python_bridge_rejects_invalid_working_directory_before_connecting() {
+        let socket = unique_test_socket("cwd");
+        let missing_cwd = socket.with_extension("missing");
+        let output = Command::new("python3")
+            .arg("-c")
+            .arg(EMBEDDED_PYTHON_BRIDGE)
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--cwd")
+            .arg(&missing_cwd)
+            .output()
+            .expect("run embedded Python bridge");
+
+        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(126));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("failed to change directory"),
+            "unexpected stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn python_bridge_bounds_drain_when_descendant_keeps_pty_open() {
+        let socket = unique_test_socket("drain");
+        let listener = UnixListener::bind(&socket).expect("bind Python bridge test socket");
+        let started_at = std::time::Instant::now();
+        let mut bridge = Command::new("python3")
+            .arg("-c")
+            .arg(EMBEDDED_PYTHON_BRIDGE)
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--program")
+            .arg("/bin/sh")
+            .arg("--literal-command")
+            .arg("--")
+            .arg("-c")
+            .arg("sleep 2 & printf con-marker")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn embedded Python bridge");
+        let (mut stream, _) = listener.accept().expect("accept Python bridge");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("bound bridge read");
+
+        let mut frames = Vec::new();
+        if let Err(error) = stream.read_to_end(&mut frames) {
+            let _ = bridge.kill();
+            let _ = bridge.wait();
+            panic!("Python bridge did not finish bounded drain: {error}");
+        }
+        let status = bridge.wait().expect("wait for Python bridge");
+        let _ = std::fs::remove_file(&socket);
+
+        assert!(status.success());
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+        assert!(
+            frames
+                .windows(b"con-marker".len())
+                .any(|window| window == b"con-marker"),
+            "final command output should precede exit: {frames:?}"
+        );
+        assert!(
+            frames.len() >= 5 && frames[frames.len() - 5] == 0x02,
+            "bridge stream should end with TAG_EXIT: {frames:?}"
+        );
     }
 
     #[test]
