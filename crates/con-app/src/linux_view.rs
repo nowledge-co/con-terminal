@@ -485,13 +485,14 @@ impl GhosttyView {
         }
 
         let mut options = self.app.default_pty_options(self.initial_cwd.as_deref());
-        if let Some(command) = self.initial_command.take() {
-            options.program = Some(command.program);
-            options.command_args = Some(command.args);
+        if let Some(command) = self.initial_command.as_ref() {
+            options.command_program = Some(command.program.clone());
+            options.command_args = Some(command.args.clone());
         }
         options.initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
         match terminal.spawn_with_options(options) {
             Ok(()) => {
+                self.initial_command = None;
                 self.restored_screen_text = None;
                 self.initialized = true;
                 self.process_exit_emitted = false;

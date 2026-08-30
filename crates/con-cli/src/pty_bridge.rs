@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,12 +19,12 @@ pub struct PtyBridgeArgs {
     #[arg(long)]
     pub cwd: Option<PathBuf>,
     #[arg(long)]
-    pub program: Option<String>,
+    pub program: Option<OsString>,
     /// Execute `program` with exactly `args`, even when the argument list is empty.
     #[arg(long)]
     pub literal_command: bool,
     #[arg(trailing_var_arg = true)]
-    pub args: Vec<String>,
+    pub args: Vec<OsString>,
 }
 
 #[cfg(unix)]
@@ -31,7 +32,7 @@ pub struct PtyBridgeArgs {
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(unix)]
-fn configure_shell_startup(program: &str, command: &mut portable_pty::CommandBuilder) {
+fn configure_shell_startup(program: &OsStr, command: &mut portable_pty::CommandBuilder) {
     let Some(shell) = Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
@@ -72,9 +73,9 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
         .openpty(pty_size)
         .context("failed to open host pty")?;
 
-    let program = args
-        .program
-        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
+    let program = args.program.unwrap_or_else(|| {
+        std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/bash"))
+    });
 
     let mut cmd = CommandBuilder::new(&program);
     if let Some(cwd) = &args.cwd {

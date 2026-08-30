@@ -1,7 +1,10 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[cfg(any(target_os = "linux", test))]
-use std::ffi::OsString;
+use std::ffi::OsStr;
+#[cfg(all(any(target_os = "linux", test), unix))]
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct StartupArgs {
@@ -14,8 +17,8 @@ pub(crate) struct StartupArgs {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TerminalCommand {
-    pub program: String,
-    pub args: Vec<String>,
+    pub program: OsString,
+    pub args: Vec<OsString>,
 }
 
 impl StartupArgs {
@@ -32,25 +35,15 @@ impl StartupArgs {
 
         while index < args.len() {
             let arg = &args[index];
-            let text = arg
-                .to_str()
-                .ok_or_else(|| "startup arguments must be valid UTF-8".to_string())?;
 
-            if text == "-e" || text == "--command" {
-                let command = args[index + 1..]
-                    .iter()
-                    .map(|value| {
-                        value
-                            .to_str()
-                            .map(str::to_owned)
-                            .ok_or_else(|| "command arguments must be valid UTF-8".to_string())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+            if arg == OsStr::new("-e") || arg == OsStr::new("--command") {
+                let option = arg.to_string_lossy();
+                let command = &args[index + 1..];
                 let Some((program, command_args)) = command.split_first() else {
-                    return Err(format!("{text} requires a command"));
+                    return Err(format!("{option} requires a command"));
                 };
                 if program.is_empty() {
-                    return Err(format!("{text} requires a non-empty command"));
+                    return Err(format!("{option} requires a non-empty command"));
                 }
                 parsed.command = Some(TerminalCommand {
                     program: program.clone(),
@@ -59,19 +52,31 @@ impl StartupArgs {
                 break;
             }
 
-            if let Some(value) =
-                option_value(text, "--working-directory").or_else(|| option_value(text, "--dir"))
-            {
-                set_path_option(&mut parsed.working_directory, value, "--working-directory")?;
+            if let Some(value) = path_option_value(arg) {
+                set_path_option(
+                    &mut parsed.working_directory,
+                    PathBuf::from(value),
+                    "--working-directory",
+                )?;
                 index += 1;
                 continue;
             }
-            if text == "--working-directory" || text == "--dir" {
-                let value = next_value(&args, &mut index, text)?;
-                set_path_option(&mut parsed.working_directory, &value, text)?;
+            if arg == OsStr::new("--working-directory") || arg == OsStr::new("--dir") {
+                let option = arg.to_string_lossy();
+                let value = next_os_value(&args, &mut index, &option)?;
+                set_path_option(&mut parsed.working_directory, PathBuf::from(value), &option)?;
                 index += 1;
                 continue;
             }
+
+            let Some(text) = arg.to_str() else {
+                if os_starts_with_dash(arg) {
+                    return Err("option names must be valid UTF-8".to_string());
+                }
+                set_workspace(&mut parsed, PathBuf::from(arg))?;
+                index += 1;
+                continue;
+            };
 
             if let Some(value) = option_value(text, "--title") {
                 set_string_option(&mut parsed.title, value, "--title")?;
@@ -79,7 +84,7 @@ impl StartupArgs {
                 continue;
             }
             if text == "--title" {
-                let value = next_value(&args, &mut index, text)?;
+                let value = next_string_value(&args, &mut index, text)?;
                 set_string_option(&mut parsed.title, &value, text)?;
                 index += 1;
                 continue;
@@ -91,7 +96,7 @@ impl StartupArgs {
                 continue;
             }
             if text == "--app-id" {
-                let value = next_value(&args, &mut index, text)?;
+                let value = next_string_value(&args, &mut index, text)?;
                 set_string_option(&mut parsed.app_id, &value, text)?;
                 index += 1;
                 continue;
@@ -131,13 +136,53 @@ fn option_value<'a>(arg: &'a str, name: &str) -> Option<&'a str> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn next_value(args: &[OsString], index: &mut usize, option: &str) -> Result<String, String> {
+fn next_os_value<'a>(
+    args: &'a [OsString],
+    index: &mut usize,
+    option: &str,
+) -> Result<&'a OsStr, String> {
     *index += 1;
-    args.get(*index)
-        .ok_or_else(|| format!("{option} requires a value"))?
+    let value = args
+        .get(*index)
+        .ok_or_else(|| format!("{option} requires a value"))?;
+    Ok(value.as_os_str())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn next_string_value(args: &[OsString], index: &mut usize, option: &str) -> Result<String, String> {
+    next_os_value(args, index, option)?
         .to_str()
         .map(str::to_owned)
         .ok_or_else(|| format!("{option} value must be valid UTF-8"))
+}
+
+#[cfg(all(any(target_os = "linux", test), unix))]
+fn path_option_value(arg: &OsStr) -> Option<OsString> {
+    [b"--working-directory=".as_slice(), b"--dir=".as_slice()]
+        .into_iter()
+        .find_map(|prefix| {
+            arg.as_bytes()
+                .strip_prefix(prefix)
+                .map(|value| OsString::from_vec(value.to_vec()))
+        })
+}
+
+#[cfg(all(any(target_os = "linux", test), unix))]
+fn os_starts_with_dash(arg: &OsStr) -> bool {
+    arg.as_bytes().first() == Some(&b'-')
+}
+
+#[cfg(all(any(target_os = "linux", test), not(unix)))]
+fn path_option_value(arg: &OsStr) -> Option<OsString> {
+    let arg = arg.to_str()?;
+    option_value(arg, "--working-directory")
+        .or_else(|| option_value(arg, "--dir"))
+        .map(OsString::from)
+}
+
+#[cfg(all(any(target_os = "linux", test), not(unix)))]
+fn os_starts_with_dash(arg: &OsStr) -> bool {
+    arg.to_string_lossy().starts_with('-')
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -158,13 +203,13 @@ fn set_string_option(
 #[cfg(any(target_os = "linux", test))]
 fn set_path_option(
     destination: &mut Option<PathBuf>,
-    value: &str,
+    value: PathBuf,
     option: &str,
 ) -> Result<(), String> {
-    if value.is_empty() {
+    if value.as_os_str().is_empty() {
         return Err(format!("{option} requires a non-empty path"));
     }
-    if destination.replace(PathBuf::from(value)).is_some() {
+    if destination.replace(value).is_some() {
         return Err(format!("{option} may only be supplied once"));
     }
     Ok(())
@@ -270,5 +315,28 @@ mod tests {
                 args: vec!["--".into(), "-notes.md".into()],
             })
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_non_utf8_workspace_paths_directories_and_command_arguments() {
+        let workspace = OsString::from_vec(b"project-\xff".to_vec());
+        assert_eq!(
+            StartupArgs::parse([workspace.clone()]).unwrap().workspace,
+            Some(PathBuf::from(workspace))
+        );
+
+        let directory = OsString::from_vec(b"/tmp/project-\xfe".to_vec());
+        let parsed = StartupArgs::parse([OsString::from("--dir"), directory.clone()]).unwrap();
+        assert_eq!(parsed.working_directory, Some(PathBuf::from(directory)));
+
+        let argument = OsString::from_vec(b"argument-\xfd".to_vec());
+        let parsed = StartupArgs::parse([
+            OsString::from("-e"),
+            OsString::from("printf"),
+            argument.clone(),
+        ])
+        .unwrap();
+        assert_eq!(parsed.command.unwrap().args, [argument]);
     }
 }

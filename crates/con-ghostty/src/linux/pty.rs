@@ -1,3 +1,4 @@
+use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -29,9 +30,10 @@ pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
+    pub command_program: Option<OsString>,
     /// `None` starts the configured program as an interactive login shell.
     /// `Some`, including an empty vector, executes an explicit command exactly.
-    pub command_args: Option<Vec<String>>,
+    pub command_args: Option<Vec<OsString>>,
     pub size: SurfaceSize,
     pub initial_output: Option<Vec<u8>>,
     pub wake_generation: Option<Arc<AtomicU64>>,
@@ -44,6 +46,7 @@ impl Default for LinuxPtyOptions {
         Self {
             cwd: None,
             program: None,
+            command_program: None,
             command_args: None,
             size: SurfaceSize {
                 columns: DEFAULT_COLUMNS,
@@ -608,9 +611,12 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         .context("failed to clone linux pty writer cancellation socket")?;
 
     let target_program = options
-        .program
+        .command_program
         .clone()
-        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
+        .or_else(|| options.program.clone().map(OsString::from))
+        .unwrap_or_else(|| {
+            std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/bash"))
+        });
 
     let mut command = CommandBuilder::new(&target_program);
     if let Some(args) = options.command_args.as_ref() {
@@ -695,7 +701,10 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         size: Mutex::new(options.size),
         title: Some(default_title(
             options.cwd.as_deref(),
-            options.program.as_deref(),
+            options
+                .command_program
+                .as_deref()
+                .or_else(|| options.program.as_deref().map(OsStr::new)),
         )),
         current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
         input_generation: AtomicU64::new(0),
@@ -755,7 +764,11 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         if let Some(cwd) = &options.cwd {
             cmd.arg("--cwd").arg(cwd);
         }
-        if let Some(prog) = &options.program {
+        if let Some(prog) = options
+            .command_program
+            .as_deref()
+            .or_else(|| options.program.as_deref().map(OsStr::new))
+        {
             cmd.arg("--program").arg(prog);
         }
         if let Some(args) = options.command_args.as_ref() {
@@ -773,7 +786,11 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         if let Some(cwd) = &options.cwd {
             cmd.arg("--cwd").arg(cwd);
         }
-        if let Some(prog) = &options.program {
+        if let Some(prog) = options
+            .command_program
+            .as_deref()
+            .or_else(|| options.program.as_deref().map(OsStr::new))
+        {
             cmd.arg("--program").arg(prog);
         }
         if let Some(args) = options.command_args.as_ref() {
@@ -865,7 +882,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         size: Mutex::new(options.size),
         title: Some(default_title(
             options.cwd.as_deref(),
-            options.program.as_deref(),
+            options
+                .command_program
+                .as_deref()
+                .or_else(|| options.program.as_deref().map(OsStr::new)),
         )),
         current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
         input_generation: AtomicU64::new(0),
@@ -975,7 +995,7 @@ fn spawn_reader_thread(
         .expect("failed to spawn linux pty reader thread");
 }
 
-fn default_title(cwd: Option<&Path>, program: Option<&str>) -> String {
+fn default_title(cwd: Option<&Path>, program: Option<&OsStr>) -> String {
     if let Some(name) = cwd
         .and_then(Path::file_name)
         .and_then(|name| name.to_str())
@@ -995,7 +1015,7 @@ fn default_title(cwd: Option<&Path>, program: Option<&str>) -> String {
     "shell".to_string()
 }
 
-fn configure_shell_startup(program: &str, command: &mut CommandBuilder) {
+fn configure_shell_startup(program: &OsStr, command: &mut CommandBuilder) {
     let Some(shell) = Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
@@ -1190,6 +1210,7 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::io::{ErrorKind, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
@@ -1208,13 +1229,13 @@ mod tests {
     #[test]
     fn explicit_command_preserves_argument_boundaries() {
         let session = LinuxPtySession::spawn(LinuxPtyOptions {
-            program: Some("/bin/sh".to_string()),
+            command_program: Some(OsString::from("/bin/sh")),
             command_args: Some(vec![
-                "-c".to_string(),
-                "printf '<%s>|<%s>\\n' \"$1\" \"$2\"".to_string(),
-                "con-command-test".to_string(),
-                "hello world".to_string(),
-                "-leading-dash".to_string(),
+                OsString::from("-c"),
+                OsString::from("printf '<%s>|<%s>\\n' \"$1\" \"$2\""),
+                OsString::from("con-command-test"),
+                OsString::from("hello world"),
+                OsString::from("-leading-dash"),
             ]),
             ..LinuxPtyOptions::default()
         })

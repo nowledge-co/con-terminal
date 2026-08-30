@@ -1180,7 +1180,16 @@ mod tests {
             panic!("expected PTY bridge command");
         };
         assert!(args.literal_command);
-        assert_eq!(args.program.as_deref(), Some("/bin/sh"));
-        assert_eq!(args.args, ["-c", "printf '%s' ready"]);
+        assert_eq!(
+            args.program.as_deref(),
+            Some(std::ffi::OsStr::new("/bin/sh"))
+        );
+        assert_eq!(
+            args.args,
+            [
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("printf '%s' ready"),
+            ]
+        );
     }
 }
