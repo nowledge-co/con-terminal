@@ -105,6 +105,7 @@ pub struct GhosttyView {
     focus_handle: FocusHandle,
     initial_cwd: Option<String>,
     restored_screen_text: Option<Vec<String>>,
+    initial_command: Option<crate::startup_args::TerminalCommand>,
     initial_font_size: f32,
     initialized: bool,
     process_exit_emitted: bool,
@@ -161,6 +162,7 @@ impl GhosttyView {
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
         restored_screen_text: Option<Vec<String>>,
+        command: Option<crate::startup_args::TerminalCommand>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -200,6 +202,7 @@ impl GhosttyView {
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
             restored_screen_text,
+            initial_command: command,
             initial_font_size: font_size,
             initialized: false,
             process_exit_emitted: false,
@@ -482,6 +485,10 @@ impl GhosttyView {
         }
 
         let mut options = self.app.default_pty_options(self.initial_cwd.as_deref());
+        if let Some(command) = self.initial_command.take() {
+            options.program = Some(command.program);
+            options.command_args = Some(command.args);
+        }
         options.initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
         match terminal.spawn_with_options(options) {
             Ok(()) => {

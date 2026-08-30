@@ -10,6 +10,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::from_session_with_initial_command(config, session, None, window, cx)
+    }
+
+    pub fn from_session_with_initial_command(
+        config: Config,
+        session: Session,
+        initial_command: Option<crate::startup_args::TerminalCommand>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
@@ -108,6 +118,7 @@ impl ConWorkspace {
         }
 
         let restore_terminal_text = config.appearance.restore_terminal_text;
+        let initial_command = RefCell::new(initial_command);
         let make_terminal = |cwd: Option<&str>,
                              restored_screen_text: Option<&[String]>,
                              force_restored_screen_text: bool,
@@ -119,10 +130,12 @@ impl ConWorkspace {
             } else {
                 None
             };
+            let command = initial_command.borrow_mut().take();
             make_ghostty_terminal(
                 &ghostty_app,
                 cwd,
                 restored_screen_text,
+                command,
                 font_size,
                 window,
                 cx,
@@ -812,7 +825,15 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        make_ghostty_terminal(&self.ghostty_app, cwd, None, self.font_size, window, cx)
+        make_ghostty_terminal(
+            &self.ghostty_app,
+            cwd,
+            None,
+            None,
+            self.font_size,
+            window,
+            cx,
+        )
     }
 
     pub(super) fn open_path_in_active_editor(

@@ -19,6 +19,9 @@ pub struct PtyBridgeArgs {
     pub cwd: Option<PathBuf>,
     #[arg(long)]
     pub program: Option<String>,
+    /// Execute `program` with exactly `args`, even when the argument list is empty.
+    #[arg(long)]
+    pub literal_command: bool,
     #[arg(trailing_var_arg = true)]
     pub args: Vec<String>,
 }
@@ -77,12 +80,12 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     if let Some(cwd) = &args.cwd {
         cmd.cwd(cwd);
     }
-    if args.args.is_empty() {
-        configure_shell_startup(&program, &mut cmd);
-    } else {
+    if args.literal_command {
         for arg in &args.args {
             cmd.arg(arg);
         }
+    } else {
+        configure_shell_startup(&program, &mut cmd);
     }
     cmd.env("TERM", "xterm-256color");
 

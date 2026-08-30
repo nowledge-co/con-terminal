@@ -29,6 +29,9 @@ pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
+    /// `None` starts the configured program as an interactive login shell.
+    /// `Some`, including an empty vector, executes an explicit command exactly.
+    pub command_args: Option<Vec<String>>,
     pub size: SurfaceSize,
     pub initial_output: Option<Vec<u8>>,
     pub wake_generation: Option<Arc<AtomicU64>>,
@@ -41,6 +44,7 @@ impl Default for LinuxPtyOptions {
         Self {
             cwd: None,
             program: None,
+            command_args: None,
             size: SurfaceSize {
                 columns: DEFAULT_COLUMNS,
                 rows: DEFAULT_ROWS,
@@ -609,7 +613,13 @@ fn spawn_local(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
 
     let mut command = CommandBuilder::new(&target_program);
-    configure_shell_startup(&target_program, &mut command);
+    if let Some(args) = options.command_args.as_ref() {
+        for arg in args {
+            command.arg(arg);
+        }
+    } else {
+        configure_shell_startup(&target_program, &mut command);
+    }
     command.env("TERM", "xterm-256color");
 
     if let Some(cwd) = options.cwd.as_ref() {
@@ -748,6 +758,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         if let Some(prog) = &options.program {
             cmd.arg("--program").arg(prog);
         }
+        if let Some(args) = options.command_args.as_ref() {
+            cmd.arg("--literal-command");
+            cmd.arg("--").args(args);
+        }
     } else {
         cmd.arg("python3");
         cmd.arg("-c");
@@ -761,6 +775,10 @@ fn spawn_host_bridge(options: LinuxPtyOptions) -> Result<LinuxPtySession> {
         }
         if let Some(prog) = &options.program {
             cmd.arg("--program").arg(prog);
+        }
+        if let Some(args) = options.command_args.as_ref() {
+            cmd.arg("--literal-command");
+            cmd.arg("--").args(args);
         }
     }
 
@@ -1018,7 +1036,10 @@ def main():
     parser.add_argument('--rows', type=int, default=24)
     parser.add_argument('--cwd')
     parser.add_argument('--program')
+    parser.add_argument('--literal-command', action='store_true')
     args, remaining = parser.parse_known_args()
+    if remaining and remaining[0] == '--':
+        remaining = remaining[1:]
 
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1055,7 +1076,7 @@ def main():
         os.environ['TERM'] = 'xterm-256color'
         prog = args.program or os.environ.get('SHELL') or '/bin/bash'
         argv = [prog]
-        if not remaining:
+        if not args.literal_command:
             shell_name = os.path.basename(prog)
             if shell_name in ('bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh'):
                 argv.append('-l')
@@ -1179,7 +1200,42 @@ mod tests {
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::VtScreen;
 
-    use super::{SessionShared, duplicate_fd, set_fd_nonblocking, write_all_cancellable};
+    use super::{
+        LinuxPtyOptions, LinuxPtySession, SessionShared, duplicate_fd, set_fd_nonblocking,
+        write_all_cancellable,
+    };
+
+    #[test]
+    fn explicit_command_preserves_argument_boundaries() {
+        let session = LinuxPtySession::spawn(LinuxPtyOptions {
+            program: Some("/bin/sh".to_string()),
+            command_args: Some(vec![
+                "-c".to_string(),
+                "printf '<%s>|<%s>\\n' \"$1\" \"$2\"".to_string(),
+                "con-command-test".to_string(),
+                "hello world".to_string(),
+                "-leading-dash".to_string(),
+            ]),
+            ..LinuxPtyOptions::default()
+        })
+        .expect("spawn explicit command");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let output = loop {
+            session.poll_child_status();
+            let output = session.read_recent_lines(20).join("\n");
+            if output.contains("<hello world>|<-leading-dash>") {
+                break output;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for explicit command output: {output:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(output.matches("<hello world>|<-leading-dash>").count(), 1);
+    }
 
     #[test]
     fn blocked_writer_stops_when_session_is_cancelled() {

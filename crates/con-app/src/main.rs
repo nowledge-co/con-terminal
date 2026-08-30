@@ -72,6 +72,7 @@ mod pane_tree;
 mod settings_panel;
 mod sidebar;
 mod sidebar_search_view;
+mod startup_args;
 mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
@@ -101,6 +102,8 @@ use gpui_component::ActiveTheme;
 #[cfg(target_os = "macos")]
 use gpui_component::link::Link;
 use workspace::ConWorkspace;
+
+use crate::startup_args::StartupArgs;
 
 actions!(
     con,
@@ -724,12 +727,44 @@ pub(crate) fn open_con_window(
     exit_on_error: bool,
     cx: &mut App,
 ) {
+    open_con_window_with_startup(config, session, exit_on_error, None, cx);
+}
+
+fn open_con_window_with_startup(
+    config: con_core::Config,
+    session: Session,
+    exit_on_error: bool,
+    startup: Option<StartupArgs>,
+    cx: &mut App,
+) {
+    #[cfg(target_os = "linux")]
+    let mut window_options = default_window_options(&config, cx);
+    #[cfg(not(target_os = "linux"))]
     let window_options = default_window_options(&config, cx);
+    #[cfg(target_os = "linux")]
+    if let Some(startup) = startup.as_ref() {
+        if let Some(app_id) = startup.app_id.as_ref() {
+            window_options.app_id = Some(app_id.clone());
+        }
+        if let Some(title) = startup.title.as_ref()
+            && let Some(titlebar) = window_options.titlebar.as_mut()
+        {
+            titlebar.title = Some(title.clone().into());
+        }
+    }
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
-            let view = cx
-                .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
+            let command = startup.as_ref().and_then(|startup| startup.command.clone());
+            let view = cx.new(|cx| {
+                ConWorkspace::from_session_with_initial_command(
+                    config.clone(),
+                    restored_session,
+                    command,
+                    window,
+                    cx,
+                )
+            });
             #[cfg(target_os = "windows")]
             let mica_applied = apply_windows_backdrop(window, config.appearance.terminal_blur);
 
@@ -917,11 +952,22 @@ fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> 
     session
 }
 
-fn startup_path_argument() -> Option<std::path::PathBuf> {
-    std::env::args_os().skip(1).find_map(|arg| {
-        let text = arg.to_string_lossy();
-        (!text.starts_with('-')).then(|| std::path::PathBuf::from(arg))
-    })
+fn startup_arguments() -> Result<StartupArgs, String> {
+    #[cfg(target_os = "linux")]
+    {
+        StartupArgs::parse_env()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(StartupArgs {
+            workspace: std::env::args_os().skip(1).find_map(|arg| {
+                let text = arg.to_string_lossy();
+                (!text.starts_with('-')).then(|| std::path::PathBuf::from(arg))
+            }),
+            ..StartupArgs::default()
+        })
+    }
 }
 
 pub(crate) fn session_from_workspace_layout_path(
@@ -949,8 +995,8 @@ pub(crate) fn session_from_workspace_layout_path(
     anyhow::bail!("workspace path does not exist: {}", path.display())
 }
 
-fn startup_session() -> Session {
-    if let Some(path) = startup_path_argument() {
+fn startup_session(startup: &StartupArgs) -> Session {
+    if let Some(path) = startup.workspace.as_ref() {
         match session_from_workspace_layout_path(&path) {
             Ok(session) => {
                 log::info!("opening workspace path {}", path.display());
@@ -961,6 +1007,10 @@ fn startup_session() -> Session {
                 return workspace_path_error_session(&path, &err);
             }
         }
+    }
+
+    if startup.command.is_some() || startup.working_directory.is_some() {
+        return fresh_window_session_with_history_for_cwd(startup.working_directory.clone());
     }
 
     if live_control_endpoint_exists() {
@@ -2525,6 +2575,14 @@ fn main() {
     cli_shim::ensure_cli_shim();
     apply_linux_platform_override();
 
+    let startup = match startup_arguments() {
+        Ok(startup) => startup,
+        Err(err) => {
+            eprintln!("con: {err}");
+            std::process::exit(2);
+        }
+    };
+
     let config = con_core::Config::load().unwrap_or_default();
     log::info!("config loaded");
     // Apply [network] proxy config — overrides any shell-inherited env vars.
@@ -2760,7 +2818,13 @@ fn main() {
 
         cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
 
-        open_con_window(config.clone(), startup_session(), true, cx);
+        open_con_window_with_startup(
+            config.clone(),
+            startup_session(&startup),
+            true,
+            Some(startup.clone()),
+            cx,
+        );
 
         // Initialize the auto-updater. On macOS this loads Sparkle
         // from the app bundle; on Windows it kicks off a notify-only

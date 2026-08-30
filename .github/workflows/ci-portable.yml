@@ -131,6 +131,8 @@ jobs:
           bash -n scripts/linux/release.sh
           bash -n scripts/release/verify-artifacts.sh
           bash -n scripts/release/verify-release-gate.sh
+          ./scripts/release/verify-artifacts.sh desktop \
+            packaging/flatpak/co.nowledge.con.desktop
           for script in scripts/macos/*.sh scripts/sparkle/*.sh; do
             bash -n "$script"
           done

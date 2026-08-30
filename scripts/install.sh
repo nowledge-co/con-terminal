@@ -315,14 +315,16 @@ fi
 # desktops can show duplicate launcher icons or fail to group windows.
 linux_app_id="co.nowledge.con"
 if [ -f "$staged_root/${linux_app_id}.desktop" ]; then
-  sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/${linux_app_id}.desktop" \
+  sed -e "s|^TryExec=.*|TryExec=${target_bin}|" \
+      -e "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/${linux_app_id}.desktop" \
     > "${apps_dir}/${linux_app_id}.desktop"
   chmod 644 "${apps_dir}/${linux_app_id}.desktop"
   rm -f "${apps_dir}/con.desktop"
 elif [ -f "$staged_root/con.desktop" ]; then
   # Legacy tarballs before the reverse-DNS app_id change shipped con.desktop.
   # Preserve compatibility when CON_INSTALL_VERSION points at an older release.
-  sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/con.desktop" \
+  sed -e "s|^TryExec=.*|TryExec=${target_bin}|" \
+      -e "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/con.desktop" \
     > "${apps_dir}/con.desktop"
   chmod 644 "${apps_dir}/con.desktop"
   rm -f "${apps_dir}/${linux_app_id}.desktop"

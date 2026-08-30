@@ -373,6 +373,7 @@ impl ConWorkspace {
                         &ghostty_app,
                         restore_cwd,
                         restored_screen_text,
+                        None,
                         font_size,
                         window,
                         cx,

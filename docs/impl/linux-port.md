@@ -38,6 +38,29 @@ On Linux today:
 cargo build -p con --release
 ```
 
+### Desktop terminal contract
+
+The installed desktop entry advertises Con as an `xdg-terminal-exec`
+provider. Desktop launchers and compositors can therefore open a shell in a
+specific directory or run a TUI without wrapping the request in a shell:
+
+```bash
+con --dir "/path/with spaces"
+con --app-id=org.example.editor --title="Editor" -e nvim -- notes.md
+```
+
+`-e` consumes the remaining arguments as one command invocation. Con preserves
+argument boundaries, starts that command exactly once in the first pane, and
+does not add login-shell flags. `--working-directory` is the canonical spelling;
+`--dir` is supported for launcher compatibility. A positional path retains its
+existing meaning as a Con workspace profile, and cannot be mixed with a command
+or working-directory request.
+
+The tarball and Flatpak desktop entries carry the same `X-TerminalArgExec`,
+`X-TerminalArgDir`, `X-TerminalArgTitle`, and `X-TerminalArgAppId` declarations.
+The one-line installer rewrites only `Exec` and `TryExec` to the selected install
+location, so the capability metadata stays intact.
+
 What that gives you:
 
 - GPUI window shell on Linux with **client-side decorations** (no

@@ -176,12 +176,17 @@ Type=Application
 Name=con
 GenericName=Terminal
 Comment=GPU-accelerated terminal emulator with a built-in AI agent harness
+TryExec=/usr/local/bin/con
 Exec=/usr/local/bin/con %U
 Icon=con
 Terminal=false
 Categories=System;TerminalEmulator;Utility;
 Keywords=terminal;shell;command;cli;ai;agent;
 StartupWMClass=${linux_app_id}
+X-TerminalArgExec=-e
+X-TerminalArgAppId=--app-id=
+X-TerminalArgTitle=--title=
+X-TerminalArgDir=--working-directory=
 EOF
 
 # 256x256 icon — freedesktop hicolor's bread-and-butter size, and
