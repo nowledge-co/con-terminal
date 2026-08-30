@@ -1385,19 +1385,19 @@ impl Render for GhosttyView {
             style: FontStyle::Normal,
         };
 
-        let status_message = if let Some(error) = self.startup_error.as_deref() {
+        let status_message = if let Some(error) = self.startup_error.clone() {
             Some(error)
         } else if !self.initialized {
-            Some("Launching Linux shell…")
+            Some("Launching Linux shell…".to_string())
         } else if !self.is_alive() {
-            Some("Linux shell exited")
+            Some("Linux shell exited".to_string())
         } else if !self.seen_any_output {
             // Only show the "waiting for prompt" placeholder before
             // bash has echoed *anything* for the first time. Once
             // the latch flips, alt-screen TUIs like htop / vim that
             // briefly clear the grid stay silent instead of
             // flashing this placeholder over their startup gap.
-            Some("Waiting for shell prompt…")
+            Some("Waiting for shell prompt…".to_string())
         } else {
             None
         };
@@ -1456,7 +1456,7 @@ impl Render for GhosttyView {
                     .text_size(px(font_size_px))
                     .line_height(px(line_height_px))
                     .text_color(status_color)
-                    .child(message.to_string())
+                    .child(message)
                     .into_any_element(),
             );
         }
