@@ -18,9 +18,9 @@ pub struct PtyBridgeArgs {
     pub cols: u16,
     #[arg(long, default_value_t = 24)]
     pub rows: u16,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub cwd: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub program: Option<OsString>,
     /// Execute `program` with exactly `args`, even when the argument list is empty.
     #[arg(long)]

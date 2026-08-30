@@ -1192,4 +1192,26 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn pty_bridge_accepts_hyphen_prefixed_cwd_and_program() {
+        let cli = Cli::try_parse_from([
+            "con-cli",
+            "pty-bridge",
+            "--socket",
+            "/tmp/con.sock",
+            "--cwd",
+            "-workspace",
+            "--program",
+            "-tool",
+            "--literal-command",
+        ])
+        .expect("parse hyphen-prefixed PTY bridge operands");
+
+        let Command::PtyBridge(args) = cli.command else {
+            panic!("expected PTY bridge command");
+        };
+        assert_eq!(args.cwd, Some(PathBuf::from("-workspace")));
+        assert_eq!(args.program, Some(std::ffi::OsString::from("-tool")));
+    }
 }

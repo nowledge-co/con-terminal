@@ -788,7 +788,7 @@ fn stop_host_bridge_child(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-fn fallback_python_option(name: &[u8], value: &OsStr) -> OsString {
+fn host_bridge_option(name: &[u8], value: &OsStr) -> OsString {
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
     let mut argument = Vec::with_capacity(name.len() + 1 + value.as_bytes().len());
@@ -911,14 +911,14 @@ fn spawn_host_bridge(
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
         if let Some(cwd) = &options.cwd {
-            cmd.arg("--cwd").arg(cwd);
+            cmd.arg(host_bridge_option(b"--cwd", cwd.as_os_str()));
         }
         if let Some(prog) = options
             .command_program
             .as_deref()
             .or_else(|| options.program.as_deref().map(OsStr::new))
         {
-            cmd.arg("--program").arg(prog);
+            cmd.arg(host_bridge_option(b"--program", prog));
         }
         if let Some(args) = options.command_args.as_ref() {
             cmd.arg("--literal-command");
@@ -933,14 +933,14 @@ fn spawn_host_bridge(
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
         if let Some(cwd) = &options.cwd {
-            cmd.arg(fallback_python_option(b"--cwd", cwd.as_os_str()));
+            cmd.arg(host_bridge_option(b"--cwd", cwd.as_os_str()));
         }
         if let Some(prog) = options
             .command_program
             .as_deref()
             .or_else(|| options.program.as_deref().map(OsStr::new))
         {
-            cmd.arg(fallback_python_option(b"--program", prog));
+            cmd.arg(host_bridge_option(b"--program", prog));
         }
         if let Some(args) = options.command_args.as_ref() {
             cmd.arg("--literal-command");
@@ -1501,7 +1501,7 @@ mod tests {
     use super::{
         BRIDGE_READY, BRIDGE_STARTUP_ERROR, EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions,
         LinuxPtySession, SessionShared, bridge_help_supports_literal_commands, duplicate_fd,
-        fallback_python_option, set_fd_nonblocking, write_all_cancellable,
+        host_bridge_option, set_fd_nonblocking, write_all_cancellable,
     };
 
     fn unique_test_socket(name: &str) -> std::path::PathBuf {
@@ -1532,15 +1532,15 @@ mod tests {
     }
 
     #[test]
-    fn fallback_python_options_preserve_leading_dashes_and_non_utf8_bytes() {
+    fn host_bridge_options_preserve_leading_dashes_and_non_utf8_bytes() {
         let value = OsStr::from_bytes(b"-tool-\xff");
 
         assert_eq!(
-            fallback_python_option(b"--program", value).as_bytes(),
+            host_bridge_option(b"--program", value).as_bytes(),
             b"--program=-tool-\xff"
         );
         assert_eq!(
-            fallback_python_option(b"--cwd", value).as_bytes(),
+            host_bridge_option(b"--cwd", value).as_bytes(),
             b"--cwd=-tool-\xff"
         );
     }
