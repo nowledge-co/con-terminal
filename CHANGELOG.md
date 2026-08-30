@@ -4,7 +4,22 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.89` - unreleased
+## `v0.1.0-beta.90` - unreleased
+
+### Added
+
+**Linux**
+
+- Con now works as an `xdg-terminal-exec` provider, so desktop launchers can
+  open a requested directory or start a TUI with its arguments, title, and app
+  identity preserved. The official installer, tarball, and Flatpak metadata
+  advertise the same capabilities. _(PR
+  [#317](https://github.com/nowledge-co/con-terminal/pull/317) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
+## `v0.1.0-beta.89` - 2026-08-30
 
 ### Added
 

@@ -697,7 +697,7 @@ impl ConWorkspace {
         let font_size = self.font_size;
         let mut make_terminal =
             |cwd: Option<&str>, _screen_text: Option<&[String]>, _force: bool| {
-                make_ghostty_terminal(&ghostty_app, cwd, None, font_size, window, cx)
+                make_ghostty_terminal(&ghostty_app, cwd, None, None, None, font_size, window, cx)
             };
         let pane_tree = PaneTree::from_state(&layout, focused_pane_id, &mut make_terminal);
 

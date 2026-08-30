@@ -4,9 +4,21 @@ use crate::editor_tab_actions::reusable_editor_tab_index;
 use crate::file_tree_view::OpenFileInEditorTab;
 
 impl ConWorkspace {
+    #[cfg(target_os = "macos")]
     pub fn from_session(
         config: Config,
         session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::from_session_with_initial_terminal(config, session, None, None, window, cx)
+    }
+
+    pub fn from_session_with_initial_terminal(
+        config: Config,
+        session: Session,
+        initial_working_directory: Option<std::path::PathBuf>,
+        initial_command: Option<crate::startup_args::TerminalCommand>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -108,6 +120,8 @@ impl ConWorkspace {
         }
 
         let restore_terminal_text = config.appearance.restore_terminal_text;
+        let initial_working_directory = RefCell::new(initial_working_directory);
+        let initial_command = RefCell::new(initial_command);
         let make_terminal = |cwd: Option<&str>,
                              restored_screen_text: Option<&[String]>,
                              force_restored_screen_text: bool,
@@ -119,10 +133,14 @@ impl ConWorkspace {
             } else {
                 None
             };
+            let working_directory = initial_working_directory.borrow_mut().take();
+            let command = initial_command.borrow_mut().take();
             make_ghostty_terminal(
                 &ghostty_app,
                 cwd,
                 restored_screen_text,
+                working_directory,
+                command,
                 font_size,
                 window,
                 cx,
@@ -812,7 +830,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> TerminalPane {
-        make_ghostty_terminal(&self.ghostty_app, cwd, None, self.font_size, window, cx)
+        make_ghostty_terminal(
+            &self.ghostty_app,
+            cwd,
+            None,
+            None,
+            None,
+            self.font_size,
+            window,
+            cx,
+        )
     }
 
     pub(super) fn open_path_in_active_editor(

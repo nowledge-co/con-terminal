@@ -11,3 +11,7 @@ Keywords=terminal;shell;command;cli;ai;agent;
 StartupWMClass=co.nowledge.con
 StartupNotify=true
 MimeType=x-scheme-handler/terminal;
+X-TerminalArgExec=-e
+X-TerminalArgAppId=--app-id=
+X-TerminalArgTitle=--title=
+X-TerminalArgDir=--working-directory=

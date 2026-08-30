@@ -21,6 +21,8 @@ pub(super) fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
     cwd: Option<&str>,
     restored_screen_text: Option<&[String]>,
+    initial_working_directory: Option<std::path::PathBuf>,
+    command: Option<crate::startup_args::TerminalCommand>,
     font_size: f32,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
@@ -30,9 +32,29 @@ pub(super) fn make_ghostty_terminal(
     let restored_screen_text = restored_screen_text
         .map(|lines| lines.to_vec())
         .filter(|lines| !lines.is_empty());
+    #[cfg(target_os = "linux")]
     let view = cx.new(|cx| {
-        crate::ghostty_view::GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)
+        let cwd = initial_working_directory.or_else(|| cwd.map(std::path::PathBuf::from));
+        crate::ghostty_view::GhosttyView::new(
+            app,
+            cwd,
+            restored_screen_text,
+            command,
+            font_size,
+            cx,
+        )
     });
+    #[cfg(not(target_os = "linux"))]
+    let view = {
+        debug_assert!(
+            initial_working_directory.is_none(),
+            "startup working directories are Linux-only"
+        );
+        debug_assert!(command.is_none(), "startup commands are Linux-only");
+        cx.new(|cx| {
+            crate::ghostty_view::GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)
+        })
+    };
     let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane

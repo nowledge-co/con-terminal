@@ -18,4 +18,5 @@ tokio.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 portable-pty = "0.9"

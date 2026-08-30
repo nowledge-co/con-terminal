@@ -1351,6 +1351,7 @@ dependencies = [
  "clap",
  "con-agent",
  "con-core",
+ "libc",
  "portable-pty",
  "serde",
  "serde_json",

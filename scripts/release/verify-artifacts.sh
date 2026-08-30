@@ -28,6 +28,22 @@ require_executable() {
   [[ -x "$path" ]] || fail "missing executable: $path"
 }
 
+require_desktop_entry() {
+  local desktop="$1"
+  local entry="$2"
+  grep -Fqx "$entry" "$desktop" \
+    || fail "$(basename "$desktop") is missing desktop entry: $entry"
+}
+
+verify_terminal_desktop_contract() {
+  local desktop="$1"
+  require_file "$desktop"
+  require_desktop_entry "$desktop" "X-TerminalArgExec=-e"
+  require_desktop_entry "$desktop" "X-TerminalArgDir=--working-directory="
+  require_desktop_entry "$desktop" "X-TerminalArgTitle=--title="
+  require_desktop_entry "$desktop" "X-TerminalArgAppId=--app-id="
+}
+
 verify_linux() {
   local tarball="$1"
   local checksum="$2"
@@ -72,6 +88,9 @@ verify_linux() {
 
   require_executable "$root/con"
   require_executable "$root/con-cli"
+  require_file "$root/co.nowledge.con.desktop"
+  require_desktop_entry "$root/co.nowledge.con.desktop" "TryExec=con"
+  verify_terminal_desktop_contract "$root/co.nowledge.con.desktop"
   "$root/con-cli" --help >/dev/null
   log "Linux artifact OK: $tarball_name"
 }
@@ -123,6 +142,11 @@ verify_macos() {
 }
 
 case "${1:-}" in
+  desktop)
+    [[ "$#" -eq 2 ]] || fail "usage: $0 desktop <desktop-entry>"
+    verify_terminal_desktop_contract "$2"
+    log "terminal desktop contract OK: $(basename "$2")"
+    ;;
   linux)
     [[ "$#" -eq 3 ]] || fail "usage: $0 linux <tarball> <checksum>"
     verify_linux "$2" "$3"
@@ -132,6 +156,6 @@ case "${1:-}" in
     verify_macos "$2" "$3" "$4" "$5"
     ;;
   *)
-    fail "usage: $0 {linux|macos} ..."
+    fail "usage: $0 {desktop|linux|macos} ..."
     ;;
 esac

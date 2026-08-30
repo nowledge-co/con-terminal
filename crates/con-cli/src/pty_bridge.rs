@@ -1,4 +1,7 @@
 #[cfg(unix)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
+#[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -15,12 +18,15 @@ pub struct PtyBridgeArgs {
     pub cols: u16,
     #[arg(long, default_value_t = 24)]
     pub rows: u16,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub cwd: Option<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    pub program: Option<OsString>,
+    /// Execute `program` with exactly `args`, even when the argument list is empty.
     #[arg(long)]
-    pub program: Option<String>,
+    pub literal_command: bool,
     #[arg(trailing_var_arg = true)]
-    pub args: Vec<String>,
+    pub args: Vec<OsString>,
 }
 
 #[cfg(unix)]
@@ -28,7 +34,56 @@ pub struct PtyBridgeArgs {
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 #[cfg(unix)]
-fn configure_shell_startup(program: &str, command: &mut portable_pty::CommandBuilder) {
+const PTY_EXIT_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(25);
+
+#[cfg(unix)]
+const PTY_EXIT_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(unix)]
+fn wait_for_pty_output(
+    pty_fd: std::os::fd::RawFd,
+    exit_fd: Option<std::os::fd::RawFd>,
+    timeout: Option<std::time::Duration>,
+) -> std::io::Result<(bool, bool)> {
+    let mut fds = [
+        libc::pollfd {
+            fd: pty_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: exit_fd.unwrap_or(-1),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    let timeout_ms = timeout.map_or(-1, |timeout| {
+        timeout.as_millis().min(i32::MAX as u128) as i32
+    });
+
+    loop {
+        // SAFETY: `fds` points to initialized values for the call, and both
+        // descriptors remain owned by the bridge threads while polling.
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
+        if ready >= 0 {
+            let pty_ready = fds[0].revents
+                & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL)
+                != 0;
+            let exit_ready = fds[1].fd >= 0
+                && fds[1].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL)
+                    != 0;
+            return Ok((pty_ready, exit_ready));
+        }
+
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn configure_shell_startup(program: &OsStr, command: &mut portable_pty::CommandBuilder) {
     let Some(shell) = Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
@@ -52,6 +107,7 @@ fn configure_shell_startup(program: &str, command: &mut portable_pty::CommandBui
 #[cfg(unix)]
 pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,20 +125,20 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
         .openpty(pty_size)
         .context("failed to open host pty")?;
 
-    let program = args
-        .program
-        .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()));
+    let program = args.program.unwrap_or_else(|| {
+        std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/bash"))
+    });
 
     let mut cmd = CommandBuilder::new(&program);
     if let Some(cwd) = &args.cwd {
         cmd.cwd(cwd);
     }
-    if args.args.is_empty() {
-        configure_shell_startup(&program, &mut cmd);
-    } else {
+    if args.literal_command || !args.args.is_empty() {
         for arg in &args.args {
             cmd.arg(arg);
         }
+    } else {
+        configure_shell_startup(&program, &mut cmd);
     }
     cmd.env("TERM", "xterm-256color");
 
@@ -96,11 +152,17 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let stream = UnixStream::connect(&args.socket)
         .with_context(|| format!("failed to connect to socket {}", args.socket.display()))?;
 
+    let pty_fd = pair
+        .master
+        .as_raw_fd()
+        .context("host pty master did not expose a file descriptor")?;
     let mut pty_reader = pair.master.try_clone_reader().context("clone pty reader")?;
     let pty_writer = std::sync::Mutex::new(pair.master.take_writer().context("take pty writer")?);
     let master_mutex = Arc::new(std::sync::Mutex::new(pair.master));
 
     let running = Arc::new(AtomicBool::new(true));
+    let (reader_exit_signal, reader_exit_wait) =
+        UnixStream::pair().context("create pty reader exit signal")?;
     let mut socket_writer = stream.try_clone().context("clone socket writer")?;
     let mut exit_writer = stream.try_clone().context("clone exit writer")?;
 
@@ -108,7 +170,34 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let running_r = running.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
-        while running_r.load(Ordering::Relaxed) {
+        let mut drain_deadline = None;
+        loop {
+            let draining = drain_deadline.is_some();
+            let timeout = drain_deadline.map(|deadline: std::time::Instant| {
+                PTY_EXIT_DRAIN_QUIET
+                    .min(deadline.saturating_duration_since(std::time::Instant::now()))
+            });
+            if timeout == Some(std::time::Duration::ZERO) {
+                break;
+            }
+            let (pty_ready, exit_ready) = match wait_for_pty_output(
+                pty_fd,
+                (!draining).then_some(reader_exit_wait.as_raw_fd()),
+                timeout,
+            ) {
+                Ok(ready) => ready,
+                Err(_) => break,
+            };
+            if exit_ready {
+                drain_deadline = Some(std::time::Instant::now() + PTY_EXIT_DRAIN_LIMIT);
+            }
+            if !pty_ready {
+                if drain_deadline.is_some() {
+                    break;
+                }
+                continue;
+            }
+
             match pty_reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -131,6 +220,9 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     // Thread 2: Read frames from socket, dispatch DATA to host PTY or RESIZE to master
     let running_w = running.clone();
     let master_for_resize = master_mutex.clone();
+    let socket_reader_interrupt = stream
+        .try_clone()
+        .context("clone socket reader interrupt")?;
     let mut socket_reader = stream;
     let socket_reader_thread = std::thread::spawn(move || {
         while running_w.load(Ordering::Relaxed) {
@@ -184,6 +276,12 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
 
     let status = child.wait();
     running.store(false, Ordering::Relaxed);
+
+    // Stop waiting for more input from Con and wake the PTY reader. It drains
+    // buffered output until the PTY is briefly quiet, with a hard limit for
+    // descendants that inherited and kept the slave descriptor open.
+    let _ = socket_reader_interrupt.shutdown(std::net::Shutdown::Read);
+    let _ = reader_exit_signal.shutdown(std::net::Shutdown::Both);
     let _ = reader_thread.join();
     let _ = socket_reader_thread.join();
 
@@ -206,4 +304,145 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
 #[cfg(not(unix))]
 pub fn run_pty_bridge(_args: PtyBridgeArgs) -> Result<()> {
     anyhow::bail!("pty-bridge is only supported on Unix targets");
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime};
+
+    use super::*;
+
+    fn run_finite_command(
+        iteration: usize,
+        script: &str,
+        literal_command: bool,
+        completion_timeout: Duration,
+    ) -> (Vec<u8>, i32) {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after unix epoch")
+            .as_nanos();
+        let socket = std::env::temp_dir().join(format!(
+            "con-pty-bridge-{}-{unique}-{iteration}.sock",
+            std::process::id(),
+        ));
+        let listener = UnixListener::bind(&socket).expect("bind bridge test socket");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let args = PtyBridgeArgs {
+            socket: socket.clone(),
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            program: Some(OsString::from("/bin/sh")),
+            literal_command,
+            args: vec![OsString::from("-c"), OsString::from(script)],
+        };
+        let (done_tx, done_rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let _ = done_tx.send(run_pty_bridge(args));
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if let Ok(result) = done_rx.try_recv() {
+                        result.expect("bridge should connect before returning");
+                        panic!("bridge returned without connecting");
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "bridge should connect within timeout"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept bridge connection: {err}"),
+            }
+        };
+        done_rx
+            .recv_timeout(completion_timeout)
+            .expect("bridge should return after child exit")
+            .expect("bridge should exit cleanly");
+
+        let mut frames = Vec::new();
+        stream
+            .read_to_end(&mut frames)
+            .expect("read completed bridge stream");
+        let mut frames = frames.as_slice();
+        let mut output = Vec::new();
+        let exit_code = loop {
+            let (&tag, rest) = frames
+                .split_first()
+                .expect("bridge should send an exit frame");
+            frames = rest;
+            match tag {
+                0x00 => {
+                    let (len, rest) = frames.split_at(4);
+                    let len = u32::from_be_bytes(len.try_into().expect("data frame length"));
+                    let (payload, rest) = rest.split_at(len as usize);
+                    output.extend_from_slice(payload);
+                    frames = rest;
+                }
+                0x02 => {
+                    let (code, _) = frames.split_at(4);
+                    break i32::from_be_bytes(code.try_into().expect("exit status"));
+                }
+                tag => panic!("unexpected bridge frame tag {tag:#x}"),
+            }
+        };
+        let _ = std::fs::remove_file(socket);
+        (output, exit_code)
+    }
+
+    #[test]
+    fn finite_command_drains_output_then_reports_exit_without_socket_input() {
+        for iteration in 0..64 {
+            let (output, exit_code) =
+                run_finite_command(iteration, "printf con-marker", true, Duration::from_secs(5));
+            assert_eq!(exit_code, 0, "iteration {iteration}");
+            assert!(
+                output
+                    .windows(b"con-marker".len())
+                    .any(|value| value == b"con-marker"),
+                "iteration {iteration} lost buffered PTY output: {output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn finite_command_does_not_wait_for_descendant_holding_slave_pty() {
+        let (output, exit_code) = run_finite_command(
+            65,
+            "sleep 2 & printf con-marker",
+            true,
+            Duration::from_secs(1),
+        );
+        assert_eq!(exit_code, 0);
+        assert!(
+            output
+                .windows(b"con-marker".len())
+                .any(|value| value == b"con-marker"),
+            "bridge lost buffered output: {output:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_trailing_arguments_still_execute_without_literal_flag() {
+        let (output, exit_code) =
+            run_finite_command(66, "printf legacy-marker", false, Duration::from_secs(5));
+        assert_eq!(exit_code, 0);
+        assert!(
+            output
+                .windows(b"legacy-marker".len())
+                .any(|value| value == b"legacy-marker"),
+            "bridge ignored legacy trailing arguments: {output:?}"
+        );
+    }
 }

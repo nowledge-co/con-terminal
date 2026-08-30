@@ -1155,3 +1155,63 @@ fn render_pretty_json(value: &Value) -> Result<()> {
 fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_bridge_literal_command_keeps_leading_dash_arguments() {
+        let cli = Cli::try_parse_from([
+            "con-cli",
+            "pty-bridge",
+            "--socket",
+            "/tmp/con bridge.sock",
+            "--program",
+            "/bin/sh",
+            "--literal-command",
+            "--",
+            "-c",
+            "printf '%s' ready",
+        ])
+        .expect("parse literal PTY bridge command");
+
+        let Command::PtyBridge(args) = cli.command else {
+            panic!("expected PTY bridge command");
+        };
+        assert!(args.literal_command);
+        assert_eq!(
+            args.program.as_deref(),
+            Some(std::ffi::OsStr::new("/bin/sh"))
+        );
+        assert_eq!(
+            args.args,
+            [
+                std::ffi::OsString::from("-c"),
+                std::ffi::OsString::from("printf '%s' ready"),
+            ]
+        );
+    }
+
+    #[test]
+    fn pty_bridge_accepts_hyphen_prefixed_cwd_and_program() {
+        let cli = Cli::try_parse_from([
+            "con-cli",
+            "pty-bridge",
+            "--socket",
+            "/tmp/con.sock",
+            "--cwd",
+            "-workspace",
+            "--program",
+            "-tool",
+            "--literal-command",
+        ])
+        .expect("parse hyphen-prefixed PTY bridge operands");
+
+        let Command::PtyBridge(args) = cli.command else {
+            panic!("expected PTY bridge command");
+        };
+        assert_eq!(args.cwd, Some(PathBuf::from("-workspace")));
+        assert_eq!(args.program, Some(std::ffi::OsString::from("-tool")));
+    }
+}

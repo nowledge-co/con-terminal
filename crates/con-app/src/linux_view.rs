@@ -103,8 +103,10 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
-    initial_cwd: Option<String>,
+    initial_cwd: Option<std::path::PathBuf>,
     restored_screen_text: Option<Vec<String>>,
+    initial_command: Option<crate::startup_args::TerminalCommand>,
+    startup_error: Option<String>,
     initial_font_size: f32,
     initialized: bool,
     process_exit_emitted: bool,
@@ -159,8 +161,9 @@ pub fn init(cx: &mut App) {
 impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
-        cwd: Option<String>,
+        cwd: Option<std::path::PathBuf>,
         restored_screen_text: Option<Vec<String>>,
+        command: Option<crate::startup_args::TerminalCommand>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -200,6 +203,8 @@ impl GhosttyView {
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
             restored_screen_text,
+            initial_command: command,
+            startup_error: None,
             initial_font_size: font_size,
             initialized: false,
             process_exit_emitted: false,
@@ -263,7 +268,11 @@ impl GhosttyView {
         self.terminal
             .as_ref()
             .and_then(|terminal| terminal.current_dir())
-            .or_else(|| self.initial_cwd.clone())
+            .or_else(|| {
+                self.initial_cwd
+                    .as_ref()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            })
     }
 
     pub fn is_alive(&self) -> bool {
@@ -319,6 +328,7 @@ impl GhosttyView {
             terminal.request_close();
         }
         self.initialized = false;
+        self.startup_error = None;
         self.process_exit_emitted = false;
         self.last_title = None;
         self.pending_write = None;
@@ -411,7 +421,7 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
-        if !terminal.is_alive() && !self.process_exit_emitted {
+        if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {
             self.process_exit_emitted = true;
             changed = true;
             cx.emit(GhosttyProcessExited);
@@ -453,7 +463,7 @@ impl GhosttyView {
                 cx.emit(GhosttyCwdChanged(cwd));
             }
 
-            if !terminal.is_alive() && !self.process_exit_emitted {
+            if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {
                 self.process_exit_emitted = true;
                 changed = true;
                 cx.emit(GhosttyProcessExited);
@@ -472,6 +482,9 @@ impl GhosttyView {
     }
 
     fn ensure_session(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.startup_error.is_some() {
+            return false;
+        }
         let Some(terminal) = self.terminal.as_ref().cloned() else {
             return false;
         };
@@ -482,9 +495,14 @@ impl GhosttyView {
         }
 
         let mut options = self.app.default_pty_options(self.initial_cwd.as_deref());
+        if let Some(command) = self.initial_command.as_ref() {
+            options.command_program = Some(command.program.clone());
+            options.command_args = Some(command.args.clone());
+        }
         options.initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
         match terminal.spawn_with_options(options) {
             Ok(()) => {
+                self.initial_command = None;
                 self.restored_screen_text = None;
                 self.initialized = true;
                 self.process_exit_emitted = false;
@@ -499,7 +517,14 @@ impl GhosttyView {
             }
             Err(err) => {
                 log::error!("failed to start linux shell: {err}");
-                false
+                if err.is_retryable() {
+                    false
+                } else {
+                    self.startup_error = Some(format!("Unable to launch terminal: {err}"));
+                    self.initial_command = None;
+                    cx.notify();
+                    true
+                }
             }
         }
     }
@@ -1360,17 +1385,19 @@ impl Render for GhosttyView {
             style: FontStyle::Normal,
         };
 
-        let status_message = if !self.initialized {
-            Some("Launching Linux shell…")
+        let status_message = if let Some(error) = self.startup_error.clone() {
+            Some(error)
+        } else if !self.initialized {
+            Some("Launching Linux shell…".to_string())
         } else if !self.is_alive() {
-            Some("Linux shell exited")
+            Some("Linux shell exited".to_string())
         } else if !self.seen_any_output {
             // Only show the "waiting for prompt" placeholder before
             // bash has echoed *anything* for the first time. Once
             // the latch flips, alt-screen TUIs like htop / vim that
             // briefly clear the grid stay silent instead of
             // flashing this placeholder over their startup gap.
-            Some("Waiting for shell prompt…")
+            Some("Waiting for shell prompt…".to_string())
         } else {
             None
         };
@@ -1429,7 +1456,7 @@ impl Render for GhosttyView {
                     .text_size(px(font_size_px))
                     .line_height(px(line_height_px))
                     .text_color(status_color)
-                    .child(message.to_string())
+                    .child(message)
                     .into_any_element(),
             );
         }
