@@ -71,6 +71,8 @@ verify_linux() {
     || fail "$tarball_name does not contain con-cli"
   tar -tzf "$tarball" | grep -E "/co\\.nowledge\\.con\\.desktop$" >/dev/null \
     || fail "$tarball_name does not contain co.nowledge.con.desktop"
+  tar -tzf "$tarball" | grep -E "/co\\.nowledge\\.con\\.png$" >/dev/null \
+    || fail "$tarball_name does not contain co.nowledge.con.png"
 
   local tmp
   tmp="$(mktemp -d)"
@@ -89,7 +91,9 @@ verify_linux() {
   require_executable "$root/con"
   require_executable "$root/con-cli"
   require_file "$root/co.nowledge.con.desktop"
+  require_file "$root/co.nowledge.con.png"
   require_desktop_entry "$root/co.nowledge.con.desktop" "TryExec=con"
+  require_desktop_entry "$root/co.nowledge.con.desktop" "Icon=co.nowledge.con"
   verify_terminal_desktop_contract "$root/co.nowledge.con.desktop"
   "$root/con-cli" --help >/dev/null
   log "Linux artifact OK: $tarball_name"

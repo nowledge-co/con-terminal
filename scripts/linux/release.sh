@@ -178,7 +178,7 @@ GenericName=Terminal
 Comment=GPU-accelerated terminal emulator with a built-in AI agent harness
 TryExec=con
 Exec=/usr/local/bin/con %U
-Icon=con
+Icon=${linux_app_id}
 Terminal=false
 Categories=System;TerminalEmulator;Utility;
 Keywords=terminal;shell;command;cli;ai;agent;
@@ -194,7 +194,7 @@ EOF
 # first. Pull from the macOS app-icon set we already ship.
 icon_src="assets/Con-macOS-Dark-256x256@2x.png"
 if [[ -f "$icon_src" ]]; then
-  cp "$icon_src" "${stage_dir}/con.png"
+  cp "$icon_src" "${stage_dir}/${linux_app_id}.png"
 else
   echo "warning: ${icon_src} missing — Linux tarball ships without an app icon" >&2
 fi
