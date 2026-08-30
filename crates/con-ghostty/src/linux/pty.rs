@@ -714,9 +714,7 @@ fn spawn_local(
         screen.feed(output);
     }
     let child = pair.slave.spawn_command(command).map_err(|err| {
-        LinuxPtySpawnError::permanent(
-            anyhow::Error::new(err).context("failed to spawn linux pty child process"),
-        )
+        LinuxPtySpawnError::permanent(err.context("failed to spawn linux pty child process"))
     })?;
 
     let shared = Arc::new(SessionShared::new(
