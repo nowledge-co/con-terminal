@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 mod pty_bridge;
 use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
+mod ssh_cache;
 
 #[derive(Parser)]
 #[command(name = "con-cli", about = "CLI control surface for a running con app")]
@@ -346,6 +347,10 @@ struct AgentAskArgs {
 }
 
 fn main() -> Result<()> {
+    let raw_args: Vec<_> = std::env::args_os().collect();
+    if raw_args.get(1).is_some_and(|arg| arg == "+ssh-cache") {
+        std::process::exit(ssh_cache::run(&raw_args[2..]));
+    }
     let cli = Cli::parse();
     let socket_path = cli.socket.clone().unwrap_or_else(control_socket_path);
 
