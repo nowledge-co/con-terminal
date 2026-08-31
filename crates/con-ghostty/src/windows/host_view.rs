@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
+use crate::DesktopNotificationPolicy;
 use crate::stub::GhosttyScrollbar;
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 
@@ -140,6 +141,7 @@ impl RenderSession {
         cwd: Option<PathBuf>,
         initial_output: Option<Vec<u8>>,
         clipboard_write_enabled: bool,
+        desktop_notification_policy: Arc<DesktopNotificationPolicy>,
         wake: W,
     ) -> Result<Self>
     where
@@ -183,6 +185,7 @@ impl RenderSession {
             )
             .context("VtScreen::new failed")?,
         );
+        vt.set_desktop_notification_policy(desktop_notification_policy);
         vt.set_clipboard_write_enabled(clipboard_write_enabled)
             .map_err(anyhow::Error::msg)?;
         let metrics = renderer.metrics();
@@ -767,6 +770,10 @@ impl RenderSession {
 
     pub fn take_clipboard_write(&self) -> Option<String> {
         self.vt.take_clipboard_write()
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.vt.take_desktop_notification()
     }
 
     pub fn current_dir(&self) -> Option<String> {

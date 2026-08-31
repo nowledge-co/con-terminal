@@ -17,6 +17,7 @@ use crate::stub::{
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{VtKeyEvent, VtKeyOutcome};
+use crate::{DesktopNotificationPolicy, desktop_notification_policy};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -30,6 +31,7 @@ fn clamp_opacity(v: f32) -> f32 {
 pub struct WindowsGhosttyApp {
     config: Mutex<RendererConfig>,
     clipboard_write_enabled: AtomicBool,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
 impl WindowsGhosttyApp {
@@ -71,6 +73,7 @@ impl WindowsGhosttyApp {
         Ok(Self {
             config: Mutex::new(config),
             clipboard_write_enabled: AtomicBool::new(clipboard_write_enabled),
+            desktop_notification_policy: desktop_notification_policy(),
         })
     }
 
@@ -79,6 +82,10 @@ impl WindowsGhosttyApp {
     /// Stub for parity with the macOS `GhosttyApp::wake_generation`.
     pub fn wake_generation(&self) -> u64 {
         0
+    }
+
+    pub fn desktop_notification_policy(&self) -> Arc<DesktopNotificationPolicy> {
+        self.desktop_notification_policy.clone()
     }
 
     pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
@@ -301,6 +308,12 @@ impl WindowsGhosttyTerminal {
             .lock()
             .as_ref()
             .and_then(RenderSession::take_clipboard_write)
+    }
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::take_desktop_notification)
     }
     pub fn current_dir(&self) -> Option<String> {
         self.inner

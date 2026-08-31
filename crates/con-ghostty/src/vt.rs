@@ -37,7 +37,10 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, O
 use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
-use crate::{CLIPBOARD_WRITE_LIMIT_BYTES, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress};
+use crate::{
+    CLIPBOARD_WRITE_LIMIT_BYTES, DesktopNotification, DesktopNotificationPolicy,
+    TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, desktop_notification_policy,
+};
 
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
@@ -207,6 +210,7 @@ pub enum GhosttyTerminalOption {
     PwdChanged = 25,
     ClipboardWrite = 26,
     ScrollbackMaxLines = 28,
+    DesktopNotification = 29,
     ProgressReport = 30,
     UnknownSequence = 35,
     UnknownMaxBytes = 36,
@@ -414,6 +418,14 @@ pub struct GhosttyString {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyTerminalDesktopNotification {
+    pub size: usize,
+    pub title: GhosttyString,
+    pub body: GhosttyString,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyTerminalProgressReport {
     pub size: usize,
@@ -607,6 +619,7 @@ const _: [(); 16] = [(); std::mem::size_of::<GhosttyClipboardWriteReply>()];
 const _: [(); 72] = [(); std::mem::size_of::<GhosttyClipboardWrite>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
 const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
+const _: [(); 40] = [(); std::mem::size_of::<GhosttyTerminalDesktopNotification>()];
 const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>()];
 
@@ -1281,6 +1294,7 @@ struct VtCallbackState {
     device_attributes: GhosttyDeviceAttributes,
     metadata_dirty: AtomicU8,
     bell_pending: AtomicBool,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
     progress_epoch: Instant,
     progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
@@ -1635,6 +1649,7 @@ impl VtScreen {
             device_attributes: default_device_attributes(),
             metadata_dirty: AtomicU8::new(0),
             bell_pending: AtomicBool::new(false),
+            desktop_notification_policy: desktop_notification_policy(),
             progress_epoch: Instant::now(),
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
@@ -1717,6 +1732,11 @@ impl VtScreen {
                 GhosttyTerminalOption::PwdChanged,
                 vt_pwd_changed_callback as *const c_void,
                 "PWD_CHANGED",
+            ),
+            (
+                GhosttyTerminalOption::DesktopNotification,
+                vt_desktop_notification_callback as *const c_void,
+                "DESKTOP_NOTIFICATION",
             ),
             (
                 GhosttyTerminalOption::ProgressReport,
@@ -1938,6 +1958,18 @@ impl VtScreen {
             .pending_clipboard_write
             .lock()
             .take()
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<DesktopNotification> {
+        self.inner
+            .lock()
+            .callback_state
+            .desktop_notification_policy
+            .take()
+    }
+
+    pub(crate) fn set_desktop_notification_policy(&self, policy: Arc<DesktopNotificationPolicy>) {
+        self.inner.lock().callback_state.desktop_notification_policy = policy;
     }
 
     /// Replace the default fg/bg/palette. Bumps the snapshot
@@ -3066,6 +3098,42 @@ unsafe extern "C" fn vt_bell_callback(_terminal: GhosttyTerminal, userdata: *mut
     state.bell_pending.store(true, Ordering::Relaxed);
 }
 
+unsafe extern "C" fn vt_desktop_notification_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    notification: *const GhosttyTerminalDesktopNotification,
+) {
+    if userdata.is_null() || notification.is_null() {
+        return;
+    }
+    if unsafe { notification.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalDesktopNotification>()
+    {
+        return;
+    }
+
+    let notification = unsafe { &*notification };
+    let Some(title) = (unsafe { ghostty_string_bytes(&notification.title) }) else {
+        return;
+    };
+    let Some(body) = (unsafe { ghostty_string_bytes(&notification.body) }) else {
+        return;
+    };
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.desktop_notification_policy.push(title, body);
+}
+
+unsafe fn ghostty_string_bytes(value: &GhosttyString) -> Option<&[u8]> {
+    if value.ptr.is_null() && value.len > 0 {
+        return None;
+    }
+    Some(if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
+    })
+}
+
 unsafe extern "C" fn vt_progress_report_callback(
     _terminal: GhosttyTerminal,
     userdata: *mut c_void,
@@ -3878,6 +3946,10 @@ mod tests {
             Some(GhosttyTerminalOption::PwdChanged as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["DESKTOP_NOTIFICATION"].as_i64(),
+            Some(GhosttyTerminalOption::DesktopNotification as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalOption"]["values"]["PROGRESS_REPORT"].as_i64(),
             Some(GhosttyTerminalOption::ProgressReport as i64)
         );
@@ -3929,6 +4001,11 @@ mod tests {
                 "GhosttyClipboardRead",
                 std::mem::size_of::<GhosttyClipboardRead>(),
                 std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+            (
+                "GhosttyTerminalDesktopNotification",
+                std::mem::size_of::<GhosttyTerminalDesktopNotification>(),
+                std::mem::align_of::<GhosttyTerminalDesktopNotification>(),
             ),
             (
                 "GhosttyTerminalProgressReport",
@@ -4542,6 +4619,22 @@ mod tests {
             .set_clipboard_write_enabled(false)
             .expect("disable clipboard writes");
         assert_eq!(screen.take_clipboard_write(), None);
+    }
+
+    #[test]
+    fn terminal_desktop_notifications_are_bounded_on_utf8_boundaries() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+        let title = format!("{}é", "a".repeat(62));
+        let sequence = format!("\x1b]777;notify;{title};Needs attention\x07");
+
+        screen.feed(sequence.as_bytes());
+
+        let notification = screen
+            .take_desktop_notification()
+            .expect("desktop notification");
+        assert_eq!(notification.title, "a".repeat(62));
+        assert_eq!(notification.body, "Needs attention");
+        assert_eq!(screen.take_desktop_notification(), None);
     }
 
     #[test]

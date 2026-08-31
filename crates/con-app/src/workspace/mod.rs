@@ -66,6 +66,8 @@ use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_ghostty::TerminalProgress;
 use con_terminal::TerminalTheme;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use crate::ghostty_view::GhosttyDesktopNotification;
 use crate::ghostty_view::{
     GhosttyBell, GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited,
     GhosttyProgressChanged, GhosttySplitRequested, GhosttyTitleChanged, GhosttyView,

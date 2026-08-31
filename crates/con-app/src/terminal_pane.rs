@@ -361,6 +361,13 @@ pub fn subscribe_terminal_pane(
     .detach();
     cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_bell)
         .detach();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_desktop_notification,
+    )
+    .detach();
     cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_cwd_changed)
         .detach();
     cx.subscribe_in(

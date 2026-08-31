@@ -11,6 +11,7 @@ use crate::stub::{
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome};
+use crate::{DesktopNotificationPolicy, desktop_notification_policy};
 
 #[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
@@ -53,6 +54,7 @@ impl Default for LinuxBackendConfig {
 pub struct LinuxGhosttyApp {
     config: Mutex<LinuxBackendConfig>,
     wake_generation: Arc<AtomicU64>,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
 impl LinuxGhosttyApp {
@@ -82,6 +84,7 @@ impl LinuxGhosttyApp {
                 clipboard_write,
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
+            desktop_notification_policy: desktop_notification_policy(),
         })
     }
 
@@ -152,6 +155,7 @@ impl LinuxGhosttyApp {
             wake_generation: Some(self.wake_generation.clone()),
             theme: config.colors,
             clipboard_write: config.clipboard_write,
+            desktop_notification_policy: self.desktop_notification_policy.clone(),
             ..LinuxPtyOptions::default()
         }
     }
@@ -466,6 +470,13 @@ impl LinuxGhosttyTerminal {
             .lock()
             .as_ref()
             .and_then(LinuxPtySession::take_clipboard_write)
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_desktop_notification)
     }
 
     pub fn current_dir(&self) -> Option<String> {

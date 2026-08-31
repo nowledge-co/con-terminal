@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{
-    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
-    GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
+    ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, DesktopNotification,
+    GhosttyApp, GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
     SurfaceSize, TerminalProgress, VtCell, VtCursor,
 };
 use futures::StreamExt;
@@ -94,6 +94,7 @@ pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
 pub struct GhosttyProgressChanged;
+pub struct GhosttyDesktopNotification(pub DesktopNotification);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
@@ -102,6 +103,7 @@ impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
+impl EventEmitter<GhosttyDesktopNotification> for GhosttyView {}
 
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -426,6 +428,11 @@ impl GhosttyView {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
 
+        if let Some(notification) = terminal.take_desktop_notification() {
+            changed = true;
+            cx.emit(GhosttyDesktopNotification(notification));
+        }
+
         let title = terminal.title();
         if title != self.last_title {
             self.last_title = title.clone();
@@ -478,6 +485,11 @@ impl GhosttyView {
             if terminal.take_bell() {
                 changed = true;
                 cx.emit(GhosttyBell);
+            }
+
+            if let Some(notification) = terminal.take_desktop_notification() {
+                changed = true;
+                cx.emit(GhosttyDesktopNotification(notification));
             }
 
             let title = terminal.title();
