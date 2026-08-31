@@ -13,6 +13,9 @@ con is still pre-release, so entries may group related beta work while the produ
 - Removed an unsupported Ghostty SSH terminfo helper invocation that could
   print a missing `Contents/MacOS/ghostty` error before SSH connections. SSH
   environment integration remains enabled. _(PR [#321](https://github.com/nowledge-co/con-terminal/pull/321) by [@wey-gu](https://github.com/wey-gu))_
+- Restored automatic SSH terminfo setup by routing Ghostty's existing shell
+  integration helper through the native `con-cli` implementation in the app
+  bundle. _(PR [#323](https://github.com/nowledge-co/con-terminal/pull/323) by [@wey-gu](https://github.com/wey-gu))_
 
 ### Added
 

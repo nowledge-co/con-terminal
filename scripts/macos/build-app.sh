@@ -38,6 +38,10 @@ rsync -a "$binary_path" "$macos_dir/con"
 chmod 755 "$macos_dir/con"
 rsync -a "$cli_binary_path" "$macos_dir/con-cli"
 chmod 755 "$macos_dir/con-cli"
+# Ghostty's bundled shell integration invokes `$GHOSTTY_BIN_DIR/ghostty
+# +ssh-cache`. Con owns that protocol now, so keep the upstream integration
+# unchanged and provide a bundle-local compatibility entry point.
+ln -s con-cli "$macos_dir/ghostty"
 
 ghostty_resources_dir="$(find "$REPO_ROOT/target/$CON_RUST_TARGET/release/build" -path '*/out/ghostty-src/zig-out/share/ghostty' | head -n 1)"
 if [[ -z "$ghostty_resources_dir" || ! -d "$ghostty_resources_dir" ]]; then
