@@ -16,6 +16,12 @@
 // Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros.
 #![allow(unexpected_cfgs)]
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalPromptState {
+    pub cursor_at_prompt: bool,
+    pub output_generation: u64,
+}
+
 pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     if lines.is_empty() {
         return None;

@@ -236,6 +236,9 @@ impl GhosttyTerminal {
     pub fn is_alive(&self) -> bool {
         false
     }
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        crate::TerminalPromptState::default()
+    }
     pub fn is_busy(&self) -> bool {
         false
     }

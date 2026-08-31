@@ -2,12 +2,52 @@ use super::*;
 
 const AGENT_CLI_DETECT_LOOKBACK_LINES: usize = 80;
 
+#[derive(Debug, PartialEq, Eq)]
+enum SemanticPromptState {
+    Unknown,
+    Waiting,
+    AtPrompt,
+}
+
+struct SemanticPromptTracker {
+    observed: bool,
+    left_prompt: bool,
+    pending_prompt: bool,
+}
+
+impl SemanticPromptTracker {
+    fn new(observed: bool) -> Self {
+        Self {
+            observed,
+            left_prompt: false,
+            pending_prompt: false,
+        }
+    }
+
+    fn observe(&mut self, cursor_at_prompt: bool, output_advanced: bool) -> SemanticPromptState {
+        self.observed |= cursor_at_prompt;
+        if !self.observed {
+            return SemanticPromptState::Unknown;
+        }
+        if !cursor_at_prompt || !output_advanced {
+            self.left_prompt |= !cursor_at_prompt;
+            self.pending_prompt = false;
+            return SemanticPromptState::Waiting;
+        }
+        if self.left_prompt || std::mem::replace(&mut self.pending_prompt, true) {
+            SemanticPromptState::AtPrompt
+        } else {
+            SemanticPromptState::Waiting
+        }
+    }
+}
+
 impl ConWorkspace {
     /// Handle a visible terminal execution request from the agent.
     ///
     /// Writes the command to the focused PTY so the user sees it execute.
-    /// Uses Ghostty's COMMAND_FINISHED signal when available, with a bounded
-    /// recent-output fallback when shell integration is unavailable.
+    /// Uses Ghostty's completion and semantic prompt state when available,
+    /// with a bounded recent-output fallback otherwise.
     pub(super) fn handle_terminal_exec_request_for_tab(
         &mut self,
         tab_idx: usize,
@@ -135,6 +175,10 @@ impl ConWorkspace {
             );
         }
 
+        let _ = pane.take_command_finished(cx);
+        let initial_prompt_state = pane.prompt_state(cx);
+        let mut semantic_prompt = SemanticPromptTracker::new(initial_prompt_state.cursor_at_prompt);
+
         // Write the command to the PTY — user sees it execute in real time
         let cmd_with_newline = format!("{}\n", req.command);
         pane.write(cmd_with_newline.as_bytes(), cx);
@@ -159,6 +203,7 @@ impl ConWorkspace {
                     output: String,
                     exit_code: Option<i32>,
                 },
+                Waiting,
                 Observe {
                     output: String,
                     prompt_like: bool,
@@ -183,6 +228,26 @@ impl ConWorkspace {
                                 output: pane_for_fallback.recent_lines(50, cx).join("\n"),
                                 exit_code,
                             };
+                        }
+
+                        let prompt_state = pane_for_fallback.prompt_state(cx);
+                        match semantic_prompt.observe(
+                            prompt_state.cursor_at_prompt,
+                            prompt_state.output_generation
+                                != initial_prompt_state.output_generation,
+                        ) {
+                            SemanticPromptState::Waiting => {
+                                return VisibleExecPoll::Waiting;
+                            }
+                            SemanticPromptState::AtPrompt => {
+                                let lines = pane_for_fallback.recent_lines(50, cx);
+                                pane_for_fallback.recover_shell_prompt_state(cx);
+                                return VisibleExecPoll::Finished {
+                                    output: lines.join("\n"),
+                                    exit_code: None,
+                                };
+                            }
+                            SemanticPromptState::Unknown => {}
                         }
 
                         let observation = pane_for_fallback.observation_frame(50, cx);
@@ -241,6 +306,7 @@ impl ConWorkspace {
                         last_prompt_snapshot = output;
                         stable_prompt_polls = 0;
                     }
+                    Some(VisibleExecPoll::Waiting) => {}
                     None => return,
                 }
 
@@ -1085,5 +1151,30 @@ impl ConWorkspace {
         };
 
         let _ = req.response_tx.send(response);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SemanticPromptState, SemanticPromptTracker};
+
+    #[test]
+    fn semantic_prompt_remains_authoritative_after_being_observed() {
+        let mut prompt = SemanticPromptTracker::new(false);
+
+        assert_eq!(prompt.observe(false, true), SemanticPromptState::Unknown);
+        assert_eq!(prompt.observe(true, true), SemanticPromptState::Waiting);
+        assert_eq!(prompt.observe(true, true), SemanticPromptState::AtPrompt);
+        assert_eq!(prompt.observe(false, true), SemanticPromptState::Waiting);
+        assert_eq!(prompt.observe(true, true), SemanticPromptState::AtPrompt);
+    }
+
+    #[test]
+    fn semantic_prompt_requires_output_after_dispatch() {
+        let mut prompt = SemanticPromptTracker::new(true);
+
+        assert_eq!(prompt.observe(true, false), SemanticPromptState::Waiting);
+        assert_eq!(prompt.observe(true, true), SemanticPromptState::Waiting);
+        assert_eq!(prompt.observe(true, true), SemanticPromptState::AtPrompt);
     }
 }

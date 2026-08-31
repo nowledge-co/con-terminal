@@ -1059,6 +1059,10 @@ impl GhosttyTerminal {
         !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
     }
 
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        crate::TerminalPromptState::default()
+    }
+
     /// Take the command-finished signal (if any). Consuming — returns None on second call.
     /// Used by terminal_exec to detect command completion with exit code.
     pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {
