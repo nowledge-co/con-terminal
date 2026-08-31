@@ -750,6 +750,10 @@ impl RenderSession {
         self.vt.title()
     }
 
+    pub fn take_bell(&self) -> bool {
+        self.vt.take_bell()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.vt.current_dir().or_else(|| {
             self.shell_cwd

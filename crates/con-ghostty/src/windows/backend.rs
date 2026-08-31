@@ -267,6 +267,12 @@ impl WindowsGhosttyTerminal {
     pub fn title(&self) -> Option<String> {
         self.inner.lock().as_ref().and_then(RenderSession::title)
     }
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(RenderSession::take_bell)
+    }
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()

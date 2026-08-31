@@ -508,6 +508,10 @@ impl LinuxPtySession {
             .unwrap_or_else(|| self.title.clone())
     }
 
+    pub fn take_bell(&self) -> bool {
+        self.shared.screen.take_bell()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.shared
             .screen

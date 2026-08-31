@@ -539,6 +539,16 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(crate) fn on_terminal_bell(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        _event: &GhosttyBell,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        window.play_system_bell();
+    }
+
     pub(crate) fn on_terminal_cwd_changed(
         &mut self,
         entity: &Entity<GhosttyView>,

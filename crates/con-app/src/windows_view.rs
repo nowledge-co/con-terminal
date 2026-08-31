@@ -98,12 +98,14 @@ actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
+impl EventEmitter<GhosttyBell> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
@@ -420,6 +422,11 @@ impl GhosttyView {
         };
 
         let mut changed = false;
+
+        if terminal.take_bell() {
+            changed = true;
+            cx.emit(GhosttyBell);
+        }
 
         let title = terminal.title();
         if title != self.last_title {

@@ -66,8 +66,8 @@ use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
 use crate::ghostty_view::{
-    GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested,
-    GhosttyTitleChanged, GhosttyView,
+    GhosttyBell, GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited,
+    GhosttySplitRequested, GhosttyTitleChanged, GhosttyView,
 };
 use crate::{
     AddWorkspaceLayoutTabs, AskAi, ClearRestoredTerminalHistory, ClearTerminal, ClosePane,

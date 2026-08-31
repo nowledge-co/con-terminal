@@ -116,6 +116,8 @@ fn perf_trace_enabled() -> bool {
 #[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
 
+pub struct GhosttyBell;
+
 /// Emitted when the terminal process exits.
 pub struct GhosttyProcessExited;
 
@@ -126,6 +128,7 @@ pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
+impl EventEmitter<GhosttyBell> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
@@ -492,6 +495,12 @@ impl GhosttyView {
 
         let started = perf_trace_enabled().then(Instant::now);
         let mut changed = false;
+
+        if terminal.take_bell() {
+            changed = true;
+            cx.emit(GhosttyBell);
+        }
+
         for event in terminal.take_pending_events() {
             changed = true;
             match event {

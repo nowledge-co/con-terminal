@@ -291,6 +291,7 @@ pub struct TerminalState {
     pub title: Option<String>,
     pub pwd: Option<String>,
     pub needs_render: bool,
+    pub bell_pending: bool,
     pub child_exited: bool,
     /// Last exit code from COMMAND_FINISHED (persists across commands).
     pub last_exit_code: Option<i32>,
@@ -324,6 +325,7 @@ impl Default for TerminalState {
             title: None,
             pwd: None,
             needs_render: false,
+            bell_pending: false,
             child_exited: false,
             last_exit_code: None,
             last_command_duration: None,
@@ -1267,6 +1269,14 @@ impl GhosttyTerminal {
         r
     }
 
+    /// Consume one or more bells coalesced since the previous drain.
+    pub fn take_bell(&self) -> bool {
+        let mut state = self.state.lock();
+        let pending = state.bell_pending;
+        state.bell_pending = false;
+        pending
+    }
+
     /// Access the per-surface state.
     pub fn state(&self) -> &StateRef {
         &self.state
@@ -1586,14 +1596,7 @@ unsafe extern "C" fn action_callback(
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RING_BELL => {
-                // macOS system beep
-                #[cfg(target_os = "macos")]
-                {
-                    unsafe extern "C" {
-                        fn NSBeep();
-                    }
-                    NSBeep();
-                }
+                state.lock().bell_pending = true;
                 true
             }
             _ => false,

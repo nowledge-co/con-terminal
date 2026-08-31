@@ -430,6 +430,13 @@ impl LinuxGhosttyTerminal {
         self.inner.lock().as_ref().and_then(LinuxPtySession::title)
     }
 
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::take_bell)
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()

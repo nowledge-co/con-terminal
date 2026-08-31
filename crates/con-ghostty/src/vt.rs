@@ -1202,6 +1202,7 @@ struct VtCallbackState {
     dark_mode: AtomicBool,
     device_attributes: GhosttyDeviceAttributes,
     metadata_dirty: AtomicU8,
+    bell_pending: AtomicBool,
 }
 
 struct VtInner {
@@ -1537,6 +1538,7 @@ impl VtScreen {
             dark_mode: AtomicBool::new(false),
             device_attributes: default_device_attributes(),
             metadata_dirty: AtomicU8::new(0),
+            bell_pending: AtomicBool::new(false),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
         let rc =
@@ -1602,6 +1604,11 @@ impl VtScreen {
         }
 
         let effect_callbacks = [
+            (
+                GhosttyTerminalOption::Bell,
+                vt_bell_callback as *const c_void,
+                "BELL",
+            ),
             (
                 GhosttyTerminalOption::TitleChanged,
                 vt_title_changed_callback as *const c_void,
@@ -1781,6 +1788,15 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    /// Consume one or more bells coalesced since the previous drain.
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .callback_state
+            .bell_pending
+            .swap(false, Ordering::Relaxed)
     }
 
     pub fn is_write_desynchronized(&self) -> bool {
@@ -2775,6 +2791,14 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 }
 
+unsafe extern "C" fn vt_bell_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.bell_pending.store(true, Ordering::Relaxed);
+}
+
 unsafe extern "C" fn vt_title_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
     if userdata.is_null() {
         return;
@@ -3426,6 +3450,10 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
             Some(GhosttyTerminalOption::ClipboardRead as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["BELL"].as_i64(),
+            Some(GhosttyTerminalOption::Bell as i64)
         );
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["TITLE_CHANGED"].as_i64(),
@@ -4205,6 +4233,21 @@ mod tests {
             .expect_err("oversized paste must be rejected");
 
         assert!(err.to_string().contains("safety limit"));
+    }
+
+    #[test]
+    fn vt_screen_coalesces_bell_effects_until_the_host_drains_them() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]2;OSC terminator\x07");
+        assert!(
+            !screen.take_bell(),
+            "an OSC terminator is not a bell effect"
+        );
+
+        screen.feed(b"\x07\x07");
+        assert!(screen.take_bell());
+        assert!(!screen.take_bell());
     }
 
     #[test]

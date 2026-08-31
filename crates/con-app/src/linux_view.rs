@@ -88,12 +88,14 @@ actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
+impl EventEmitter<GhosttyBell> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
@@ -407,6 +409,11 @@ impl GhosttyView {
             changed |= self.refresh_snapshot();
         }
 
+        if terminal.take_bell() {
+            changed = true;
+            cx.emit(GhosttyBell);
+        }
+
         let title = terminal.title();
         if title != self.last_title {
             self.last_title = title.clone();
@@ -447,6 +454,11 @@ impl GhosttyView {
             // wake signal we explicitly want to react to.
             if terminal.take_needs_render() {
                 changed |= self.refresh_snapshot();
+            }
+
+            if terminal.take_bell() {
+                changed = true;
+                cx.emit(GhosttyBell);
             }
 
             let title = terminal.title();
