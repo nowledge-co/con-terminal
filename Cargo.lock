@@ -1351,6 +1351,7 @@ dependencies = [
  "clap",
  "con-agent",
  "con-core",
+ "con-paths",
  "libc",
  "portable-pty",
  "serde",
