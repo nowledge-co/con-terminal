@@ -107,6 +107,9 @@ const GHOSTTY_KITTY_KEY_REPORT_EVENTS: u8 = 1 << 1;
 const TEXT_PLAIN_MIME: &[u8] = b"text/plain";
 const METADATA_DIRTY_TITLE: u8 = 1 << 0;
 const METADATA_DIRTY_PWD: u8 = 1 << 1;
+const UNKNOWN_SEQUENCE_LOG_TARGET: &str = "con_ghostty::vt::unknown_sequence";
+const UNKNOWN_SEQUENCE_MAX_BYTES: usize = 256;
+const UNKNOWN_SEQUENCE_LOG_LIMIT: u8 = 16;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -202,6 +205,8 @@ pub enum GhosttyTerminalOption {
     KittyImageStorageLimit = 15,
     PwdChanged = 25,
     ScrollbackMaxLines = 28,
+    UnknownSequence = 35,
+    UnknownMaxBytes = 36,
     ClipboardRead = 38,
 }
 
@@ -402,6 +407,29 @@ pub struct GhosttyColorRgb {
 pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
+}
+
+const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: i32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalUnknownStringSequence {
+    pub truncated: bool,
+    pub content: GhosttyString,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union GhosttyTerminalUnknownSequenceValue {
+    pub apc: GhosttyTerminalUnknownStringSequence,
+    pub _padding: [u64; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalUnknownSequence {
+    pub tag: i32,
+    pub value: GhosttyTerminalUnknownSequenceValue,
 }
 
 #[repr(C)]
@@ -1203,6 +1231,7 @@ struct VtCallbackState {
     device_attributes: GhosttyDeviceAttributes,
     metadata_dirty: AtomicU8,
     bell_pending: AtomicBool,
+    unknown_sequence_log_count: AtomicU8,
 }
 
 struct VtInner {
@@ -1539,6 +1568,7 @@ impl VtScreen {
             device_attributes: default_device_attributes(),
             metadata_dirty: AtomicU8::new(0),
             bell_pending: AtomicBool::new(false),
+            unknown_sequence_log_count: AtomicU8::new(0),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
         let rc =
@@ -1625,6 +1655,32 @@ impl VtScreen {
             if rc != 0 {
                 unsafe { ghostty_terminal_free(terminal) };
                 anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
+            }
+        }
+
+        if log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug) {
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::UnknownMaxBytes,
+                    &UNKNOWN_SEQUENCE_MAX_BYTES as *const _ as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(UNKNOWN_MAX_BYTES) failed: rc={rc}");
+            }
+
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::UnknownSequence,
+                    vt_unknown_sequence_callback as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(UNKNOWN_SEQUENCE) failed: rc={rc}");
             }
         }
 
@@ -2799,6 +2855,67 @@ unsafe extern "C" fn vt_bell_callback(_terminal: GhosttyTerminal, userdata: *mut
     state.bell_pending.store(true, Ordering::Relaxed);
 }
 
+unsafe extern "C" fn vt_unknown_sequence_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    sequence: *const GhosttyTerminalUnknownSequence,
+) {
+    if userdata.is_null()
+        || sequence.is_null()
+        || !log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug)
+    {
+        return;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let Ok(log_index) = state.unknown_sequence_log_count.fetch_update(
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+        |count| (count <= UNKNOWN_SEQUENCE_LOG_LIMIT).then_some(count + 1),
+    ) else {
+        return;
+    };
+    if log_index == UNKNOWN_SEQUENCE_LOG_LIMIT {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "further unknown terminal sequences suppressed"
+        );
+        return;
+    }
+
+    let sequence = unsafe { &*sequence };
+    if sequence.tag != GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "unknown terminal sequence tag={}",
+            sequence.tag
+        );
+        return;
+    }
+
+    let apc = unsafe { sequence.value.apc };
+    if apc.content.ptr.is_null() && apc.content.len != 0 {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "unknown APC has invalid content pointer len={} truncated={}",
+            apc.content.len,
+            apc.truncated
+        );
+        return;
+    }
+    let content = if apc.content.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(apc.content.ptr, apc.content.len) }
+    };
+    log::debug!(
+        target: UNKNOWN_SEQUENCE_LOG_TARGET,
+        "unknown APC len={} truncated={} content={content:02x?}",
+        content.len(),
+        apc.truncated
+    );
+}
+
 unsafe extern "C" fn vt_title_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
     if userdata.is_null() {
         return;
@@ -3463,6 +3580,14 @@ mod tests {
             types["GhosttyTerminalOption"]["values"]["PWD_CHANGED"].as_i64(),
             Some(GhosttyTerminalOption::PwdChanged as i64)
         );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["UNKNOWN_SEQUENCE"].as_i64(),
+            Some(GhosttyTerminalOption::UnknownSequence as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["UNKNOWN_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalOption::UnknownMaxBytes as i64)
+        );
         for (name, size, align) in [
             (
                 "GhosttyWriter",
@@ -3493,6 +3618,21 @@ mod tests {
                 "GhosttyClipboardRead",
                 std::mem::size_of::<GhosttyClipboardRead>(),
                 std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+            (
+                "GhosttyTerminalUnknownStringSequence",
+                std::mem::size_of::<GhosttyTerminalUnknownStringSequence>(),
+                std::mem::align_of::<GhosttyTerminalUnknownStringSequence>(),
+            ),
+            (
+                "GhosttyTerminalUnknownSequenceValue",
+                std::mem::size_of::<GhosttyTerminalUnknownSequenceValue>(),
+                std::mem::align_of::<GhosttyTerminalUnknownSequenceValue>(),
+            ),
+            (
+                "GhosttyTerminalUnknownSequence",
+                std::mem::size_of::<GhosttyTerminalUnknownSequence>(),
+                std::mem::align_of::<GhosttyTerminalUnknownSequence>(),
             ),
             (
                 "GhosttySysImage",
