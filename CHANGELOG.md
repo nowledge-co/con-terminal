@@ -14,6 +14,14 @@ con is still pre-release, so entries may group related beta work while the produ
   print a missing `Contents/MacOS/ghostty` error before SSH connections. SSH
   environment integration remains enabled. _(PR [#321](https://github.com/nowledge-co/con-terminal/pull/321) by [@wey-gu](https://github.com/wey-gu))_
 
+### Added
+
+**Developer tools**
+
+- Added the native `con-cli +ssh-cache` command for tracking remote hosts that
+  already have Con's terminal definition installed. The cache stores host
+  metadata only and provides stable exit codes for shell integration. _(PR [#322](https://github.com/nowledge-co/con-terminal/pull/322) by [@wey-gu](https://github.com/wey-gu))_
+
 ---
 
 ## `v0.1.0-beta.90` - 2026-08-30
