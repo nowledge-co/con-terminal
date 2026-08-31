@@ -49,7 +49,9 @@ The host check exits `0` when an entry is present and `1` when it is absent,
 so shell integration can use it without parsing output. Cache entries are
 stored under Con's platform-specific user cache directory and are written
 atomically. `--expire-days N` filters entries older than `N` days for list and
-host checks.
+host checks. On macOS, the installed app bundle exposes this command through
+the compatibility entry point expected by Ghostty's shell integration, so SSH
+terminfo setup works without a separate Ghostty executable.
 
 ## Pane commands
 
