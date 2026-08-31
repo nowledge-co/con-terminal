@@ -26,7 +26,9 @@ use parking_lot::Mutex;
 use crate::ffi;
 
 const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
-const CON_SHELL_INTEGRATION_FEATURES: &str = "no-cursor,ssh-env,ssh-terminfo";
+// Con does not ship Ghostty's `+ssh-cache` CLI helper. Do not advertise
+// `ssh-terminfo` until Con has an equivalent cache implementation.
+const CON_SHELL_INTEGRATION_FEATURES: &str = "no-cursor,ssh-env";
 
 fn sanitize_font_family_for_ghostty(font_family: &str) -> &str {
     let trimmed = font_family.trim();
@@ -159,8 +161,9 @@ impl GhosttyConfigPatch {
         // Disable ghostty shell-integration cursor override so con's
         // cursor-style setting is respected. Ghostty's integration
         // unconditionally forces a bar cursor at prompts otherwise.
-        // Enable ssh-env and ssh-terminfo so Ghostty's shell integration
-        // auto-installs xterm-ghostty terminfo on remote SSH hosts.
+        // Keep ssh-env compatibility. ssh-terminfo is intentionally omitted:
+        // Ghostty's shell integration would invoke a missing
+        // `ghostty +ssh-cache` helper from Con's app bundle.
         s.push_str("shell-integration-features = ");
         s.push_str(CON_SHELL_INTEGRATION_FEATURES);
         s.push('\n');
@@ -1922,7 +1925,8 @@ mod tests {
     fn ghostty_config_always_includes_con_shell_integration_features() {
         let config = GhosttyConfigPatch::default().to_config_string();
 
-        assert!(config.contains("shell-integration-features = no-cursor,ssh-env,ssh-terminfo"));
+        assert!(config.contains("shell-integration-features = no-cursor,ssh-env\n"));
+        assert!(!config.contains("ssh-terminfo"));
     }
 
     #[test]
