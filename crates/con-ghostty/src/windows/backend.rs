@@ -265,7 +265,7 @@ impl WindowsGhosttyTerminal {
     }
 
     pub fn title(&self) -> Option<String> {
-        None
+        self.inner.lock().as_ref().and_then(RenderSession::title)
     }
     pub fn current_dir(&self) -> Option<String> {
         self.inner

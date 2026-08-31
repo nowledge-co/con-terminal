@@ -502,7 +502,10 @@ impl LinuxPtySession {
     }
 
     pub fn title(&self) -> Option<String> {
-        self.title.clone()
+        self.shared
+            .screen
+            .reported_title()
+            .unwrap_or_else(|| self.title.clone())
     }
 
     pub fn current_dir(&self) -> Option<String> {

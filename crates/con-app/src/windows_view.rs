@@ -123,6 +123,7 @@ pub struct GhosttyView {
     init_failed: bool,
     /// Emit `GhosttyProcessExited` exactly once on shell death.
     process_exit_emitted: bool,
+    last_title: Option<String>,
     last_cwd: Option<String>,
     /// Pane bounds in logical window pixels, captured during prepaint.
     pane_bounds: Option<Bounds<Pixels>>,
@@ -230,6 +231,7 @@ impl GhosttyView {
             initialized: false,
             init_failed: false,
             process_exit_emitted: false,
+            last_title: None,
             last_cwd: None,
             pane_bounds: None,
             scale_factor: 1.0,
@@ -419,6 +421,13 @@ impl GhosttyView {
 
         let mut changed = false;
 
+        let title = terminal.title();
+        if title != self.last_title {
+            self.last_title = title.clone();
+            changed = true;
+            cx.emit(GhosttyTitleChanged(title));
+        }
+
         let cwd = terminal.current_dir();
         if cwd != self.last_cwd {
             self.last_cwd = cwd.clone();
@@ -426,9 +435,9 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
-        // No action-callback channel on Windows (cf. macOS's
-        // `wake_generation`). Poll `is_alive` so workspace's
-        // `on_terminal_process_exited` runs when the child shell exits.
+        // Portable effects reuse the existing output wake and are drained
+        // above. Process exit has no corresponding VT effect, so poll it to
+        // ensure workspace's `on_terminal_process_exited` still runs.
         if !self.process_exit_emitted && !terminal.is_alive() {
             self.process_exit_emitted = true;
             changed = true;
@@ -477,6 +486,7 @@ impl GhosttyView {
                 }
                 self.restored_screen_text = None;
                 self.initialized = true;
+                self.last_title = self.terminal.as_ref().and_then(|t| t.title());
                 self.last_cwd = self.terminal.as_ref().and_then(|t| t.current_dir());
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;

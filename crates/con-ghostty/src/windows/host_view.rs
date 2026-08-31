@@ -746,6 +746,10 @@ impl RenderSession {
         snapshot_to_lines(&self.vt.snapshot(), max_lines)
     }
 
+    pub fn title(&self) -> Option<String> {
+        self.vt.title()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.vt.current_dir().or_else(|| {
             self.shell_cwd

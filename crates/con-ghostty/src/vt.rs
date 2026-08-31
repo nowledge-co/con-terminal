@@ -33,7 +33,7 @@ use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
@@ -105,6 +105,8 @@ const GHOSTTY_MODS_ALT: u16 = 1 << 2;
 const GHOSTTY_MODS_SUPER: u16 = 1 << 3;
 const GHOSTTY_KITTY_KEY_REPORT_EVENTS: u8 = 1 << 1;
 const TEXT_PLAIN_MIME: &[u8] = b"text/plain";
+const METADATA_DIRTY_TITLE: u8 = 1 << 0;
+const METADATA_DIRTY_PWD: u8 = 1 << 1;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -198,6 +200,7 @@ pub enum GhosttyTerminalOption {
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
     KittyImageStorageLimit = 15,
+    PwdChanged = 25,
     ScrollbackMaxLines = 28,
     ClipboardRead = 38,
 }
@@ -1174,7 +1177,7 @@ impl PendingPasteWrite {
 }
 
 struct VtCallbackState {
-    write_pty: PtyWriteCallback,
+    write_pty: Option<PtyWriteCallback>,
     /// Serializes host callback entry. `send_key` acquires this while it still
     /// owns the VT mutex, then releases the VT mutex before invoking the host;
     /// a parser reply therefore cannot overtake the already-encoded key.
@@ -1198,6 +1201,7 @@ struct VtCallbackState {
     cell_height: AtomicU32,
     dark_mode: AtomicBool,
     device_attributes: GhosttyDeviceAttributes,
+    metadata_dirty: AtomicU8,
 }
 
 struct VtInner {
@@ -1211,7 +1215,10 @@ struct VtInner {
     kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
     kitty_placements: Arc<[KittyPlacement]>,
     kitty_snapshot_generation: u64,
-    callback_state: Option<Box<VtCallbackState>>,
+    callback_state: Box<VtCallbackState>,
+    title: Option<String>,
+    title_reported: bool,
+    current_dir: Option<String>,
     cols: u16,
     rows: u16,
     generation: u64,
@@ -1516,32 +1523,30 @@ impl VtScreen {
             anyhow::bail!("ghostty_terminal_set(KITTY_IMAGE_STORAGE_LIMIT) failed: rc={rc}");
         }
 
-        let mut callback_state = write_pty.map(|write_pty| {
-            Box::new(VtCallbackState {
-                write_pty,
-                write_order: Arc::new(Mutex::new(())),
-                enquiry_response: b"con".to_vec().into_boxed_slice(),
-                clipboard_text: Mutex::new(None),
-                write_failed: Arc::new(AtomicBool::new(false)),
-                pending_paste_write: Mutex::new(None),
-                rows: AtomicU16::new(rows),
-                cols: AtomicU16::new(cols),
-                cell_width: AtomicU32::new(1),
-                cell_height: AtomicU32::new(1),
-                dark_mode: AtomicBool::new(false),
-                device_attributes: default_device_attributes(),
-            })
+        let mut callback_state = Box::new(VtCallbackState {
+            write_pty,
+            write_order: Arc::new(Mutex::new(())),
+            enquiry_response: b"con".to_vec().into_boxed_slice(),
+            clipboard_text: Mutex::new(None),
+            write_failed: Arc::new(AtomicBool::new(false)),
+            pending_paste_write: Mutex::new(None),
+            rows: AtomicU16::new(rows),
+            cols: AtomicU16::new(cols),
+            cell_width: AtomicU32::new(1),
+            cell_height: AtomicU32::new(1),
+            dark_mode: AtomicBool::new(false),
+            device_attributes: default_device_attributes(),
+            metadata_dirty: AtomicU8::new(0),
         });
-        if let Some(state) = callback_state.as_mut() {
-            let userdata = state.as_mut() as *mut VtCallbackState as *mut c_void;
-            let rc = unsafe {
-                ghostty_terminal_set(terminal, GhosttyTerminalOption::Userdata, userdata)
-            };
-            if rc != 0 {
-                unsafe { ghostty_terminal_free(terminal) };
-                anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
-            }
+        let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
+        let rc =
+            unsafe { ghostty_terminal_set(terminal, GhosttyTerminalOption::Userdata, userdata) };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
+        }
 
+        if callback_state.write_pty.is_some() {
             let rc = unsafe {
                 ghostty_terminal_set(
                     terminal,
@@ -1593,6 +1598,26 @@ impl VtScreen {
                     unsafe { ghostty_terminal_free(terminal) };
                     anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
                 }
+            }
+        }
+
+        let effect_callbacks = [
+            (
+                GhosttyTerminalOption::TitleChanged,
+                vt_title_changed_callback as *const c_void,
+                "TITLE_CHANGED",
+            ),
+            (
+                GhosttyTerminalOption::PwdChanged,
+                vt_pwd_changed_callback as *const c_void,
+                "PWD_CHANGED",
+            ),
+        ];
+        for (option, callback, label) in effect_callbacks {
+            let rc = unsafe { ghostty_terminal_set(terminal, option, callback) };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
             }
         }
 
@@ -1719,6 +1744,9 @@ impl VtScreen {
                 kitty_placements: Arc::from([]),
                 kitty_snapshot_generation: u64::MAX,
                 callback_state,
+                title: None,
+                title_reported: false,
+                current_dir: None,
                 cols,
                 rows,
                 generation: 0,
@@ -1759,8 +1787,8 @@ impl VtScreen {
         self.inner
             .lock()
             .callback_state
-            .as_ref()
-            .is_some_and(|state| state.write_failed.load(Ordering::Acquire))
+            .write_failed
+            .load(Ordering::Acquire)
     }
 
     /// Enqueue raw user input through the same ordering boundary as encoded
@@ -1780,13 +1808,13 @@ impl VtScreen {
             return Ok(());
         }
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.clone() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "terminal input requires a WRITE_PTY callback",
             ));
         };
-        let write_pty = callback_state.write_pty.clone();
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
         let write_guard = write_order.lock();
@@ -1807,6 +1835,7 @@ impl VtScreen {
         let mut inner = self.inner.lock();
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        refresh_terminal_metadata(&mut inner);
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -1818,10 +1847,10 @@ impl VtScreen {
     /// change between parsing output and encoding the next key.
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> anyhow::Result<VtKeyOutcome> {
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.clone() else {
             anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
         };
-        let write_pty = callback_state.write_pty.clone();
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
 
@@ -1951,7 +1980,8 @@ impl VtScreen {
         }
 
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.as_ref() else {
             anyhow::bail!("terminal paste requires a WRITE_PTY callback");
         };
         let previous = callback_state
@@ -2001,7 +2031,7 @@ impl VtScreen {
                     // one-time Kitty grant is installed before a program can
                     // react to the event and request its clipboard payload.
                     let _write_guard = callback_state.write_order.lock();
-                    (callback_state.write_pty)(&output, PtyWriteClass::Regular).map_err(|err| {
+                    write_pty(&output, PtyWriteClass::Regular).map_err(|err| {
                         anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}")
                     })?;
                 }
@@ -2049,16 +2079,15 @@ impl VtScreen {
         }
         inner.cols = cols;
         inner.rows = rows;
-        if let Some(state) = inner.callback_state.as_ref() {
-            state.cols.store(cols, Ordering::Release);
-            state.rows.store(rows, Ordering::Release);
-            state
-                .cell_width
-                .store(cell_width_px.max(1), Ordering::Release);
-            state
-                .cell_height
-                .store(cell_height_px.max(1), Ordering::Release);
-        }
+        let state = &inner.callback_state;
+        state.cols.store(cols, Ordering::Release);
+        state.rows.store(rows, Ordering::Release);
+        state
+            .cell_width
+            .store(cell_width_px.max(1), Ordering::Release);
+        state
+            .cell_height
+            .store(cell_height_px.max(1), Ordering::Release);
         let total = cols as usize * rows as usize;
         inner.scratch.clear();
         inner.scratch.resize(total, Cell::default());
@@ -2381,9 +2410,10 @@ impl VtScreen {
 
     pub fn set_dark_mode(&self, dark: bool) {
         let inner = self.inner.lock();
-        if let Some(state) = inner.callback_state.as_ref() {
-            state.dark_mode.store(dark, Ordering::Release);
-        }
+        inner
+            .callback_state
+            .dark_mode
+            .store(dark, Ordering::Release);
     }
 
     /// Returns `true` when at least one mouse-tracking mode is set
@@ -2421,37 +2451,24 @@ impl VtScreen {
         read_scrollbar(inner.terminal)
     }
 
-    /// Current working directory reported by shell integration (OSC 7).
-    ///
-    /// Returns `None` when the shell has not reported a cwd yet. Callers
-    /// should keep their launch cwd as a fallback for plain shells.
-    pub fn current_dir(&self) -> Option<String> {
-        let inner = self.inner.lock();
-        if inner.terminal.is_null() {
-            return None;
-        }
-        let mut pwd = GhosttyString::default();
-        let rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::Pwd,
-                &mut pwd as *mut _ as *mut c_void,
-            )
-        };
-        if rc != 0 || pwd.ptr.is_null() || pwd.len == 0 {
-            return None;
-        }
+    /// Current title reported by OSC 0/2.
+    pub fn title(&self) -> Option<String> {
+        self.inner.lock().title.clone()
+    }
 
-        let bytes = unsafe { std::slice::from_raw_parts(pwd.ptr, pwd.len) };
-        let pwd = std::str::from_utf8(bytes).ok()?;
-        if pwd.is_empty() {
-            return None;
-        }
-        if pwd.starts_with("file://") {
-            parse_osc7_cwd(pwd)
-        } else {
-            Some(pwd.to_string())
-        }
+    /// Distinguishes no title report from an explicit title clear.
+    pub(crate) fn reported_title(&self) -> Option<Option<String>> {
+        let inner = self.inner.lock();
+        inner.title_reported.then(|| inner.title.clone())
+    }
+
+    /// Current working directory reported by shell integration.
+    ///
+    /// OSC 7 file URIs are decoded when the callback fires; OSC 9 and OSC 1337
+    /// paths are retained as reported. Returns `None` when the shell has not
+    /// reported a cwd or explicitly clears it.
+    pub fn current_dir(&self) -> Option<String> {
+        self.inner.lock().current_dir.clone()
     }
 
     /// Returns `true` while the alternate screen buffer is active.
@@ -2541,6 +2558,57 @@ impl VtScreen {
         };
         rc == 0 && config.value
     }
+}
+
+fn refresh_terminal_metadata(inner: &mut VtInner) {
+    let dirty = inner
+        .callback_state
+        .metadata_dirty
+        .swap(0, Ordering::Relaxed);
+    if dirty & METADATA_DIRTY_TITLE != 0 {
+        let title = with_terminal_bytes(inner.terminal, GhosttyTerminalData::Title, |bytes| {
+            (!bytes.is_empty()).then(|| String::from_utf8_lossy(bytes).into_owned())
+        });
+        if let Some(title) = title {
+            inner.title_reported = true;
+            inner.title = title;
+        }
+    }
+
+    if dirty & METADATA_DIRTY_PWD != 0 {
+        let current_dir = with_terminal_bytes(inner.terminal, GhosttyTerminalData::Pwd, |bytes| {
+            let pwd = std::str::from_utf8(bytes).ok()?;
+            if pwd.is_empty() {
+                None
+            } else if pwd.starts_with("file://") {
+                parse_osc7_cwd(pwd)
+            } else {
+                Some(pwd.to_owned())
+            }
+        });
+        if let Some(current_dir) = current_dir {
+            inner.current_dir = current_dir;
+        }
+    }
+}
+
+fn with_terminal_bytes<R>(
+    terminal: GhosttyTerminal,
+    data: GhosttyTerminalData,
+    read: impl FnOnce(&[u8]) -> R,
+) -> Option<R> {
+    let mut value = GhosttyString::default();
+    let rc =
+        unsafe { ghostty_terminal_get(terminal, data, (&mut value as *mut GhosttyString).cast()) };
+    if rc != GHOSTTY_SUCCESS || (value.ptr.is_null() && value.len > 0) {
+        return None;
+    }
+    if value.len == 0 {
+        return Some(read(&[]));
+    }
+    Some(read(unsafe {
+        std::slice::from_raw_parts(value.ptr, value.len)
+    }))
 }
 
 unsafe extern "C" fn vt_paste_read_callback(
@@ -2689,6 +2757,9 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let Some(write_pty) = state.write_pty.as_ref() else {
+        return;
+    };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
     {
         let mut pending = state.pending_paste_write.lock();
@@ -2699,9 +2770,29 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let _write_guard = state.write_order.lock();
-    if let Err(err) = (state.write_pty)(bytes, PtyWriteClass::ReservedControl) {
+    if let Err(err) = write_pty(bytes, PtyWriteClass::ReservedControl) {
         mark_control_write_failed(&state.write_failed, &err);
     }
+}
+
+unsafe extern "C" fn vt_title_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state
+        .metadata_dirty
+        .fetch_or(METADATA_DIRTY_TITLE, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn vt_pwd_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state
+        .metadata_dirty
+        .fetch_or(METADATA_DIRTY_PWD, Ordering::Relaxed);
 }
 
 fn mark_control_write_failed(write_failed: &AtomicBool, err: &std::io::Error) {
@@ -3335,6 +3426,14 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
             Some(GhosttyTerminalOption::ClipboardRead as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["TITLE_CHANGED"].as_i64(),
+            Some(GhosttyTerminalOption::TitleChanged as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["PWD_CHANGED"].as_i64(),
+            Some(GhosttyTerminalOption::PwdChanged as i64)
         );
         for (name, size, align) in [
             (
@@ -4076,8 +4175,6 @@ mod tests {
                     .inner
                     .lock()
                     .callback_state
-                    .as_ref()
-                    .expect("callback state")
                     .clipboard_text
                     .lock()
                     .as_deref(),
@@ -4111,6 +4208,27 @@ mod tests {
     }
 
     #[test]
+    fn vt_screen_tracks_title_effects_without_a_pty_writer() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        assert_eq!(screen.reported_title(), None);
+        assert_eq!(screen.title(), None);
+
+        screen.feed(b"\x1b]0;first title\x07\x1b]2;final title\x1b\\");
+
+        assert_eq!(
+            screen.reported_title(),
+            Some(Some("final title".to_owned()))
+        );
+        assert_eq!(screen.title().as_deref(), Some("final title"));
+
+        screen.feed(b"\x1b]2;\x07");
+
+        assert_eq!(screen.reported_title(), Some(None));
+        assert_eq!(screen.title(), None);
+    }
+
+    #[test]
     fn vt_screen_reports_osc7_current_dir() {
         let screen = VtScreen::new(80, 24, None).expect("create vt screen");
 
@@ -4118,6 +4236,19 @@ mod tests {
         screen.feed(b"\x1b]7;file:///tmp/con-vt-cwd\x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some("/tmp/con-vt-cwd"));
+    }
+
+    #[test]
+    fn vt_screen_coalesces_and_clears_current_dir_effects_without_a_pty_writer() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///tmp/first\x07\x1b]9;9;/tmp/final\x1b\\");
+
+        assert_eq!(screen.current_dir().as_deref(), Some("/tmp/final"));
+
+        screen.feed(b"\x1b]7;\x07");
+
+        assert_eq!(screen.current_dir(), None);
     }
 
     #[test]
