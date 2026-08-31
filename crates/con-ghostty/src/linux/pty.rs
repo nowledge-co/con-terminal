@@ -1062,6 +1062,13 @@ fn spawn_host_bridge(
         .context("failed to create linux vt screen")?,
     );
     screen.set_desktop_notification_policy(options.desktop_notification_policy.clone());
+    screen
+        .set_clipboard_write_enabled(options.clipboard_write)
+        .map_err(|message| {
+            stop_host_bridge_child(&mut child);
+            let _ = std::fs::remove_file(&socket_path);
+            anyhow::Error::msg(message)
+        })?;
 
     if let Some(output) = options
         .initial_output
