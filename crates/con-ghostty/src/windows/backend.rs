@@ -5,6 +5,7 @@
 //! across platforms.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -28,6 +29,7 @@ fn clamp_opacity(v: f32) -> f32 {
 /// One per GPUI window. Holds shared, app-wide terminal config.
 pub struct WindowsGhosttyApp {
     config: Mutex<RendererConfig>,
+    clipboard_write_enabled: AtomicBool,
 }
 
 impl WindowsGhosttyApp {
@@ -44,6 +46,7 @@ impl WindowsGhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        clipboard_write_enabled: bool,
     ) -> Result<Self, String> {
         let mut config = RendererConfig::default();
         if let Some(family) = font_family {
@@ -67,6 +70,7 @@ impl WindowsGhosttyApp {
         }
         Ok(Self {
             config: Mutex::new(config),
+            clipboard_write_enabled: AtomicBool::new(clipboard_write_enabled),
         })
     }
 
@@ -116,6 +120,16 @@ impl WindowsGhosttyApp {
     }
 
     pub fn set_color_scheme(&self, _dark: bool) {}
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.clipboard_write_enabled
+            .store(enabled, Ordering::Release);
+        Ok(())
+    }
+
+    pub fn clipboard_write_enabled(&self) -> bool {
+        self.clipboard_write_enabled.load(Ordering::Acquire)
+    }
 
     /// Snapshot the current renderer config — used by `WindowsTerminalView`
     /// when constructing a new `RenderSession`.
@@ -275,6 +289,18 @@ impl WindowsGhosttyTerminal {
     }
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.inner.lock().as_ref().and_then(RenderSession::progress)
+    }
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
+    }
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::take_clipboard_write)
     }
     pub fn current_dir(&self) -> Option<String> {
         self.inner

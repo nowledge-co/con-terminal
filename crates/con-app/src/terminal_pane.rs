@@ -129,6 +129,13 @@ impl TerminalPane {
         }
     }
 
+    pub fn set_clipboard_write_enabled(&self, enabled: bool, cx: &App) -> Result<(), String> {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            terminal.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
+    }
+
     pub fn notify(&self, cx: &mut App) {
         self.entity.update(cx, |_, cx| cx.notify());
     }

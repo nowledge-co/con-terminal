@@ -31,6 +31,7 @@ pub struct LinuxBackendConfig {
     /// itself — the `WindowBackgroundAppearance::Blurred` toggle is
     /// applied at the GPUI window level in `con-app/main.rs`.
     pub background_blur: bool,
+    pub clipboard_write: bool,
 }
 
 impl Default for LinuxBackendConfig {
@@ -42,6 +43,7 @@ impl Default for LinuxBackendConfig {
             colors: None,
             background_opacity: 1.0,
             background_blur: false,
+            clipboard_write: false,
         }
     }
 }
@@ -67,6 +69,7 @@ impl LinuxGhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        clipboard_write: bool,
     ) -> Result<Self, String> {
         Ok(Self {
             config: Mutex::new(LinuxBackendConfig {
@@ -76,6 +79,7 @@ impl LinuxGhosttyApp {
                 colors: colors.cloned(),
                 background_opacity: clamp_opacity(background_opacity.unwrap_or(1.0)),
                 background_blur: background_blur.unwrap_or(false),
+                clipboard_write,
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
         })
@@ -131,6 +135,11 @@ impl LinuxGhosttyApp {
 
     pub fn set_color_scheme(&self, _dark: bool) {}
 
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.config.lock().clipboard_write = enabled;
+        Ok(())
+    }
+
     pub fn backend_config(&self) -> LinuxBackendConfig {
         self.config.lock().clone()
     }
@@ -142,6 +151,7 @@ impl LinuxGhosttyApp {
             program: config.shell_program,
             wake_generation: Some(self.wake_generation.clone()),
             theme: config.colors,
+            clipboard_write: config.clipboard_write,
             ..LinuxPtyOptions::default()
         }
     }
@@ -442,6 +452,20 @@ impl LinuxGhosttyTerminal {
             .lock()
             .as_ref()
             .and_then(LinuxPtySession::progress)
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_clipboard_write)
     }
 
     pub fn current_dir(&self) -> Option<String> {

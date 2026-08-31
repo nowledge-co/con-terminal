@@ -83,6 +83,7 @@ pub struct TerminalConfig {
     pub font_size: f32,
     pub theme: String,
     pub cursor_style: String,
+    pub clipboard_write: bool,
 }
 
 impl Default for TerminalConfig {
@@ -92,6 +93,7 @@ impl Default for TerminalConfig {
             font_size: default_font_size(),
             theme: default_theme(),
             cursor_style: default_cursor_style(),
+            clipboard_write: false,
         }
     }
 }

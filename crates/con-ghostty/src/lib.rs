@@ -18,6 +18,8 @@
 
 use std::time::Duration;
 
+pub(crate) const CLIPBOARD_WRITE_LIMIT_BYTES: usize = 1024 * 1024;
+
 pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     if lines.is_empty() {
         return None;

@@ -81,6 +81,7 @@ impl ConWorkspace {
             Some(&background_image_position),
             Some(&background_image_fit),
             Some(background_image_repeat),
+            config.terminal.clipboard_write,
         )
         .map(std::sync::Arc::new)
         .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));

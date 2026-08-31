@@ -88,6 +88,7 @@ pub struct LinuxPtyOptions {
     pub wake_generation: Option<Arc<AtomicU64>>,
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
+    pub clipboard_write: bool,
 }
 
 impl Default for LinuxPtyOptions {
@@ -109,6 +110,7 @@ impl Default for LinuxPtyOptions {
             wake_generation: None,
             wake_callback: None,
             theme: None,
+            clipboard_write: false,
         }
     }
 }
@@ -516,6 +518,14 @@ impl LinuxPtySession {
         self.shared.screen.progress()
     }
 
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.shared.screen.set_clipboard_write_enabled(enabled)
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.shared.screen.take_clipboard_write()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.shared
             .screen
@@ -720,6 +730,9 @@ fn spawn_local(
         )
         .context("failed to create linux vt screen")?,
     );
+    screen
+        .set_clipboard_write_enabled(options.clipboard_write)
+        .map_err(anyhow::Error::msg)?;
     if let Some(output) = options
         .initial_output
         .as_deref()

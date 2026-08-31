@@ -417,8 +417,8 @@ impl GhosttyView {
         self.poll_terminal_state(cx)
     }
 
-    pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
-        self.poll_terminal_state(cx)
+    pub fn pump_deferred_work(&mut self, _cx: &mut Context<Self>) -> bool {
+        false
     }
 
     fn poll_terminal_state(&mut self, cx: &mut Context<Self>) -> bool {
@@ -435,6 +435,10 @@ impl GhosttyView {
         if terminal.take_bell() {
             changed = true;
             cx.emit(GhosttyBell);
+        }
+
+        if let Some(text) = terminal.take_clipboard_write() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
 
         let title = terminal.title();
@@ -502,7 +506,16 @@ impl GhosttyView {
 
         let cwd = self.initial_cwd.as_deref().map(std::path::PathBuf::from);
         let initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
-        match RenderSession::new(width_px, height_px, dpi, config, cwd, initial_output, wake) {
+        match RenderSession::new(
+            width_px,
+            height_px,
+            dpi,
+            config,
+            cwd,
+            initial_output,
+            self.app.clipboard_write_enabled(),
+            wake,
+        ) {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);

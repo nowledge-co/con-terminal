@@ -422,6 +422,10 @@ impl GhosttyView {
             cx.emit(GhosttyBell);
         }
 
+        if let Some(text) = terminal.take_clipboard_write() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+
         let title = terminal.title();
         if title != self.last_title {
             self.last_title = title.clone();

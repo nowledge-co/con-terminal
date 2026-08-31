@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, O
 use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
-use crate::{TERMINAL_PROGRESS_TIMEOUT, TerminalProgress};
+use crate::{CLIPBOARD_WRITE_LIMIT_BYTES, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress};
 
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
@@ -205,11 +205,13 @@ pub enum GhosttyTerminalOption {
     ColorPalette = 14,
     KittyImageStorageLimit = 15,
     PwdChanged = 25,
+    ClipboardWrite = 26,
     ScrollbackMaxLines = 28,
     ProgressReport = 30,
     UnknownSequence = 35,
     UnknownMaxBytes = 36,
     ClipboardRead = 38,
+    ClipboardWriteMaxBytes = 39,
 }
 
 /// `GHOSTTY_SYS_OPT_*` keys for process-global optional services.
@@ -492,6 +494,40 @@ pub struct GhosttyClipboardContent {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyClipboardWriteResult {
+    Success = 0,
+    Denied = 1,
+    Unsupported = 2,
+    Busy = 3,
+    InvalidData = 4,
+    IoError = 5,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyClipboardWriteReply {
+    pub size: usize,
+    pub result: GhosttyClipboardWriteResult,
+    pub remember: bool,
+}
+
+#[repr(C)]
+pub struct GhosttyClipboardWrite {
+    pub size: usize,
+    pub location: GhosttyClipboardLocation,
+    pub contents: *const GhosttyClipboardContent,
+    pub contents_len: usize,
+    pub name: GhosttyString,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub ctx: *const c_void,
+    pub reply: Option<
+        unsafe extern "C" fn(*const GhosttyClipboardWrite, *const GhosttyClipboardWriteReply),
+    >,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GhosttyClipboardReadResult {
     Success = 0,
     Denied = 1,
@@ -567,6 +603,8 @@ const _: [(); 16] = [(); std::mem::size_of::<GhosttyWriter>()];
 const _: [(); 16] = [(); std::mem::size_of::<GhosttyMimeReader>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyPaste>()];
 const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
+const _: [(); 16] = [(); std::mem::size_of::<GhosttyClipboardWriteReply>()];
+const _: [(); 72] = [(); std::mem::size_of::<GhosttyClipboardWrite>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
 const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
 const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
@@ -1229,6 +1267,8 @@ struct VtCallbackState {
     /// callback ABI. If its reserved queue capacity is exhausted, fail the
     /// session explicitly rather than continuing with desynchronized state.
     write_failed: Arc<AtomicBool>,
+    clipboard_write_enabled: AtomicBool,
+    pending_clipboard_write: Mutex<Option<String>>,
     /// Active only during `ghostty_terminal_paste`. The C callback cannot
     /// return an I/O result, so buffer the complete logical paste and perform
     /// one fallible host enqueue after libghostty returns.
@@ -1565,12 +1605,27 @@ impl VtScreen {
             anyhow::bail!("ghostty_terminal_set(KITTY_IMAGE_STORAGE_LIMIT) failed: rc={rc}");
         }
 
+        let clipboard_write_max_bytes = CLIPBOARD_WRITE_LIMIT_BYTES;
+        let rc = unsafe {
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                &clipboard_write_max_bytes as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={rc}");
+        }
+
         let mut callback_state = Box::new(VtCallbackState {
             write_pty,
             write_order: Arc::new(Mutex::new(())),
             enquiry_response: b"con".to_vec().into_boxed_slice(),
             clipboard_text: Mutex::new(None),
             write_failed: Arc::new(AtomicBool::new(false)),
+            clipboard_write_enabled: AtomicBool::new(false),
+            pending_clipboard_write: Mutex::new(None),
             pending_paste_write: Mutex::new(None),
             rows: AtomicU16::new(rows),
             cols: AtomicU16::new(cols),
@@ -1839,6 +1894,50 @@ impl VtScreen {
                 last_cursor: Cursor::default(),
             })),
         })
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        let inner = self.inner.lock();
+        if !enabled {
+            inner
+                .callback_state
+                .clipboard_write_enabled
+                .store(false, Ordering::Release);
+            inner.callback_state.pending_clipboard_write.lock().take();
+        }
+        let callback = if enabled {
+            vt_clipboard_write_callback as *const c_void
+        } else {
+            std::ptr::null()
+        };
+        let rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::ClipboardWrite,
+                callback,
+            )
+        };
+        if rc != 0 {
+            return Err(format!(
+                "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={rc}"
+            ));
+        }
+        if enabled {
+            inner
+                .callback_state
+                .clipboard_write_enabled
+                .store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .callback_state
+            .pending_clipboard_write
+            .lock()
+            .take()
     }
 
     /// Replace the default fg/bg/palette. Bumps the snapshot
@@ -2737,6 +2836,81 @@ unsafe extern "C" fn vt_paste_read_callback(
         return true;
     }
     unsafe { write(writer.userdata, reader.text.as_ptr(), reader.text.len()) }
+}
+
+unsafe extern "C" fn vt_clipboard_write_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    write: *const GhosttyClipboardWrite,
+) {
+    if userdata.is_null() || write.is_null() {
+        return;
+    }
+    if unsafe { (*write).size } < std::mem::size_of::<GhosttyClipboardWrite>() {
+        return;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let write = unsafe { &*write };
+    if write.reply.is_none() {
+        return;
+    }
+
+    let result = if !state.clipboard_write_enabled.load(Ordering::Acquire) {
+        GhosttyClipboardWriteResult::Denied
+    } else if write.location != GhosttyClipboardLocation::Standard {
+        GhosttyClipboardWriteResult::Unsupported
+    } else {
+        let text = if write.contents_len == 0 {
+            Ok("")
+        } else if write.contents_len > 1 {
+            Err(GhosttyClipboardWriteResult::Unsupported)
+        } else if write.contents.is_null() {
+            Err(GhosttyClipboardWriteResult::InvalidData)
+        } else {
+            let content = unsafe { &*write.contents };
+            if !ghostty_string_is_supported_text(content.mime) {
+                Err(GhosttyClipboardWriteResult::Unsupported)
+            } else if content.data.len > CLIPBOARD_WRITE_LIMIT_BYTES
+                || (content.data.ptr.is_null() && content.data.len > 0)
+            {
+                Err(GhosttyClipboardWriteResult::InvalidData)
+            } else {
+                let bytes = if content.data.len == 0 {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(content.data.ptr, content.data.len) }
+                };
+                std::str::from_utf8(bytes).map_err(|_| GhosttyClipboardWriteResult::InvalidData)
+            }
+        };
+        match text {
+            Err(result) => result,
+            Ok(text) => {
+                let mut pending = state.pending_clipboard_write.lock();
+                if !state.clipboard_write_enabled.load(Ordering::Acquire) {
+                    GhosttyClipboardWriteResult::Denied
+                } else {
+                    *pending = Some(text.to_owned());
+                    GhosttyClipboardWriteResult::Success
+                }
+            }
+        }
+    };
+
+    reply_clipboard_write(write, result);
+}
+
+fn reply_clipboard_write(write: &GhosttyClipboardWrite, result: GhosttyClipboardWriteResult) {
+    let Some(reply) = write.reply else {
+        return;
+    };
+    let reply_value = GhosttyClipboardWriteReply {
+        size: std::mem::size_of::<GhosttyClipboardWriteReply>(),
+        result,
+        remember: false,
+    };
+    unsafe { reply(write, &reply_value) };
 }
 
 /// Clipboard reads initiated by a running program are denied by default.
@@ -3684,6 +3858,14 @@ mod tests {
             Some(GhosttyTerminalOption::ClipboardRead as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["CLIPBOARD_WRITE"].as_i64(),
+            Some(GhosttyTerminalOption::ClipboardWrite as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["CLIPBOARD_WRITE_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalOption::ClipboardWriteMaxBytes as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalOption"]["values"]["BELL"].as_i64(),
             Some(GhosttyTerminalOption::Bell as i64)
         );
@@ -3727,6 +3909,16 @@ mod tests {
                 "GhosttyClipboardContent",
                 std::mem::size_of::<GhosttyClipboardContent>(),
                 std::mem::align_of::<GhosttyClipboardContent>(),
+            ),
+            (
+                "GhosttyClipboardWriteReply",
+                std::mem::size_of::<GhosttyClipboardWriteReply>(),
+                std::mem::align_of::<GhosttyClipboardWriteReply>(),
+            ),
+            (
+                "GhosttyClipboardWrite",
+                std::mem::size_of::<GhosttyClipboardWrite>(),
+                std::mem::align_of::<GhosttyClipboardWrite>(),
             ),
             (
                 "GhosttyClipboardReadReply",
@@ -3799,6 +3991,20 @@ mod tests {
                 types["GhosttyPasteSource"]["values"][name].as_i64(),
                 Some(value as i64),
                 "GhosttyPasteSource::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SUCCESS", GhosttyClipboardWriteResult::Success),
+            ("DENIED", GhosttyClipboardWriteResult::Denied),
+            ("UNSUPPORTED", GhosttyClipboardWriteResult::Unsupported),
+            ("BUSY", GhosttyClipboardWriteResult::Busy),
+            ("INVALID_DATA", GhosttyClipboardWriteResult::InvalidData),
+            ("IO_ERROR", GhosttyClipboardWriteResult::IoError),
+        ] {
+            assert_eq!(
+                types["GhosttyClipboardWriteResult"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyClipboardWriteResult::{name}"
             );
         }
         for (name, value) in [
@@ -4308,6 +4514,34 @@ mod tests {
 
         assert_eq!(rc, 0);
         assert_eq!(max_lines, 10_000);
+    }
+
+    #[test]
+    fn terminal_clipboard_writes_require_opt_in_and_coalesce_pending_text() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen
+            .set_clipboard_write_enabled(true)
+            .expect("enable clipboard writes");
+        screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
+        screen.feed(b"\x1b]52;c;d29ybGQ=\x07");
+        assert_eq!(screen.take_clipboard_write().as_deref(), Some("world"));
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen.feed(b"\x1b]52;c;/w==\x07");
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen.feed(b"\x1b]52;c;\x07");
+        assert_eq!(screen.take_clipboard_write().as_deref(), Some(""));
+
+        screen.feed(b"\x1b]52;c;YWdhaW4=\x07");
+        screen
+            .set_clipboard_write_enabled(false)
+            .expect("disable clipboard writes");
+        assert_eq!(screen.take_clipboard_write(), None);
     }
 
     #[test]

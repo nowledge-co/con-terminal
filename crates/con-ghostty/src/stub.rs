@@ -42,6 +42,7 @@ pub struct GhosttyConfigPatch {
     pub background_image_position: Option<String>,
     pub background_image_fit: Option<String>,
     pub background_image_repeat: Option<bool>,
+    pub clipboard_write: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,7 @@ impl GhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        _clipboard_write_enabled: bool,
     ) -> Result<Self, String> {
         Ok(Self { _sealed: () })
     }
@@ -158,6 +160,10 @@ impl GhosttyApp {
     }
 
     pub fn set_color_scheme(&self, _dark: bool) {}
+
+    pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // SAFETY: the stub has no interior state, so it is trivially Send+Sync.
@@ -189,6 +195,9 @@ impl GhosttyTerminal {
     pub fn set_focus(&self, _focused: bool) {}
     pub fn set_occlusion(&self, _occluded: bool) {}
     pub fn set_color_scheme(&self, _dark: bool) {}
+    pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
     pub fn perform_binding_action(&self, _action: &str) -> Result<bool, String> {
         Ok(false)
     }

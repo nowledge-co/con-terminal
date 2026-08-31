@@ -23,7 +23,7 @@ use std::time::Instant;
 use dispatch::Queue;
 use parking_lot::Mutex;
 
-use crate::{TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, ffi};
+use crate::{CLIPBOARD_WRITE_LIMIT_BYTES, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, ffi};
 
 const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
 // Con does not ship Ghostty's `+ssh-cache` CLI helper. Do not advertise
@@ -83,6 +83,7 @@ pub struct GhosttyConfigPatch {
     pub background_image_position: Option<String>,
     pub background_image_fit: Option<String>,
     pub background_image_repeat: Option<bool>,
+    pub clipboard_write: Option<bool>,
 }
 
 impl GhosttyConfigPatch {
@@ -122,6 +123,9 @@ impl GhosttyConfigPatch {
         }
         if let Some(background_image_repeat) = patch.background_image_repeat {
             self.background_image_repeat = Some(background_image_repeat);
+        }
+        if let Some(clipboard_write) = patch.clipboard_write {
+            self.clipboard_write = Some(clipboard_write);
         }
     }
 
@@ -167,14 +171,20 @@ impl GhosttyConfigPatch {
         s.push_str("shell-integration-features = ");
         s.push_str(CON_SHELL_INTEGRATION_FEATURES);
         s.push('\n');
-        // Force Kitty writes through Ghostty's confirmation request so Con can
-        // reject them until it has a user-visible permission flow. OSC 52 uses
-        // the write callback's `confirm` flag instead; that callback preserves
-        // Con's existing unconditional-write behavior during this migration.
-        s.push_str("clipboard-write = ask\n");
-        // This limit applies only to Kitty OSC 5522, not OSC 52. Avoid buffering
-        // an untrusted 64 MiB transaction just to reject it at confirmation.
-        s.push_str("clipboard-write-limit-bytes = 0\n");
+        let clipboard_write = self.clipboard_write.unwrap_or(false);
+        s.push_str(if clipboard_write {
+            "clipboard-write = allow\n"
+        } else {
+            "clipboard-write = deny\n"
+        });
+        let clipboard_write_limit = if clipboard_write {
+            CLIPBOARD_WRITE_LIMIT_BYTES
+        } else {
+            0
+        };
+        s.push_str(&format!(
+            "clipboard-write-limit-bytes = {clipboard_write_limit}\n"
+        ));
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
             if let Some(background_image_opacity) = self.background_image_opacity {
@@ -313,6 +323,7 @@ pub struct TerminalState {
     pub last_command_finished_input_generation: u64,
     /// Surface handle — stored so clipboard callbacks can complete requests.
     pub surface: ffi::ghostty_surface_t,
+    clipboard_write_enabled: Arc<AtomicBool>,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
     /// Latest viewport scrollbar state emitted by Ghostty.
@@ -339,6 +350,7 @@ impl Default for TerminalState {
             input_generation: 0,
             last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
+            clipboard_write_enabled: Arc::new(AtomicBool::new(false)),
             pending_events: VecDeque::new(),
             scrollbar: None,
         }
@@ -469,6 +481,7 @@ struct GhosttyWakeHandle {
     app: AtomicPtr<c_void>,
     tick_scheduled: AtomicBool,
     generation: AtomicU64,
+    clipboard_write_enabled: Arc<AtomicBool>,
 }
 
 impl Default for GhosttyWakeHandle {
@@ -477,6 +490,7 @@ impl Default for GhosttyWakeHandle {
             app: AtomicPtr::new(std::ptr::null_mut()),
             tick_scheduled: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            clipboard_write_enabled: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -495,6 +509,7 @@ impl GhosttyApp {
         background_image_position: Option<&str>,
         background_image_fit: Option<&str>,
         background_image_repeat: Option<bool>,
+        clipboard_write_enabled: bool,
     ) -> Result<Self, String> {
         ensure_ghostty_init()?;
 
@@ -513,10 +528,14 @@ impl GhosttyApp {
             background_image_position: background_image_position.map(ToOwned::to_owned),
             background_image_fit: background_image_fit.map(ToOwned::to_owned),
             background_image_repeat,
+            clipboard_write: Some(clipboard_write_enabled),
         };
         let config = build_ghostty_config(&appearance)?;
 
         let wake_handle = Arc::new(GhosttyWakeHandle::default());
+        wake_handle
+            .clipboard_write_enabled
+            .store(clipboard_write_enabled, Ordering::Release);
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
             userdata: Arc::as_ptr(&wake_handle) as *mut c_void,
             supports_selection_clipboard: false,
@@ -603,6 +622,7 @@ impl GhosttyApp {
             background_image_position: None,
             background_image_fit: None,
             background_image_repeat: None,
+            clipboard_write: None,
         })
     }
 
@@ -633,20 +653,20 @@ impl GhosttyApp {
             background_image_position: background_image_position.map(ToOwned::to_owned),
             background_image_fit: background_image_fit.map(ToOwned::to_owned),
             background_image_repeat: background_image.map(|_| background_image_repeat),
+            clipboard_write: None,
         })
     }
 
     pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
-        let merged = {
-            let mut appearance = self.appearance.lock();
-            appearance.merge(patch);
-            appearance.clone()
-        };
+        let mut appearance = self.appearance.lock();
+        let mut merged = appearance.clone();
+        merged.merge(patch);
         let config = build_ghostty_config(&merged)?;
         unsafe {
             ffi::ghostty_app_update_config(self.app, config);
             ffi::ghostty_config_free(config);
         }
+        *appearance = merged;
         Ok(())
     }
 
@@ -658,6 +678,24 @@ impl GhosttyApp {
             ffi::ghostty_color_scheme_e::GHOSTTY_COLOR_SCHEME_LIGHT
         };
         unsafe { ffi::ghostty_app_set_color_scheme(self.app, scheme) }
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.wake_handle
+                .clipboard_write_enabled
+                .store(false, Ordering::Release);
+        }
+        self.update_config(&GhosttyConfigPatch {
+            clipboard_write: Some(enabled),
+            ..Default::default()
+        })?;
+        if enabled {
+            self.wake_handle
+                .clipboard_write_enabled
+                .store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
     /// Create a new terminal surface. The `nsview` must be a valid NSView pointer
@@ -675,7 +713,10 @@ impl GhosttyApp {
     ) -> Result<GhosttyTerminal, String> {
         // Per-surface state — stored as surface userdata so callbacks can
         // update the correct terminal's state.
-        let state: StateRef = Arc::new(Mutex::new(TerminalState::default()));
+        let state: StateRef = Arc::new(Mutex::new(TerminalState {
+            clipboard_write_enabled: self.wake_handle.clipboard_write_enabled.clone(),
+            ..TerminalState::default()
+        }));
         let surface_userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
 
         let mut config = unsafe { ffi::ghostty_surface_config_new() };
@@ -825,6 +866,10 @@ impl GhosttyTerminal {
         unsafe { ffi::ghostty_surface_set_color_scheme(self.surface, scheme) }
     }
 
+    pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+
     pub fn perform_binding_action(&self, action: &str) -> Result<bool, String> {
         let action = CString::new(action).map_err(|e| format!("CString: {}", e))?;
         Ok(unsafe {
@@ -916,6 +961,7 @@ impl GhosttyTerminal {
             background_image_position: background_image_position.map(ToOwned::to_owned),
             background_image_fit: background_image_fit.map(ToOwned::to_owned),
             background_image_repeat: background_image.map(|_| background_image_repeat),
+            clipboard_write: None,
         })?;
         self.refresh();
         Ok(())
@@ -1777,20 +1823,23 @@ unsafe extern "C" fn confirm_read_clipboard_callback(
     }
 }
 
-/// Clipboard write — ghostty wants to copy (selection, OSC 52). Write to macOS pasteboard.
+/// Clipboard write — ghostty wants to copy plain text to the macOS pasteboard.
 unsafe extern "C" fn write_clipboard_callback(
-    _userdata: *mut c_void,
+    userdata: *mut c_void,
     clipboard: ffi::ghostty_clipboard_e,
     content: *const ffi::ghostty_clipboard_content_s,
     content_count: usize,
     _confirm: bool,
 ) {
     unsafe {
-        // Standard and selection both map to the macOS general pasteboard;
-        // primary is unsupported on this platform.
-        if clipboard == ffi::ghostty_clipboard_e::GHOSTTY_CLIPBOARD_PRIMARY
-            || content.is_null()
-            || content_count == 0
+        if userdata.is_null()
+            || !(*(userdata as *const StateRef))
+                .lock()
+                .clipboard_write_enabled
+                .load(Ordering::Acquire)
+            || clipboard != ffi::ghostty_clipboard_e::GHOSTTY_CLIPBOARD_STANDARD
+            || content_count > 1
+            || (content.is_null() && content_count > 0)
         {
             return;
         }
@@ -1800,34 +1849,41 @@ unsafe extern "C" fn write_clipboard_callback(
             use objc::runtime::Object;
             use objc::{class, msg_send, sel, sel_impl};
 
-            let items = std::slice::from_raw_parts(content, content_count);
-
-            for item in items {
-                if !clipboard_c_mime_is_text(item.mime) || (item.data.is_null() && item.len > 0) {
-                    continue;
+            let (data, len) = if content_count == 0 {
+                (c"".as_ptr(), 0)
+            } else {
+                let item = &*content;
+                if !clipboard_c_mime_is_text(item.mime) {
+                    return;
                 }
-                let data = if item.len == 0 {
-                    c"".as_ptr()
-                } else {
-                    item.data
-                };
-                let ns_str: *mut Object = msg_send![
-                    class!(NSString),
-                    stringWithBytes: data
-                    length: item.len
-                    encoding: 4usize
-                ];
-                if ns_str.is_null() {
-                    continue;
+                if item.len > CLIPBOARD_WRITE_LIMIT_BYTES || (item.data.is_null() && item.len > 0) {
+                    return;
                 }
+                (
+                    if item.len == 0 {
+                        c"".as_ptr()
+                    } else {
+                        item.data
+                    },
+                    item.len,
+                )
+            };
 
-                // NSPasteboardTypeString = @"public.utf8-plain-text"
-                let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c"public.utf8-plain-text".as_ptr()];
-                let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
-                let _: () = msg_send![pb, clearContents];
-                let _success: bool = msg_send![pb, setString: ns_str forType: ns_type];
+            let ns_str: *mut Object = msg_send![
+                class!(NSString),
+                stringWithBytes: data
+                length: len
+                encoding: 4usize
+            ];
+            if ns_str.is_null() {
                 return;
             }
+
+            // NSPasteboardTypeString = @"public.utf8-plain-text"
+            let ns_type: *mut Object = msg_send![class!(NSString), stringWithUTF8String: c"public.utf8-plain-text".as_ptr()];
+            let pb: *mut Object = msg_send![class!(NSPasteboard), generalPasteboard];
+            let _: () = msg_send![pb, clearContents];
+            let _success: bool = msg_send![pb, setString: ns_str forType: ns_type];
         }
     }
 }
@@ -1962,11 +2018,18 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_config_rejects_kitty_clipboard_writes_until_permission_ui_exists() {
-        let config = GhosttyConfigPatch::default().to_config_string();
+    fn ghostty_config_gates_kitty_clipboard_writes() {
+        let disabled = GhosttyConfigPatch::default().to_config_string();
+        let enabled = GhosttyConfigPatch {
+            clipboard_write: Some(true),
+            ..Default::default()
+        }
+        .to_config_string();
 
-        assert!(config.contains("clipboard-write = ask"));
-        assert!(config.contains("clipboard-write-limit-bytes = 0"));
+        assert!(disabled.contains("clipboard-write = deny"));
+        assert!(disabled.contains("clipboard-write-limit-bytes = 0"));
+        assert!(enabled.contains("clipboard-write = allow"));
+        assert!(enabled.contains("clipboard-write-limit-bytes = 1048576"));
     }
 
     #[test]
