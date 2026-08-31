@@ -233,6 +233,9 @@ impl GhosttyTerminal {
     pub fn current_dir(&self) -> Option<String> {
         None
     }
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        None
+    }
     pub fn is_alive(&self) -> bool {
         false
     }

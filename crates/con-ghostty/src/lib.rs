@@ -16,6 +16,8 @@
 // Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros.
 #![allow(unexpected_cfgs)]
 
+use std::time::Duration;
+
 pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     if lines.is_empty() {
         return None;
@@ -43,6 +45,32 @@ pub(crate) fn clipboard_mime_is_text(mime: &[u8]) -> bool {
         || mime.eq_ignore_ascii_case(b"TEXT")
         || mime.eq_ignore_ascii_case(b"STRING")
         || media_type.eq_ignore_ascii_case(b"text/plain")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalProgress {
+    Running(Option<u8>),
+    Error(Option<u8>),
+    Indeterminate,
+    Paused(Option<u8>),
+}
+
+pub(crate) const TERMINAL_PROGRESS_TIMEOUT: Duration = Duration::from_secs(15);
+
+impl TerminalProgress {
+    pub(crate) fn from_ghostty_report(state: i32, progress: i8) -> Option<Option<Self>> {
+        let percent = u8::try_from(progress)
+            .ok()
+            .filter(|percent| *percent <= 100);
+        match state {
+            0 => Some(None),
+            1 => Some(Some(Self::Running(percent))),
+            2 => Some(Some(Self::Error(percent))),
+            3 => Some(Some(Self::Indeterminate)),
+            4 => Some(Some(Self::Paused(percent))),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]

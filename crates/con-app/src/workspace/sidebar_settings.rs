@@ -634,6 +634,10 @@ impl ConWorkspace {
                     subtitle: presentation.subtitle,
                     is_ssh: presentation.is_ssh,
                     needs_attention: tab.needs_attention,
+                    progress: tab
+                        .pane_tree
+                        .focused_pane_terminal()
+                        .and_then(|terminal| terminal.progress(cx)),
                     icon: presentation.icon,
                     has_user_label: tab.user_label.is_some(),
                     pane_count,

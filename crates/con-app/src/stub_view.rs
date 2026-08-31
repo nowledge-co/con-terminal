@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal};
+use con_ghostty::{GhosttyApp, GhosttySplitDirection, GhosttyTerminal, TerminalProgress};
 use gpui::*;
 use gpui_component::ActiveTheme;
 
@@ -26,6 +26,7 @@ pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
+pub struct GhosttyProgressChanged;
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
@@ -33,6 +34,7 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
+impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
 
 /// Placeholder terminal view. Holds the shared `GhosttyApp` handle so the
 /// field shape matches the macOS view, but never creates a real surface.
@@ -81,6 +83,10 @@ impl GhosttyView {
 
     pub fn current_dir(&self) -> Option<String> {
         self.initial_cwd.clone()
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        None
     }
 
     pub fn is_alive(&self) -> bool {

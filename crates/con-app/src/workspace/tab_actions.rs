@@ -366,6 +366,9 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
         self.clear_terminal_focus_states_for_active_tab(cx);
         self.sync_active_tab_native_view_visibility(cx);
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         let editor_view = self.tabs[self.active_tab]
             .pane_tree
             .editor_view_for_pane(pane_id);
@@ -439,6 +442,9 @@ impl ConWorkspace {
             pane_tree.focus(pane_id);
             entity.focus_handle(cx).focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
+            if self.vertical_tabs_enabled() {
+                self.sync_sidebar(cx);
+            }
         }
         cx.notify();
     }
@@ -497,6 +503,9 @@ impl ConWorkspace {
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
+            if self.vertical_tabs_enabled() {
+                self.sync_sidebar(cx);
+            }
             self.save_session(cx);
             cx.notify();
             return;
@@ -547,6 +556,27 @@ impl ConWorkspace {
         _cx: &mut Context<Self>,
     ) {
         window.play_system_bell();
+    }
+
+    pub(crate) fn on_terminal_progress_changed(
+        &mut self,
+        entity: &Entity<GhosttyView>,
+        _event: &GhosttyProgressChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity_id = entity.entity_id();
+        if !self
+            .tabs
+            .iter()
+            .any(|tab| tab.pane_tree.focused_terminal_entity_id() == Some(entity_id))
+        {
+            return;
+        }
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
+        cx.notify();
     }
 
     pub(crate) fn on_terminal_cwd_changed(

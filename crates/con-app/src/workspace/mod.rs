@@ -63,11 +63,12 @@ use crate::sidebar::{
 };
 use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
+use con_ghostty::TerminalProgress;
 use con_terminal::TerminalTheme;
 
 use crate::ghostty_view::{
     GhosttyBell, GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited,
-    GhosttySplitRequested, GhosttyTitleChanged, GhosttyView,
+    GhosttyProgressChanged, GhosttySplitRequested, GhosttyTitleChanged, GhosttyView,
 };
 use crate::{
     AddWorkspaceLayoutTabs, AskAi, ClearRestoredTerminalHistory, ClearTerminal, ClosePane,

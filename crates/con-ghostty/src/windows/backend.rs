@@ -273,6 +273,9 @@ impl WindowsGhosttyTerminal {
             .as_ref()
             .is_some_and(RenderSession::take_bell)
     }
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.inner.lock().as_ref().and_then(RenderSession::progress)
+    }
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()

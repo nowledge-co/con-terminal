@@ -1,7 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::TerminalColors;
+use con_ghostty::{TerminalColors, TerminalProgress};
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -24,6 +24,10 @@ impl TerminalPane {
 
     pub fn current_dir(&self, cx: &App) -> Option<String> {
         self.entity.read(cx).current_dir()
+    }
+
+    pub fn progress(&self, cx: &App) -> Option<TerminalProgress> {
+        self.entity.read(cx).progress()
     }
 
     pub fn is_alive(&self, cx: &App) -> bool {
@@ -352,6 +356,12 @@ pub fn subscribe_terminal_pane(
         .detach();
     cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_cwd_changed)
         .detach();
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_progress_changed,
+    )
+    .detach();
     cx.subscribe_in(
         &pane.entity,
         window,

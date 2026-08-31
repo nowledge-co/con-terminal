@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, O
 use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
+use crate::{TERMINAL_PROGRESS_TIMEOUT, TerminalProgress};
 
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
@@ -205,6 +206,7 @@ pub enum GhosttyTerminalOption {
     KittyImageStorageLimit = 15,
     PwdChanged = 25,
     ScrollbackMaxLines = 28,
+    ProgressReport = 30,
     UnknownSequence = 35,
     UnknownMaxBytes = 36,
     ClipboardRead = 38,
@@ -407,6 +409,14 @@ pub struct GhosttyColorRgb {
 pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalProgressReport {
+    pub size: usize,
+    pub state: i32,
+    pub progress: i8,
 }
 
 const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: i32 = 0;
@@ -1231,6 +1241,8 @@ struct VtCallbackState {
     device_attributes: GhosttyDeviceAttributes,
     metadata_dirty: AtomicU8,
     bell_pending: AtomicBool,
+    progress_epoch: Instant,
+    progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
 }
 
@@ -1568,6 +1580,8 @@ impl VtScreen {
             device_attributes: default_device_attributes(),
             metadata_dirty: AtomicU8::new(0),
             bell_pending: AtomicBool::new(false),
+            progress_epoch: Instant::now(),
+            progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
@@ -1648,6 +1662,11 @@ impl VtScreen {
                 GhosttyTerminalOption::PwdChanged,
                 vt_pwd_changed_callback as *const c_void,
                 "PWD_CHANGED",
+            ),
+            (
+                GhosttyTerminalOption::ProgressReport,
+                vt_progress_report_callback as *const c_void,
+                "PROGRESS_REPORT",
             ),
         ];
         for (option, callback, label) in effect_callbacks {
@@ -1853,6 +1872,24 @@ impl VtScreen {
             .callback_state
             .bell_pending
             .swap(false, Ordering::Relaxed)
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        let inner = self.inner.lock();
+        let state = &inner.callback_state;
+        let encoded = state.progress.load(Ordering::Relaxed);
+        if encoded == 0 {
+            return None;
+        }
+        let progress =
+            decode_timed_terminal_progress(encoded, terminal_progress_tick(&state.progress_epoch));
+        if progress.is_none() {
+            let _ =
+                state
+                    .progress
+                    .compare_exchange(encoded, 0, Ordering::Relaxed, Ordering::Relaxed);
+        }
+        progress
     }
 
     pub fn is_write_desynchronized(&self) -> bool {
@@ -2855,6 +2892,84 @@ unsafe extern "C" fn vt_bell_callback(_terminal: GhosttyTerminal, userdata: *mut
     state.bell_pending.store(true, Ordering::Relaxed);
 }
 
+unsafe extern "C" fn vt_progress_report_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    report: *const GhosttyTerminalProgressReport,
+) {
+    if userdata.is_null() || report.is_null() {
+        return;
+    }
+    if unsafe { report.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalProgressReport>()
+    {
+        return;
+    }
+    let report = unsafe { &*report };
+    let Some(progress) = TerminalProgress::from_ghostty_report(report.state, report.progress)
+    else {
+        return;
+    };
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.progress.store(
+        encode_timed_terminal_progress(progress, terminal_progress_tick(&state.progress_epoch)),
+        Ordering::Relaxed,
+    );
+}
+
+fn encode_terminal_progress(progress: Option<TerminalProgress>) -> u16 {
+    let (state, percent) = match progress {
+        None => return 0,
+        Some(TerminalProgress::Running(percent)) => (1, percent),
+        Some(TerminalProgress::Error(percent)) => (2, percent),
+        Some(TerminalProgress::Indeterminate) => (3, None),
+        Some(TerminalProgress::Paused(percent)) => (4, percent),
+    };
+    (state << 8) | percent.map_or(0, |percent| u16::from(percent) + 1)
+}
+
+fn terminal_progress_tick(epoch: &Instant) -> u64 {
+    const MAX_TICK: u64 = u64::MAX >> u16::BITS;
+    u64::try_from(epoch.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .min(MAX_TICK - 1)
+        + 1
+}
+
+fn encode_timed_terminal_progress(progress: Option<TerminalProgress>, tick: u64) -> u64 {
+    let progress = encode_terminal_progress(progress);
+    if progress == 0 {
+        0
+    } else {
+        (tick << u16::BITS) | u64::from(progress)
+    }
+}
+
+fn decode_timed_terminal_progress(value: u64, now: u64) -> Option<TerminalProgress> {
+    let updated_at = value >> u16::BITS;
+    if updated_at == 0
+        || now.saturating_sub(updated_at)
+            >= u64::try_from(TERMINAL_PROGRESS_TIMEOUT.as_millis()).unwrap_or(u64::MAX)
+    {
+        return None;
+    }
+    decode_terminal_progress(value as u16)
+}
+
+fn decode_terminal_progress(value: u16) -> Option<TerminalProgress> {
+    let percent = match value & 0xff {
+        0 => None,
+        value => Some((value - 1) as u8),
+    };
+    match value >> 8 {
+        1 => Some(TerminalProgress::Running(percent)),
+        2 => Some(TerminalProgress::Error(percent)),
+        3 => Some(TerminalProgress::Indeterminate),
+        4 => Some(TerminalProgress::Paused(percent)),
+        _ => None,
+    }
+}
+
 unsafe extern "C" fn vt_unknown_sequence_callback(
     _terminal: GhosttyTerminal,
     userdata: *mut c_void,
@@ -3581,6 +3696,10 @@ mod tests {
             Some(GhosttyTerminalOption::PwdChanged as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["PROGRESS_REPORT"].as_i64(),
+            Some(GhosttyTerminalOption::ProgressReport as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalOption"]["values"]["UNKNOWN_SEQUENCE"].as_i64(),
             Some(GhosttyTerminalOption::UnknownSequence as i64)
         );
@@ -3618,6 +3737,11 @@ mod tests {
                 "GhosttyClipboardRead",
                 std::mem::size_of::<GhosttyClipboardRead>(),
                 std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+            (
+                "GhosttyTerminalProgressReport",
+                std::mem::size_of::<GhosttyTerminalProgressReport>(),
+                std::mem::align_of::<GhosttyTerminalProgressReport>(),
             ),
             (
                 "GhosttyTerminalUnknownStringSequence",
@@ -4388,6 +4512,41 @@ mod tests {
         screen.feed(b"\x07\x07");
         assert!(screen.take_bell());
         assert!(!screen.take_bell());
+    }
+
+    #[test]
+    fn vt_screen_tracks_latest_progress_report() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]9;4;1;42\x07\x1b]9;4;4;75\x1b\\");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Paused(Some(75))));
+
+        screen.feed(b"\x1b]9;4;2");
+        screen.feed(b";7\x1b\\");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Error(Some(7))));
+
+        screen.feed(b"\x1b]9;4;3\x07");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Indeterminate));
+
+        screen.feed(b"\x1b]9;4;0\x07");
+        assert_eq!(screen.progress(), None);
+    }
+
+    #[test]
+    fn terminal_progress_expires_without_a_fresh_report() {
+        let progress = Some(TerminalProgress::Running(Some(42)));
+        let reported_at = 10;
+        let encoded = encode_timed_terminal_progress(progress, reported_at);
+        let timeout = u64::try_from(TERMINAL_PROGRESS_TIMEOUT.as_millis()).unwrap();
+
+        assert_eq!(
+            decode_timed_terminal_progress(encoded, reported_at + timeout - 1),
+            progress
+        );
+        assert_eq!(
+            decode_timed_terminal_progress(encoded, reported_at + timeout),
+            None
+        );
     }
 
     #[test]

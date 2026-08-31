@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use con_ghostty::TerminalProgress;
 use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
@@ -103,6 +104,7 @@ pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
+pub struct GhosttyProgressChanged;
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
@@ -110,6 +112,7 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
+impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
 
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -127,6 +130,7 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     last_title: Option<String>,
     last_cwd: Option<String>,
+    last_progress: Option<TerminalProgress>,
     /// Pane bounds in logical window pixels, captured during prepaint.
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -235,6 +239,7 @@ impl GhosttyView {
             process_exit_emitted: false,
             last_title: None,
             last_cwd: None,
+            last_progress: None,
             pane_bounds: None,
             scale_factor: 1.0,
             ime_marked_text: None,
@@ -285,6 +290,10 @@ impl GhosttyView {
             .as_ref()
             .and_then(|t| t.current_dir())
             .or_else(|| self.initial_cwd.clone())
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        self.last_progress
     }
 
     pub fn is_alive(&self) -> bool {
@@ -440,6 +449,13 @@ impl GhosttyView {
             self.last_cwd = cwd.clone();
             changed = true;
             cx.emit(GhosttyCwdChanged(cwd));
+        }
+
+        let progress = terminal.progress();
+        if progress != self.last_progress {
+            self.last_progress = progress;
+            changed = true;
+            cx.emit(GhosttyProgressChanged);
         }
 
         // Portable effects reuse the existing output wake and are drained

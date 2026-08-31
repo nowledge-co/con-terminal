@@ -27,6 +27,7 @@ use con_ghostty::GhosttyScrollbar;
 use con_ghostty::ffi;
 use con_ghostty::{
     GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
+    TerminalProgress,
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::ActiveTheme;
@@ -126,6 +127,7 @@ pub struct GhosttyFocusChanged;
 /// Emitted when Ghostty requests a new split from this surface.
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
+pub struct GhosttyProgressChanged;
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
@@ -133,6 +135,7 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
+impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
 
 #[derive(Default)]
 struct PendingTerminalFind {
@@ -177,6 +180,7 @@ pub struct GhosttyView {
     scale_factor: f32,
     last_title: Option<String>,
     last_cwd: Option<String>,
+    last_progress: Option<TerminalProgress>,
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
@@ -262,6 +266,7 @@ impl GhosttyView {
             scale_factor: 1.0,
             last_title: None,
             last_cwd: cwd,
+            last_progress: None,
             pending_write: None,
             restored_screen_text,
             native_view_visible: Cell::new(true),
@@ -576,6 +581,13 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
+        let progress = terminal.progress();
+        if progress != self.last_progress {
+            self.last_progress = progress;
+            changed = true;
+            cx.emit(GhosttyProgressChanged);
+        }
+
         #[cfg(target_os = "macos")]
         if sync_native_scroll {
             self.sync_native_scroll_view();
@@ -676,6 +688,10 @@ impl GhosttyView {
             .as_ref()
             .and_then(|t| t.current_dir())
             .or_else(|| self.initial_cwd.clone())
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        self.last_progress
     }
 
     pub fn is_alive(&self) -> bool {
@@ -851,6 +867,7 @@ impl GhosttyView {
         self.awaiting_first_layout_visibility = false;
         self.last_bounds = None;
         self.last_title = None;
+        self.last_progress = None;
         self.pending_write = None;
         self.restored_screen_text = None;
         self.next_surface_init_retry_at = None;

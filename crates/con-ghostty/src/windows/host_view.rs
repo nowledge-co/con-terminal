@@ -754,6 +754,10 @@ impl RenderSession {
         self.vt.take_bell()
     }
 
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.vt.progress()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.vt.current_dir().or_else(|| {
             self.shell_cwd

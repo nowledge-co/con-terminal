@@ -21,7 +21,7 @@ use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, Vt
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, GhosttyApp,
     GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
-    SurfaceSize, VtCell, VtCursor,
+    SurfaceSize, TerminalProgress, VtCell, VtCursor,
 };
 use futures::StreamExt;
 use futures::channel::mpsc::unbounded;
@@ -93,6 +93,7 @@ pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
+pub struct GhosttyProgressChanged;
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyBell> for GhosttyView {}
@@ -100,6 +101,7 @@ impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
+impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
 
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -114,6 +116,7 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     last_title: Option<String>,
     last_cwd: Option<String>,
+    last_progress: Option<TerminalProgress>,
     pending_write: Option<Vec<u8>>,
     snapshot: Option<ScreenSnapshot>,
     row_cache: Vec<CachedTerminalRow>,
@@ -212,6 +215,7 @@ impl GhosttyView {
             process_exit_emitted: false,
             last_title: None,
             last_cwd: None,
+            last_progress: None,
             pending_write: None,
             snapshot: None,
             row_cache: Vec::new(),
@@ -275,6 +279,10 @@ impl GhosttyView {
                     .as_ref()
                     .map(|cwd| cwd.to_string_lossy().into_owned())
             })
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        self.last_progress
     }
 
     pub fn is_alive(&self) -> bool {
@@ -428,6 +436,13 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
+        let progress = terminal.progress();
+        if progress != self.last_progress {
+            self.last_progress = progress;
+            changed = true;
+            cx.emit(GhosttyProgressChanged);
+        }
+
         if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {
             self.process_exit_emitted = true;
             changed = true;
@@ -473,6 +488,13 @@ impl GhosttyView {
                 self.last_cwd = cwd.clone();
                 changed = true;
                 cx.emit(GhosttyCwdChanged(cwd));
+            }
+
+            let progress = terminal.progress();
+            if progress != self.last_progress {
+                self.last_progress = progress;
+                changed = true;
+                cx.emit(GhosttyProgressChanged);
             }
 
             if self.initialized && !terminal.is_alive() && !self.process_exit_emitted {

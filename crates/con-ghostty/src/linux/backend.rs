@@ -437,6 +437,13 @@ impl LinuxGhosttyTerminal {
             .is_some_and(LinuxPtySession::take_bell)
     }
 
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::progress)
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()

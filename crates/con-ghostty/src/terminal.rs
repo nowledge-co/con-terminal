@@ -23,7 +23,7 @@ use std::time::Instant;
 use dispatch::Queue;
 use parking_lot::Mutex;
 
-use crate::ffi;
+use crate::{TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, ffi};
 
 const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
 // Con does not ship Ghostty's `+ssh-cache` CLI helper. Do not advertise
@@ -292,6 +292,8 @@ pub struct TerminalState {
     pub pwd: Option<String>,
     pub needs_render: bool,
     pub bell_pending: bool,
+    pub progress: Option<TerminalProgress>,
+    pub progress_updated_at: Option<Instant>,
     pub child_exited: bool,
     /// Last exit code from COMMAND_FINISHED (persists across commands).
     pub last_exit_code: Option<i32>,
@@ -326,6 +328,8 @@ impl Default for TerminalState {
             pwd: None,
             needs_render: false,
             bell_pending: false,
+            progress: None,
+            progress_updated_at: None,
             child_exited: false,
             last_exit_code: None,
             last_command_duration: None,
@@ -1056,6 +1060,20 @@ impl GhosttyTerminal {
         self.state.lock().pwd.clone()
     }
 
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        let mut state = self.state.lock();
+        let progress = state.progress?;
+        if state
+            .progress_updated_at
+            .is_some_and(|updated_at| updated_at.elapsed() < TERMINAL_PROGRESS_TIMEOUT)
+        {
+            return Some(progress);
+        }
+        state.progress = None;
+        state.progress_updated_at = None;
+        None
+    }
+
     /// Whether the child process has exited.
     pub fn is_alive(&self) -> bool {
         !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
@@ -1597,6 +1615,17 @@ unsafe extern "C" fn action_callback(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RING_BELL => {
                 state.lock().bell_pending = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PROGRESS_REPORT => {
+                let report = action.action.progress_report;
+                if let Some(progress) =
+                    TerminalProgress::from_ghostty_report(report.state, report.progress)
+                {
+                    let mut state = state.lock();
+                    state.progress = progress;
+                    state.progress_updated_at = progress.map(|_| Instant::now());
+                }
                 true
             }
             _ => false,

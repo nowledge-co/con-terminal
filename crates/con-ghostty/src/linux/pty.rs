@@ -512,6 +512,10 @@ impl LinuxPtySession {
         self.shared.screen.take_bell()
     }
 
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.shared.screen.progress()
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.shared
             .screen
