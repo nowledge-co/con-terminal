@@ -566,15 +566,6 @@ impl GhosttyApp {
             .map(|colors| colors.background)
     }
 
-    /// Current configured terminal foreground color.
-    pub fn foreground_rgb(&self) -> Option<[u8; 3]> {
-        self.appearance
-            .lock()
-            .colors
-            .as_ref()
-            .map(|colors| colors.foreground)
-    }
-
     /// Current configured terminal background opacity. This lets the macOS
     /// embedding layer keep short-lived AppKit backing mattes visually aligned
     /// with Ghostty's own transparent terminal background.
@@ -934,6 +925,14 @@ impl GhosttyTerminal {
         }
         // If text contains NUL bytes, we silently drop it — this matches
         // terminal semantics where NUL in text input is meaningless.
+    }
+
+    pub fn set_preedit(&self, text: Option<&str>) {
+        let text = text.filter(|text| !text.is_empty());
+        let (ptr, len) = text.map_or((std::ptr::null(), 0), |text| {
+            (text.as_ptr().cast(), text.len())
+        });
+        unsafe { ffi::ghostty_surface_preedit(self.surface, ptr, len) }
     }
 
     pub fn ime_point(&self) -> ImePoint {
