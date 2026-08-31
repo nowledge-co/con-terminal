@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.91` - unreleased
+
+### Fixed
+
+**macOS**
+
+- Removed an unsupported Ghostty SSH terminfo helper invocation that could
+  print a missing `Contents/MacOS/ghostty` error before SSH connections. SSH
+  environment integration remains enabled. _(PR [#321](https://github.com/nowledge-co/con-terminal/pull/321) by [@wey-gu](https://github.com/wey-gu))_
+
+---
+
 ## `v0.1.0-beta.90` - 2026-08-30
 
 ### Added
