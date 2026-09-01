@@ -759,6 +759,9 @@ pub struct GhosttyTerminal {
 }
 
 impl GhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = true;
+    pub const SUPPORTS_TTY_NAME: bool = true;
+
     fn mark_input_observed(&self) {
         let mut state = self.state.lock();
         state.input_generation = state.input_generation.saturating_add(1);
@@ -1058,6 +1061,10 @@ impl GhosttyTerminal {
 
     /// Foreground process-group ID for the surface PTY.
     pub fn foreground_process_group_id(&self) -> Option<u64> {
+        if !self.is_alive() {
+            return None;
+        }
+
         let process_group_id = unsafe { ffi::ghostty_surface_foreground_pid(self.surface) };
         (process_group_id != 0).then_some(process_group_id)
     }

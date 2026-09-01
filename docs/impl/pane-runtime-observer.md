@@ -543,6 +543,8 @@ Shipped in con:
 Current Ghostty embedded status:
 
 - `foreground_process_group_id` and `tty_name` are available as macOS backend facts
+- `support.foreground_process_group_id = true` on macOS and `false` on the portable backends
+- `support.tty_name = true` on macOS and `false` on the portable backends
 - `support.foreground_command = false`
 - `support.alternate_screen = false`
 - `support.remote_host_identity = false`

@@ -212,6 +212,12 @@ impl PaneShellContext {
 pub struct PaneObservationSupport {
     /// Whether the backend can provide authoritative foreground command text.
     pub foreground_command: bool,
+    /// Whether the backend can provide a foreground process-group ID.
+    #[serde(default)]
+    pub foreground_process_group_id: bool,
+    /// Whether the backend can provide a PTY slave name.
+    #[serde(default)]
+    pub tty_name: bool,
     /// Whether the backend can provide authoritative alternate-screen state.
     pub alternate_screen: bool,
     /// Whether the backend can provide authoritative remote-host identity.
@@ -223,6 +229,12 @@ impl PaneObservationSupport {
         let mut missing = Vec::new();
         if !self.foreground_command {
             missing.push("foreground command text");
+        }
+        if !self.foreground_process_group_id {
+            missing.push("foreground process-group ID");
+        }
+        if !self.tty_name {
+            missing.push("PTY slave name");
         }
         if !self.alternate_screen {
             missing.push("alternate-screen state");
@@ -236,7 +248,7 @@ impl PaneObservationSupport {
         }
 
         Some(format!(
-            "Embedded Ghostty does not currently export authoritative {} for this pane. Unproven foreground runtimes must stay unknown.",
+            "The terminal backend does not currently export authoritative {} for this pane. Unproven foreground runtimes must stay unknown.",
             missing.join(", ")
         ))
     }
@@ -246,6 +258,8 @@ impl Default for PaneObservationSupport {
     fn default() -> Self {
         Self {
             foreground_command: false,
+            foreground_process_group_id: false,
+            tty_name: false,
             alternate_screen: false,
             remote_host_identity: false,
         }
@@ -647,7 +661,9 @@ impl PaneRuntimeTracker {
             });
         }
 
-        if let Some(process_group_id) = observation.foreground_process_group_id {
+        if observation.support.foreground_process_group_id
+            && let Some(process_group_id) = observation.foreground_process_group_id
+        {
             evidence.push(PaneEvidence {
                 subject: "foreground_process_group_id".to_string(),
                 value: Some(process_group_id.to_string()),
@@ -661,7 +677,9 @@ impl PaneRuntimeTracker {
             });
         }
 
-        if let Some(tty_name) = observation.tty_name.as_ref() {
+        if observation.support.tty_name
+            && let Some(tty_name) = observation.tty_name.as_ref()
+        {
             evidence.push(PaneEvidence {
                 subject: "tty_name".to_string(),
                 value: Some(tty_name.clone()),
@@ -1274,19 +1292,35 @@ fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
 }
 
 fn format_pty_attributes(
+    support: &PaneObservationSupport,
     foreground_process_group_id: Option<u64>,
     tty_name: Option<&str>,
 ) -> String {
     let mut attributes = String::new();
-    if let Some(process_group_id) = foreground_process_group_id {
+    if support.foreground_process_group_id
+        && let Some(process_group_id) = foreground_process_group_id
+    {
         attributes.push_str(&format!(
             " foreground_process_group_id=\"{process_group_id}\""
         ));
     }
-    if let Some(tty_name) = tty_name {
+    if support.tty_name
+        && let Some(tty_name) = tty_name
+    {
         attributes.push_str(&format!(" tty_name=\"{}\"", xml_escape(tty_name)));
     }
     attributes
+}
+
+fn format_observation_support(support: &PaneObservationSupport) -> String {
+    format!(
+        " supports_foreground_command=\"{}\" supports_foreground_process_group_id=\"{}\" supports_tty_name=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
+        support.foreground_command,
+        support.foreground_process_group_id,
+        support.tty_name,
+        support.alternate_screen,
+        support.remote_host_identity,
+    )
 }
 
 pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<String> {
@@ -2725,7 +2759,7 @@ impl TerminalContext {
              - Prefer typed attachments and probes over inference. If `probe_shell_context` is available, use it before guessing about SSH, tmux, or editor context.\n\
              - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
              - `<local_workspaces>` is con's current local coding-workspace inventory for this tab. Use it to reuse local shell and local agent-cli panes for the same project path instead of opening duplicates.\n\
-             - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
+             - Backend support is explicit. If any `supports_*` attribute is false, treat its missing runtime data as unavailable backend truth, not as proof of absence.\n\
              - `foreground_process_group_id` is the local PTY job-control group, not an exact process identity and not the foreground program inside SSH or tmux. A missing process-group or TTY value means unavailable, not absent.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
@@ -2757,11 +2791,8 @@ impl TerminalContext {
             self.focused_shell_metadata_fresh,
             self.focused_shell_context_fresh,
         ));
-        prompt.push_str(&format!(
-            " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
-            self.focused_observation_support.foreground_command,
-            self.focused_observation_support.alternate_screen,
-            self.focused_observation_support.remote_host_identity,
+        prompt.push_str(&format_observation_support(
+            &self.focused_observation_support,
         ));
         if let Some(host) = &self.focused_hostname {
             prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
@@ -2779,6 +2810,7 @@ impl TerminalContext {
             prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
         }
         prompt.push_str(&format_pty_attributes(
+            &self.focused_observation_support,
             self.focused_foreground_process_group_id,
             self.focused_tty_name.as_deref(),
         ));
@@ -2967,13 +2999,11 @@ impl TerminalContext {
                 xml_escape(&format_control_channels(&self.focused_control.channels)),
                 xml_escape(&format_control_capabilities(&self.focused_control.capabilities))
             ));
-            prompt.push_str(&format!(
-                " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
-                self.focused_observation_support.foreground_command,
-                self.focused_observation_support.alternate_screen,
-                self.focused_observation_support.remote_host_identity,
+            prompt.push_str(&format_observation_support(
+                &self.focused_observation_support,
             ));
             prompt.push_str(&format_pty_attributes(
+                &self.focused_observation_support,
                 self.focused_foreground_process_group_id,
                 self.focused_tty_name.as_deref(),
             ));
@@ -3068,13 +3098,9 @@ impl TerminalContext {
                     .as_ref()
                     .map(|tmux| format!(" tmux_mode=\"{}\"", tmux.mode.as_str()))
                     .unwrap_or_default();
-                let support = format!(
-                    " supports_foreground_command=\"{}\" supports_alt_screen=\"{}\" supports_remote_host_identity=\"{}\"",
-                    pane.observation_support.foreground_command,
-                    pane.observation_support.alternate_screen,
-                    pane.observation_support.remote_host_identity,
-                );
+                let support = format_observation_support(&pane.observation_support);
                 let pty = format_pty_attributes(
+                    &pane.observation_support,
                     pane.foreground_process_group_id,
                     pane.tty_name.as_deref(),
                 );
@@ -3550,6 +3576,11 @@ mod tests {
         let observation = PaneObservationFrame {
             foreground_process_group_id: Some(42),
             tty_name: Some("/dev/ttys001".to_string()),
+            support: PaneObservationSupport {
+                foreground_process_group_id: true,
+                tty_name: true,
+                ..PaneObservationSupport::default()
+            },
             ..PaneObservationFrame::default()
         };
 
@@ -3570,6 +3601,27 @@ mod tests {
                 && evidence.source == PaneEvidenceSource::SurfaceState
                 && evidence.confidence == PaneConfidence::Strong
         }));
+    }
+
+    #[test]
+    fn unsupported_pty_values_are_not_treated_as_backend_facts() {
+        let observation = PaneObservationFrame {
+            foreground_process_group_id: Some(42),
+            tty_name: Some("/dev/not-a-terminal".to_string()),
+            ..PaneObservationFrame::default()
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+        assert!(runtime.evidence.iter().all(|evidence| {
+            evidence.subject != "foreground_process_group_id" && evidence.subject != "tty_name"
+        }));
+
+        let mut ctx = TerminalContext::empty();
+        ctx.focused_foreground_process_group_id = observation.foreground_process_group_id;
+        ctx.focused_tty_name = observation.tty_name;
+        let prompt = ctx.to_system_prompt();
+        assert!(!prompt.contains("foreground_process_group_id=\"42\""));
+        assert!(!prompt.contains("tty_name=\"/dev/not-a-terminal\""));
     }
 
     #[test]
@@ -4406,12 +4458,27 @@ mod tests {
         let mut ctx = TerminalContext::empty();
         ctx.focused_foreground_process_group_id = Some(42);
         ctx.focused_tty_name = Some("/dev/ttys&1".to_string());
+        ctx.focused_observation_support.foreground_process_group_id = true;
+        ctx.focused_observation_support.tty_name = true;
 
         let prompt = ctx.to_system_prompt();
 
+        assert!(prompt.contains("supports_foreground_process_group_id=\"true\""));
+        assert!(prompt.contains("supports_tty_name=\"true\""));
         assert!(prompt.contains("foreground_process_group_id=\"42\""));
         assert!(prompt.contains("tty_name=\"/dev/ttys&amp;1\""));
         assert!(prompt.contains("not an exact process identity"));
+    }
+
+    #[test]
+    fn process_metadata_support_defaults_when_deserializing_legacy_json() {
+        let support: PaneObservationSupport = serde_json::from_str(
+            r#"{"foreground_command":false,"alternate_screen":false,"remote_host_identity":false}"#,
+        )
+        .expect("deserialize legacy support");
+
+        assert!(!support.foreground_process_group_id);
+        assert!(!support.tty_name);
     }
 
     #[test]

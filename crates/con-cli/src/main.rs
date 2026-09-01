@@ -939,11 +939,46 @@ fn render_panes_list(value: &Value) -> Result<()> {
         if !title.is_empty() {
             println!("    title: {title}");
         }
+        if let Some(details) = format_pty_details(pane) {
+            println!("    {details}");
+        }
         if !caps.is_empty() {
             println!("    capabilities: {caps}");
         }
     }
     Ok(())
+}
+
+fn format_pty_details(value: &Value) -> Option<String> {
+    let foreground_process_group_id = value
+        .get("foreground_process_group_id")
+        .and_then(Value::as_u64);
+    let tty_name = value.get("tty_name").and_then(Value::as_str);
+    let support = value.get("observation_support");
+    let process_group_id_support = support
+        .and_then(|support| support.get("foreground_process_group_id"))
+        .and_then(Value::as_bool);
+    let tty_name_support = support
+        .and_then(|support| support.get("tty_name"))
+        .and_then(Value::as_bool);
+
+    let mut details = Vec::with_capacity(2);
+    match (process_group_id_support, foreground_process_group_id) {
+        (Some(false), _) => {}
+        (_, Some(process_group_id)) => {
+            details.push(format!("foreground_process_group_id: {process_group_id}"))
+        }
+        (Some(true), None) => details.push("foreground_process_group_id: unavailable".to_string()),
+        (None, None) => {}
+    }
+    match (tty_name_support, tty_name) {
+        (Some(false), _) => {}
+        (_, Some(tty_name)) => details.push(format!("tty: {tty_name}")),
+        (Some(true), None) => details.push("tty: unavailable".to_string()),
+        (None, None) => {}
+    }
+
+    (!details.is_empty()).then(|| details.join("  "))
 }
 
 fn render_tree(value: &Value) -> Result<()> {
@@ -1014,18 +1049,8 @@ fn render_surface_rows(surfaces: &[Value], prefix: &str) {
         if !title.is_empty() {
             println!("{prefix}    title: {title}");
         }
-        let foreground_process_group_id = surface
-            .get("foreground_process_group_id")
-            .and_then(Value::as_u64);
-        let tty_name = surface.get("tty_name").and_then(Value::as_str);
-        if foreground_process_group_id.is_some() || tty_name.is_some() {
-            let process_group_id = foreground_process_group_id
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "?".to_string());
-            let tty_name = tty_name.unwrap_or("?");
-            println!(
-                "{prefix}    foreground_process_group_id: {process_group_id}  tty: {tty_name}"
-            );
+        if let Some(details) = format_pty_details(surface) {
+            println!("{prefix}    {details}");
         }
     }
 }
@@ -1063,6 +1088,9 @@ fn render_create_result(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(details) = format_pty_details(value) {
+        println!("    {details}");
+    }
     Ok(())
 }
 
@@ -1081,6 +1109,9 @@ fn render_surface_created(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(details) = format_pty_details(value) {
+        println!("    {details}");
+    }
     Ok(())
 }
 
@@ -1106,6 +1137,9 @@ fn render_surface_wait(value: &Value) -> Result<()> {
         value["has_shell_integration"].as_bool().unwrap_or(false),
         value["is_busy"].as_bool().unwrap_or(false)
     );
+    if let Some(details) = format_pty_details(value) {
+        println!("    {details}");
+    }
     Ok(())
 }
 
@@ -1231,5 +1265,47 @@ mod tests {
         };
         assert_eq!(args.cwd, Some(PathBuf::from("-workspace")));
         assert_eq!(args.program, Some(std::ffi::OsString::from("-tool")));
+    }
+
+    #[test]
+    fn pty_details_render_values_capabilities_and_legacy_responses() {
+        assert_eq!(
+            format_pty_details(&json!({
+                "foreground_process_group_id": 42,
+                "tty_name": "/dev/ttys001",
+                "observation_support": {
+                    "foreground_process_group_id": true,
+                    "tty_name": true,
+                },
+            }))
+            .as_deref(),
+            Some("foreground_process_group_id: 42  tty: /dev/ttys001")
+        );
+        assert_eq!(
+            format_pty_details(&json!({ "tty_name": "/dev/ttys001" })).as_deref(),
+            Some("tty: /dev/ttys001")
+        );
+        assert_eq!(
+            format_pty_details(&json!({
+                "observation_support": {
+                    "foreground_process_group_id": true,
+                    "tty_name": true,
+                },
+            }))
+            .as_deref(),
+            Some("foreground_process_group_id: unavailable  tty: unavailable")
+        );
+        assert_eq!(
+            format_pty_details(&json!({
+                "foreground_process_group_id": 42,
+                "tty_name": "/dev/ttys001",
+                "observation_support": {
+                    "foreground_process_group_id": false,
+                    "tty_name": false,
+                },
+            })),
+            None
+        );
+        assert_eq!(format_pty_details(&json!({})), None);
     }
 }

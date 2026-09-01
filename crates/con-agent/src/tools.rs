@@ -926,6 +926,9 @@ pub enum PaneResponse {
         surface_ready: bool,
         is_alive: bool,
         has_shell_integration: bool,
+        observation_support: crate::context::PaneObservationSupport,
+        foreground_process_group_id: Option<u64>,
+        tty_name: Option<String>,
     },
     Error(String),
 }
@@ -6741,6 +6744,7 @@ impl Tool for CreatePaneTool {
                 surface_ready,
                 is_alive,
                 has_shell_integration,
+                ..
             } => {
                 // If a command was provided (e.g. "ssh host"), wait for initial output
                 // to settle so the model can observe the result immediately.

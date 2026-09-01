@@ -134,6 +134,9 @@ pub struct WindowsGhosttyTerminal {
 }
 
 impl WindowsGhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
