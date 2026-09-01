@@ -124,14 +124,12 @@ pub struct Renderer {
     has_full_frame: Mutex<bool>,
     kitty_readback: Mutex<KittyReadbackState>,
     /// Generation fingerprint of the last frame we actually rendered.
-    /// It includes VT generation, selection state, and snapshot/view
-    /// geometry so resize catch-up frames are not mistaken for
-    /// unchanged content. Seeded with `u64::MAX` so the very first call
-    /// — which sees `generation = 0` on a quiet VT — still produces a
-    /// frame (the cleared background), giving the pane something to
-    /// show before the shell has printed anything.
+    /// It includes VT generation and snapshot/view geometry so resize
+    /// catch-up frames are not mistaken for unchanged content. Seeded
+    /// with `u64::MAX` so the very first call — which sees `generation =
+    /// 0` on a quiet VT — still produces a frame (the cleared background),
+    /// giving the pane something to show before the shell has printed anything.
     last_generation: Mutex<u64>,
-    selection: Mutex<Option<Selection>>,
     /// Wall-clock time of the last `Rendered` outcome. Drives the
     /// `MIN_FALLBACK_PRESENT_INTERVAL` cap that decouples presentation
     /// rate from the VT update rate, so continuous-output TUIs (issue
@@ -190,37 +188,6 @@ pub enum RenderOutcome {
     /// image and schedule another prepaint unless this frame was marked
     /// latency-critical.
     Pending,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Selection {
-    pub anchor: (u16, u64),
-    pub extent: (u16, u64),
-}
-
-impl Selection {
-    pub fn contains(&self, col: u16, row: u16, cols: u16, viewport_offset: u64) -> bool {
-        let to_lin = |p: (u16, u64)| (p.1 as u128) * (cols as u128) + (p.0 as u128);
-        let a = to_lin(self.anchor);
-        let b = to_lin(self.extent);
-        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-        let here = to_lin((col, viewport_offset.saturating_add(row as u64)));
-        here >= lo && here <= hi
-    }
-
-    pub fn hash_u64(&self) -> u64 {
-        let mut hash = 0x9E37_79B9_7F4A_7C15u64;
-        for value in [
-            self.anchor.0 as u64,
-            self.anchor.1,
-            self.extent.0 as u64,
-            self.extent.1,
-        ] {
-            hash ^= value;
-            hash = hash.rotate_left(13).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        }
-        hash
-    }
 }
 
 unsafe impl Send for Renderer {}
@@ -291,7 +258,6 @@ impl Renderer {
             has_full_frame: Mutex::new(false),
             kitty_readback: Mutex::new(KittyReadbackState::default()),
             last_generation: Mutex::new(u64::MAX),
-            selection: Mutex::new(None),
             last_presented_at: Mutex::new(None),
             width_px: width,
             height_px: height,
@@ -338,23 +304,6 @@ impl Renderer {
             .metrics()
     }
 
-    /// Install / clear the current selection. The render-gate combines
-    /// `snapshot.generation` with the selection fingerprint, so setting
-    /// a new selection naturally invalidates the last frame.
-    pub fn set_selection(&self, selection: Option<Selection>) {
-        *self
-            .selection
-            .lock()
-            .expect("selection mutex poisoned in set_selection()") = selection;
-    }
-
-    pub fn selection(&self) -> Option<Selection> {
-        *self
-            .selection
-            .lock()
-            .expect("selection mutex poisoned in selection()")
-    }
-
     pub fn grid_for_dimensions(&self, _config: &RendererConfig) -> (u16, u16) {
         let m = self.metrics();
         let cols = (self.width_px / m.cell_width_px.max(1)).max(1) as u16;
@@ -388,7 +337,7 @@ impl Renderer {
     /// # State machine
     ///
     /// Inputs read each call:
-    /// * `snapshot.generation`, `selection`, viewport geometry —
+    /// * `snapshot.generation`, viewport geometry —
     ///   combined into a fingerprint that decides `needs_draw`.
     /// * Staging ring's `oldest_in_flight()` — the GPU copy queued by
     ///   a prior call that may now have completed.
@@ -456,17 +405,12 @@ impl Renderer {
         prefer_latest: bool,
     ) -> Result<RenderOutcome> {
         let prof_started = perf_trace_enabled().then(Instant::now);
-        let selection = *self
-            .selection
-            .lock()
-            .expect("selection mutex poisoned in render()");
-        let sel_hash = selection.map(|s| s.hash_u64()).unwrap_or(0);
         let geometry_hash =
             geometry_fingerprint(snapshot.cols, snapshot.rows, self.width_px, self.height_px);
         let combined = snapshot
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(sel_hash ^ geometry_hash.rotate_left(13));
+            .wrapping_add(geometry_hash.rotate_left(13));
         let needs_draw = *self
             .last_generation
             .lock()
@@ -572,7 +516,7 @@ impl Renderer {
                 [cell_metrics.cell_width_px, cell_metrics.cell_height_px],
             );
             let readback_regions =
-                self.readback_regions(snapshot, sel_hash, can_partial_readback, &kitty_visuals);
+                self.readback_regions(snapshot, can_partial_readback, &kitty_visuals);
             submitted = Some(ring.submit_copy_mailbox(
                 &self.context,
                 &self.rt_texture,
@@ -789,12 +733,10 @@ impl Renderer {
     fn readback_regions(
         &self,
         snapshot: &ScreenSnapshot,
-        sel_hash: u64,
         allow_partial: bool,
         kitty_visuals: &KittyVisualState,
     ) -> Vec<ReadbackRegion> {
         if !allow_partial
-            || sel_hash != 0
             || snapshot.dirty_rows.is_empty()
             || snapshot.dirty_rows.len() >= snapshot.rows as usize
         {
@@ -911,10 +853,6 @@ impl Renderer {
         snapshot: &ScreenSnapshot,
         config: &RendererConfig,
     ) -> Result<CellMetrics> {
-        let selection = *self
-            .selection
-            .lock()
-            .expect("selection mutex poisoned in draw_terminal()");
         // Sentinel alpha=0 in cell.bg means "default theme background"
         // (set by the VT layer); rewrite it to the configured opacity
         // so the shader composes the cell over Mica with the right
@@ -957,16 +895,18 @@ impl Renderer {
         } else {
             None
         };
-        let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
         let mut has_wide_glyph = false;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
 
-            let in_sel = selection
-                .map(|s| s.contains(col, row, snapshot.cols, viewport_offset))
-                .unwrap_or(false);
+            let in_sel = snapshot
+                .selection_ranges
+                .get(row as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|range| range.contains(col));
             let effective_attrs = if in_sel {
                 cell.attrs ^ 0x10
             } else {

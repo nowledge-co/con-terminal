@@ -23,10 +23,49 @@ typedef void* GhosttyRowIterator;
 typedef void* GhosttyRowCells;
 typedef void* GhosttyKeyEncoder;
 typedef void* GhosttyKeyEvent;
+typedef void* GhosttySelectionGesture;
+typedef void* GhosttySelectionGestureEvent;
 typedef void* GhosttyKittyGraphics;
 typedef void* GhosttyKittyGraphicsImage;
 typedef void* GhosttyKittyGraphicsPlacementIterator;
 typedef int   GhosttyResult;
+
+struct GhosttyPointCoordinate {
+    uint16_t x;
+    uint32_t y;
+};
+
+union GhosttyPointValue {
+    struct GhosttyPointCoordinate coordinate;
+    uint64_t _padding[2];
+};
+
+struct GhosttyPoint {
+    int tag;
+    union GhosttyPointValue value;
+};
+
+struct GhosttyGridRef {
+    size_t size;
+    void* node;
+    uint16_t x;
+    uint16_t y;
+};
+
+struct GhosttySelection {
+    size_t size;
+    struct GhosttyGridRef start;
+    struct GhosttyGridRef end;
+    bool rectangle;
+};
+
+struct GhosttyTerminalSelectionFormatOptions {
+    size_t size;
+    int emit;
+    bool unwrap;
+    bool trim;
+    const struct GhosttySelection* selection;
+};
 
 union GhosttyTerminalScrollViewportValue {
     intptr_t delta;
@@ -48,6 +87,10 @@ const char* ghostty_type_json(void) { return NULL; }
 uint8_t* ghostty_alloc(const void* allocator, size_t len) {
     (void)allocator; (void)len;
     return NULL;
+}
+
+void ghostty_free(const void* allocator, uint8_t* ptr, size_t len) {
+    (void)allocator; (void)ptr; (void)len;
 }
 
 GhosttyResult ghostty_sys_set(int option, const void* value) {
@@ -110,6 +153,96 @@ GhosttyResult ghostty_terminal_paste(
     (void)terminal; (void)paste;
     if (out_written) { *out_written = false; }
     return 0;
+}
+
+GhosttyResult ghostty_terminal_grid_ref(
+    GhosttyTerminal terminal, struct GhosttyPoint point,
+    struct GhosttyGridRef* out_ref
+) {
+    (void)terminal; (void)point; (void)out_ref;
+    return -4;
+}
+
+/* ── Selection ─────────────────────────────────────────────────── */
+
+GhosttyResult ghostty_selection_gesture_new(
+    const void* allocator, GhosttySelectionGesture* out_gesture
+) {
+    (void)allocator;
+    if (out_gesture) { *out_gesture = (void*)(uintptr_t)8; }
+    return 0;
+}
+
+void ghostty_selection_gesture_free(
+    GhosttySelectionGesture gesture, GhosttyTerminal terminal
+) {
+    (void)gesture; (void)terminal;
+}
+
+void ghostty_selection_gesture_reset(
+    GhosttySelectionGesture gesture, GhosttyTerminal terminal
+) {
+    (void)gesture; (void)terminal;
+}
+
+GhosttyResult ghostty_selection_gesture_get(
+    GhosttySelectionGesture gesture, GhosttyTerminal terminal,
+    int data, void* out
+) {
+    (void)gesture; (void)terminal;
+    if (out) {
+        if (data == 0) { *(uint8_t*)out = 0; }
+        else { *(int*)out = 0; }
+    }
+    return 0;
+}
+
+GhosttyResult ghostty_selection_gesture_event_new(
+    const void* allocator, GhosttySelectionGestureEvent* out_event,
+    int event_type
+) {
+    (void)allocator; (void)event_type;
+    if (out_event) { *out_event = (void*)(uintptr_t)9; }
+    return 0;
+}
+
+void ghostty_selection_gesture_event_free(GhosttySelectionGestureEvent event) {
+    (void)event;
+}
+
+GhosttyResult ghostty_selection_gesture_event_set(
+    GhosttySelectionGestureEvent event, int option, const void* value
+) {
+    (void)event; (void)option; (void)value;
+    return 0;
+}
+
+GhosttyResult ghostty_selection_gesture_event(
+    GhosttySelectionGesture gesture, GhosttyTerminal terminal,
+    GhosttySelectionGestureEvent event, struct GhosttySelection* out_selection
+) {
+    (void)gesture; (void)terminal; (void)event; (void)out_selection;
+    return -4;
+}
+
+GhosttyResult ghostty_terminal_selection_equal(
+    GhosttyTerminal terminal, const struct GhosttySelection* a,
+    const struct GhosttySelection* b, bool* out_equal
+) {
+    (void)terminal; (void)a; (void)b;
+    if (out_equal) { *out_equal = true; }
+    return 0;
+}
+
+GhosttyResult ghostty_terminal_selection_format_alloc(
+    GhosttyTerminal terminal, const void* allocator,
+    struct GhosttyTerminalSelectionFormatOptions options,
+    uint8_t** out_ptr, size_t* out_len
+) {
+    (void)terminal; (void)allocator; (void)options;
+    if (out_ptr) { *out_ptr = NULL; }
+    if (out_len) { *out_len = 0; }
+    return -4;
 }
 
 /* ── Kitty graphics ────────────────────────────────────────────── */

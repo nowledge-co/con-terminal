@@ -1684,8 +1684,8 @@ impl GhosttyView {
         terminal.send_mouse_pos(x, y, mods);
         let consumed = terminal.send_mouse_button(true, button, mods);
         match button {
-            MouseButton::Left => self.left_mouse_sequence.press_sent(mods),
-            MouseButton::Right => self.right_mouse_sequence.press_sent(mods),
+            MouseButton::Left => self.left_mouse_sequence.begin(mods),
+            MouseButton::Right => self.right_mouse_sequence.begin(mods),
             MouseButton::Middle => {}
         }
         Some(consumed)

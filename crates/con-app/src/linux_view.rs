@@ -16,8 +16,12 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
-use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
+use con_ghostty::vt::{
+    SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
+    VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource,
+};
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, DesktopNotification,
     GhosttyApp, GhosttySplitDirection, GhosttyTerminal, KittyImage, KittyPlacement, ScreenSnapshot,
@@ -36,7 +40,8 @@ use crate::mouse_sequence::MouseButtonSequence;
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
-    TerminalPastePayload, payload_from_clipboard, payload_from_external_paths, unsafe_paste_preview,
+    TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
+    payload_from_external_paths, unsafe_paste_preview,
 };
 use crate::terminal_restore::restored_terminal_output;
 
@@ -47,6 +52,7 @@ const DEFAULT_CELL_HEIGHT_RATIO: f32 = 1.45;
 const TERMINAL_PADDING_X_PX: f32 = 12.0;
 const TERMINAL_PADDING_Y_PX: f32 = 10.0;
 const KITTY_BELOW_BACKGROUND_LIMIT: i32 = i32::MIN / 2;
+const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(15);
 
 /// Resolved logical font size used for both the cell-grid estimate
 /// (`estimate_surface_size`) and the actual paint (`render`). Both
@@ -105,6 +111,12 @@ impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
 impl EventEmitter<GhosttyDesktopNotification> for GhosttyView {}
 
+#[derive(Clone, Copy)]
+enum LeftMouseSequence {
+    LocalSelection,
+    TerminalReport,
+}
+
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
@@ -144,13 +156,14 @@ pub struct GhosttyView {
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
     last_mouse_position: Option<Point<Pixels>>,
-    selection: Option<TerminalSelection>,
-    drag_anchor: Option<(u16, u64)>,
+    terminal_left_mouse_sequence: MouseButtonSequence<LeftMouseSequence>,
     /// Whether the most recent right-button press was consumed by the
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
     terminal_mouse_right_consumed: Option<bool>,
     terminal_right_mouse_sequence: MouseButtonSequence<bool>,
+    selection_autoscroll_epoch: u64,
+    selection_autoscroll_active: bool,
     keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
     pending_unsafe_paste: Option<(String, VtPasteSource)>,
 }
@@ -237,10 +250,11 @@ impl GhosttyView {
             suppress_link_mouse_up: false,
             hovered_link: None,
             last_mouse_position: None,
-            selection: None,
-            drag_anchor: None,
+            terminal_left_mouse_sequence: MouseButtonSequence::default(),
             terminal_mouse_right_consumed: None,
             terminal_right_mouse_sequence: MouseButtonSequence::default(),
+            selection_autoscroll_epoch: 0,
+            selection_autoscroll_active: false,
             keys_awaiting_release: HashMap::new(),
             pending_unsafe_paste: None,
         }
@@ -298,39 +312,33 @@ impl GhosttyView {
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        extract_selection_text(self.snapshot.as_ref()?, self.selection?)
+        self.terminal
+            .as_ref()
+            .and_then(|terminal| terminal.selection_text())
     }
 
     pub fn release_mouse_selection(&mut self, cx: &mut Context<Self>) {
         let Some(position) = self.last_mouse_position else {
             return;
         };
-        if self.finish_selection(position) {
+        if self.finish_left_mouse_sequence(position) {
             cx.notify();
         }
     }
 
     fn clear_selection(&mut self) -> bool {
-        let changed = self.selection.take().is_some() || self.drag_anchor.take().is_some();
+        let Some(terminal) = self.terminal.as_ref() else {
+            return false;
+        };
+        let changed = terminal.has_selection();
+        terminal.clear_selection();
         changed
     }
 
     fn copy_current_selection_to_clipboard(&mut self, cx: &mut App) -> bool {
-        if self.selection.is_none() {
-            return false;
-        }
-
-        let Some(selection) = self
-            .selection_text()
-            .filter(|selection| !selection.is_empty())
-        else {
-            self.clear_selection();
-            return true;
-        };
-
-        cx.write_to_clipboard(ClipboardItem::new_string(selection));
-        self.clear_selection();
-        true
+        self.terminal
+            .as_ref()
+            .is_some_and(|terminal| copy_selection_to_clipboard(terminal, cx))
     }
 
     pub fn shutdown_surface(&mut self, mut window: Option<&mut Window>, cx: &mut App) {
@@ -362,10 +370,10 @@ impl GhosttyView {
         self.suppress_link_mouse_up = false;
         self.hovered_link = None;
         self.last_mouse_position = None;
-        self.selection = None;
-        self.drag_anchor = None;
+        self.terminal_left_mouse_sequence = MouseButtonSequence::default();
         self.terminal_mouse_right_consumed = None;
         self.terminal_right_mouse_sequence = MouseButtonSequence::default();
+        self.stop_selection_autoscroll();
         self.keys_awaiting_release.clear();
         self.pending_unsafe_paste = None;
     }
@@ -616,7 +624,6 @@ impl GhosttyView {
         {
             self.seen_any_output = true;
         }
-        self.clear_selection();
         self.snapshot = Some(snapshot);
         true
     }
@@ -634,7 +641,6 @@ impl GhosttyView {
             return false;
         }
 
-        self.clear_selection();
         if let Err(err) = terminal.resize_surface(size) {
             // Do not cache a resize that never reached the PTY. A later layout
             // or render pass can retry the same dimensions after backpressure
@@ -695,30 +701,59 @@ impl GhosttyView {
         pos: Point<Pixels>,
         clamp_to_grid: bool,
     ) -> Option<(u16, u16)> {
+        self.selection_input_from_event_position(pos, clamp_to_grid)
+            .map(|(point, _)| (point.col, point.row))
+    }
+
+    fn selection_input_from_event_position(
+        &self,
+        pos: Point<Pixels>,
+        clamp_to_grid: bool,
+    ) -> Option<(SelectionPoint, SelectionGeometry)> {
         let bounds = self.pane_bounds?;
         let snapshot = self.snapshot.as_ref()?;
+        if snapshot.cols == 0 || snapshot.rows == 0 {
+            return None;
+        }
         let font_size_px = effective_font_size(self.initial_font_size);
-        let cell_width_px = cell_width_px(font_size_px);
-        let cell_height_px = cell_height_px(font_size_px);
-
-        let mut local_x = f32::from(pos.x) - f32::from(bounds.origin.x) - TERMINAL_PADDING_X_PX;
-        let mut local_y = f32::from(pos.y) - f32::from(bounds.origin.y) - TERMINAL_PADDING_Y_PX;
-        let grid_width = snapshot.cols as f32 * cell_width_px;
-        let grid_height = snapshot.rows as f32 * cell_height_px;
-        if clamp_to_grid {
-            local_x = local_x.clamp(0.0, (grid_width - f32::EPSILON).max(0.0));
-            local_y = local_y.clamp(0.0, (grid_height - f32::EPSILON).max(0.0));
-        } else if local_x < 0.0 || local_y < 0.0 || local_x >= grid_width || local_y >= grid_height
+        let scale = self.scale_factor.max(f32::EPSILON);
+        let (cell_width, cell_height) = physical_cell_size(font_size_px, scale);
+        let surface_x = (f32::from(pos.x) - f32::from(bounds.origin.x)) * scale;
+        let surface_y = (f32::from(pos.y) - f32::from(bounds.origin.y)) * scale;
+        let padding_left = (TERMINAL_PADDING_X_PX * scale).round().max(0.0) as u32;
+        let padding_top = (TERMINAL_PADDING_Y_PX * scale).round().max(0.0) as u32;
+        let grid_x = surface_x - padding_left as f32;
+        let grid_y = surface_y - padding_top as f32;
+        let grid_width = f32::from(snapshot.cols) * cell_width as f32;
+        let grid_height = f32::from(snapshot.rows) * cell_height as f32;
+        if !clamp_to_grid
+            && (grid_x < 0.0 || grid_y < 0.0 || grid_x >= grid_width || grid_y >= grid_height)
         {
             return None;
         }
 
-        let col = (local_x / cell_width_px).floor() as u16;
-        let row = (local_y / cell_height_px).floor() as u16;
-        if col >= snapshot.cols || row >= snapshot.rows {
-            return None;
-        }
-        Some((col, row))
+        let grid_x = grid_x.clamp(0.0, (grid_width - f32::EPSILON).max(0.0));
+        let grid_y = grid_y.clamp(0.0, (grid_height - f32::EPSILON).max(0.0));
+        let col = ((grid_x as u32) / cell_width).min(u32::from(snapshot.cols - 1)) as u16;
+        let row = ((grid_y as u32) / cell_height).min(u32::from(snapshot.rows - 1)) as u16;
+        let screen_height_px = self.last_surface_size.map_or_else(
+            || ((f32::from(bounds.size.height) * scale).ceil() as u32).max(1),
+            |size| size.height_px.max(1),
+        );
+        Some((
+            SelectionPoint {
+                col,
+                row,
+                surface_x_px: f64::from(surface_x),
+                surface_y_px: f64::from(surface_y),
+            },
+            SelectionGeometry {
+                columns: u32::from(snapshot.cols),
+                cell_width_px: cell_width,
+                padding_left_px: padding_left,
+                screen_height_px,
+            },
+        ))
     }
 
     fn link_at_position(&self, pos: Point<Pixels>) -> Option<TerminalLink> {
@@ -743,55 +778,98 @@ impl GhosttyView {
 
     fn clear_hovered_link(&mut self) -> bool {
         let changed = self.hovered_link.take().is_some();
-        if self.drag_anchor.is_none() && !self.terminal_right_mouse_sequence.is_active() {
+        if !self.terminal_left_mouse_sequence.is_active()
+            && !self.terminal_right_mouse_sequence.is_active()
+        {
             self.last_mouse_position = None;
         }
         changed
     }
 
-    fn begin_selection(&mut self, pos: Point<Pixels>) -> bool {
-        let Some(point) = self.selection_point_from_event_position(pos) else {
-            return self.clear_selection();
+    fn begin_local_selection(
+        &mut self,
+        pos: Point<Pixels>,
+        shift: bool,
+        click_count: usize,
+    ) -> bool {
+        let Some((point, geometry)) = self.selection_input_from_event_position(pos, false) else {
+            return false;
         };
-        self.drag_anchor = Some(point);
-        self.selection = Some(TerminalSelection {
-            anchor: point,
-            extent: point,
-        });
-        true
+        let Some(terminal) = self.terminal.as_ref() else {
+            return false;
+        };
+        let click_count = u8::try_from(click_count).unwrap_or(u8::MAX);
+        let result = terminal.selection_press(point, geometry, click_count, shift);
+        match result {
+            Ok(()) => {
+                self.terminal_left_mouse_sequence
+                    .begin(LeftMouseSequence::LocalSelection);
+                true
+            }
+            Err(err) => {
+                log::debug!("linux terminal selection press failed: {err:#}");
+                terminal.selection_cancel_gesture();
+                false
+            }
+        }
     }
 
-    fn update_selection_drag(&mut self, pos: Point<Pixels>) -> bool {
-        let Some(anchor) = self.drag_anchor else {
+    fn update_left_mouse_sequence(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        let Some(sequence) = self.terminal_left_mouse_sequence.payload().copied() else {
             return false;
         };
-        let Some(extent) = self.clamped_selection_point_from_event_position(pos) else {
+        let Some((point, geometry)) = self.selection_input_from_event_position(pos, true) else {
             return false;
         };
-        let next = TerminalSelection { anchor, extent };
-        if self.selection == Some(next) {
+        let Some(terminal) = self.terminal.as_ref() else {
             return false;
+        };
+
+        match sequence {
+            LeftMouseSequence::TerminalReport => {
+                terminal.mouse_motion_report(point.col, point.row, false)
+            }
+            LeftMouseSequence::LocalSelection => match terminal.selection_drag(point, geometry) {
+                Ok(autoscroll) => {
+                    self.update_selection_autoscroll(autoscroll, cx);
+                    true
+                }
+                Err(err) => {
+                    log::debug!("linux terminal selection drag failed: {err:#}");
+                    terminal.selection_cancel_gesture();
+                    self.stop_selection_autoscroll();
+                    false
+                }
+            },
         }
-        self.selection = Some(next);
-        true
     }
 
-    fn finish_selection(&mut self, pos: Point<Pixels>) -> bool {
-        let anchor = self.drag_anchor.take();
-        let Some(anchor) = anchor else {
+    fn finish_left_mouse_sequence(&mut self, pos: Point<Pixels>) -> bool {
+        self.stop_selection_autoscroll();
+        let Some(sequence) = self.terminal_left_mouse_sequence.finish() else {
             return false;
         };
-        let extent = self
-            .clamped_selection_point_from_event_position(pos)
-            .unwrap_or(anchor);
-        if anchor == extent {
-            return self.clear_selection();
+        let point = self
+            .selection_input_from_event_position(pos, true)
+            .map(|(point, _)| point);
+        let Some(terminal) = self.terminal.as_ref() else {
+            return true;
+        };
+        match sequence {
+            LeftMouseSequence::TerminalReport => {
+                if let Some(point) = point {
+                    terminal.mouse_release(0, point.col, point.row, false);
+                }
+            }
+            LeftMouseSequence::LocalSelection => {
+                if let Err(err) =
+                    terminal.selection_release(point.map(|point| (point.col, point.row)))
+                {
+                    log::debug!("linux terminal selection release failed: {err:#}");
+                    terminal.selection_cancel_gesture();
+                }
+            }
         }
-        let next = TerminalSelection { anchor, extent };
-        if self.selection == Some(next) {
-            return false;
-        }
-        self.selection = Some(next);
         true
     }
 
@@ -809,16 +887,24 @@ impl GhosttyView {
     }
 
     fn cancel_left_pointer_interactions(&mut self, position: Point<Pixels>) {
+        self.stop_selection_autoscroll();
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
-        self.finish_selection(position);
+        self.finish_left_mouse_sequence(position);
     }
 
     fn cancel_pointer_interactions(&mut self) {
+        self.stop_selection_autoscroll();
         let Some(position) = self.last_mouse_position else {
             self.mouse_down_link = None;
             self.suppress_link_mouse_up = false;
-            self.drag_anchor = None;
+            if matches!(
+                self.terminal_left_mouse_sequence.finish(),
+                Some(LeftMouseSequence::LocalSelection)
+            ) && let Some(terminal) = self.terminal.as_ref()
+            {
+                terminal.selection_cancel_gesture();
+            }
             self.terminal_right_mouse_sequence.finish();
             return;
         };
@@ -826,26 +912,84 @@ impl GhosttyView {
         self.finish_right_mouse_sequence(position);
     }
 
-    fn selection_point_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u64)> {
-        self.cell_from_event_position(pos)
-            .map(|cell| self.selection_point_from_cell(cell))
+    fn update_selection_autoscroll(
+        &mut self,
+        autoscroll: SelectionAutoscroll,
+        cx: &mut Context<Self>,
+    ) {
+        if autoscroll == SelectionAutoscroll::None {
+            self.stop_selection_autoscroll();
+            return;
+        }
+        if self.selection_autoscroll_active {
+            return;
+        }
+
+        self.selection_autoscroll_epoch = self.selection_autoscroll_epoch.wrapping_add(1);
+        let epoch = self.selection_autoscroll_epoch;
+        self.selection_autoscroll_active = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(SELECTION_AUTOSCROLL_INTERVAL)
+                    .await;
+                let keep_scrolling = this
+                    .update(cx, |this, cx| {
+                        if !this.selection_autoscroll_active
+                            || this.selection_autoscroll_epoch != epoch
+                            || !matches!(
+                                this.terminal_left_mouse_sequence.payload(),
+                                Some(LeftMouseSequence::LocalSelection)
+                            )
+                        {
+                            return false;
+                        }
+                        let update = this.selection_autoscroll_tick();
+                        if update.direction == SelectionAutoscroll::None {
+                            this.stop_selection_autoscroll();
+                            return false;
+                        }
+                        if update.changed {
+                            cx.notify();
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_scrolling {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
-    fn clamped_selection_point_from_event_position(
-        &self,
-        pos: Point<Pixels>,
-    ) -> Option<(u16, u64)> {
-        self.clamped_cell_from_event_position(pos)
-            .map(|cell| self.selection_point_from_cell(cell))
+    fn selection_autoscroll_tick(&self) -> SelectionAutoscrollUpdate {
+        let Some(position) = self.last_mouse_position else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        let Some((point, geometry)) = self.selection_input_from_event_position(position, true)
+        else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        let Some(terminal) = self.terminal.as_ref() else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        match terminal.selection_autoscroll_tick(point, geometry) {
+            Ok(update) => update,
+            Err(err) => {
+                log::debug!("linux terminal selection autoscroll failed: {err:#}");
+                terminal.selection_cancel_gesture();
+                SelectionAutoscrollUpdate::default()
+            }
+        }
     }
 
-    fn selection_point_from_cell(&self, cell: (u16, u16)) -> (u16, u64) {
-        let viewport_offset = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.scrollbar)
-            .map_or(0, |scrollbar| scrollbar.offset);
-        (cell.0, viewport_offset.saturating_add(cell.1 as u64))
+    fn stop_selection_autoscroll(&mut self) {
+        if !self.selection_autoscroll_active {
+            return;
+        }
+        self.selection_autoscroll_active = false;
+        self.selection_autoscroll_epoch = self.selection_autoscroll_epoch.wrapping_add(1);
     }
 
     fn render_link_cursor_overlay(
@@ -1470,7 +1614,6 @@ impl Render for GhosttyView {
             configured_pane_opacity
         };
         let pane_background = theme.background.opacity(pane_opacity);
-        let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
         let mut has_kitty_images = false;
         let mut split_terminal_rows = false;
@@ -1517,9 +1660,13 @@ impl Render for GhosttyView {
 
         if let Some(snapshot) = self.snapshot.as_ref() {
             for row_idx in 0..usize::from(snapshot.rows) {
-                if let Some(selection_cols) =
-                    selection.and_then(|selection| selection.row_range(row_idx, snapshot))
-                {
+                let selection_cols = snapshot
+                    .selection_ranges
+                    .get(row_idx)
+                    .copied()
+                    .flatten()
+                    .map(|range| (usize::from(range.start), usize::from(range.end)));
+                if let Some(selection_cols) = selection_cols {
                     let row_start = row_idx * usize::from(snapshot.cols);
                     let row_end = row_start + usize::from(snapshot.cols);
                     if let Some(cells) = snapshot.cells.get(row_start..row_end) {
@@ -1813,8 +1960,7 @@ impl Render for GhosttyView {
                         None
                     };
                     if this.terminal_mouse_right_consumed == Some(true) {
-                        this.terminal_right_mouse_sequence
-                            .press_sent(shift_at_press);
+                        this.terminal_right_mouse_sequence.begin(shift_at_press);
                     }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1839,7 +1985,25 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.begin_selection(event.position);
+                    let shift = event.modifiers.shift;
+                    let tracking_active = this
+                        .terminal()
+                        .is_some_and(|terminal| terminal.mouse_tracking_active());
+                    if tracking_active && !shift {
+                        if let Some(terminal) = this.terminal() {
+                            terminal.selection_cancel_gesture();
+                            if let Some((col, row)) = this.cell_from_event_position(event.position)
+                                && terminal.mouse_report(0, col, row, false)
+                            {
+                                this.terminal_left_mouse_sequence
+                                    .begin(LeftMouseSequence::TerminalReport);
+                            }
+                        }
+                    } else if !this.begin_local_selection(event.position, shift, event.click_count)
+                        && !shift
+                    {
+                        this.clear_selection();
+                    }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1875,9 +2039,11 @@ impl Render for GhosttyView {
                 }
                 let mut changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
-                    changed |= this.update_selection_drag(event.position);
-                } else if event.pressed_button.is_none() && this.drag_anchor.is_some() {
-                    changed |= this.finish_selection(event.position);
+                    changed |= this.update_left_mouse_sequence(event.position, cx);
+                } else if event.pressed_button.is_none()
+                    && this.terminal_left_mouse_sequence.is_active()
+                {
+                    changed |= this.finish_left_mouse_sequence(event.position);
                 }
                 if event.pressed_button.is_none() && this.terminal_right_mouse_sequence.is_active()
                 {
@@ -1905,7 +2071,7 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    let mut changed = this.finish_selection(event.position);
+                    let mut changed = this.finish_left_mouse_sequence(event.position);
                     changed |= this.update_hovered_link(&event.modifiers);
                     if changed {
                         cx.notify();
@@ -1915,13 +2081,15 @@ impl Render for GhosttyView {
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
-                    if this.drag_anchor.is_none() && !this.suppress_link_mouse_up {
+                    if !this.terminal_left_mouse_sequence.is_active()
+                        && !this.suppress_link_mouse_up
+                    {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
-                    let mut changed = this.finish_selection(event.position);
+                    let mut changed = this.finish_left_mouse_sequence(event.position);
                     changed |= this.update_hovered_link(&event.modifiers);
                     if changed {
                         cx.notify();
@@ -2221,97 +2389,6 @@ fn render_kitty_image_layer(
     .absolute()
     .size_full()
     .into_any_element()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TerminalSelection {
-    anchor: (u16, u64),
-    extent: (u16, u64),
-}
-
-impl TerminalSelection {
-    fn contains(self, col: u16, row: u16, snapshot: &ScreenSnapshot) -> bool {
-        let cols = snapshot.cols;
-        let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
-        let to_linear = |point: (u16, u64)| point.1 as u128 * cols as u128 + point.0 as u128;
-        let anchor = to_linear(self.anchor);
-        let extent = to_linear(self.extent);
-        let (start, end) = if anchor <= extent {
-            (anchor, extent)
-        } else {
-            (extent, anchor)
-        };
-        let current = to_linear((col, viewport_offset.saturating_add(row as u64)));
-        current >= start && current <= end
-    }
-
-    fn row_range(self, row: usize, snapshot: &ScreenSnapshot) -> Option<(usize, usize)> {
-        let cols = snapshot.cols;
-        if cols == 0 || row > u16::MAX as usize {
-            return None;
-        }
-
-        let row = row as u16;
-        let mut start = None;
-        let mut end = None;
-        for col in 0..cols {
-            if self.contains(col, row, snapshot) {
-                start.get_or_insert(usize::from(col));
-                end = Some(usize::from(col));
-            }
-        }
-
-        start.zip(end)
-    }
-}
-
-fn extract_selection_text(
-    snapshot: &ScreenSnapshot,
-    selection: TerminalSelection,
-) -> Option<String> {
-    if snapshot.cols == 0 || snapshot.rows == 0 || snapshot.cells.is_empty() {
-        return None;
-    }
-
-    let cols = usize::from(snapshot.cols);
-    let mut output = String::new();
-    for row in 0..snapshot.rows {
-        let Some((start, end)) = selection.row_range(usize::from(row), snapshot) else {
-            continue;
-        };
-
-        let row_start = usize::from(row) * cols;
-        let Some(cells) = snapshot.cells.get(row_start + start..=row_start + end) else {
-            continue;
-        };
-
-        let mut row_text = String::with_capacity(cells.len());
-        let mut last_non_blank = None;
-        for cell in cells {
-            let ch = match cell.codepoint {
-                0 => ' ',
-                cp => char::from_u32(cp).unwrap_or('\u{FFFD}'),
-            };
-            if ch != ' ' {
-                last_non_blank = Some(row_text.len() + ch.len_utf8());
-            }
-            row_text.push(ch);
-        }
-
-        if let Some(end_byte) = last_non_blank {
-            output.push_str(&row_text[..end_byte]);
-        }
-        output.push('\n');
-    }
-
-    if output.ends_with('\n') {
-        output.pop();
-    }
-    if output.is_empty() {
-        None
-    } else {
-        Some(output)
-    }
 }
 
 #[derive(Clone, Default)]
@@ -2727,9 +2804,9 @@ fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
 mod tests {
     use super::{
         DEFAULT_FONT_SIZE, KITTY_BELOW_BACKGROUND_LIMIT, KittyImageLayer, MIN_FONT_SIZE_PX,
-        TerminalSelection, build_terminal_row, cell_height_px, cell_width_px, effective_font_size,
-        extract_selection_text, kitty_image_to_render_image, kitty_placement_geometry,
-        physical_cell_size, rows_needing_refresh, vt_color_to_hsla,
+        build_terminal_row, cell_height_px, cell_width_px, effective_font_size,
+        kitty_image_to_render_image, kitty_placement_geometry, physical_cell_size,
+        rows_needing_refresh, vt_color_to_hsla,
     };
     use con_ghostty::{
         ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, KittyImage, KittyPlacement, ScreenSnapshot,
@@ -2936,73 +3013,12 @@ mod tests {
     }
 
     #[test]
-    fn terminal_selection_row_range_handles_reverse_drag() {
-        let snapshot = ScreenSnapshot {
-            cols: 5,
-            rows: 3,
-            cells: Vec::new(),
-            kitty_placements: Default::default(),
-            dirty_rows: Vec::new(),
-            cursor: VtCursor {
-                col: 0,
-                row: 0,
-                visible: false,
-            },
-            alternate_screen: false,
-            scrollbar: None,
-            title: None,
-            generation: 1,
-        };
-        let selection = TerminalSelection {
-            anchor: (3, 1),
-            extent: (1, 0),
-        };
-
-        assert_eq!(selection.row_range(0, &snapshot), Some((1, 4)));
-        assert_eq!(selection.row_range(1, &snapshot), Some((0, 3)));
-        assert_eq!(selection.row_range(2, &snapshot), None);
-    }
-
-    #[test]
-    fn extracts_selected_text_from_snapshot() {
-        let mut cells = vec![VtCell::default(); 12];
-        for (idx, ch) in "one two     ".chars().enumerate() {
-            cells[idx].codepoint = ch as u32;
-        }
-        let snapshot = ScreenSnapshot {
-            cols: 4,
-            rows: 3,
-            cells,
-            kitty_placements: Default::default(),
-            dirty_rows: Vec::new(),
-            cursor: VtCursor {
-                col: 0,
-                row: 0,
-                visible: false,
-            },
-            alternate_screen: false,
-            scrollbar: None,
-            title: None,
-            generation: 1,
-        };
-
-        let selection = TerminalSelection {
-            anchor: (1, 0),
-            extent: (2, 1),
-        };
-
-        assert_eq!(
-            extract_selection_text(&snapshot, selection),
-            Some("ne\ntwo".to_string())
-        );
-    }
-
-    #[test]
     fn refresh_rows_include_old_and_new_cursor_rows() {
         let snapshot = ScreenSnapshot {
             cols: 4,
             rows: 3,
             cells: vec![Default::default(); 12],
+            selection_ranges: vec![None; 3],
             kitty_placements: Default::default(),
             dirty_rows: vec![1],
             cursor: VtCursor {

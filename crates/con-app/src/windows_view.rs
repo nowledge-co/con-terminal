@@ -40,9 +40,12 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
+use con_ghostty::vt::{
+    SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
+    VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource,
+};
 use con_ghostty::{DesktopNotification, TerminalProgress};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
@@ -62,14 +65,21 @@ use crate::terminal_paste::{
     payload_from_external_paths, unsafe_paste_preview,
 };
 use crate::terminal_restore::restored_terminal_output;
-use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
+use con_ghostty::windows::host_view::{MouseDownRoute, MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
 const SCROLLBAR_INSET_PX: f32 = 4.0;
 const SCROLLBAR_WIDTH_PX: f32 = 6.0;
 const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
+const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(15);
 const TERMINAL_PADDING_X_PX: f32 = 10.0;
 const TERMINAL_PADDING_Y_PX: f32 = 8.0;
+
+#[derive(Clone, Copy)]
+struct MousePressRoute {
+    shift: bool,
+    local_selection: bool,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ScrollbarDrag {
@@ -164,8 +174,8 @@ pub struct GhosttyView {
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
-    terminal_left_mouse_sequence: MouseButtonSequence<bool>,
-    terminal_right_mouse_sequence: MouseButtonSequence<bool>,
+    terminal_left_mouse_sequence: MouseButtonSequence<MousePressRoute>,
+    terminal_right_mouse_sequence: MouseButtonSequence<MousePressRoute>,
     /// Whether the most recent right-button press was consumed by the
     /// terminal app (an SGR report emitted). The context-menu builder
     /// suppresses con's menu only when this is true.
@@ -174,6 +184,8 @@ pub struct GhosttyView {
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
     last_mouse_position: Option<Point<Pixels>>,
+    selection_autoscroll_epoch: u64,
+    selection_autoscroll_active: bool,
     keys_awaiting_release: HashMap<String, crate::terminal_keys::TrackedVtKey>,
     pending_unsafe_paste: Option<(String, VtPasteSource)>,
     /// Cloned and handed to `RenderSession::new`; the ConPTY reader
@@ -262,6 +274,8 @@ impl GhosttyView {
             suppress_link_mouse_up: false,
             hovered_link: None,
             last_mouse_position: None,
+            selection_autoscroll_epoch: 0,
+            selection_autoscroll_active: false,
             keys_awaiting_release: HashMap::new(),
             pending_unsafe_paste: None,
             wake_tx,
@@ -353,6 +367,7 @@ impl GhosttyView {
         self.suppress_link_mouse_up = false;
         self.hovered_link = None;
         self.last_mouse_position = None;
+        self.stop_selection_autoscroll();
         self.keys_awaiting_release.clear();
         self.pending_unsafe_paste = None;
         self.images_to_drop.clear();
@@ -856,18 +871,15 @@ impl GhosttyView {
     /// (col, row) cell address. Returns `None` when we don't yet have a
     /// session / bounds to project into.
     fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
-        self.cell_from_event_position_impl(pos, false)
+        self.selection_input_from_event_position(pos, false)
+            .map(|(point, _)| (point.col, point.row))
     }
 
-    fn clamped_cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
-        self.cell_from_event_position_impl(pos, true)
-    }
-
-    fn cell_from_event_position_impl(
+    fn selection_input_from_event_position(
         &self,
         pos: Point<Pixels>,
         clamp_to_grid: bool,
-    ) -> Option<(u16, u16)> {
+    ) -> Option<(SelectionPoint, SelectionGeometry)> {
         let bounds = self.pane_bounds?;
         let terminal = self.terminal.as_ref()?;
         let inner = terminal.inner();
@@ -880,29 +892,43 @@ impl GhosttyView {
         let scale = self.scale_factor.max(f32::EPSILON);
         let width_px = ((f32::from(bounds.size.width) * scale).ceil() as u32).max(1);
         let height_px = ((f32::from(bounds.size.height) * scale).ceil() as u32).max(1);
-        let cols = (width_px / metrics.cell_width_px.max(1)).max(1);
-        let rows = (height_px / metrics.cell_height_px.max(1)).max(1);
+        let (cols, rows) = session.vt().size();
+        let cols = u32::from(cols.max(1));
+        let rows = u32::from(rows.max(1));
         let grid_width_px = (cols * metrics.cell_width_px.max(1)) as f32;
         let grid_height_px = (rows * metrics.cell_height_px.max(1)) as f32;
         let local_x = f32::from(pos.x) - f32::from(bounds.origin.x);
         let local_y = f32::from(pos.y) - f32::from(bounds.origin.y);
-        let mut phys_x = local_x * scale;
-        let mut phys_y = local_y * scale;
-        if clamp_to_grid {
-            phys_x = phys_x.clamp(0.0, (grid_width_px - f32::EPSILON).max(0.0));
-            phys_y = phys_y.clamp(0.0, (grid_height_px - f32::EPSILON).max(0.0));
-        } else if phys_x < 0.0
-            || phys_y < 0.0
-            || phys_x >= width_px as f32
-            || phys_y >= height_px as f32
-            || phys_x >= grid_width_px
-            || phys_y >= grid_height_px
+        let surface_x = local_x * scale;
+        let surface_y = local_y * scale;
+        if !clamp_to_grid
+            && (surface_x < 0.0
+                || surface_y < 0.0
+                || surface_x >= width_px as f32
+                || surface_y >= height_px as f32
+                || surface_x >= grid_width_px
+                || surface_y >= grid_height_px)
         {
             return None;
         }
-        let col = ((phys_x as u32) / metrics.cell_width_px.max(1)).min(cols - 1) as u16;
-        let row = ((phys_y as u32) / metrics.cell_height_px.max(1)).min(rows - 1) as u16;
-        Some((col, row))
+        let grid_x = surface_x.clamp(0.0, (grid_width_px - f32::EPSILON).max(0.0));
+        let grid_y = surface_y.clamp(0.0, (grid_height_px - f32::EPSILON).max(0.0));
+        let col = ((grid_x as u32) / metrics.cell_width_px.max(1)).min(cols - 1) as u16;
+        let row = ((grid_y as u32) / metrics.cell_height_px.max(1)).min(rows - 1) as u16;
+        Some((
+            SelectionPoint {
+                col,
+                row,
+                surface_x_px: f64::from(surface_x),
+                surface_y_px: f64::from(surface_y),
+            },
+            SelectionGeometry {
+                columns: cols,
+                cell_width_px: metrics.cell_width_px,
+                padding_left_px: 0,
+                screen_height_px: height_px,
+            },
+        ))
     }
 
     fn link_at_position(&self, pos: Point<Pixels>) -> Option<TerminalLink> {
@@ -964,30 +990,28 @@ impl GhosttyView {
         )
     }
 
-    fn forward_mouse_down(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods) -> bool {
-        if let Some((col, row)) = self.cell_from_event_position(pos) {
+    fn forward_mouse_down(
+        &self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+        click_count: usize,
+    ) -> MouseDownRoute {
+        if let Some((point, geometry)) = self.selection_input_from_event_position(pos, false) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    return session.mouse_down(button, col, row, mods);
+                    return session.mouse_down(
+                        button,
+                        point,
+                        geometry,
+                        mods,
+                        u8::try_from(click_count).unwrap_or(u8::MAX),
+                    );
                 }
             }
         }
-        false
-    }
-
-    fn terminal_mouse_tracking_active_at(&self, pos: Point<Pixels>) -> bool {
-        if self.cell_from_event_position(pos).is_none() {
-            return false;
-        }
-        let Some(terminal) = &self.terminal else {
-            return false;
-        };
-        let inner = terminal.inner();
-        inner
-            .lock()
-            .as_ref()
-            .is_some_and(|session| session.mouse_tracking_active())
+        MouseDownRoute::Ignored
     }
 
     fn forward_mouse_drag(
@@ -996,34 +1020,34 @@ impl GhosttyView {
         pos: Point<Pixels>,
         mods: MouseEventMods,
         clamp: bool,
-    ) {
-        let cell = if clamp {
-            self.clamped_cell_from_event_position(pos)
-        } else {
-            self.cell_from_event_position(pos)
-        };
-        if let Some((col, row)) = cell {
+        local_selection: bool,
+    ) -> SelectionAutoscroll {
+        if let Some((point, geometry)) = self.selection_input_from_event_position(pos, clamp) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_drag(button, col, row, mods);
+                    return session.mouse_drag(button, point, geometry, mods, local_selection);
                 }
             }
         }
+        SelectionAutoscroll::None
     }
 
-    fn forward_mouse_up(&self, button: u8, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
-        let cell = if clamp {
-            self.clamped_cell_from_event_position(pos)
-        } else {
-            self.cell_from_event_position(pos)
-        };
-        if let Some((col, row)) = cell {
-            if let Some(terminal) = &self.terminal {
-                let inner = terminal.inner();
-                if let Some(session) = inner.lock().as_ref() {
-                    session.mouse_up(button, col, row, mods);
-                }
+    fn forward_mouse_up(
+        &self,
+        button: u8,
+        pos: Point<Pixels>,
+        mods: MouseEventMods,
+        clamp: bool,
+        local_selection: bool,
+    ) {
+        let point = self
+            .selection_input_from_event_position(pos, clamp)
+            .map(|(point, _)| point);
+        if let Some(terminal) = &self.terminal {
+            let inner = terminal.inner();
+            if let Some(session) = inner.lock().as_ref() {
+                session.mouse_up(button, point, mods, local_selection);
             }
         }
     }
@@ -1034,21 +1058,104 @@ impl GhosttyView {
         pos: Point<Pixels>,
         mut mods: MouseEventMods,
     ) -> bool {
-        let press_shift = match button {
+        if button == 0 {
+            self.stop_selection_autoscroll();
+        }
+        let route = match button {
             0 => self.terminal_left_mouse_sequence.finish(),
             2 => self.terminal_right_mouse_sequence.finish(),
             _ => None,
         };
-        let Some(press_shift) = press_shift else {
+        let Some(route) = route else {
             return false;
         };
 
-        mods.shift = press_shift;
-        self.forward_mouse_up(button, pos, mods, true);
+        mods.shift = route.shift;
+        self.forward_mouse_up(button, pos, mods, true, route.local_selection);
         true
     }
 
+    fn update_selection_autoscroll(
+        &mut self,
+        autoscroll: SelectionAutoscroll,
+        cx: &mut Context<Self>,
+    ) {
+        if autoscroll == SelectionAutoscroll::None {
+            self.stop_selection_autoscroll();
+            return;
+        }
+        if self.selection_autoscroll_active {
+            return;
+        }
+
+        self.selection_autoscroll_epoch = self.selection_autoscroll_epoch.wrapping_add(1);
+        let epoch = self.selection_autoscroll_epoch;
+        self.selection_autoscroll_active = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(SELECTION_AUTOSCROLL_INTERVAL)
+                    .await;
+                let keep_scrolling = this
+                    .update(cx, |this, cx| {
+                        if !this.selection_autoscroll_active
+                            || this.selection_autoscroll_epoch != epoch
+                            || !this
+                                .terminal_left_mouse_sequence
+                                .payload()
+                                .is_some_and(|route| route.local_selection)
+                        {
+                            return false;
+                        }
+                        let update = this.selection_autoscroll_tick();
+                        if update.direction == SelectionAutoscroll::None {
+                            this.stop_selection_autoscroll();
+                            return false;
+                        }
+                        if update.changed {
+                            cx.notify();
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep_scrolling {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn selection_autoscroll_tick(&self) -> SelectionAutoscrollUpdate {
+        let Some(position) = self.last_mouse_position else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        let Some((point, geometry)) = self.selection_input_from_event_position(position, true)
+        else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        let Some(terminal) = &self.terminal else {
+            return SelectionAutoscrollUpdate::default();
+        };
+        let inner = terminal.inner();
+        let guard = inner.lock();
+        guard
+            .as_ref()
+            .map_or(SelectionAutoscrollUpdate::default(), |session| {
+                session.selection_autoscroll_tick(point, geometry)
+            })
+    }
+
+    fn stop_selection_autoscroll(&mut self) {
+        if !self.selection_autoscroll_active {
+            return;
+        }
+        self.selection_autoscroll_active = false;
+        self.selection_autoscroll_epoch = self.selection_autoscroll_epoch.wrapping_add(1);
+    }
+
     fn cancel_left_pointer_interactions(&mut self, position: Point<Pixels>) {
+        self.stop_selection_autoscroll();
         self.scrollbar_drag = None;
         self.mouse_down_link = None;
         self.suppress_link_mouse_up = false;
@@ -1056,6 +1163,7 @@ impl GhosttyView {
     }
 
     fn cancel_pointer_interactions(&mut self) {
+        self.stop_selection_autoscroll();
         if let Some(position) = self.last_mouse_position {
             self.cancel_left_pointer_interactions(position);
             self.finish_terminal_mouse_sequence(2, position, MouseEventMods::default());
@@ -1063,7 +1171,15 @@ impl GhosttyView {
             self.scrollbar_drag = None;
             self.mouse_down_link = None;
             self.suppress_link_mouse_up = false;
-            self.terminal_left_mouse_sequence.finish();
+            if self
+                .terminal_left_mouse_sequence
+                .finish()
+                .is_some_and(|route| route.local_selection)
+                && let Some(terminal) = &self.terminal
+                && let Some(session) = terminal.inner().lock().as_ref()
+            {
+                session.cancel_drag();
+            }
             self.terminal_right_mouse_sequence.finish();
         }
     }
@@ -1864,11 +1980,14 @@ impl Render for GhosttyView {
                         2,
                         event.position,
                         mouse_mods_from(&event.modifiers),
-                    );
+                        event.click_count,
+                    ) == MouseDownRoute::TerminalReport;
                     this.terminal_mouse_right_consumed = Some(consumed);
                     if consumed {
-                        this.terminal_right_mouse_sequence
-                            .press_sent(event.modifiers.shift);
+                        this.terminal_right_mouse_sequence.begin(MousePressRoute {
+                            shift: event.modifiers.shift,
+                            local_selection: false,
+                        });
                     }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1898,15 +2017,20 @@ impl Render for GhosttyView {
                     // written. Do not continue an SGR sequence after a failed
                     // PTY write.
                     let mods = mouse_mods_from(&event.modifiers);
-                    let tracking_active = this.terminal_mouse_tracking_active_at(event.position);
-                    let consumed = this.forward_mouse_down(0, event.position, mods);
-                    if consumed
-                        || ((!tracking_active || mods.shift)
-                            && this.terminal().is_some()
-                            && this.cell_from_event_position(event.position).is_some())
-                    {
-                        this.terminal_left_mouse_sequence
-                            .press_sent(event.modifiers.shift);
+                    let route =
+                        match this.forward_mouse_down(0, event.position, mods, event.click_count) {
+                            MouseDownRoute::TerminalReport => Some(MousePressRoute {
+                                shift: mods.shift,
+                                local_selection: false,
+                            }),
+                            MouseDownRoute::LocalSelection => Some(MousePressRoute {
+                                shift: mods.shift,
+                                local_selection: true,
+                            }),
+                            MouseDownRoute::Ignored => None,
+                        };
+                    if let Some(route) = route {
+                        this.terminal_left_mouse_sequence.begin(route);
                     }
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1955,39 +2079,39 @@ impl Render for GhosttyView {
                 }
                 let hover_changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
-                    if let Some(shift) =
-                        this.terminal_left_mouse_sequence.press_modifiers().copied()
-                    {
-                        this.forward_mouse_drag(
+                    if let Some(route) = this.terminal_left_mouse_sequence.payload().copied() {
+                        let autoscroll = this.forward_mouse_drag(
                             0,
                             event.position,
                             MouseEventMods {
-                                shift,
+                                shift: route.shift,
                                 ..mouse_mods_from(&event.modifiers)
                             },
                             true,
+                            route.local_selection,
                         );
+                        if route.local_selection {
+                            this.update_selection_autoscroll(autoscroll, cx);
+                        }
                         cx.notify();
                     } else if hover_changed {
                         cx.notify();
                     }
                 } else if event.pressed_button == Some(MouseButton::Right)
-                    && let Some(shift) = this
-                        .terminal_right_mouse_sequence
-                        .press_modifiers()
-                        .copied()
+                    && let Some(route) = this.terminal_right_mouse_sequence.payload().copied()
                 {
                     // Right button is held and the sequence is active: keep
                     // reporting motion (button 2 + 32) instead of treating
                     // this as a release.
-                    this.forward_mouse_drag(
+                    let _ = this.forward_mouse_drag(
                         2,
                         event.position,
                         MouseEventMods {
-                            shift,
+                            shift: route.shift,
                             ..mouse_mods_from(&event.modifiers)
                         },
                         true,
+                        false,
                     );
                     cx.notify();
                 } else if event.pressed_button.is_none()
@@ -2094,18 +2218,21 @@ impl Render for GhosttyView {
                     mouse_mods_from(&event.modifiers),
                 );
                 if scrolled_viewport
-                    && let Some(shift) =
-                        this.terminal_left_mouse_sequence.press_modifiers().copied()
+                    && let Some(route) = this.terminal_left_mouse_sequence.payload().copied()
                 {
-                    this.forward_mouse_drag(
+                    let autoscroll = this.forward_mouse_drag(
                         0,
                         event.position,
                         MouseEventMods {
-                            shift,
+                            shift: route.shift,
                             ..mouse_mods_from(&event.modifiers)
                         },
                         true,
+                        route.local_selection,
                     );
+                    if route.local_selection {
+                        this.update_selection_autoscroll(autoscroll, cx);
+                    }
                 }
                 cx.notify();
             }))

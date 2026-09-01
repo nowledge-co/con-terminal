@@ -10,7 +10,10 @@ use crate::stub::{
     CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
-use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome};
+use crate::vt::{
+    ScreenSnapshot, SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry,
+    SelectionPoint, VtKeyEvent, VtKeyOutcome,
+};
 use crate::{
     ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
     desktop_notification_policy,
@@ -439,6 +442,26 @@ impl LinuxGhosttyTerminal {
         }
     }
 
+    /// Report a left-button drag only for modes that requested pointer motion
+    /// (1002/1003). SGR encodes motion by setting bit 5 on the button code.
+    pub fn mouse_motion_report(&self, col: u16, row: u16, shift: bool) -> bool {
+        let inner = self.inner.lock();
+        let Some(session) = inner.as_ref() else {
+            return false;
+        };
+        if !session.mouse_motion_tracking_active() || !session.is_sgr_mouse() || shift {
+            return false;
+        }
+        let seq = sgr_mouse_sequence(32, col, row, true);
+        match session.write_input(seq.as_bytes()) {
+            Ok(()) => true,
+            Err(err) => {
+                log::debug!("linux pty mouse motion write failed: {err:#}");
+                false
+            }
+        }
+    }
+
     /// Report a mouse button release to the child as an SGR (1006)
     /// sequence, gated on the same mouse-reporting mode as
     /// [`Self::mouse_report`].
@@ -577,14 +600,83 @@ impl LinuxGhosttyTerminal {
     pub fn recover_shell_prompt_state(&self) {}
 
     pub fn has_selection(&self) -> bool {
-        false
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::has_selection)
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        None
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::selection_text)
     }
 
-    pub fn clear_selection(&self) {}
+    pub fn take_selection_text(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_selection_text)
+    }
+
+    pub fn clear_selection(&self) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.clear_selection();
+        }
+    }
+
+    pub fn selection_press(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+        click_count: u8,
+        extend: bool,
+    ) -> anyhow::Result<()> {
+        let inner = self.inner.lock();
+        let session = inner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("linux terminal session is not attached"))?;
+        session.selection_press(point, geometry, click_count, extend)
+    }
+
+    pub fn selection_drag(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> anyhow::Result<SelectionAutoscroll> {
+        let inner = self.inner.lock();
+        let session = inner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("linux terminal session is not attached"))?;
+        session.selection_drag(point, geometry)
+    }
+
+    pub fn selection_autoscroll_tick(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> anyhow::Result<SelectionAutoscrollUpdate> {
+        let inner = self.inner.lock();
+        let session = inner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("linux terminal session is not attached"))?;
+        session.selection_autoscroll_tick(point, geometry)
+    }
+
+    pub fn selection_release(&self, point: Option<(u16, u16)>) -> anyhow::Result<()> {
+        let inner = self.inner.lock();
+        let session = inner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("linux terminal session is not attached"))?;
+        session.selection_release(point)
+    }
+
+    pub fn selection_cancel_gesture(&self) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.selection_cancel_gesture();
+        }
+    }
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         self.inner
@@ -655,6 +747,11 @@ mod tests {
     fn sgr_left_press_and_release_terminators() {
         assert_eq!(sgr_mouse_sequence(0, 3, 7, true), "\x1b[<0;4;8M");
         assert_eq!(sgr_mouse_sequence(0, 3, 7, false), "\x1b[<0;4;8m");
+    }
+
+    #[test]
+    fn sgr_left_drag_sets_motion_bit() {
+        assert_eq!(sgr_mouse_sequence(32, 3, 7, true), "\x1b[<32;4;8M");
     }
 
     #[test]
