@@ -43,9 +43,11 @@ Supported wrapper options are:
    SSH control connection.
 4. If any local or remote setup step fails, Con falls back to
    `TERM=xterm-256color` and continues with the user's SSH command.
-5. A successful setup and successful SSH session add the destination to
-   Con's cache. The cache contains host metadata only; it is not a shared
-   Ghostty cache format.
+5. A successful setup and successful SSH session add the resolved
+   `user@hostname:port` destination to Con's cache. Including the resolved port
+   prevents two SSH endpoints that share a hostname from reusing one another's
+   installation state. The cache contains host metadata only; it is not a
+   shared Ghostty cache format.
 
 Environment forwarding uses OpenSSH options rather than a shell command:
 

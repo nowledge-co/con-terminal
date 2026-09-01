@@ -210,6 +210,7 @@ fn resolve_destination(ssh: &OsStr, args: &[OsString]) -> Option<String> {
     let text = String::from_utf8_lossy(&output.stdout);
     let mut user = None;
     let mut host = None;
+    let mut port = None;
     for line in text.lines() {
         let Some((key, value)) = line.split_once(' ') else {
             continue;
@@ -217,15 +218,22 @@ fn resolve_destination(ssh: &OsStr, args: &[OsString]) -> Option<String> {
         match key {
             "user" => user = Some(value),
             "hostname" => host = Some(value),
+            "port" => port = Some(value),
             _ => {}
         }
     }
-    Some(format!("{}@{}", user?, host?))
+    Some(match port {
+        Some(port) => format!("{}@{}:{port}", user?, host?),
+        None => format!("{}@{}", user?, host?),
+    })
 }
 
 fn local_terminfo() -> Option<Vec<u8>> {
     let mut command = Command::new("infocmp");
-    command.args(["-0", "-Q2", "-q", TERMINFO_NAME]);
+    // `-Q2` asks infocmp for a compiled description. `tic -x -` expects the
+    // source form, so keep this as source output and never pipe `b64:` data to
+    // the remote compiler.
+    command.args(["-0", "-q", TERMINFO_NAME]);
     if std::env::var_os("TERMINFO").is_none() {
         if let Some(path) = bundled_terminfo_dir() {
             command.env("TERMINFO", path);
@@ -331,20 +339,22 @@ mod tests {
 
     #[test]
     fn parses_destination_from_ssh_config_output() {
-        let output = "hostname example.com\nuser alice\n";
+        let output = "hostname example.com\nuser alice\nport 2222\n";
         let mut user = None;
         let mut host = None;
+        let mut port = None;
         for line in output.lines() {
             let (key, value) = line.split_once(' ').unwrap();
             match key {
                 "user" => user = Some(value),
                 "hostname" => host = Some(value),
+                "port" => port = Some(value),
                 _ => {}
             }
         }
         assert_eq!(
-            format!("{}@{}", user.unwrap(), host.unwrap()),
-            "alice@example.com"
+            format!("{}@{}:{}", user.unwrap(), host.unwrap(), port.unwrap()),
+            "alice@example.com:2222"
         );
     }
 }
