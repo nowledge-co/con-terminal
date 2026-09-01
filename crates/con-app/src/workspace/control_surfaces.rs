@@ -1158,6 +1158,9 @@ impl ConWorkspace {
     pub(super) fn terminal_exec_response_to_control_result(
         response: TerminalExecResponse,
     ) -> ControlResult {
+        if let Some(error) = response.completion_error_with_output() {
+            return Err(ControlError::internal(error));
+        }
         Ok(json!({
             "output": response.output,
             "exit_code": response.exit_code,

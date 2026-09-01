@@ -96,6 +96,47 @@ pub struct TerminalExecRequest {
 pub struct TerminalExecResponse {
     pub output: String,
     pub exit_code: Option<i32>,
+    status: TerminalExecStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalExecStatus {
+    Completed,
+    Unconfirmed,
+}
+
+impl TerminalExecResponse {
+    const UNCONFIRMED_MESSAGE: &'static str = "Shell command completion could not be confirmed; the command may still be running. Do not issue another command to this pane until its state is verified.";
+
+    pub fn completed(output: String, exit_code: Option<i32>) -> Self {
+        Self {
+            output,
+            exit_code,
+            status: TerminalExecStatus::Completed,
+        }
+    }
+
+    pub fn unconfirmed(output: String) -> Self {
+        Self {
+            output,
+            exit_code: None,
+            status: TerminalExecStatus::Unconfirmed,
+        }
+    }
+
+    pub fn completion_error(&self) -> Option<&'static str> {
+        (self.status == TerminalExecStatus::Unconfirmed).then_some(Self::UNCONFIRMED_MESSAGE)
+    }
+
+    pub fn completion_error_with_output(&self) -> Option<String> {
+        self.completion_error().map(|message| {
+            if self.output.is_empty() {
+                message.to_string()
+            } else {
+                format!("{message}\nRecent output:\n{}", self.output)
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -238,6 +279,10 @@ impl Tool for TerminalExecTool {
                     )
                 })
         })?;
+
+        if let Some(error) = response.completion_error_with_output() {
+            return Err(ToolError::CommandFailed(error));
+        }
 
         Ok(ShellExecOutput {
             stdout: response.output,
@@ -4954,13 +4999,16 @@ impl Tool for BatchExecTool {
                 .into_iter()
                 .map(|(pane_index, pane_id, rx)| {
                     match rx.recv_timeout(std::time::Duration::from_secs(60)) {
-                        Ok(resp) => BatchResult {
-                            pane_index,
-                            pane_id,
-                            output: resp.output,
-                            exit_code: resp.exit_code,
-                            error: None,
-                        },
+                        Ok(resp) => {
+                            let error = resp.completion_error().map(str::to_string);
+                            BatchResult {
+                                pane_index,
+                                pane_id,
+                                output: resp.output,
+                                exit_code: resp.exit_code,
+                                error,
+                            }
+                        }
                         Err(_) => BatchResult {
                             pane_index,
                             pane_id,
@@ -5948,6 +5996,13 @@ async fn ensure_remote_tmux_workspace_impl(
             })
     })?;
 
+    if let Some(error) = tmux_bootstrap.completion_error_with_output() {
+        return Err(ToolError::CommandFailed(format!(
+            "Failed to confirm tmux session preparation for `{}` on host `{}`.\n{}",
+            session_name, ensure.host, error
+        )));
+    }
+
     if tmux_bootstrap.exit_code.is_some_and(|code| code != 0) {
         return Err(ToolError::CommandFailed(format!(
             "Failed to prepare tmux session `{}` on host `{}`.\n{}",
@@ -6448,17 +6503,20 @@ impl Tool for RemoteExecTool {
                 .map(
                     |(host, pane_index, pane_id, created, match_source, bootstrap_output, rx)| {
                         match rx.recv_timeout(std::time::Duration::from_secs(60)) {
-                            Ok(resp) => RemoteExecHostResult {
-                                host,
-                                pane_index,
-                                pane_id,
-                                created,
-                                match_source,
-                                bootstrap_output,
-                                output: resp.output,
-                                exit_code: resp.exit_code,
-                                error: None,
-                            },
+                            Ok(resp) => {
+                                let error = resp.completion_error().map(str::to_string);
+                                RemoteExecHostResult {
+                                    host,
+                                    pane_index,
+                                    pane_id,
+                                    created,
+                                    match_source,
+                                    bootstrap_output,
+                                    output: resp.output,
+                                    exit_code: resp.exit_code,
+                                    error,
+                                }
+                            }
                             Err(_) => RemoteExecHostResult {
                                 host,
                                 pane_index,
@@ -6778,8 +6836,8 @@ impl Tool for CreatePaneTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentCliNativeAttachmentState, ResolveWorkTargetResult, TmuxTargetKindFilter,
-        WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
+        AgentCliNativeAttachmentState, ResolveWorkTargetResult, TerminalExecResponse,
+        TmuxTargetKindFilter, WorkTargetControlPath, WorkTargetIntent, agent_cli_native_attachment,
         build_local_cwd_command_prefix, canonical_agent_cli_name, decode_key_escapes,
         expand_home_prefix, is_tmux_agent_cli_command, is_tmux_shell_command, pane_matches_cwd,
         resolve_work_target_candidates, split_at_standalone_esc,
@@ -6797,6 +6855,19 @@ mod tests {
         PaneSelector, preferred_tmux_shell_session, shell_quote_fragment, tmux_creation_target,
     };
     use crossbeam_channel::unbounded;
+
+    #[test]
+    fn terminal_exec_response_distinguishes_unconfirmed_completion() {
+        let completed = TerminalExecResponse::completed("done".to_string(), Some(0));
+        let response = TerminalExecResponse::unconfirmed("$ ".to_string());
+
+        assert_eq!(completed.completion_error(), None);
+        let error = response
+            .completion_error_with_output()
+            .expect("completion error");
+        assert!(error.contains("may still be running"));
+        assert!(error.contains("$ "));
+    }
 
     #[test]
     fn decode_standard_escapes() {
