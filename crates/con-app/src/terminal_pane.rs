@@ -1,9 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-<<<<<<< HEAD
 use con_ghostty::{GhosttyTerminal, TerminalColors, TerminalProgress, TerminalPromptState};
->>>>>>> origin/main
 use con_terminal::TerminalTheme;
 use gpui::*;
 
