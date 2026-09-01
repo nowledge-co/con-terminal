@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use con_ghostty::GhosttyTerminal;
 use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
 
@@ -108,7 +108,7 @@ pub fn payload_from_external_paths(paths: &ExternalPaths) -> Option<TerminalPast
     quoted_paths_text(paths.paths()).map(TerminalPastePayload::Text)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::App) -> bool {
     let has_selection = terminal.has_selection();
     let selection = has_selection.then(|| terminal.selection_text()).flatten();
@@ -127,14 +127,14 @@ pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::Ap
 }
 
 #[derive(Debug, Eq, PartialEq)]
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 enum CopySelectionDecision<'a> {
     NoSelection,
     ClearOnly,
     CopyAndClear(&'a str),
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 fn copy_selection_decision(
     has_selection: bool,
     selection: Option<&str>,

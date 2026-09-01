@@ -30,8 +30,11 @@ use crate::{DesktopNotificationPolicy, clipboard_write_policy};
 
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
-use super::render::{RenderOutcome, Renderer, RendererConfig, Selection, ThemeColors};
-use super::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen};
+use super::render::{RenderOutcome, Renderer, RendererConfig, ThemeColors};
+use super::vt::{
+    SelectionAutoscroll, SelectionGeometry, SelectionPoint, VtKeyEvent, VtKeyOutcome,
+    VtPasteResult, VtPasteSource, VtScreen,
+};
 
 use super::render::CellMetrics;
 
@@ -67,7 +70,6 @@ pub struct RenderSession {
     /// so fractional deltas accumulate here instead of turning every
     /// tiny touchpad event into a full-row jump.
     scroll_remainder: Mutex<ScrollRemainder>,
-    drag_anchor: Mutex<Option<(u16, u64)>>,
 }
 
 unsafe impl Send for RenderSession {}
@@ -118,6 +120,13 @@ pub struct MouseEventMods {
     pub shift: bool,
     pub alt: bool,
     pub control: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MouseDownRoute {
+    Ignored,
+    LocalSelection,
+    TerminalReport,
 }
 
 impl RenderSession {
@@ -249,7 +258,6 @@ impl RenderSession {
             low_latency_generation_target: AtomicU64::new(0),
             low_latency_burst_until: Mutex::new(None),
             scroll_remainder: Mutex::new(ScrollRemainder::default()),
-            drag_anchor: Mutex::new(None),
         })
     }
 
@@ -494,38 +502,43 @@ impl RenderSession {
     /// we emit an SGR button-press report and leave selection alone.
     /// Shift+click with an existing selection extends from the original
     /// anchor (matches every other terminal). `button` follows the SGR
-    /// button index (0=Left, 1=Middle, 2=Right). Returns `true` when the
-    /// event was consumed by the terminal app (an SGR report emitted) —
-    /// the view uses this to suppress its own context menu on
-    /// right-click.
-    pub fn mouse_down(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
+    /// button index (0=Left, 1=Middle, 2=Right). The return value records
+    /// the chosen route so the view can preserve it through drag/release.
+    pub fn mouse_down(
+        &self,
+        button: u8,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+        mods: MouseEventMods,
+    ) -> MouseDownRoute {
         if self.vt.mouse_tracking_active() && !mods.shift {
+            self.vt.selection_cancel_gesture();
             self.request_low_latency_after_next_generation();
-            return self.report_sgr_button(button, col, row, mods, true);
+            return if self.report_sgr_button(button, point.col, point.row, mods, true) {
+                MouseDownRoute::TerminalReport
+            } else {
+                MouseDownRoute::Ignored
+            };
         }
         if button != 0 {
             // Non-left buttons never drive local selection; when tracking
             // is off the click is simply not consumed by the terminal.
-            return false;
+            return MouseDownRoute::Ignored;
         }
         self.request_low_latency_present();
-        let point = self.selection_point(col, row);
-        if mods.shift {
-            let renderer = self.renderer.lock();
-            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or(point);
-            *self.drag_anchor.lock() = Some(existing_anchor);
-            renderer.set_selection(Some(Selection {
-                anchor: existing_anchor,
-                extent: point,
-            }));
-            return false;
+        let result = if mods.shift && self.vt.has_selection() {
+            self.vt.selection_drag(point, geometry).map(|_| ())
+        } else {
+            self.vt.selection_press(point, geometry)
+        };
+        match result {
+            Ok(()) => MouseDownRoute::LocalSelection,
+            Err(err) => {
+                log::debug!("windows terminal selection press failed: {err:#}");
+                self.vt.selection_cancel_gesture();
+                MouseDownRoute::Ignored
+            }
         }
-        *self.drag_anchor.lock() = Some(point);
-        self.renderer.lock().set_selection(Some(Selection {
-            anchor: point,
-            extent: point,
-        }));
-        false
     }
 
     /// Mouse-moved at the given cell while a button is held.
@@ -533,60 +546,86 @@ impl RenderSession {
     /// Emits an SGR motion-with-button report only when the shell
     /// requested motion reporting (DECSET 1002 button-event or 1003
     /// any-event); plain button-event tracking (1000) reports presses
-    /// and releases but no motion. When motion reporting is off or
-    /// Shift is held we extend the local left-button drag selection.
+    /// and releases but no motion. `local_selection` preserves the route
+    /// chosen for the matching press, even if the child changes mouse modes
+    /// while the button remains held.
     /// `button` follows the SGR button index (0=Left, 1=Middle,
     /// 2=Right); the motion bit (+32) is added inside.
-    pub fn mouse_drag(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) {
-        let motion_reporting = self.mouse_motion_reporting_active();
-        if motion_reporting && !mods.shift {
-            self.request_low_latency_after_next_generation();
-            // Button + 32 = motion-with-button bit per SGR spec.
-            self.report_sgr_button(button.saturating_add(32), col, row, mods, true);
-            return;
+    pub fn mouse_drag(
+        &self,
+        button: u8,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+        mods: MouseEventMods,
+        local_selection: bool,
+    ) -> SelectionAutoscroll {
+        if !local_selection {
+            if self.mouse_motion_reporting_active() {
+                self.request_low_latency_after_next_generation();
+                // Button + 32 = motion-with-button bit per SGR spec.
+                self.report_sgr_button(button.saturating_add(32), point.col, point.row, mods, true);
+            }
+            return SelectionAutoscroll::None;
         }
-        if !mouse_drag_updates_local_selection(button, motion_reporting, mods.shift) {
-            return;
+        if button != 0 {
+            return SelectionAutoscroll::None;
         }
         self.request_low_latency_present();
-        let anchor = *self.drag_anchor.lock();
-        if let Some(anchor) = anchor {
-            self.renderer.lock().set_selection(Some(Selection {
-                anchor,
-                extent: self.selection_point(col, row),
-            }));
+        match self.vt.selection_drag(point, geometry) {
+            Ok(autoscroll) => autoscroll,
+            Err(err) => {
+                log::debug!("windows terminal selection drag failed: {err:#}");
+                self.vt.selection_cancel_gesture();
+                SelectionAutoscroll::None
+            }
         }
     }
 
-    /// Mouse-up at the given cell.
-    ///
-    /// Emits an SGR release when mouse tracking is active (unless Shift
-    /// is held to keep selection). Otherwise clears a transient 1-cell
-    /// selection — a click without drag shouldn't leave a lone cell
-    /// highlighted. `button` follows the SGR button index (0=Left,
-    /// 1=Middle, 2=Right). Returns `true` when the release was consumed
-    /// by the terminal app (an SGR report was emitted).
-    pub fn mouse_up(&self, button: u8, col: u16, row: u16, mods: MouseEventMods) -> bool {
-        if self.mouse_release_reporting_active() && !mods.shift {
-            self.request_low_latency_after_next_generation();
-            return self.report_sgr_button(button, col, row, mods, false);
-        }
-        if button != 0 {
+    /// Finish the route chosen for a pointer press.
+    pub fn mouse_up(
+        &self,
+        button: u8,
+        point: Option<SelectionPoint>,
+        mods: MouseEventMods,
+        local_selection: bool,
+    ) -> bool {
+        if local_selection {
+            if button != 0 {
+                return false;
+            }
+            self.request_low_latency_present();
+            let point = point.map(|point| (point.col, point.row));
+            if let Err(err) = self.vt.selection_release(point) {
+                log::debug!("windows terminal selection release failed: {err:#}");
+                self.vt.selection_cancel_gesture();
+            }
             return false;
         }
-        self.request_low_latency_present();
-        let anchor = self.drag_anchor.lock().take();
-        if let Some(anchor) = anchor
-            && anchor == self.selection_point(col, row)
-        {
-            self.renderer.lock().set_selection(None);
+
+        let Some(point) = point else {
+            return false;
+        };
+        if self.mouse_release_reporting_active() {
+            self.request_low_latency_after_next_generation();
+            return self.report_sgr_button(button, point.col, point.row, mods, false);
         }
         false
     }
 
-    fn selection_point(&self, col: u16, row: u16) -> (u16, u64) {
-        let viewport_offset = self.vt.scrollbar().map_or(0, |scrollbar| scrollbar.offset);
-        (col, viewport_offset.saturating_add(row as u64))
+    pub fn selection_autoscroll_tick(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> SelectionAutoscroll {
+        self.request_low_latency_present();
+        match self.vt.selection_autoscroll_tick(point, geometry) {
+            Ok(autoscroll) => autoscroll,
+            Err(err) => {
+                log::debug!("windows terminal selection autoscroll failed: {err:#}");
+                self.vt.selection_cancel_gesture();
+                SelectionAutoscroll::None
+            }
+        }
     }
 
     fn report_sgr_button(
@@ -607,7 +646,7 @@ impl RenderSession {
 
     /// Cancel any in-flight drag (used on focus loss).
     pub fn cancel_drag(&self) {
-        *self.drag_anchor.lock() = None;
+        self.vt.selection_cancel_gesture();
     }
 
     /// SGR mouse-wheel report. Only used when the shell has enabled
@@ -741,15 +780,13 @@ impl RenderSession {
     }
 
     pub fn has_selection(&self) -> bool {
-        self.renderer.lock().selection().is_some()
+        self.vt.has_selection()
     }
 
     /// Extract the current selection as text. Returns `None` when
     /// nothing is selected.
     pub fn selection_text(&self) -> Option<String> {
-        let selection = self.renderer.lock().selection()?;
-        let snapshot = self.vt.snapshot();
-        Some(extract_selection_text(&snapshot, selection))
+        self.vt.selection_text()
     }
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
@@ -797,7 +834,7 @@ impl RenderSession {
     }
 
     pub fn clear_selection(&self) {
-        self.renderer.lock().set_selection(None);
+        self.vt.clear_selection();
     }
 
     pub fn dimensions_px(&self) -> (u32, u32) {
@@ -906,10 +943,6 @@ fn mouse_motion_reporting_active_for_modes(button_tracking: bool, any_tracking: 
     button_tracking || any_tracking
 }
 
-fn mouse_drag_updates_local_selection(button: u8, motion_reporting: bool, shift: bool) -> bool {
-    button == 0 && (!motion_reporting || shift)
-}
-
 fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
     match rows.cmp(&0) {
         std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
@@ -924,50 +957,6 @@ fn viewport_delta_for_scroll_rows(rows: isize) -> isize {
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
-}
-
-fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
-    let cols = snapshot.cols;
-    if cols == 0 || snapshot.cells.is_empty() {
-        return String::new();
-    }
-    let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
-    let mut out = String::new();
-    let rows = snapshot.rows;
-    for row in 0..rows {
-        let mut row_buf = String::new();
-        let mut row_has_cell = false;
-        let mut last_non_blank: i32 = -1;
-        for col in 0..cols {
-            if !sel.contains(col, row, cols, viewport_offset) {
-                continue;
-            }
-            row_has_cell = true;
-            let idx = row as usize * cols as usize + col as usize;
-            let cell = snapshot.cells.get(idx).copied().unwrap_or_default();
-            let ch = if cell.codepoint == 0 {
-                ' '
-            } else {
-                char::from_u32(cell.codepoint).unwrap_or(' ')
-            };
-            row_buf.push(ch);
-            if cell.codepoint != 0 && cell.codepoint != 0x20 {
-                last_non_blank = row_buf.chars().count() as i32 - 1;
-            }
-        }
-        if !row_has_cell {
-            continue;
-        }
-        if last_non_blank >= 0 {
-            let trimmed: String = row_buf.chars().take(last_non_blank as usize + 1).collect();
-            out.push_str(&trimmed);
-        }
-        out.push('\n');
-    }
-    if out.ends_with('\n') {
-        out.pop();
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1038,14 +1027,5 @@ mod tests {
         assert!(!mouse_motion_reporting_active_for_modes(false, false));
         assert!(mouse_motion_reporting_active_for_modes(true, false));
         assert!(mouse_motion_reporting_active_for_modes(false, true));
-    }
-
-    #[test]
-    fn only_left_drag_updates_local_selection() {
-        assert!(mouse_drag_updates_local_selection(0, false, false));
-        assert!(mouse_drag_updates_local_selection(0, true, true));
-        assert!(!mouse_drag_updates_local_selection(0, true, false));
-        assert!(!mouse_drag_updates_local_selection(2, false, false));
-        assert!(!mouse_drag_updates_local_selection(2, true, true));
     }
 }

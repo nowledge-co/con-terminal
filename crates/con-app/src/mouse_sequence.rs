@@ -1,32 +1,30 @@
 pub(crate) struct MouseButtonSequence<M> {
-    press_modifiers: Option<M>,
+    payload: Option<M>,
 }
 
 impl<M> Default for MouseButtonSequence<M> {
     fn default() -> Self {
-        Self {
-            press_modifiers: None,
-        }
+        Self { payload: None }
     }
 }
 
 impl<M> MouseButtonSequence<M> {
     pub(crate) fn is_active(&self) -> bool {
-        self.press_modifiers.is_some()
+        self.payload.is_some()
     }
 
-    #[cfg(target_os = "windows")]
-    pub(crate) fn press_modifiers(&self) -> Option<&M> {
-        self.press_modifiers.as_ref()
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub(crate) fn payload(&self) -> Option<&M> {
+        self.payload.as_ref()
     }
 
-    pub(crate) fn press_sent(&mut self, modifiers: M) {
-        debug_assert!(self.press_modifiers.is_none());
-        self.press_modifiers = Some(modifiers);
+    pub(crate) fn begin(&mut self, payload: M) {
+        debug_assert!(self.payload.is_none());
+        self.payload = Some(payload);
     }
 
     pub(crate) fn finish(&mut self) -> Option<M> {
-        self.press_modifiers.take()
+        self.payload.take()
     }
 }
 
@@ -39,8 +37,8 @@ mod tests {
         let mut left = MouseButtonSequence::default();
         let mut right = MouseButtonSequence::default();
 
-        left.press_sent(1);
-        right.press_sent(2);
+        left.begin(1);
+        right.begin(2);
 
         assert_eq!(left.finish(), Some(1));
         assert!(!left.is_active());

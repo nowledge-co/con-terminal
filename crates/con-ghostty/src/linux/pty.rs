@@ -15,8 +15,8 @@ use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
-    PtyWriteClass, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
-    VtPasteSource, VtScreen,
+    PtyWriteClass, ScreenSnapshot, SelectionAutoscroll, SelectionGeometry, SelectionPoint,
+    ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen,
 };
 use crate::{ClipboardWritePolicy, DesktopNotificationPolicy};
 
@@ -510,6 +510,61 @@ impl LinuxPtySession {
         }
     }
 
+    pub fn selection_press(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> Result<()> {
+        self.shared.screen.selection_press(point, geometry)?;
+        self.mark_needs_render();
+        Ok(())
+    }
+
+    pub fn selection_drag(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> Result<SelectionAutoscroll> {
+        let autoscroll = self.shared.screen.selection_drag(point, geometry)?;
+        self.mark_needs_render();
+        Ok(autoscroll)
+    }
+
+    pub fn selection_autoscroll_tick(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> Result<SelectionAutoscroll> {
+        let autoscroll = self
+            .shared
+            .screen
+            .selection_autoscroll_tick(point, geometry)?;
+        self.mark_needs_render();
+        Ok(autoscroll)
+    }
+
+    pub fn selection_release(&self, point: Option<(u16, u16)>) -> Result<()> {
+        self.shared.screen.selection_release(point)
+    }
+
+    pub fn selection_cancel_gesture(&self) {
+        self.shared.screen.selection_cancel_gesture();
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.shared.screen.has_selection()
+    }
+
+    pub fn selection_text(&self) -> Option<String> {
+        self.shared.screen.selection_text()
+    }
+
+    pub fn clear_selection(&self) {
+        if self.shared.screen.clear_selection() {
+            self.mark_needs_render();
+        }
+    }
+
     pub fn title(&self) -> Option<String> {
         self.shared
             .screen
@@ -614,6 +669,10 @@ impl LinuxPtySession {
 
     pub fn mouse_tracking_active(&self) -> bool {
         self.shared.screen.mouse_tracking_active()
+    }
+
+    pub fn mouse_motion_tracking_active(&self) -> bool {
+        self.shared.screen.mouse_motion_tracking_active()
     }
 
     pub fn is_sgr_mouse(&self) -> bool {

@@ -1076,6 +1076,12 @@ unsafe extern "C" {
         event: GhosttySelectionGestureEvent,
         out_selection: *mut GhosttySelection,
     ) -> GhosttyResult;
+    fn ghostty_terminal_selection_equal(
+        terminal: GhosttyTerminal,
+        a: *const GhosttySelection,
+        b: *const GhosttySelection,
+        out_equal: *mut bool,
+    ) -> GhosttyResult;
     fn ghostty_terminal_selection_format_buf(
         terminal: GhosttyTerminal,
         options: GhosttyTerminalSelectionFormatOptions,
@@ -2841,6 +2847,9 @@ impl VtScreen {
     /// present and successfully cleared.
     pub fn clear_selection(&self) -> bool {
         let mut inner = self.inner.lock();
+        if let Some(state) = inner.selection_gesture.as_ref() {
+            unsafe { ghostty_selection_gesture_reset(state.gesture, inner.terminal) };
+        }
         match set_selection_locked(&mut inner, None) {
             Ok(changed) => changed,
             Err(err) => {
@@ -3572,6 +3581,13 @@ impl VtScreen {
             || self.mode_active(MODE_BUTTON_MOUSE)
             || self.mode_active(MODE_ANY_MOUSE)
             || self.mode_active(MODE_X10_MOUSE)
+    }
+
+    /// Returns `true` when the application requested pointer motion reports.
+    /// Normal (1000) and X10 tracking only receive button events; button-motion
+    /// (1002) and any-motion (1003) receive drag updates.
+    pub fn mouse_motion_tracking_active(&self) -> bool {
+        self.mode_active(MODE_BUTTON_MOUSE) || self.mode_active(MODE_ANY_MOUSE)
     }
 
     /// SGR (1006) mouse format is the extended coord encoding.
@@ -4416,7 +4432,7 @@ fn selection_gesture_autoscroll(inner: &VtInner) -> anyhow::Result<SelectionAuto
     Ok(autoscroll.into())
 }
 
-fn has_selection_locked(inner: &VtInner) -> anyhow::Result<bool> {
+fn selection_locked(inner: &VtInner) -> anyhow::Result<Option<GhosttySelection>> {
     let mut selection = GhosttySelection::default();
     let rc = unsafe {
         ghostty_terminal_get(
@@ -4426,18 +4442,36 @@ fn has_selection_locked(inner: &VtInner) -> anyhow::Result<bool> {
         )
     };
     match rc {
-        GHOSTTY_SUCCESS => Ok(true),
-        GHOSTTY_NO_VALUE => Ok(false),
+        GHOSTTY_SUCCESS => Ok(Some(selection)),
+        GHOSTTY_NO_VALUE => Ok(None),
         _ => anyhow::bail!("ghostty_terminal_get(SELECTION) failed: rc={rc}"),
     }
+}
+
+fn has_selection_locked(inner: &VtInner) -> anyhow::Result<bool> {
+    Ok(selection_locked(inner)?.is_some())
 }
 
 fn set_selection_locked(
     inner: &mut VtInner,
     selection: Option<&GhosttySelection>,
 ) -> anyhow::Result<bool> {
-    if selection.is_none() && !has_selection_locked(inner)? {
-        return Ok(false);
+    let current = selection_locked(inner)?;
+    match (selection, current.as_ref()) {
+        (None, None) => return Ok(false),
+        (Some(selection), Some(current)) => {
+            let mut equal = false;
+            let rc = unsafe {
+                ghostty_terminal_selection_equal(inner.terminal, selection, current, &mut equal)
+            };
+            if rc != GHOSTTY_SUCCESS {
+                anyhow::bail!("ghostty_terminal_selection_equal failed: rc={rc}");
+            }
+            if equal {
+                return Ok(false);
+            }
+        }
+        _ => {}
     }
     let value = selection.map_or(std::ptr::null(), |selection| {
         selection as *const GhosttySelection as *const c_void
@@ -5810,6 +5844,12 @@ mod tests {
         assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
         assert_eq!(screen.generation(), baseline_generation.wrapping_add(1));
 
+        let selected_generation = screen.generation();
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("repeat drag in selected cell");
+        assert_eq!(screen.generation(), selected_generation);
+
         screen
             .selection_release(Some((4, 0)))
             .expect("release selection");
@@ -5901,6 +5941,69 @@ mod tests {
     }
 
     #[test]
+    fn clearing_selection_resets_repeat_click_state() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+        let point = test_selection_point(1, 0, 5.0);
+
+        screen
+            .selection_press(point, geometry)
+            .expect("first click");
+        screen
+            .selection_release(Some((point.col, point.row)))
+            .expect("first release");
+        assert!(!screen.clear_selection());
+
+        screen
+            .selection_press(point, geometry)
+            .expect("click after clear");
+        assert_eq!(screen.selection_text(), None);
+    }
+
+    #[test]
+    fn drag_after_release_extends_existing_selection() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("drag initial selection");
+        screen
+            .selection_release(Some((4, 0)))
+            .expect("release initial selection");
+
+        screen
+            .selection_drag(test_selection_point(9, 0, 9.0), geometry)
+            .expect("extend released selection");
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha beta"));
+    }
+
+    #[test]
+    fn mouse_motion_tracking_excludes_press_only_modes() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        assert!(!screen.mouse_motion_tracking_active());
+
+        screen.feed(b"\x1b[?1000h");
+        assert!(screen.mouse_tracking_active());
+        assert!(!screen.mouse_motion_tracking_active());
+
+        screen.feed(b"\x1b[?1000l\x1b[?1002h");
+        assert!(screen.mouse_motion_tracking_active());
+
+        screen.feed(b"\x1b[?1002l\x1b[?1003h");
+        assert!(screen.mouse_motion_tracking_active());
+
+        screen.feed(b"\x1b[?1003l\x1b[?9h");
+        assert!(screen.mouse_tracking_active());
+        assert!(!screen.mouse_motion_tracking_active());
+    }
+
+    #[test]
     fn terminal_selection_survives_reflow_and_clears_across_screen_switches() {
         let screen = VtScreen::new(20, 3, None).expect("create vt screen");
         screen.feed(b"alpha beta");
@@ -5925,6 +6028,75 @@ mod tests {
         screen.feed(b"\x1b[?1049l");
         assert!(!screen.has_selection());
         assert_eq!(screen.selection_text(), None);
+    }
+
+    #[test]
+    fn terminal_selection_preserves_graphemes_across_soft_wraps() {
+        let screen = VtScreen::new(5, 3, None).expect("create vt screen");
+        screen.feed("cafe\u{301}xy".as_bytes());
+        let geometry = test_selection_geometry(5, 3);
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(0, 1, 9.0), geometry)
+            .expect("drag selection across soft wrap");
+
+        assert_eq!(screen.selection_text().as_deref(), Some("cafe\u{301}xy"));
+    }
+
+    #[test]
+    fn terminal_selection_tracks_text_into_scrollback() {
+        let screen = VtScreen::new(10, 2, None).expect("create vt screen");
+        screen.feed(b"alpha\r\nbeta");
+        let geometry = test_selection_geometry(10, 2);
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("drag selection");
+        screen
+            .selection_release(Some((4, 0)))
+            .expect("release selection");
+
+        screen.feed(b"\r\ngamma");
+
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn terminal_selection_autoscroll_tick_extends_into_scrollback() {
+        let screen = VtScreen::new(10, 2, None).expect("create vt screen");
+        screen.feed(b"one\r\ntwo\r\nthree");
+        let geometry = test_selection_geometry(10, 2);
+        let mut point_above_viewport = test_selection_point(0, 0, 1.0);
+        point_above_viewport.surface_y_px = -1.0;
+        assert_eq!(screen.scrollbar().map(|state| state.offset), Some(1));
+
+        screen
+            .selection_press(test_selection_point(4, 1, 9.0), geometry)
+            .expect("press selection anchor");
+        assert_eq!(
+            screen
+                .selection_drag(point_above_viewport, geometry)
+                .expect("drag above viewport"),
+            SelectionAutoscroll::Up
+        );
+        let generation_before_tick = screen.generation();
+
+        assert_eq!(
+            screen
+                .selection_autoscroll_tick(point_above_viewport, geometry)
+                .expect("autoscroll selection"),
+            SelectionAutoscroll::Up
+        );
+
+        assert!(screen.generation() > generation_before_tick);
+        assert_eq!(screen.scrollbar().map(|state| state.offset), Some(0));
+        assert_eq!(screen.selection_text().as_deref(), Some("one\ntwo\nthree"));
     }
 
     #[test]
