@@ -1,7 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::{TerminalColors, TerminalProgress, TerminalPromptState};
+use con_ghostty::{GhosttyTerminal, TerminalColors, TerminalProgress, TerminalPromptState};
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -24,6 +24,28 @@ impl TerminalPane {
 
     pub fn current_dir(&self, cx: &App) -> Option<String> {
         self.entity.read(cx).current_dir()
+    }
+
+    pub fn foreground_process_group_id(&self, cx: &App) -> Option<u64> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.foreground_process_group_id())
+    }
+
+    pub fn tty_name(&self, cx: &App) -> Option<String> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.tty_name())
+    }
+
+    pub fn observation_support(&self, _cx: &App) -> PaneObservationSupport {
+        PaneObservationSupport {
+            foreground_process_group_id: GhosttyTerminal::SUPPORTS_FOREGROUND_PROCESS_GROUP_ID,
+            tty_name: GhosttyTerminal::SUPPORTS_TTY_NAME,
+            ..PaneObservationSupport::default()
+        }
     }
 
     pub fn progress(&self, cx: &App) -> Option<TerminalProgress> {
@@ -293,6 +315,8 @@ impl TerminalPane {
         PaneObservationFrame {
             title: title.clone(),
             cwd: self.current_dir(cx),
+            foreground_process_group_id: self.foreground_process_group_id(cx),
+            tty_name: self.tty_name(cx),
             screen_hints: derive_screen_hints(
                 title.as_deref(),
                 if visible_output.is_empty() {
@@ -309,7 +333,7 @@ impl TerminalPane {
             last_command: self.last_command(cx),
             last_exit_code: self.last_exit_code(cx),
             last_command_duration_secs: self.last_command_duration(cx).map(|d| d.as_secs_f64()),
-            support: PaneObservationSupport::default(),
+            support: self.observation_support(cx),
             has_shell_integration: self.has_shell_integration(cx),
             is_alt_screen: self.is_alt_screen(cx),
             is_busy: self.is_busy(cx),

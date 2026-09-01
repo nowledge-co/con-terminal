@@ -431,6 +431,8 @@ impl ConWorkspace {
                             pane_id: pid,
                             title,
                             cwd: observation.cwd.clone(),
+                            foreground_process_group_id: observation.foreground_process_group_id,
+                            tty_name: observation.tty_name.clone(),
                             is_focused: pid == focused_pid,
                             rows,
                             cols,

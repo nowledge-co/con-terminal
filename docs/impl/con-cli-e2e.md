@@ -101,6 +101,7 @@ Current status as of April 10, 2026:
 - the request now returns promptly
 - the returned pane identity is stable
 - the response now reports `surface_ready`, `is_alive`, and `has_shell_integration`
+- the response includes `observation_support`; on macOS, it marks `foreground_process_group_id` and `tty_name` as supported and reports their values when libghostty can provide them
 
 Treat startup-command panes as provisional until their foreground state settles, but a clean pane creation should now come back with a live initialized surface:
 

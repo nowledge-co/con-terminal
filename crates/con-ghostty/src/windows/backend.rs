@@ -166,6 +166,9 @@ pub struct WindowsGhosttyTerminal {
 }
 
 impl WindowsGhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -331,6 +334,12 @@ impl WindowsGhosttyTerminal {
             .lock()
             .as_ref()
             .and_then(RenderSession::current_dir)
+    }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
+        None
     }
     pub fn is_alive(&self) -> bool {
         match self.inner.lock().as_ref() {

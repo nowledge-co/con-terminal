@@ -275,7 +275,7 @@ This matters for SSH, tmux, and full-screen TUIs:
 - `ssh_host` is only populated when a remote host is proven. If con cannot prove it, the prompt says `unknown`.
 - `tmux_session` only comes from authoritative command-line evidence, not from inherited process environment, pane titles, or status-line patterns.
 - Shell freshness now comes from Ghostty command-boundary tracking. After any unconfirmed PTY input, con stops trusting cwd and last-command metadata until shell integration proves a fresh prompt again.
-- Current embedded Ghostty panes explicitly report what the backend cannot prove yet. Today that includes authoritative foreground command text, alternate-screen state, and remote-host identity, so manual tmux/editor/SSH flows may remain `unknown` until Ghostty exports stronger facts.
+- Current embedded Ghostty panes expose the local PTY foreground process group and TTY name while explicit support flags distinguish unavailable values from unsupported portable backends. Authoritative foreground command text, alternate-screen state, and remote-host identity remain unavailable, so manual tmux/editor/SSH flows may stay `unknown`.
 - When the pane mode is not `shell`, or shell metadata is stale, the prompt explicitly tells the model to inspect the live pane with `list_panes`, `read_pane`, and `send_keys` before making claims about cwd, hostname, or the running app.
 
 con now keeps a per-pane runtime tracker for each tab. The tracker is reducer-based: it merges Ghostty observations, typed shell-probe results, and con-originated actions such as pane creation, visible shell exec, raw input, and process exit. It invalidates active tmux/app state when a fresh shell prompt returns without a fresh typed probe, and it exposes both current runtime truth and recent causal history to the prompt, `list_panes`, the sidebar, and smart-input classification.
@@ -304,6 +304,6 @@ For whole-tab situation questions, the harness and prompt now also carry a typed
 
 con also now exposes a tmux-specific inspect surface. `tmux_inspect` returns tmux adapter state when tmux has been authoritatively detected, including the explicit reason native tmux pane/window control is not yet available.
 
-What is still missing is stronger backend truth for foreground runtime identity. The next layer is not more local heuristics; it is an upstream Ghostty observability contract for explicit foreground process and semantic prompt state. See `docs/impl/pane-runtime-observer.md`.
+What is still missing is exact executable identity for the foreground process group and richer semantic prompt state. The process-group ID is useful transition evidence, but it does not identify the exact local process or any program nested inside SSH or tmux. See `docs/impl/pane-runtime-observer.md`.
 
 Separately, con also needs a control-plane split between visible shell execution, local hidden execution, tmux-native control, and raw TUI input. That design lives in `docs/impl/agent-runtime-control-plane.md`.

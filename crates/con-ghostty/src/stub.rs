@@ -178,6 +178,9 @@ pub struct GhosttyTerminal {
 }
 
 impl GhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn draw(&self) {}
     pub fn refresh(&self) {}
     pub fn set_size(&self, _w: u32, _h: u32) {}
@@ -240,6 +243,12 @@ impl GhosttyTerminal {
         None
     }
     pub fn current_dir(&self) -> Option<String> {
+        None
+    }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
         None
     }
     pub fn progress(&self) -> Option<crate::TerminalProgress> {

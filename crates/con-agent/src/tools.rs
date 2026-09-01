@@ -795,6 +795,10 @@ pub struct PaneInfo {
     pub pane_id: usize,
     pub title: String,
     pub cwd: Option<String>,
+    /// Foreground job-control process group reported by the local PTY.
+    pub foreground_process_group_id: Option<u64>,
+    /// Local PTY slave name for this pane.
+    pub tty_name: Option<String>,
     pub is_focused: bool,
     pub rows: usize,
     pub cols: usize,
@@ -967,6 +971,9 @@ pub enum PaneResponse {
         surface_ready: bool,
         is_alive: bool,
         has_shell_integration: bool,
+        observation_support: crate::context::PaneObservationSupport,
+        foreground_process_group_id: Option<u64>,
+        tty_name: Option<String>,
     },
     Error(String),
 }
@@ -6795,6 +6802,7 @@ impl Tool for CreatePaneTool {
                 surface_ready,
                 is_alive,
                 has_shell_integration,
+                ..
             } => {
                 // If a command was provided (e.g. "ssh host"), wait for initial output
                 // to settle so the model can observe the result immediately.
@@ -6990,6 +6998,8 @@ mod tests {
             pane_id: index,
             title: title.to_string(),
             cwd: None,
+            foreground_process_group_id: None,
+            tty_name: None,
             is_focused: false,
             rows: 24,
             cols: 80,

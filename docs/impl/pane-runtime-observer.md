@@ -68,7 +68,8 @@ Examples:
 - alternate-screen state
 - command-finished events
 - visible screen text
-- future libghostty foreground-process exports
+- local PTY foreground process-group ID
+- local PTY slave name
 
 This layer answers:
 
@@ -119,6 +120,8 @@ Current implementation in con:
 
 - `title`
 - `cwd`
+- `foreground_process_group_id`
+- `tty_name`
 - `recent_output`
 - `last_command`
 - `last_exit_code`
@@ -136,7 +139,6 @@ Suggested fields:
 - `observed_at`
 - `backend`
 - `pty_child_pid`
-- `pty_foreground_pgid`
 - `title`
 - `pwd`
 - `shell_integration`
@@ -281,18 +283,20 @@ The public libghostty C API already gives us strong pane facts:
 - working directory
 - command-finished events
 - process-exited state
+- foreground process-group ID
+- PTY slave name
 - visible text
 - scrollback text
 
 These are strong facts about terminal state.
-They are not direct foreground-process identity.
+The process-group ID is not direct foreground-process identity.
 
-#### Upstreamable runtime facts
+#### Foreground runtime facts
 
-Ghostty clearly owns the PTY and process group internally.
-If con needs high-confidence local foreground-app identity, the durable path is to expose that through libghostty instead of rebuilding a parallel PTY stack in this repo.
+Ghostty exposes the local PTY foreground process group through `ghostty_surface_foreground_pid` and the PTY slave name through `ghostty_surface_tty_name`.
+Despite the upstream function name, the former is a job-control process-group ID, not necessarily the PID of the exact process drawing the visible UI.
 
-That should be treated as an upstream API contract project, not a local shortcut.
+Con records these values as backend facts without promoting them to executable, shell, TUI, SSH, or tmux identity.
 
 #### Shell integration events
 
@@ -355,6 +359,8 @@ Ghostty currently gives us:
 - title via action callback
 - pwd via action callback
 - command-finished via action callback
+- foreground process-group ID via `ghostty_surface_foreground_pid`
+- PTY slave name via `ghostty_surface_tty_name`
 - visible and scrollback text via `ghostty_surface_read_text`
 - selection access
 - inspector handle
@@ -368,7 +374,7 @@ More concretely, the current embedded path does not export:
 - authoritative foreground command text
 - authoritative alternate-screen state
 - authoritative remote-host identity
-- foreground process or process-group identity
+- exact foreground executable or argument identity
 
 Important consequence:
 
@@ -536,13 +542,15 @@ Shipped in con:
 
 Current Ghostty embedded status:
 
+- `foreground_process_group_id` and `tty_name` are available as macOS backend facts
+- `support.foreground_process_group_id = true` on macOS and `false` on the portable backends
+- `support.tty_name = true` on macOS and `false` on the portable backends
 - `support.foreground_command = false`
 - `support.alternate_screen = false`
 - `support.remote_host_identity = false`
 
 ### Phase 2
 
-- upstream or expose stronger libghostty runtime facts when needed
 - record executable identity only from explicit backend contracts
 - avoid shelling out in the hot path for pane identity
 

@@ -220,6 +220,9 @@ pub struct LinuxGhosttyTerminal {
 }
 
 impl LinuxGhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -496,6 +499,14 @@ impl LinuxGhosttyTerminal {
             .lock()
             .as_ref()
             .and_then(LinuxPtySession::current_dir)
+    }
+
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+
+    pub fn tty_name(&self) -> Option<String> {
+        None
     }
 
     pub fn is_alive(&self) -> bool {

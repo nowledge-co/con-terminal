@@ -748,6 +748,7 @@ impl GhosttyApp {
             surface,
             state,
             userdata_ptr: surface_userdata,
+            tty_name: Mutex::new(None),
         })
     }
 
@@ -791,9 +792,13 @@ pub struct GhosttyTerminal {
     /// Raw pointer to the Box<StateRef> we allocated for surface userdata.
     /// Must be recovered and freed when the terminal is dropped.
     userdata_ptr: *mut c_void,
+    tty_name: Mutex<Option<String>>,
 }
 
 impl GhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = true;
+    pub const SUPPORTS_TTY_NAME: bool = true;
+
     fn mark_input_observed(&self) {
         let mut state = self.state.lock();
         state.input_generation = state.input_generation.saturating_add(1);
@@ -1102,6 +1107,35 @@ impl GhosttyTerminal {
     /// Working directory (from per-surface action callback, set by OSC 7).
     pub fn current_dir(&self) -> Option<String> {
         self.state.lock().pwd.clone()
+    }
+
+    /// Foreground process-group ID for the surface PTY.
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        if !self.is_alive() {
+            return None;
+        }
+
+        let process_group_id = unsafe { ffi::ghostty_surface_foreground_pid(self.surface) };
+        (process_group_id != 0).then_some(process_group_id)
+    }
+
+    pub fn tty_name(&self) -> Option<String> {
+        let mut tty_name = self.tty_name.lock();
+        if let Some(name) = tty_name.as_ref() {
+            return Some(name.clone());
+        }
+
+        let raw = unsafe { ffi::ghostty_surface_tty_name(self.surface) };
+        let name = if raw.ptr.is_null() || raw.len == 0 {
+            None
+        } else {
+            let bytes = unsafe { std::slice::from_raw_parts(raw.ptr.cast::<u8>(), raw.len) };
+            std::str::from_utf8(bytes).ok().map(ToOwned::to_owned)
+        };
+        unsafe { ffi::ghostty_string_free(raw) };
+
+        let name = name?;
+        Some(tty_name.insert(name).clone())
     }
 
     pub fn progress(&self) -> Option<TerminalProgress> {
