@@ -33,7 +33,8 @@ use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, ThemeColors};
 use super::vt::{
     SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyEvent,
-    VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen,
+    VtKeyOutcome, VtMouseAction, VtMouseButton, VtMouseEvent, VtMouseModifiers, VtPasteResult,
+    VtPasteSource, VtScreen,
 };
 
 use super::render::CellMetrics;
@@ -112,9 +113,9 @@ impl ScrollRemainder {
 /// We don't import GPUI's `Modifiers` here because `con-ghostty` must
 /// stay independent of the UI crate on Windows. The view layer copies
 /// the three bits we care about (shift/alt/control) into this struct.
-/// `platform` (the Win key / cmd key) is not reported in SGR and not
-/// meaningful for xterm shift-bypass semantics, so it's deliberately
-/// omitted.
+/// `platform` (the Win key / cmd key) is not part of terminal mouse
+/// protocols or meaningful for xterm shift-bypass semantics, so it's
+/// deliberately omitted.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MouseEventMods {
     pub shift: bool,
@@ -122,11 +123,21 @@ pub struct MouseEventMods {
     pub control: bool,
 }
 
+impl From<MouseEventMods> for VtMouseModifiers {
+    fn from(modifiers: MouseEventMods) -> Self {
+        Self {
+            shift: modifiers.shift,
+            control: modifiers.control,
+            alt: modifiers.alt,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MouseDownRoute {
     Ignored,
     LocalSelection,
-    TerminalReport,
+    TerminalCapture,
 }
 
 impl RenderSession {
@@ -207,6 +218,12 @@ impl RenderSession {
         // indefinitely when the pane opens at its final dimensions.
         vt.resize(cols, rows, cell_width_px, cell_height_px)
             .context("initial VtScreen::resize failed")?;
+        vt.set_mouse_geometry(
+            renderer_config.initial_width,
+            renderer_config.initial_height,
+            cell_width_px,
+            cell_height_px,
+        );
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
             .as_deref()
@@ -338,6 +355,8 @@ impl RenderSession {
         self.vt
             .resize(cols, rows, cell_width_px, cell_height_px)
             .context("VtScreen::resize failed")?;
+        self.vt
+            .set_mouse_geometry(width_px, height_px, cell_width_px, cell_height_px);
         self.conpty
             .resize(PtySize { cols, rows })
             .context("ConPty::resize failed")?;
@@ -435,21 +454,6 @@ impl RenderSession {
         self.vt.mouse_tracking_active()
     }
 
-    fn mouse_release_reporting_active(&self) -> bool {
-        mouse_release_reporting_active_for_modes(
-            self.vt.mode_active(crate::vt::MODE_NORMAL_MOUSE),
-            self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE),
-            self.vt.mode_active(crate::vt::MODE_ANY_MOUSE),
-        )
-    }
-
-    fn mouse_motion_reporting_active(&self) -> bool {
-        mouse_motion_reporting_active_for_modes(
-            self.vt.mode_active(crate::vt::MODE_BUTTON_MOUSE),
-            self.vt.mode_active(crate::vt::MODE_ANY_MOUSE),
-        )
-    }
-
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) -> Result<()> {
@@ -493,21 +497,21 @@ impl RenderSession {
         self.request_low_latency_present();
     }
 
-    /// Mouse-down at the given cell.
+    /// Mouse-down at the given surface position.
     ///
     /// Xterm convention: Shift bypasses mouse tracking so the user can
     /// always select text, even when a TUI has `set mouse=a` on. When
     /// tracking is off or Shift is held, we drive local selection (left
     /// button only — non-left buttons never drive selection); otherwise
-    /// we emit an SGR button-press report and leave selection alone.
+    /// Ghostty encodes the press using the terminal's active mouse protocol.
     /// Shift+single-click with an existing selection extends from the original
     /// anchor; repeated clicks retain the platform's word/line behavior.
-    /// `button` follows the SGR button index (0=Left, 1=Middle, 2=Right). The
-    /// return value records the chosen route so the view can preserve it
-    /// through drag/release.
+    /// The return value records the chosen route so the view can preserve it
+    /// through drag/release. A captured event stays on the terminal route even
+    /// when the active protocol legitimately emits zero bytes.
     pub fn mouse_down(
         &self,
-        button: u8,
+        button: VtMouseButton,
         point: SelectionPoint,
         geometry: SelectionGeometry,
         mods: MouseEventMods,
@@ -515,14 +519,25 @@ impl RenderSession {
     ) -> MouseDownRoute {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.vt.selection_cancel_gesture();
-            self.request_low_latency_after_next_generation();
-            return if self.report_sgr_button(button, point.col, point.row, mods, true) {
-                MouseDownRoute::TerminalReport
-            } else {
-                MouseDownRoute::Ignored
+            return match self.send_terminal_mouse_event(
+                VtMouseAction::Press,
+                Some(button),
+                point,
+                mods,
+            ) {
+                Ok(output_written) => {
+                    if output_written {
+                        self.request_low_latency_after_next_generation();
+                    }
+                    MouseDownRoute::TerminalCapture
+                }
+                Err(err) => {
+                    log::debug!("windows terminal mouse press failed: {err:#}");
+                    MouseDownRoute::Ignored
+                }
             };
         }
-        if button != 0 {
+        if button != VtMouseButton::Left {
             // Non-left buttons never drive local selection; when tracking
             // is off the click is simply not consumed by the terminal.
             return MouseDownRoute::Ignored;
@@ -541,33 +556,28 @@ impl RenderSession {
         }
     }
 
-    /// Mouse-moved at the given cell while a button is held.
+    /// Mouse-moved at the given surface position while a button is held.
     ///
-    /// Emits an SGR motion-with-button report only when the shell
-    /// requested motion reporting (DECSET 1002 button-event or 1003
-    /// any-event); plain button-event tracking (1000) reports presses
-    /// and releases but no motion. `local_selection` preserves the route
-    /// chosen for the matching press, even if the child changes mouse modes
-    /// while the button remains held.
-    /// `button` follows the SGR button index (0=Left, 1=Middle,
-    /// 2=Right); the motion bit (+32) is added inside.
+    /// Ghostty applies the active mode's motion gate and same-cell deduplication.
+    /// `local_selection` preserves the route chosen for the matching press,
+    /// even if the child changes mouse modes while the button remains held.
     pub fn mouse_drag(
         &self,
-        button: u8,
+        button: VtMouseButton,
         point: SelectionPoint,
         geometry: SelectionGeometry,
         mods: MouseEventMods,
         local_selection: bool,
     ) -> SelectionAutoscroll {
         if !local_selection {
-            if self.mouse_motion_reporting_active() {
-                self.request_low_latency_after_next_generation();
-                // Button + 32 = motion-with-button bit per SGR spec.
-                self.report_sgr_button(button.saturating_add(32), point.col, point.row, mods, true);
+            match self.send_terminal_mouse_event(VtMouseAction::Motion, Some(button), point, mods) {
+                Ok(true) => self.request_low_latency_after_next_generation(),
+                Ok(false) => {}
+                Err(err) => log::debug!("windows terminal mouse drag failed: {err:#}"),
             }
             return SelectionAutoscroll::None;
         }
-        if button != 0 {
+        if button != VtMouseButton::Left {
             return SelectionAutoscroll::None;
         }
         self.request_low_latency_present();
@@ -584,13 +594,13 @@ impl RenderSession {
     /// Finish the route chosen for a pointer press.
     pub fn mouse_up(
         &self,
-        button: u8,
+        button: VtMouseButton,
         point: Option<SelectionPoint>,
         mods: MouseEventMods,
         local_selection: bool,
     ) -> bool {
         if local_selection {
-            if button != 0 {
+            if button != VtMouseButton::Left {
                 return false;
             }
             self.request_low_latency_present();
@@ -605,11 +615,18 @@ impl RenderSession {
         let Some(point) = point else {
             return false;
         };
-        if self.mouse_release_reporting_active() {
-            self.request_low_latency_after_next_generation();
-            return self.report_sgr_button(button, point.col, point.row, mods, false);
+        match self.send_terminal_mouse_event(VtMouseAction::Release, Some(button), point, mods) {
+            Ok(output_written) => {
+                if output_written {
+                    self.request_low_latency_after_next_generation();
+                }
+                output_written
+            }
+            Err(err) => {
+                log::debug!("windows terminal mouse release failed: {err:#}");
+                false
+            }
         }
-        false
     }
 
     pub fn selection_autoscroll_tick(
@@ -632,20 +649,42 @@ impl RenderSession {
         }
     }
 
-    fn report_sgr_button(
-        &self,
-        base_button: u8,
-        col: u16,
-        row: u16,
-        mods: MouseEventMods,
-        pressed: bool,
-    ) -> bool {
-        let seq = sgr_button_sequence(base_button, col, row, mods, pressed);
-        if pressed {
-            self.vt.write_input(seq.as_bytes()).is_ok()
-        } else {
-            self.vt.write_control(seq.as_bytes()).is_ok()
+    /// Report pointer motion with no button held. Ghostty emits this only for
+    /// DECSET 1003 and deduplicates cell formats internally.
+    pub fn mouse_hover(&self, point: SelectionPoint, mods: MouseEventMods) -> bool {
+        if !self.vt.mouse_tracking_active() {
+            return false;
         }
+        match self.send_terminal_mouse_event(VtMouseAction::Motion, None, point, mods) {
+            Ok(output_written) => {
+                if output_written {
+                    self.request_low_latency_after_next_generation();
+                }
+                output_written
+            }
+            Err(err) => {
+                log::debug!("windows terminal mouse hover failed: {err:#}");
+                false
+            }
+        }
+    }
+
+    fn send_terminal_mouse_event(
+        &self,
+        action: VtMouseAction,
+        button: Option<VtMouseButton>,
+        point: SelectionPoint,
+        mods: MouseEventMods,
+    ) -> Result<bool> {
+        self.vt
+            .send_mouse_event(VtMouseEvent {
+                action,
+                button,
+                modifiers: mods.into(),
+                surface_x_px: point.surface_x_px as f32,
+                surface_y_px: point.surface_y_px as f32,
+            })
+            .map(|outcome| outcome.output_written)
     }
 
     /// Cancel any in-flight drag (used on focus loss).
@@ -653,29 +692,21 @@ impl RenderSession {
         self.vt.selection_cancel_gesture();
     }
 
-    /// SGR mouse-wheel report. Only used when the shell has enabled
-    /// mouse tracking — see `mouse_tracking_active`. `col`/`row` are
-    /// 1-based cell coordinates per the SGR spec. Alt/Ctrl are encoded
-    /// into the button byte; Shift is handled upstream by the view,
-    /// which bypasses reporting entirely when Shift is held so the user
-    /// can scroll Con's own scrollback without the TUI seeing it.
-    pub fn forward_wheel(&self, col: u16, row: u16, delta_y: f32, mods: MouseEventMods) {
+    /// Mouse-wheel report using the terminal's active protocol. Shift bypass is
+    /// handled by the view so users can still scroll Con's own scrollback.
+    pub fn forward_wheel(&self, point: SelectionPoint, delta_y: f32, mods: MouseEventMods) {
         if delta_y.abs() < f32::EPSILON {
             return;
         }
-        self.request_low_latency_after_next_generation();
-        let mut button = sgr_wheel_button_for_delta(delta_y);
-        if mods.alt {
-            button |= 0x08;
-        }
-        if mods.control {
-            button |= 0x10;
-        }
-        let col = col.max(1);
-        let row = row.max(1);
-        let seq = format!("\x1b[<{button};{col};{row}M");
-        if let Err(err) = self.vt.write_input(seq.as_bytes()) {
-            log::debug!("windows terminal mouse wheel write failed: {err}");
+        let button = if delta_y > 0.0 {
+            VtMouseButton::Button4
+        } else {
+            VtMouseButton::Button5
+        };
+        match self.send_terminal_mouse_event(VtMouseAction::Press, Some(button), point, mods) {
+            Ok(true) => self.request_low_latency_after_next_generation(),
+            Ok(false) => {}
+            Err(err) => log::debug!("windows terminal mouse wheel failed: {err:#}"),
         }
     }
 
@@ -911,46 +942,6 @@ fn is_valid_shell_cwd(path: &Path) -> bool {
     path.is_absolute() && path.is_dir()
 }
 
-fn sgr_wheel_button_for_delta(delta_y: f32) -> u8 {
-    if delta_y > 0.0 { 64 } else { 65 }
-}
-
-/// Build an SGR (1006) mouse button report escape sequence for the
-/// given 0-based cell coordinates. Alt (0x08) and Ctrl (0x10) bits are
-/// folded into the button byte per the SGR spec; `pressed` selects the
-/// press (`M`) or release (`m`) terminator.
-fn sgr_button_sequence(
-    base_button: u8,
-    col: u16,
-    row: u16,
-    mods: MouseEventMods,
-    pressed: bool,
-) -> String {
-    let col = col.saturating_add(1);
-    let row = row.saturating_add(1);
-    let mut cb = base_button;
-    if mods.alt {
-        cb |= 0x08;
-    }
-    if mods.control {
-        cb |= 0x10;
-    }
-    let terminator = if pressed { 'M' } else { 'm' };
-    format!("\x1b[<{cb};{col};{row}{terminator}")
-}
-
-fn mouse_release_reporting_active_for_modes(
-    normal_tracking: bool,
-    button_tracking: bool,
-    any_tracking: bool,
-) -> bool {
-    normal_tracking || button_tracking || any_tracking
-}
-
-fn mouse_motion_reporting_active_for_modes(button_tracking: bool, any_tracking: bool) -> bool {
-    button_tracking || any_tracking
-}
-
 fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
     match rows.cmp(&0) {
         std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
@@ -972,12 +963,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sgr_wheel_delta_matches_gpui_scroll_direction() {
-        assert_eq!(sgr_wheel_button_for_delta(1.0), 64);
-        assert_eq!(sgr_wheel_button_for_delta(-1.0), 65);
-    }
-
-    #[test]
     fn alt_scroll_rows_match_cursor_direction() {
         assert_eq!(cursor_key_for_scroll_rows(2, false), Some("\x1b[A"));
         assert_eq!(cursor_key_for_scroll_rows(-2, false), Some("\x1b[B"));
@@ -991,49 +976,5 @@ mod tests {
         assert_eq!(viewport_delta_for_scroll_rows(3), -3);
         assert_eq!(viewport_delta_for_scroll_rows(-3), 3);
         assert_eq!(viewport_delta_for_scroll_rows(0), 0);
-    }
-
-    #[test]
-    fn sgr_right_button_press_and_release() {
-        let mods = MouseEventMods::default();
-        assert_eq!(sgr_button_sequence(2, 0, 0, mods, true), "\x1b[<2;1;1M");
-        assert_eq!(sgr_button_sequence(2, 5, 9, mods, false), "\x1b[<2;6;10m");
-    }
-
-    #[test]
-    fn sgr_button_sequence_folds_alt_and_ctrl_bits() {
-        let mods = MouseEventMods {
-            alt: true,
-            control: true,
-            shift: false,
-        };
-        // base 0 (left) | alt 0x08 | ctrl 0x10 = 0x18
-        assert_eq!(sgr_button_sequence(0, 3, 7, mods, true), "\x1b[<24;4;8M");
-    }
-
-    #[test]
-    fn sgr_drag_motion_uses_button_plus_32() {
-        // Right-button drag: 2 + 32 = 34.
-        let mods = MouseEventMods::default();
-        assert_eq!(sgr_button_sequence(34, 1, 2, mods, true), "\x1b[<34;2;3M");
-        // Left-button drag: 0 + 32 = 32.
-        assert_eq!(sgr_button_sequence(32, 1, 2, mods, true), "\x1b[<32;2;3M");
-    }
-
-    #[test]
-    fn release_reporting_excludes_x10_press_only_mode() {
-        assert!(!mouse_release_reporting_active_for_modes(
-            false, false, false
-        ));
-        assert!(mouse_release_reporting_active_for_modes(true, false, false));
-        assert!(mouse_release_reporting_active_for_modes(false, true, false));
-        assert!(mouse_release_reporting_active_for_modes(false, false, true));
-    }
-
-    #[test]
-    fn motion_reporting_requires_button_or_any_mode() {
-        assert!(!mouse_motion_reporting_active_for_modes(false, false));
-        assert!(mouse_motion_reporting_active_for_modes(true, false));
-        assert!(mouse_motion_reporting_active_for_modes(false, true));
     }
 }

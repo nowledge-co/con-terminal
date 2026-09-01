@@ -69,6 +69,8 @@ pub type GhosttyRowIterator = *mut c_void;
 pub type GhosttyRowCells = *mut c_void;
 pub type GhosttyKeyEncoder = *mut c_void;
 pub type GhosttyKeyEvent = *mut c_void;
+pub type GhosttyMouseEncoder = *mut c_void;
+pub type GhosttyMouseEvent = *mut c_void;
 pub type GhosttySelectionGesture = *mut c_void;
 pub type GhosttySelectionGestureEvent = *mut c_void;
 pub type GhosttyKittyGraphics = *mut c_void;
@@ -373,6 +375,71 @@ enum GhosttySelectionGestureAutoscroll {
     None = 0,
     Up = 1,
     Down = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyMouseAction {
+    Press = 0,
+    Release = 1,
+    Motion = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyMouseButton {
+    Left = 1,
+    Right = 2,
+    Middle = 3,
+    Four = 4,
+    Five = 5,
+    Six = 6,
+    Seven = 7,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyMouseEncoderOption {
+    Size = 2,
+    AnyButtonPressed = 3,
+    TrackLastCell = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GhosttyMousePosition {
+    x: f32,
+    y: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GhosttyMouseEncoderSize {
+    size: usize,
+    screen_width: u32,
+    screen_height: u32,
+    cell_width: u32,
+    cell_height: u32,
+    padding_top: u32,
+    padding_bottom: u32,
+    padding_right: u32,
+    padding_left: u32,
+}
+
+impl GhosttyMouseEncoderSize {
+    fn new(screen_width: u32, screen_height: u32, cell_width: u32, cell_height: u32) -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            screen_width: screen_width.max(1),
+            screen_height: screen_height.max(1),
+            cell_width: cell_width.max(1),
+            cell_height: cell_height.max(1),
+            padding_top: 0,
+            padding_bottom: 0,
+            padding_right: 0,
+            padding_left: 0,
+        }
+    }
 }
 
 /// `GHOSTTY_SYS_OPT_*` keys for process-global optional services.
@@ -1122,6 +1189,40 @@ unsafe extern "C" {
     pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: *const c_char, len: usize);
     pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
 
+    // Mouse input (`mouse/{encoder,event}.h`). The encoder and reusable event
+    // share `VtInner`'s mutex with the terminal mode state they encode against.
+    fn ghostty_mouse_encoder_new(
+        allocator: *const GhosttyAllocator,
+        out_encoder: *mut GhosttyMouseEncoder,
+    ) -> GhosttyResult;
+    fn ghostty_mouse_encoder_free(encoder: GhosttyMouseEncoder);
+    fn ghostty_mouse_encoder_setopt(
+        encoder: GhosttyMouseEncoder,
+        option: GhosttyMouseEncoderOption,
+        value: *const c_void,
+    );
+    fn ghostty_mouse_encoder_setopt_from_terminal(
+        encoder: GhosttyMouseEncoder,
+        terminal: GhosttyTerminal,
+    );
+    fn ghostty_mouse_encoder_encode(
+        encoder: GhosttyMouseEncoder,
+        event: GhosttyMouseEvent,
+        out_buf: *mut c_char,
+        out_buf_size: usize,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
+    fn ghostty_mouse_event_new(
+        allocator: *const GhosttyAllocator,
+        out_event: *mut GhosttyMouseEvent,
+    ) -> GhosttyResult;
+    fn ghostty_mouse_event_free(event: GhosttyMouseEvent);
+    fn ghostty_mouse_event_set_action(event: GhosttyMouseEvent, action: GhosttyMouseAction);
+    fn ghostty_mouse_event_set_button(event: GhosttyMouseEvent, button: GhosttyMouseButton);
+    fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent);
+    fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent, mods: u16);
+    fn ghostty_mouse_event_set_position(event: GhosttyMouseEvent, position: GhosttyMousePosition);
+
     // Kitty graphics storage (`kitty_graphics.h`). Handles are borrowed from
     // the terminal and remain valid only while its mutex is held.
     fn ghostty_kitty_graphics_get(
@@ -1658,6 +1759,49 @@ pub struct VtKeyOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtMouseAction {
+    Press,
+    Release,
+    Motion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtMouseButton {
+    Left,
+    Middle,
+    Right,
+    Button4,
+    Button5,
+    Button6,
+    Button7,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VtMouseModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+}
+
+/// Normalized mouse input in physical surface pixels. Ghostty converts this
+/// position to cells or terminal-space pixels according to the active format.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VtMouseEvent {
+    pub action: VtMouseAction,
+    pub button: Option<VtMouseButton>,
+    pub modifiers: VtMouseModifiers,
+    pub surface_x_px: f32,
+    pub surface_y_px: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VtMouseOutcome {
+    /// True only when the active protocol encoded bytes and the PTY callback
+    /// accepted them. A captured terminal event may legitimately produce none.
+    pub output_written: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtPasteResult {
     Empty,
     Accepted,
@@ -1699,9 +1843,9 @@ impl PendingPasteWrite {
 
 struct VtCallbackState {
     write_pty: Option<PtyWriteCallback>,
-    /// Serializes host callback entry. `send_key` acquires this while it still
-    /// owns the VT mutex, then releases the VT mutex before invoking the host;
-    /// a parser reply therefore cannot overtake the already-encoded key.
+    /// Serializes host callback entry. Encoded input acquires this while it
+    /// still owns the VT mutex, then releases the VT mutex before invoking the
+    /// host; a parser reply therefore cannot overtake that input.
     write_order: Arc<Mutex<()>>,
     enquiry_response: Box<[u8]>,
     /// Last clipboard text the user explicitly chose to paste. Kitty grants
@@ -1733,10 +1877,67 @@ struct VtCallbackState {
     unknown_sequence_log_count: AtomicU8,
 }
 
+struct MouseEncoderState {
+    encoder: GhosttyMouseEncoder,
+    event: GhosttyMouseEvent,
+    geometry: GhosttyMouseEncoderSize,
+}
+
+impl MouseEncoderState {
+    fn new(terminal: GhosttyTerminal, cols: u16, rows: u16) -> anyhow::Result<Self> {
+        let mut encoder = std::ptr::null_mut();
+        let rc = unsafe { ghostty_mouse_encoder_new(std::ptr::null(), &mut encoder) };
+        if rc != GHOSTTY_SUCCESS || encoder.is_null() {
+            anyhow::bail!("ghostty_mouse_encoder_new failed: rc={rc}");
+        }
+
+        let mut event = std::ptr::null_mut();
+        let rc = unsafe { ghostty_mouse_event_new(std::ptr::null(), &mut event) };
+        if rc != GHOSTTY_SUCCESS || event.is_null() {
+            unsafe { ghostty_mouse_encoder_free(encoder) };
+            anyhow::bail!("ghostty_mouse_event_new failed: rc={rc}");
+        }
+
+        let geometry = GhosttyMouseEncoderSize::new(u32::from(cols), u32::from(rows), 1, 1);
+        let track_last_cell = true;
+        unsafe {
+            ghostty_mouse_encoder_setopt(
+                encoder,
+                GhosttyMouseEncoderOption::Size,
+                &geometry as *const _ as *const c_void,
+            );
+            ghostty_mouse_encoder_setopt(
+                encoder,
+                GhosttyMouseEncoderOption::TrackLastCell,
+                &track_last_cell as *const _ as *const c_void,
+            );
+            ghostty_mouse_encoder_setopt_from_terminal(encoder, terminal);
+        }
+
+        Ok(Self {
+            encoder,
+            event,
+            geometry,
+        })
+    }
+
+    unsafe fn free(&mut self) {
+        if !self.event.is_null() {
+            unsafe { ghostty_mouse_event_free(self.event) };
+            self.event = std::ptr::null_mut();
+        }
+        if !self.encoder.is_null() {
+            unsafe { ghostty_mouse_encoder_free(self.encoder) };
+            self.encoder = std::ptr::null_mut();
+        }
+    }
+}
+
 struct VtInner {
     terminal: GhosttyTerminal,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
+    mouse: MouseEncoderState,
     selection_gesture: Option<SelectionGestureState>,
     kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
     kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
@@ -1961,6 +2162,32 @@ fn ghostty_modifiers(modifiers: VtKeyModifiers) -> u16 {
         | (u16::from(modifiers.control) * GHOSTTY_MODS_CTRL)
         | (u16::from(modifiers.alt) * GHOSTTY_MODS_ALT)
         | (u16::from(modifiers.platform) * GHOSTTY_MODS_SUPER)
+}
+
+fn ghostty_mouse_action(action: VtMouseAction) -> GhosttyMouseAction {
+    match action {
+        VtMouseAction::Press => GhosttyMouseAction::Press,
+        VtMouseAction::Release => GhosttyMouseAction::Release,
+        VtMouseAction::Motion => GhosttyMouseAction::Motion,
+    }
+}
+
+fn ghostty_mouse_button(button: VtMouseButton) -> GhosttyMouseButton {
+    match button {
+        VtMouseButton::Left => GhosttyMouseButton::Left,
+        VtMouseButton::Middle => GhosttyMouseButton::Middle,
+        VtMouseButton::Right => GhosttyMouseButton::Right,
+        VtMouseButton::Button4 => GhosttyMouseButton::Four,
+        VtMouseButton::Button5 => GhosttyMouseButton::Five,
+        VtMouseButton::Button6 => GhosttyMouseButton::Six,
+        VtMouseButton::Button7 => GhosttyMouseButton::Seven,
+    }
+}
+
+fn ghostty_mouse_modifiers(modifiers: VtMouseModifiers) -> u16 {
+    (u16::from(modifiers.shift) * GHOSTTY_MODS_SHIFT)
+        | (u16::from(modifiers.control) * GHOSTTY_MODS_CTRL)
+        | (u16::from(modifiers.alt) * GHOSTTY_MODS_ALT)
 }
 
 /// Map only key names whose physical identity is unambiguous in GPUI's
@@ -2446,6 +2673,28 @@ impl VtScreen {
             anyhow::bail!("ghostty_key_event_new failed: rc={rc}");
         }
 
+        let mouse = match MouseEncoderState::new(terminal, cols, rows) {
+            Ok(mouse) => mouse,
+            Err(err) => {
+                unsafe {
+                    ghostty_key_event_free(key_event);
+                    ghostty_key_encoder_free(key_encoder);
+                    ghostty_kitty_graphics_placement_iterator_free(kitty_placement_iter);
+                    if !row_cells.is_null() {
+                        ghostty_render_state_row_cells_free(row_cells);
+                    }
+                    if !row_iter.is_null() {
+                        ghostty_render_state_row_iterator_free(row_iter);
+                    }
+                    if !render_state.is_null() {
+                        ghostty_render_state_free(render_state);
+                    }
+                    ghostty_terminal_free(terminal);
+                }
+                return Err(err);
+            }
+        };
+
         if let Some(theme) = theme {
             unsafe { apply_theme_to_terminal(terminal, theme) };
         }
@@ -2455,6 +2704,7 @@ impl VtScreen {
                 terminal,
                 key_encoder,
                 key_event,
+                mouse,
                 selection_gesture: None,
                 kitty_placement_iter,
                 kitty_image_cache: HashMap::new(),
@@ -3039,9 +3289,157 @@ impl VtScreen {
         let mut inner = self.inner.lock();
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        // Tracking event and output format are last-write-wins terminal flags,
+        // not a pure function of the DEC mode bitset. Synchronize from the
+        // terminal after every parsed output chunk so repeated DECSET/DECRST
+        // sequences cannot leave the encoder on a stale protocol.
+        unsafe { ghostty_mouse_encoder_setopt_from_terminal(inner.mouse.encoder, inner.terminal) };
         refresh_terminal_metadata(&mut inner);
         inner.output_generation = inner.output_generation.wrapping_add(1);
         inner.generation = inner.generation.wrapping_add(1);
+    }
+
+    /// Update the renderer geometry used for cell and SGR-pixel mouse formats.
+    /// Ghostty clears motion deduplication whenever this option is set, so
+    /// compare the complete geometry before crossing the FFI boundary.
+    pub fn set_mouse_geometry(
+        &self,
+        screen_width_px: u32,
+        screen_height_px: u32,
+        cell_width_px: u32,
+        cell_height_px: u32,
+    ) {
+        let geometry = GhosttyMouseEncoderSize::new(
+            screen_width_px,
+            screen_height_px,
+            cell_width_px,
+            cell_height_px,
+        );
+        let mut inner = self.inner.lock();
+        if inner.mouse.geometry == geometry {
+            return;
+        }
+        unsafe {
+            ghostty_mouse_encoder_setopt(
+                inner.mouse.encoder,
+                GhosttyMouseEncoderOption::Size,
+                &geometry as *const _ as *const c_void,
+            )
+        };
+        inner.mouse.geometry = geometry;
+    }
+
+    /// Encode one normalized pointer event with Ghostty's effective terminal
+    /// mouse mode and synchronously write any resulting protocol bytes.
+    pub fn send_mouse_event(&self, event: VtMouseEvent) -> anyhow::Result<VtMouseOutcome> {
+        if !event.surface_x_px.is_finite() || !event.surface_y_px.is_finite() {
+            anyhow::bail!("terminal mouse position must be finite");
+        }
+        if event.action != VtMouseAction::Motion && event.button.is_none() {
+            anyhow::bail!("terminal mouse press and release events require a button");
+        }
+
+        let inner = self.inner.lock();
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.clone() else {
+            anyhow::bail!("terminal mouse encoding requires a WRITE_PTY callback");
+        };
+        let write_failed = callback_state.write_failed.clone();
+        let write_order = callback_state.write_order.clone();
+        let any_button_pressed = event.action == VtMouseAction::Press
+            || (event.action == VtMouseAction::Motion && event.button.is_some());
+
+        unsafe {
+            ghostty_mouse_encoder_setopt(
+                inner.mouse.encoder,
+                GhosttyMouseEncoderOption::AnyButtonPressed,
+                &any_button_pressed as *const _ as *const c_void,
+            );
+            ghostty_mouse_event_set_action(inner.mouse.event, ghostty_mouse_action(event.action));
+            if let Some(button) = event.button {
+                ghostty_mouse_event_set_button(inner.mouse.event, ghostty_mouse_button(button));
+            } else {
+                ghostty_mouse_event_clear_button(inner.mouse.event);
+            }
+            ghostty_mouse_event_set_mods(
+                inner.mouse.event,
+                ghostty_mouse_modifiers(event.modifiers),
+            );
+            ghostty_mouse_event_set_position(
+                inner.mouse.event,
+                GhosttyMousePosition {
+                    x: event.surface_x_px,
+                    y: event.surface_y_px,
+                },
+            );
+        }
+
+        let mut inline = [0_u8; 128];
+        let mut len = 0_usize;
+        let mut rc = unsafe {
+            ghostty_mouse_encoder_encode(
+                inner.mouse.encoder,
+                inner.mouse.event,
+                inline.as_mut_ptr().cast(),
+                inline.len(),
+                &mut len,
+            )
+        };
+
+        let mut overflow = Vec::new();
+        let bytes = if rc == GHOSTTY_OUT_OF_SPACE {
+            overflow.resize(len, 0);
+            rc = unsafe {
+                ghostty_mouse_encoder_encode(
+                    inner.mouse.encoder,
+                    inner.mouse.event,
+                    overflow.as_mut_ptr().cast(),
+                    overflow.len(),
+                    &mut len,
+                )
+            };
+            if rc != GHOSTTY_SUCCESS {
+                anyhow::bail!("ghostty_mouse_encoder_encode retry failed: rc={rc}");
+            }
+            if len > overflow.len() {
+                anyhow::bail!("ghostty mouse encoder exceeded its requested output size");
+            }
+            &overflow[..len]
+        } else {
+            if rc != GHOSTTY_SUCCESS {
+                anyhow::bail!("ghostty_mouse_encoder_encode failed: rc={rc}");
+            }
+            if len > inline.len() {
+                anyhow::bail!("ghostty mouse encoder returned an invalid output size");
+            }
+            &inline[..len]
+        };
+
+        if bytes.is_empty() {
+            return Ok(VtMouseOutcome::default());
+        }
+
+        // Reserve this host-write position before releasing the mode snapshot.
+        // Parser-generated replies cannot then overtake the encoded event.
+        let write_guard = write_order.lock();
+        drop(inner);
+        let class = if event.action == VtMouseAction::Release {
+            PtyWriteClass::ReservedControl
+        } else {
+            PtyWriteClass::Regular
+        };
+        let result = write_pty(bytes, class);
+        if let Err(err) = &result
+            && class == PtyWriteClass::ReservedControl
+        {
+            mark_control_write_failed(&write_failed, err);
+        }
+        drop(write_guard);
+        result.map_err(|err| anyhow::anyhow!("failed to write encoded mouse event: {err}"))?;
+
+        Ok(VtMouseOutcome {
+            output_written: true,
+        })
     }
 
     /// Encode one platform key event against the terminal's current modes
@@ -5083,6 +5481,7 @@ impl Drop for VtScreen {
             // Free every object that can refer to the terminal before the
             // terminal itself.
             // SAFETY: unique owner via Arc::get_mut.
+            unsafe { inner.mouse.free() };
             if !inner.key_event.is_null() {
                 unsafe { ghostty_key_event_free(inner.key_event) };
                 inner.key_event = std::ptr::null_mut();
@@ -5216,6 +5615,16 @@ mod tests {
             Some(GhosttyTerminalData::ClipboardWriteMaxBytes as i64)
         );
         for (name, size, align) in [
+            (
+                "GhosttyMousePosition",
+                std::mem::size_of::<GhosttyMousePosition>(),
+                std::mem::align_of::<GhosttyMousePosition>(),
+            ),
+            (
+                "GhosttyMouseEncoderSize",
+                std::mem::size_of::<GhosttyMouseEncoderSize>(),
+                std::mem::align_of::<GhosttyMouseEncoderSize>(),
+            ),
             (
                 "GhosttyWriter",
                 std::mem::size_of::<GhosttyWriter>(),
@@ -5830,6 +6239,98 @@ mod tests {
             Some(ghostty_key_action(VtKeyAction::Repeat) as i64)
         );
 
+        for (name, action) in [
+            ("PRESS", GhosttyMouseAction::Press),
+            ("RELEASE", GhosttyMouseAction::Release),
+            ("MOTION", GhosttyMouseAction::Motion),
+        ] {
+            assert_eq!(
+                types["GhosttyMouseAction"]["values"][name].as_i64(),
+                Some(action as i64),
+                "GhosttyMouseAction::{name}"
+            );
+        }
+        for (name, button) in [
+            ("LEFT", GhosttyMouseButton::Left),
+            ("RIGHT", GhosttyMouseButton::Right),
+            ("MIDDLE", GhosttyMouseButton::Middle),
+            ("FOUR", GhosttyMouseButton::Four),
+            ("FIVE", GhosttyMouseButton::Five),
+            ("SIX", GhosttyMouseButton::Six),
+            ("SEVEN", GhosttyMouseButton::Seven),
+        ] {
+            assert_eq!(
+                types["GhosttyMouseButton"]["values"][name].as_i64(),
+                Some(button as i64),
+                "GhosttyMouseButton::{name}"
+            );
+        }
+        for (name, option) in [
+            ("SIZE", GhosttyMouseEncoderOption::Size),
+            (
+                "ANY_BUTTON_PRESSED",
+                GhosttyMouseEncoderOption::AnyButtonPressed,
+            ),
+            ("TRACK_LAST_CELL", GhosttyMouseEncoderOption::TrackLastCell),
+        ] {
+            assert_eq!(
+                types["GhosttyMouseEncoderOption"]["values"][name].as_i64(),
+                Some(option as i64),
+                "GhosttyMouseEncoderOption::{name}"
+            );
+        }
+        for (name, offset) in [
+            ("x", std::mem::offset_of!(GhosttyMousePosition, x)),
+            ("y", std::mem::offset_of!(GhosttyMousePosition, y)),
+        ] {
+            assert_eq!(
+                types["GhosttyMousePosition"]["fields"][name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyMousePosition::{name} offset"
+            );
+        }
+        for (name, offset) in [
+            ("size", std::mem::offset_of!(GhosttyMouseEncoderSize, size)),
+            (
+                "screen_width",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, screen_width),
+            ),
+            (
+                "screen_height",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, screen_height),
+            ),
+            (
+                "cell_width",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, cell_width),
+            ),
+            (
+                "cell_height",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, cell_height),
+            ),
+            (
+                "padding_top",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, padding_top),
+            ),
+            (
+                "padding_bottom",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, padding_bottom),
+            ),
+            (
+                "padding_right",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, padding_right),
+            ),
+            (
+                "padding_left",
+                std::mem::offset_of!(GhosttyMouseEncoderSize, padding_left),
+            ),
+        ] {
+            assert_eq!(
+                types["GhosttyMouseEncoderSize"]["fields"][name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyMouseEncoderSize::{name} offset"
+            );
+        }
+
         let keys = &types["GhosttyKey"]["values"];
         for (name, key) in [
             ("UNIDENTIFIED", GhosttyKey::Unidentified),
@@ -6363,6 +6864,258 @@ mod tests {
         let second = screen.snapshot();
         assert_eq!(second.kitty_placements.len(), 1);
         assert!(Arc::ptr_eq(&pixels, &second.kitty_placements[0].image));
+    }
+
+    type MouseWrites = Arc<Mutex<Vec<(Vec<u8>, PtyWriteClass)>>>;
+
+    fn mouse_test_screen(cols: u16, rows: u16) -> (VtScreen, MouseWrites) {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let callback_writes = writes.clone();
+        let screen = VtScreen::new_with_write_pty(
+            cols,
+            rows,
+            None,
+            Some(Arc::new(move |bytes, class| {
+                callback_writes.lock().push((bytes.to_vec(), class));
+                Ok(())
+            })),
+        )
+        .expect("create mouse test screen");
+        screen.set_mouse_geometry(u32::from(cols) * 10, u32::from(rows) * 20, 10, 20);
+        (screen, writes)
+    }
+
+    fn test_mouse_event(
+        action: VtMouseAction,
+        button: Option<VtMouseButton>,
+        x: f32,
+        y: f32,
+    ) -> VtMouseEvent {
+        VtMouseEvent {
+            action,
+            button,
+            modifiers: VtMouseModifiers::default(),
+            surface_x_px: x,
+            surface_y_px: y,
+        }
+    }
+
+    #[test]
+    fn mouse_encoder_emits_legacy_utf8_sgr_urxvt_and_pixel_formats() {
+        let cases = [
+            (
+                b"\x1b[?1000h".as_slice(),
+                test_mouse_event(VtMouseAction::Press, Some(VtMouseButton::Left), 15.0, 10.0),
+                b"\x1b[M \"!".as_slice(),
+                80,
+            ),
+            (
+                b"\x1b[?1000h\x1b[?1005h".as_slice(),
+                test_mouse_event(
+                    VtMouseAction::Press,
+                    Some(VtMouseButton::Left),
+                    2235.0,
+                    10.0,
+                ),
+                b"\x1b[M \xc4\x80!".as_slice(),
+                300,
+            ),
+            (
+                b"\x1b[?1000h\x1b[?1006h".as_slice(),
+                VtMouseEvent {
+                    modifiers: VtMouseModifiers {
+                        shift: true,
+                        control: true,
+                        alt: true,
+                    },
+                    ..test_mouse_event(
+                        VtMouseAction::Release,
+                        Some(VtMouseButton::Right),
+                        15.0,
+                        10.0,
+                    )
+                },
+                b"\x1b[<30;2;1m".as_slice(),
+                80,
+            ),
+            (
+                b"\x1b[?1000h\x1b[?1015h".as_slice(),
+                test_mouse_event(
+                    VtMouseAction::Release,
+                    Some(VtMouseButton::Right),
+                    15.0,
+                    10.0,
+                ),
+                b"\x1b[35;2;1M".as_slice(),
+                80,
+            ),
+            (
+                b"\x1b[?1000h\x1b[?1016h".as_slice(),
+                test_mouse_event(
+                    VtMouseAction::Press,
+                    Some(VtMouseButton::Left),
+                    15.25,
+                    10.75,
+                ),
+                b"\x1b[<0;15;11M".as_slice(),
+                80,
+            ),
+        ];
+
+        for (modes, event, expected, cols) in cases {
+            let (screen, writes) = mouse_test_screen(cols, 24);
+            screen.feed(modes);
+            let outcome = screen.send_mouse_event(event).expect("encode mouse event");
+            assert!(outcome.output_written, "modes={modes:?}");
+            let writes = writes.lock();
+            assert_eq!(writes.len(), 1, "modes={modes:?}");
+            assert_eq!(writes[0].0.as_slice(), expected, "modes={modes:?}");
+            assert_eq!(
+                writes[0].1,
+                if event.action == VtMouseAction::Release {
+                    PtyWriteClass::ReservedControl
+                } else {
+                    PtyWriteClass::Regular
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn mouse_encoder_maps_buttons_without_swapping_middle_and_right() {
+        let (screen, writes) = mouse_test_screen(80, 24);
+        screen.feed(b"\x1b[?1000h\x1b[?1006h");
+
+        for (button, code) in [
+            (VtMouseButton::Left, 0),
+            (VtMouseButton::Middle, 1),
+            (VtMouseButton::Right, 2),
+            (VtMouseButton::Button4, 64),
+            (VtMouseButton::Button5, 65),
+        ] {
+            assert!(
+                screen
+                    .send_mouse_event(test_mouse_event(
+                        VtMouseAction::Press,
+                        Some(button),
+                        5.0,
+                        5.0,
+                    ))
+                    .expect("encode button press")
+                    .output_written
+            );
+            assert_eq!(
+                writes
+                    .lock()
+                    .last()
+                    .expect("captured button press")
+                    .0
+                    .as_slice(),
+                format!("\x1b[<{code};1;1M").into_bytes()
+            );
+        }
+
+        screen
+            .send_mouse_event(test_mouse_event(
+                VtMouseAction::Release,
+                Some(VtMouseButton::Left),
+                5.0,
+                5.0,
+            ))
+            .expect("encode release");
+        assert_eq!(
+            writes.lock().last().expect("captured release").1,
+            PtyWriteClass::ReservedControl
+        );
+    }
+
+    #[test]
+    fn mouse_encoder_applies_x10_gating_and_effective_terminal_state() {
+        let (screen, writes) = mouse_test_screen(300, 24);
+        screen.feed(b"\x1b[?9h");
+        let event = VtMouseEvent {
+            modifiers: VtMouseModifiers {
+                shift: true,
+                control: true,
+                alt: true,
+            },
+            ..test_mouse_event(VtMouseAction::Press, Some(VtMouseButton::Left), 15.0, 10.0)
+        };
+        assert!(screen.send_mouse_event(event).unwrap().output_written);
+        assert_eq!(writes.lock()[0].0.as_slice(), b"\x1b[M \"!");
+
+        assert!(
+            !screen
+                .send_mouse_event(test_mouse_event(
+                    VtMouseAction::Release,
+                    Some(VtMouseButton::Left),
+                    15.0,
+                    10.0,
+                ))
+                .unwrap()
+                .output_written
+        );
+        assert!(
+            !screen
+                .send_mouse_event(test_mouse_event(
+                    VtMouseAction::Press,
+                    Some(VtMouseButton::Left),
+                    2235.0,
+                    10.0,
+                ))
+                .unwrap()
+                .output_written
+        );
+        assert_eq!(writes.lock().len(), 1);
+
+        // The public bitset route still sees 1002, but DECRST 1000 made the
+        // terminal's last-write-wins effective event mode `none`.
+        screen.feed(b"\x1b[?9l\x1b[?1000h\x1b[?1002h\x1b[?1000l");
+        assert!(screen.mouse_tracking_active());
+        assert!(
+            !screen
+                .send_mouse_event(test_mouse_event(
+                    VtMouseAction::Press,
+                    Some(VtMouseButton::Left),
+                    5.0,
+                    5.0,
+                ))
+                .unwrap()
+                .output_written
+        );
+        assert_eq!(writes.lock().len(), 1);
+    }
+
+    #[test]
+    fn mouse_encoder_deduplicates_motion_until_terminal_output_resynchronizes() {
+        let (screen, writes) = mouse_test_screen(80, 24);
+        screen.feed(b"\x1b[?1002h\x1b[?1006h");
+        let drag = test_mouse_event(VtMouseAction::Motion, Some(VtMouseButton::Left), 5.0, 5.0);
+
+        assert!(screen.send_mouse_event(drag).unwrap().output_written);
+        assert!(!screen.send_mouse_event(drag).unwrap().output_written);
+        screen.set_mouse_geometry(800, 480, 10, 20);
+        assert!(!screen.send_mouse_event(drag).unwrap().output_written);
+
+        // The pinned setopt_from_terminal implementation clears last-cell
+        // state on each feed, even when the parsed bytes do not change modes.
+        screen.feed(b"x");
+        assert!(screen.send_mouse_event(drag).unwrap().output_written);
+        assert_eq!(writes.lock().len(), 2);
+    }
+
+    #[test]
+    fn mouse_encoder_reports_no_button_motion_in_any_event_mode() {
+        let (screen, writes) = mouse_test_screen(80, 24);
+        screen.feed(b"\x1b[?1003h\x1b[?1006h");
+
+        assert!(
+            screen
+                .send_mouse_event(test_mouse_event(VtMouseAction::Motion, None, 5.0, 5.0))
+                .unwrap()
+                .output_written
+        );
+        assert_eq!(writes.lock()[0].0.as_slice(), b"\x1b[<35;1;1M");
     }
 
     #[test]

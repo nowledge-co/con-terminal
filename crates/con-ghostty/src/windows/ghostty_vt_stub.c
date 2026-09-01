@@ -23,6 +23,8 @@ typedef void* GhosttyRowIterator;
 typedef void* GhosttyRowCells;
 typedef void* GhosttyKeyEncoder;
 typedef void* GhosttyKeyEvent;
+typedef void* GhosttyMouseEncoder;
+typedef void* GhosttyMouseEvent;
 typedef void* GhosttySelectionGesture;
 typedef void* GhosttySelectionGestureEvent;
 typedef void* GhosttyKittyGraphics;
@@ -75,6 +77,11 @@ union GhosttyTerminalScrollViewportValue {
 struct GhosttyTerminalScrollViewport {
     int tag;
     union GhosttyTerminalScrollViewportValue value;
+};
+
+struct GhosttyMousePosition {
+    float x;
+    float y;
 };
 
 /* The stub has no real ABI manifest. Returning NULL keeps ordinary stub
@@ -373,6 +380,64 @@ void ghostty_key_event_set_unshifted_codepoint(
     GhosttyKeyEvent event, uint32_t codepoint
 ) {
     (void)event; (void)codepoint;
+}
+
+/* ── Mouse encoder ──────────────────────────────────────────────── */
+
+GhosttyResult ghostty_mouse_encoder_new(
+    const void* allocator, GhosttyMouseEncoder* out_encoder
+) {
+    (void)allocator;
+    if (out_encoder) { *out_encoder = (void*)(uintptr_t)10; }
+    return 0;
+}
+
+void ghostty_mouse_encoder_free(GhosttyMouseEncoder encoder) { (void)encoder; }
+
+void ghostty_mouse_encoder_setopt(
+    GhosttyMouseEncoder encoder, int option, const void* value
+) {
+    (void)encoder; (void)option; (void)value;
+}
+
+void ghostty_mouse_encoder_setopt_from_terminal(
+    GhosttyMouseEncoder encoder, GhosttyTerminal terminal
+) {
+    (void)encoder; (void)terminal;
+}
+
+GhosttyResult ghostty_mouse_encoder_encode(
+    GhosttyMouseEncoder encoder, GhosttyMouseEvent event,
+    char* out_buf, size_t out_buf_size, size_t* out_len
+) {
+    (void)encoder; (void)event; (void)out_buf; (void)out_buf_size;
+    if (out_len) { *out_len = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_mouse_event_new(
+    const void* allocator, GhosttyMouseEvent* out_event
+) {
+    (void)allocator;
+    if (out_event) { *out_event = (void*)(uintptr_t)11; }
+    return 0;
+}
+
+void ghostty_mouse_event_free(GhosttyMouseEvent event) { (void)event; }
+void ghostty_mouse_event_set_action(GhosttyMouseEvent event, int action) {
+    (void)event; (void)action;
+}
+void ghostty_mouse_event_set_button(GhosttyMouseEvent event, int button) {
+    (void)event; (void)button;
+}
+void ghostty_mouse_event_clear_button(GhosttyMouseEvent event) { (void)event; }
+void ghostty_mouse_event_set_mods(GhosttyMouseEvent event, uint16_t mods) {
+    (void)event; (void)mods;
+}
+void ghostty_mouse_event_set_position(
+    GhosttyMouseEvent event, struct GhosttyMousePosition position
+) {
+    (void)event; (void)position;
 }
 
 /* ── Cell accessor ──────────────────────────────────────────────── */
