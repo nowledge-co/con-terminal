@@ -278,6 +278,8 @@ pub enum GhosttyRenderStateData {
     CursorViewportX = 15,
     CursorViewportY = 16,
     CursorViewportWideTail = 17,
+    Cursor = 18,
+    Colors = 19,
 }
 
 #[repr(C)]
@@ -297,6 +299,8 @@ pub enum GhosttyRenderStateRowData {
     Dirty = 1,
     Raw = 2,
     Cells = 3,
+    Selection = 4,
+    CellsRaw = 5,
 }
 
 /// `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_*` keys.
@@ -310,6 +314,9 @@ pub enum GhosttyRenderStateRowCellsData {
     GraphemesBuf = 4,
     BgColor = 5,
     FgColor = 6,
+    Selected = 7,
+    HasStyling = 8,
+    GraphemesUtf8 = 9,
 }
 
 /// `GHOSTTY_CELL_DATA_*` keys for `ghostty_cell_get`. Integer values
@@ -392,6 +399,60 @@ pub struct GhosttyColorRgb {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyRenderStateCursor {
+    pub size: usize,
+    pub viewport_has_value: bool,
+    pub viewport_x: u16,
+    pub viewport_y: u16,
+    pub wide_tail: bool,
+    pub visible: bool,
+    pub blinking: bool,
+    pub password_input: bool,
+    pub visual_style: c_int,
+}
+
+impl Default for GhosttyRenderStateCursor {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            viewport_has_value: false,
+            viewport_x: 0,
+            viewport_y: 0,
+            wide_tail: false,
+            visible: false,
+            blinking: false,
+            password_input: false,
+            visual_style: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyRenderStateColors {
+    pub size: usize,
+    pub background: GhosttyColorRgb,
+    pub foreground: GhosttyColorRgb,
+    pub cursor: GhosttyColorRgb,
+    pub cursor_has_value: bool,
+    pub palette: [GhosttyColorRgb; 256],
+}
+
+impl Default for GhosttyRenderStateColors {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            background: GhosttyColorRgb::default(),
+            foreground: GhosttyColorRgb::default(),
+            cursor: GhosttyColorRgb::default(),
+            cursor_has_value: false,
+            palette: [GhosttyColorRgb::default(); 256],
+        }
+    }
 }
 
 #[repr(C)]
@@ -799,10 +860,23 @@ unsafe extern "C" {
         state: GhosttyRenderState,
         terminal: GhosttyTerminal,
     ) -> GhosttyResult;
+    pub fn ghostty_render_state_begin_update(
+        state: GhosttyRenderState,
+        terminal: GhosttyTerminal,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_end_update(state: GhosttyRenderState) -> GhosttyResult;
+    pub fn ghostty_render_state_clean(state: GhosttyRenderState) -> GhosttyResult;
     pub fn ghostty_render_state_get(
         state: GhosttyRenderState,
         key: GhosttyRenderStateData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_get_multi(
+        state: GhosttyRenderState,
+        count: usize,
+        keys: *const GhosttyRenderStateData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_iterator_new(
@@ -813,10 +887,21 @@ unsafe extern "C" {
     /// Returns `bool` per upstream signature. Rust `bool` is 1 byte —
     /// matches MSVC/gcc/clang C99 `_Bool` layout.
     pub fn ghostty_render_state_row_iterator_next(iter: GhosttyRowIterator) -> bool;
+    pub fn ghostty_render_state_row_iterator_next_dirty(
+        iter: GhosttyRowIterator,
+        out_y: *mut u16,
+    ) -> bool;
     pub fn ghostty_render_state_row_get(
         iter: GhosttyRowIterator,
         key: GhosttyRenderStateRowData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_get_multi(
+        iter: GhosttyRowIterator,
+        count: usize,
+        keys: *const GhosttyRenderStateRowData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_cells_new(
@@ -830,6 +915,13 @@ unsafe extern "C" {
         key: GhosttyRenderStateRowCellsData,
         out: *mut c_void,
     ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_cells_get_multi(
+        cells: GhosttyRowCells,
+        count: usize,
+        keys: *const GhosttyRenderStateRowCellsData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 
     // Cell accessor (`screen.h`). Decodes fields out of the opaque
     // `GhosttyCell` u64 we get from row_cells RAW.
@@ -837,6 +929,13 @@ unsafe extern "C" {
         cell: GhosttyCell,
         key: GhosttyCellData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_cell_get_multi(
+        cell: GhosttyCell,
+        count: usize,
+        keys: *const GhosttyCellData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 }
 
@@ -3377,6 +3476,16 @@ mod tests {
                 std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
                 std::mem::align_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
             ),
+            (
+                "GhosttyRenderStateCursor",
+                std::mem::size_of::<GhosttyRenderStateCursor>(),
+                std::mem::align_of::<GhosttyRenderStateCursor>(),
+            ),
+            (
+                "GhosttyRenderStateColors",
+                std::mem::size_of::<GhosttyRenderStateColors>(),
+                std::mem::align_of::<GhosttyRenderStateColors>(),
+            ),
         ] {
             assert_eq!(
                 types[name]["size"].as_u64(),
@@ -3387,6 +3496,78 @@ mod tests {
                 types[name]["align"].as_u64(),
                 Some(align as u64),
                 "{name} alignment"
+            );
+        }
+        let cursor_fields = &types["GhosttyRenderStateCursor"]["fields"];
+        for (name, offset) in [
+            ("size", std::mem::offset_of!(GhosttyRenderStateCursor, size)),
+            (
+                "viewport_has_value",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_has_value),
+            ),
+            (
+                "viewport_x",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_x),
+            ),
+            (
+                "viewport_y",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_y),
+            ),
+            (
+                "wide_tail",
+                std::mem::offset_of!(GhosttyRenderStateCursor, wide_tail),
+            ),
+            (
+                "visible",
+                std::mem::offset_of!(GhosttyRenderStateCursor, visible),
+            ),
+            (
+                "blinking",
+                std::mem::offset_of!(GhosttyRenderStateCursor, blinking),
+            ),
+            (
+                "password_input",
+                std::mem::offset_of!(GhosttyRenderStateCursor, password_input),
+            ),
+            (
+                "visual_style",
+                std::mem::offset_of!(GhosttyRenderStateCursor, visual_style),
+            ),
+        ] {
+            assert_eq!(
+                cursor_fields[name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyRenderStateCursor::{name} offset"
+            );
+        }
+        let colors_fields = &types["GhosttyRenderStateColors"]["fields"];
+        for (name, offset) in [
+            ("size", std::mem::offset_of!(GhosttyRenderStateColors, size)),
+            (
+                "background",
+                std::mem::offset_of!(GhosttyRenderStateColors, background),
+            ),
+            (
+                "foreground",
+                std::mem::offset_of!(GhosttyRenderStateColors, foreground),
+            ),
+            (
+                "cursor",
+                std::mem::offset_of!(GhosttyRenderStateColors, cursor),
+            ),
+            (
+                "cursor_has_value",
+                std::mem::offset_of!(GhosttyRenderStateColors, cursor_has_value),
+            ),
+            (
+                "palette",
+                std::mem::offset_of!(GhosttyRenderStateColors, palette),
+            ),
+        ] {
+            assert_eq!(
+                colors_fields[name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyRenderStateColors::{name} offset"
             );
         }
         for (name, value) in [
@@ -3431,6 +3612,40 @@ mod tests {
             types["GhosttyResult"]["values"]["REJECTED"].as_i64(),
             Some(GHOSTTY_REJECTED as i64)
         );
+        for (name, value) in [
+            ("CURSOR", GhosttyRenderStateData::Cursor),
+            ("COLORS", GhosttyRenderStateData::Colors),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SELECTION", GhosttyRenderStateRowData::Selection),
+            ("CELLS_RAW", GhosttyRenderStateRowData::CellsRaw),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateRowData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateRowData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SELECTED", GhosttyRenderStateRowCellsData::Selected),
+            ("HAS_STYLING", GhosttyRenderStateRowCellsData::HasStyling),
+            (
+                "GRAPHEMES_UTF8",
+                GhosttyRenderStateRowCellsData::GraphemesUtf8,
+            ),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateRowCellsData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateRowCellsData::{name}"
+            );
+        }
         assert_eq!(
             types["GhosttyTerminalData"]["values"]["MODE"].as_i64(),
             Some(GhosttyTerminalData::Mode as i64)
