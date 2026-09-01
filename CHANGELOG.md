@@ -15,6 +15,20 @@ con is still pre-release, so entries may group related beta work while the produ
   for visible agent-run commands while retaining the existing fallback. _(PR
   [#328](https://github.com/nowledge-co/con-terminal/pull/328) by
   [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Agent-run commands now report an unconfirmed result instead of claiming
+  success when shell prompt integration disappears before completion can be
+  verified. _(PR
+  [#330](https://github.com/nowledge-co/con-terminal/pull/330) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Portable terminal sessions now surface title, working-directory, bell,
+  progress, notification, and clipboard effects consistently on Windows and
+  Linux, with bounded payloads and conservative clipboard defaults. _(PR
+  [#331](https://github.com/nowledge-co/con-terminal/pull/331) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- The control plane can now identify the foreground process group and PTY for
+  macOS panes when the terminal backend supports those details. _(PR
+  [#332](https://github.com/nowledge-co/con-terminal/pull/332) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
 ---
 
