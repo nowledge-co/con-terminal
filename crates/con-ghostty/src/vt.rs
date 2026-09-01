@@ -607,6 +607,24 @@ impl Default for GhosttyRenderStateCursor {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct GhosttyRenderStateRowSelection {
+    pub size: usize,
+    pub start_x: u16,
+    pub end_x: u16,
+}
+
+impl Default for GhosttyRenderStateRowSelection {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            start_x: 0,
+            end_x: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct GhosttyRenderStateColors {
     pub size: usize,
     pub background: GhosttyColorRgb,
@@ -1520,6 +1538,7 @@ pub struct ScreenSnapshot {
     pub cols: u16,
     pub rows: u16,
     pub cells: Vec<Cell>,
+    pub selection_ranges: Vec<Option<SelectionRange>>,
     pub kitty_placements: Arc<[KittyPlacement]>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Cursor,
@@ -1527,6 +1546,19 @@ pub struct ScreenSnapshot {
     pub scrollbar: Option<GhosttyScrollbar>,
     pub title: Option<String>,
     pub generation: u64,
+}
+
+/// Inclusive visible-grid column range selected on one snapshot row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionRange {
+    pub start: u16,
+    pub end: u16,
+}
+
+impl SelectionRange {
+    pub fn contains(self, col: u16) -> bool {
+        col >= self.start && col <= self.end
+    }
 }
 
 struct SnapshotMetadata {
@@ -1551,11 +1583,16 @@ struct SnapshotEpoch {
 }
 
 impl SnapshotMetadata {
-    fn snapshot(&self, cells: &[Cell]) -> ScreenSnapshot {
+    fn snapshot(
+        &self,
+        cells: &[Cell],
+        selection_ranges: &[Option<SelectionRange>],
+    ) -> ScreenSnapshot {
         ScreenSnapshot {
             cols: self.cols,
             rows: self.rows,
             cells: cells.to_vec(),
+            selection_ranges: selection_ranges.to_vec(),
             kitty_placements: self.kitty_placements.clone(),
             dirty_rows: self.dirty_rows.clone(),
             cursor: self.cursor,
@@ -1808,6 +1845,7 @@ struct VtRenderState {
     scratch_cols: u16,
     scratch_rows: u16,
     scratch: Vec<Cell>,
+    selection_ranges: Vec<Option<SelectionRange>>,
     last_cursor: Cursor,
     snapshot_metadata: Option<SnapshotMetadata>,
 }
@@ -2439,6 +2477,7 @@ impl VtScreen {
                 scratch_cols: cols,
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
+                selection_ranges: Vec::with_capacity(rows as usize),
                 last_cursor: Cursor::default(),
                 snapshot_metadata: None,
             }),
@@ -3199,7 +3238,7 @@ impl VtScreen {
                     .snapshot_metadata
                     .as_ref()
                     .expect("snapshot metadata checked above");
-                return Some(metadata.snapshot(&render.scratch));
+                return Some(metadata.snapshot(&render.scratch, &render.selection_ranges));
             }
 
             let mut active_screen = GhosttyTerminalScreen::Primary;
@@ -3314,6 +3353,8 @@ impl VtScreen {
         {
             render.scratch.clear();
             render.scratch.resize(total, Cell::default());
+            render.selection_ranges.clear();
+            render.selection_ranges.resize(rows as usize, None);
             render.scratch_cols = cols;
             render.scratch_rows = rows;
             full_redraw = true;
@@ -3361,6 +3402,41 @@ impl VtScreen {
                 render.force_full_snapshot = true;
                 return None;
             }
+
+            let mut row_selection = GhosttyRenderStateRowSelection::default();
+            let rc = unsafe {
+                ghostty_render_state_row_get(
+                    render.row_iter,
+                    GhosttyRenderStateRowData::Selection,
+                    &mut row_selection as *mut _ as *mut c_void,
+                )
+            };
+            render.selection_ranges[row_idx as usize] = match rc {
+                GHOSTTY_SUCCESS
+                    if row_selection.start_x <= row_selection.end_x
+                        && row_selection.end_x < cols =>
+                {
+                    Some(SelectionRange {
+                        start: row_selection.start_x,
+                        end: row_selection.end_x,
+                    })
+                }
+                GHOSTTY_NO_VALUE => None,
+                GHOSTTY_SUCCESS => {
+                    log::warn!(
+                        "invalid render selection range at row {row_idx}: {}..={} for {cols} cols",
+                        row_selection.start_x,
+                        row_selection.end_x
+                    );
+                    render.force_full_snapshot = true;
+                    return None;
+                }
+                _ => {
+                    log::warn!("ghostty_render_state_row_get(SELECTION) rc={rc} at row {row_idx}");
+                    render.force_full_snapshot = true;
+                    return None;
+                }
+            };
 
             let row_start = row_idx as usize * cols as usize;
             let mut col_idx: u16 = 0;
@@ -3437,7 +3513,7 @@ impl VtScreen {
             generation: epoch.generation,
         };
         let clone_started = perf_trace_enabled().then(Instant::now);
-        let snapshot = metadata.snapshot(&render.scratch);
+        let snapshot = metadata.snapshot(&render.scratch, &render.selection_ranges);
         let clone_elapsed_ms =
             clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
         render.snapshot_metadata = Some(metadata);
@@ -4424,6 +4500,7 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         cols,
         rows,
         cells: Vec::new(),
+        selection_ranges: Vec::new(),
         kitty_placements: Arc::from([]),
         dirty_rows: Vec::new(),
         cursor: Cursor::default(),
@@ -5100,6 +5177,11 @@ mod tests {
                 std::mem::align_of::<GhosttyRenderStateCursor>(),
             ),
             (
+                "GhosttyRenderStateRowSelection",
+                std::mem::size_of::<GhosttyRenderStateRowSelection>(),
+                std::mem::align_of::<GhosttyRenderStateRowSelection>(),
+            ),
+            (
                 "GhosttyRenderStateColors",
                 std::mem::size_of::<GhosttyRenderStateColors>(),
                 std::mem::align_of::<GhosttyRenderStateColors>(),
@@ -5196,6 +5278,27 @@ mod tests {
                 cursor_fields[name]["offset"].as_u64(),
                 Some(offset as u64),
                 "GhosttyRenderStateCursor::{name} offset"
+            );
+        }
+        let row_selection_fields = &types["GhosttyRenderStateRowSelection"]["fields"];
+        for (name, offset) in [
+            (
+                "size",
+                std::mem::offset_of!(GhosttyRenderStateRowSelection, size),
+            ),
+            (
+                "start_x",
+                std::mem::offset_of!(GhosttyRenderStateRowSelection, start_x),
+            ),
+            (
+                "end_x",
+                std::mem::offset_of!(GhosttyRenderStateRowSelection, end_x),
+            ),
+        ] {
+            assert_eq!(
+                row_selection_fields[name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyRenderStateRowSelection::{name} offset"
             );
         }
         let colors_fields = &types["GhosttyRenderStateColors"]["fields"];
@@ -5718,6 +5821,54 @@ mod tests {
         let cleared_generation = screen.generation();
         assert!(!screen.clear_selection());
         assert_eq!(screen.generation(), cleared_generation);
+    }
+
+    #[test]
+    fn snapshots_cache_terminal_selection_ranges_and_clear_stale_rows() {
+        let screen = VtScreen::new(6, 3, None).expect("create vt screen");
+        screen.feed(b"abcdef\r\nghijkl\x1b[?25l");
+        let geometry = test_selection_geometry(6, 3);
+        let baseline = screen.snapshot();
+        assert_eq!(baseline.selection_ranges, vec![None; 3]);
+        screen.acknowledge_snapshot(baseline.generation);
+
+        screen
+            .selection_press(test_selection_point(2, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(3, 1, 9.0), geometry)
+            .expect("drag selection across rows");
+
+        let selected = screen.snapshot();
+        assert_eq!(
+            selected.selection_ranges,
+            vec![
+                Some(SelectionRange { start: 2, end: 5 }),
+                Some(SelectionRange { start: 0, end: 3 }),
+                None,
+            ]
+        );
+        assert!(selected.generation > baseline.generation);
+        assert_eq!(selected.dirty_rows, vec![0, 1, 2]);
+        assert!(selected.selection_ranges[0].is_some_and(|range| range.contains(2)));
+        assert!(!selected.selection_ranges[0].is_some_and(|range| range.contains(1)));
+
+        let cached = screen.snapshot();
+        assert_eq!(cached.generation, selected.generation);
+        assert_eq!(cached.selection_ranges, selected.selection_ranges);
+        screen.acknowledge_snapshot(selected.generation);
+
+        screen.feed(b"\x1b[3;1HX");
+        let partial = screen.snapshot();
+        assert_eq!(partial.selection_ranges, selected.selection_ranges);
+        assert_eq!(partial.dirty_rows, vec![1, 2]);
+        screen.acknowledge_snapshot(partial.generation);
+
+        assert!(screen.clear_selection());
+        let cleared = screen.snapshot();
+        assert!(cleared.generation > partial.generation);
+        assert_eq!(cleared.selection_ranges, vec![None; 3]);
+        assert_eq!(cleared.dirty_rows, vec![0, 1, 2]);
     }
 
     #[test]

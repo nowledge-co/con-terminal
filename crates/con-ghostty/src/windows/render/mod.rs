@@ -964,9 +964,13 @@ impl Renderer {
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
 
-            let in_sel = selection
-                .map(|s| s.contains(col, row, snapshot.cols, viewport_offset))
-                .unwrap_or(false);
+            let in_sel = snapshot
+                .selection_ranges
+                .get(row as usize)
+                .copied()
+                .flatten()
+                .is_some_and(|range| range.contains(col))
+                || selection.is_some_and(|s| s.contains(col, row, snapshot.cols, viewport_offset));
             let effective_attrs = if in_sel {
                 cell.attrs ^ 0x10
             } else {

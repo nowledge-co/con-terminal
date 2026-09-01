@@ -1517,9 +1517,16 @@ impl Render for GhosttyView {
 
         if let Some(snapshot) = self.snapshot.as_ref() {
             for row_idx in 0..usize::from(snapshot.rows) {
-                if let Some(selection_cols) =
-                    selection.and_then(|selection| selection.row_range(row_idx, snapshot))
-                {
+                let selection_cols = match selection {
+                    Some(selection) => selection.row_range(row_idx, snapshot),
+                    None => snapshot
+                        .selection_ranges
+                        .get(row_idx)
+                        .copied()
+                        .flatten()
+                        .map(|range| (usize::from(range.start), usize::from(range.end))),
+                };
+                if let Some(selection_cols) = selection_cols {
                     let row_start = row_idx * usize::from(snapshot.cols);
                     let row_end = row_start + usize::from(snapshot.cols);
                     if let Some(cells) = snapshot.cells.get(row_start..row_end) {
@@ -2941,6 +2948,7 @@ mod tests {
             cols: 5,
             rows: 3,
             cells: Vec::new(),
+            selection_ranges: vec![None; 3],
             kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
@@ -2973,6 +2981,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells,
+            selection_ranges: vec![None; 3],
             kitty_placements: Default::default(),
             dirty_rows: Vec::new(),
             cursor: VtCursor {
@@ -3003,6 +3012,7 @@ mod tests {
             cols: 4,
             rows: 3,
             cells: vec![Default::default(); 12],
+            selection_ranges: vec![None; 3],
             kitty_placements: Default::default(),
             dirty_rows: vec![1],
             cursor: VtCursor {
