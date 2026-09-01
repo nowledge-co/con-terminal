@@ -17,6 +17,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#335](https://github.com/nowledge-co/con-terminal/pull/335) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**Windows and Linux**
+
+- Terminal updates now consume incremental dirty-row changes, reducing
+  unnecessary parser and renderer work during continuous output and window
+  resizing. _(PR
+  [#336](https://github.com/nowledge-co/con-terminal/pull/336) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 **Developer tools**
 
 - Terminal execution now recognizes semantic shell prompt state on Windows and
@@ -38,6 +46,11 @@ con is still pre-release, so entries may group related beta work while the produ
   macOS panes when the terminal backend supports those details. _(PR
   [#332](https://github.com/nowledge-co/con-terminal/pull/332) by
   [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- macOS release validation now checks the bundle-local SSH compatibility
+  entry point in the app bundle, ZIP, and DMG before artifacts can be
+  published. _(PR [#334](https://github.com/nowledge-co/con-terminal/pull/334)
+  and PR [#337](https://github.com/nowledge-co/con-terminal/pull/337) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ---
 
