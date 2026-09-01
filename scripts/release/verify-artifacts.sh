@@ -28,6 +28,14 @@ require_executable() {
   [[ -x "$path" ]] || fail "missing executable: $path"
 }
 
+require_symlink_target() {
+  local path="$1"
+  local expected_target="$2"
+  [[ -L "$path" ]] || fail "missing symlink: $path"
+  [[ "$(readlink "$path")" == "$expected_target" ]] \
+    || fail "$path must point to $expected_target"
+}
+
 require_desktop_entry() {
   local desktop="$1"
   local entry="$2"
@@ -112,6 +120,7 @@ verify_macos() {
 
   require_executable "$app/Contents/MacOS/con"
   require_executable "$app/Contents/MacOS/con-cli"
+  require_symlink_target "$app/Contents/MacOS/ghostty" con-cli
   "$app/Contents/MacOS/con-cli" --help >/dev/null
 
   log "checking macOS checksum"
@@ -123,6 +132,8 @@ verify_macos() {
   log "checking macOS ZIP layout"
   unzip -l "$zip" | grep -F ".app/Contents/MacOS/con-cli" >/dev/null \
     || fail "$(basename "$zip") does not contain bundled con-cli"
+  unzip -l "$zip" | grep -F ".app/Contents/MacOS/ghostty" >/dev/null \
+    || fail "$(basename "$zip") does not contain Ghostty SSH compatibility entry point"
 
   log "checking macOS DMG layout"
   local mount_point
@@ -140,6 +151,7 @@ verify_macos() {
   [[ -n "$mounted_app" ]] || fail "$(basename "$dmg") does not contain an app bundle"
   require_executable "$mounted_app/Contents/MacOS/con"
   require_executable "$mounted_app/Contents/MacOS/con-cli"
+  require_symlink_target "$mounted_app/Contents/MacOS/ghostty" con-cli
   "$mounted_app/Contents/MacOS/con-cli" --help >/dev/null
 
   log "macOS artifact OK: $(basename "$dmg")"
