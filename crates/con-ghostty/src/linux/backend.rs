@@ -11,7 +11,10 @@ use crate::stub::{
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome};
-use crate::{DesktopNotificationPolicy, desktop_notification_policy};
+use crate::{
+    ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
+    desktop_notification_policy,
+};
 
 #[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
@@ -54,6 +57,7 @@ impl Default for LinuxBackendConfig {
 pub struct LinuxGhosttyApp {
     config: Mutex<LinuxBackendConfig>,
     wake_generation: Arc<AtomicU64>,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
     desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
@@ -84,6 +88,7 @@ impl LinuxGhosttyApp {
                 clipboard_write,
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
+            clipboard_write_policy: clipboard_write_policy(clipboard_write),
             desktop_notification_policy: desktop_notification_policy(),
         })
     }
@@ -139,7 +144,13 @@ impl LinuxGhosttyApp {
     pub fn set_color_scheme(&self, _dark: bool) {}
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.clipboard_write_policy.set_enabled(false);
+        }
         self.config.lock().clipboard_write = enabled;
+        if enabled {
+            self.clipboard_write_policy.set_enabled(true);
+        }
         Ok(())
     }
 
@@ -155,6 +166,7 @@ impl LinuxGhosttyApp {
             wake_generation: Some(self.wake_generation.clone()),
             theme: config.colors,
             clipboard_write: config.clipboard_write,
+            clipboard_write_policy: self.clipboard_write_policy.clone(),
             desktop_notification_policy: self.desktop_notification_policy.clone(),
             ..LinuxPtyOptions::default()
         }

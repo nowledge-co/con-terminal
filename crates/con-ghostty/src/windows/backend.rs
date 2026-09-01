@@ -17,7 +17,10 @@ use crate::stub::{
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{VtKeyEvent, VtKeyOutcome};
-use crate::{DesktopNotificationPolicy, desktop_notification_policy};
+use crate::{
+    ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
+    desktop_notification_policy,
+};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -31,6 +34,7 @@ fn clamp_opacity(v: f32) -> f32 {
 pub struct WindowsGhosttyApp {
     config: Mutex<RendererConfig>,
     clipboard_write_enabled: AtomicBool,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
     desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
@@ -73,6 +77,7 @@ impl WindowsGhosttyApp {
         Ok(Self {
             config: Mutex::new(config),
             clipboard_write_enabled: AtomicBool::new(clipboard_write_enabled),
+            clipboard_write_policy: clipboard_write_policy(clipboard_write_enabled),
             desktop_notification_policy: desktop_notification_policy(),
         })
     }
@@ -129,8 +134,14 @@ impl WindowsGhosttyApp {
     pub fn set_color_scheme(&self, _dark: bool) {}
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.clipboard_write_policy.set_enabled(false);
+        }
         self.clipboard_write_enabled
             .store(enabled, Ordering::Release);
+        if enabled {
+            self.clipboard_write_policy.set_enabled(true);
+        }
         Ok(())
     }
 

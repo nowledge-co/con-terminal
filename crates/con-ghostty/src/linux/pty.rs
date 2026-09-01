@@ -18,7 +18,7 @@ use crate::vt::{
     PtyWriteClass, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
     VtPasteSource, VtScreen,
 };
-use crate::{DesktopNotificationPolicy, desktop_notification_policy};
+use crate::{ClipboardWritePolicy, DesktopNotificationPolicy};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -90,6 +90,7 @@ pub struct LinuxPtyOptions {
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
     pub clipboard_write: bool,
+    pub(crate) clipboard_write_policy: Arc<ClipboardWritePolicy>,
     pub(crate) desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
@@ -113,7 +114,8 @@ impl Default for LinuxPtyOptions {
             wake_callback: None,
             theme: None,
             clipboard_write: false,
-            desktop_notification_policy: desktop_notification_policy(),
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(true)),
+            desktop_notification_policy: Arc::new(DesktopNotificationPolicy::default()),
         }
     }
 }
@@ -737,6 +739,7 @@ fn spawn_local(
         )
         .context("failed to create linux vt screen")?,
     );
+    screen.set_clipboard_write_policy(options.clipboard_write_policy.clone());
     screen.set_desktop_notification_policy(options.desktop_notification_policy.clone());
     screen
         .set_clipboard_write_enabled(options.clipboard_write)
@@ -1061,6 +1064,7 @@ fn spawn_host_bridge(
         )
         .context("failed to create linux vt screen")?,
     );
+    screen.set_clipboard_write_policy(options.clipboard_write_policy.clone());
     screen.set_desktop_notification_policy(options.desktop_notification_policy.clone());
     screen
         .set_clipboard_write_enabled(options.clipboard_write)

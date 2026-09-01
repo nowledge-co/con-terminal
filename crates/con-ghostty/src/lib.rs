@@ -20,8 +20,8 @@
 use std::collections::hash_map::DefaultHasher;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::hash::{Hash, Hasher};
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::time::Instant;
@@ -34,6 +34,33 @@ pub(crate) const CLIPBOARD_WRITE_LIMIT_BYTES: usize = 1024 * 1024;
 const DESKTOP_NOTIFICATION_TITLE_LIMIT_BYTES: usize = 63;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const DESKTOP_NOTIFICATION_BODY_LIMIT_BYTES: usize = 255;
+
+pub(crate) struct ClipboardWritePolicy {
+    enabled: AtomicBool,
+}
+
+impl ClipboardWritePolicy {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled: AtomicBool::new(enabled),
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Release);
+    }
+}
+
+pub(crate) fn clipboard_write_policy(initially_enabled: bool) -> Arc<ClipboardWritePolicy> {
+    static POLICY: OnceLock<Arc<ClipboardWritePolicy>> = OnceLock::new();
+    POLICY
+        .get_or_init(|| Arc::new(ClipboardWritePolicy::new(initially_enabled)))
+        .clone()
+}
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,42 +114,57 @@ impl DesktopNotificationLimiter {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-#[derive(Default)]
-struct DesktopNotificationState {
-    limiter: DesktopNotificationLimiter,
-    pending: Option<DesktopNotification>,
+pub struct DesktopNotificationPolicy {
+    limiter: Arc<Mutex<DesktopNotificationLimiter>>,
+    pending: Mutex<Option<DesktopNotification>>,
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-#[derive(Default)]
-pub struct DesktopNotificationPolicy {
-    state: Mutex<DesktopNotificationState>,
+impl Default for DesktopNotificationPolicy {
+    fn default() -> Self {
+        Self {
+            limiter: Arc::new(Mutex::new(DesktopNotificationLimiter::default())),
+            pending: Mutex::new(None),
+        }
+    }
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 impl DesktopNotificationPolicy {
+    fn with_limiter(limiter: Arc<Mutex<DesktopNotificationLimiter>>) -> Self {
+        Self {
+            limiter,
+            pending: Mutex::new(None),
+        }
+    }
+
     pub(crate) fn push(&self, title: &[u8], body: &[u8]) -> bool {
-        let mut state = self.state.lock();
-        if !state.limiter.accept(title, body) {
+        let title = &title[..title.len().min(DESKTOP_NOTIFICATION_TITLE_LIMIT_BYTES)];
+        let body = &body[..body.len().min(DESKTOP_NOTIFICATION_BODY_LIMIT_BYTES)];
+        if !self.limiter.lock().accept(title, body) {
             return false;
         }
-        state.pending = Some(DesktopNotification::from_bytes(title, body));
+        *self.pending.lock() = Some(DesktopNotification::from_bytes(title, body));
         true
     }
 
     fn take(&self) -> Option<DesktopNotification> {
-        self.state.lock().pending.take()
+        self.pending.lock().take()
     }
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn desktop_notification_policy() -> Arc<DesktopNotificationPolicy> {
-    Arc::new(DesktopNotificationPolicy::default())
+    static LIMITER: OnceLock<Arc<Mutex<DesktopNotificationLimiter>>> = OnceLock::new();
+    let limiter = LIMITER
+        .get_or_init(|| Arc::new(Mutex::new(DesktopNotificationLimiter::default())))
+        .clone();
+    Arc::new(DesktopNotificationPolicy::with_limiter(limiter))
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn bounded_lossy_utf8(bytes: &[u8], limit: usize) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]);
     let mut end = text.len().min(limit);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -259,9 +301,9 @@ pub use stub::{
 
 #[cfg(test)]
 mod tests {
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    use super::DesktopNotificationPolicy;
     use super::clipboard_mime_is_text;
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    use super::{DesktopNotificationPolicy, bounded_lossy_utf8};
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     use std::time::{Duration, Instant};
 
@@ -279,17 +321,27 @@ mod tests {
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
-    fn desktop_notification_limiter_rejects_bursts_and_recent_duplicates() {
-        let policy = DesktopNotificationPolicy::default();
+    fn desktop_notification_limiter_is_shared_without_crossing_pending_mailboxes() {
+        let first = DesktopNotificationPolicy::default();
+        let second = DesktopNotificationPolicy::with_limiter(first.limiter.clone());
 
-        assert!(policy.push(b"Build", b"Complete"));
-        assert!(!policy.push(b"Deploy", b"Complete"));
-        assert_eq!(policy.take().expect("pending notification").title, "Build");
+        assert!(first.push(b"Build", b"Complete"));
+        assert!(!second.push(b"Deploy", b"Complete"));
+        assert_eq!(first.take().expect("pending notification").title, "Build");
+        assert_eq!(second.take(), None);
 
-        policy.state.lock().limiter.last_accepted_at =
-            Some(Instant::now() - Duration::from_secs(2));
-        assert!(!policy.push(b"Build", b"Complete"));
-        assert!(policy.push(b"Deploy", b"Complete"));
-        assert_eq!(policy.take().expect("pending notification").title, "Deploy");
+        first.limiter.lock().last_accepted_at = Some(Instant::now() - Duration::from_secs(2));
+        assert!(!second.push(b"Build", b"Complete"));
+        assert!(second.push(b"Deploy", b"Complete"));
+        assert_eq!(second.take().expect("pending notification").title, "Deploy");
+        assert_eq!(first.take(), None);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn bounded_lossy_utf8_does_not_decode_past_the_output_limit() {
+        let bytes = [vec![b'a'; 62], "é".as_bytes().to_vec(), vec![0xff; 1024]].concat();
+
+        assert_eq!(bounded_lossy_utf8(&bytes, 63), "a".repeat(62));
     }
 }

@@ -38,8 +38,8 @@ use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
 use crate::{
-    CLIPBOARD_WRITE_LIMIT_BYTES, DesktopNotification, DesktopNotificationPolicy,
-    TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, desktop_notification_policy,
+    CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, DesktopNotification,
+    DesktopNotificationPolicy, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress,
 };
 
 use image::{ImageFormat, ImageReader, Limits};
@@ -140,6 +140,7 @@ pub enum GhosttyTerminalData {
     KittyGraphics = 30,
     ScrollbackMaxLines = 35,
     Mode = 37,
+    ClipboardWriteMaxBytes = 40,
 }
 
 /// `GhosttyTerminalScrollbar` — current viewport position in the full
@@ -1281,6 +1282,7 @@ struct VtCallbackState {
     /// session explicitly rather than continuing with desynchronized state.
     write_failed: Arc<AtomicBool>,
     clipboard_write_enabled: AtomicBool,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
     pending_clipboard_write: Mutex<Option<String>>,
     /// Active only during `ghostty_terminal_paste`. The C callback cannot
     /// return an I/O result, so buffer the complete logical paste and perform
@@ -1619,7 +1621,7 @@ impl VtScreen {
             anyhow::bail!("ghostty_terminal_set(KITTY_IMAGE_STORAGE_LIMIT) failed: rc={rc}");
         }
 
-        let clipboard_write_max_bytes = CLIPBOARD_WRITE_LIMIT_BYTES;
+        let clipboard_write_max_bytes = 0_usize;
         let rc = unsafe {
             ghostty_terminal_set(
                 terminal,
@@ -1639,6 +1641,7 @@ impl VtScreen {
             clipboard_text: Mutex::new(None),
             write_failed: Arc::new(AtomicBool::new(false)),
             clipboard_write_enabled: AtomicBool::new(false),
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(true)),
             pending_clipboard_write: Mutex::new(None),
             pending_paste_write: Mutex::new(None),
             rows: AtomicU16::new(rows),
@@ -1649,7 +1652,7 @@ impl VtScreen {
             device_attributes: default_device_attributes(),
             metadata_dirty: AtomicU8::new(0),
             bell_pending: AtomicBool::new(false),
-            desktop_notification_policy: desktop_notification_policy(),
+            desktop_notification_policy: Arc::new(DesktopNotificationPolicy::default()),
             progress_epoch: Instant::now(),
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
@@ -1918,46 +1921,98 @@ impl VtScreen {
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
         let inner = self.inner.lock();
-        if !enabled {
-            inner
-                .callback_state
-                .clipboard_write_enabled
-                .store(false, Ordering::Release);
-            inner.callback_state.pending_clipboard_write.lock().take();
-        }
-        let callback = if enabled {
-            vt_clipboard_write_callback as *const c_void
-        } else {
-            std::ptr::null()
-        };
-        let rc = unsafe {
-            ghostty_terminal_set(
-                inner.terminal,
-                GhosttyTerminalOption::ClipboardWrite,
-                callback,
-            )
-        };
-        if rc != 0 {
-            return Err(format!(
-                "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={rc}"
-            ));
-        }
         if enabled {
+            let clipboard_write_max_bytes = CLIPBOARD_WRITE_LIMIT_BYTES;
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    inner.terminal,
+                    GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                    &clipboard_write_max_bytes as *const _ as *const c_void,
+                )
+            };
+            if rc != 0 {
+                return Err(format!(
+                    "ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={rc}"
+                ));
+            }
+
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    inner.terminal,
+                    GhosttyTerminalOption::ClipboardWrite,
+                    vt_clipboard_write_callback as *const c_void,
+                )
+            };
+            if rc != 0 {
+                let disabled_limit = 0_usize;
+                let _ = unsafe {
+                    ghostty_terminal_set(
+                        inner.terminal,
+                        GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                        &disabled_limit as *const _ as *const c_void,
+                    )
+                };
+                return Err(format!(
+                    "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={rc}"
+                ));
+            }
             inner
                 .callback_state
                 .clipboard_write_enabled
                 .store(true, Ordering::Release);
+            return Ok(());
+        }
+
+        inner
+            .callback_state
+            .clipboard_write_enabled
+            .store(false, Ordering::Release);
+        inner.callback_state.pending_clipboard_write.lock().take();
+        let callback_rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::ClipboardWrite,
+                std::ptr::null(),
+            )
+        };
+        let disabled_limit = 0_usize;
+        let limit_rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                &disabled_limit as *const _ as *const c_void,
+            )
+        };
+        if callback_rc != 0 {
+            return Err(format!(
+                "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={callback_rc}"
+            ));
+        }
+        if limit_rc != 0 {
+            return Err(format!(
+                "ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={limit_rc}"
+            ));
         }
         Ok(())
     }
 
     pub fn take_clipboard_write(&self) -> Option<String> {
-        self.inner
-            .lock()
-            .callback_state
-            .pending_clipboard_write
-            .lock()
-            .take()
+        let inner = self.inner.lock();
+        let state = &inner.callback_state;
+        let pending = state.pending_clipboard_write.lock().take();
+        if state.clipboard_write_policy.is_enabled() {
+            pending
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_clipboard_write_policy(&self, policy: Arc<ClipboardWritePolicy>) {
+        let mut inner = self.inner.lock();
+        if !policy.is_enabled() {
+            inner.callback_state.pending_clipboard_write.lock().take();
+        }
+        inner.callback_state.clipboard_write_policy = policy;
     }
 
     pub fn take_desktop_notification(&self) -> Option<DesktopNotification> {
@@ -2888,7 +2943,9 @@ unsafe extern "C" fn vt_clipboard_write_callback(
         return;
     }
 
-    let result = if !state.clipboard_write_enabled.load(Ordering::Acquire) {
+    let result = if !state.clipboard_write_enabled.load(Ordering::Acquire)
+        || !state.clipboard_write_policy.is_enabled()
+    {
         GhosttyClipboardWriteResult::Denied
     } else if write.location != GhosttyClipboardLocation::Standard {
         GhosttyClipboardWriteResult::Unsupported
@@ -2920,7 +2977,9 @@ unsafe extern "C" fn vt_clipboard_write_callback(
             Err(result) => result,
             Ok(text) => {
                 let mut pending = state.pending_clipboard_write.lock();
-                if !state.clipboard_write_enabled.load(Ordering::Acquire) {
+                if !state.clipboard_write_enabled.load(Ordering::Acquire)
+                    || !state.clipboard_write_policy.is_enabled()
+                {
                     GhosttyClipboardWriteResult::Denied
                 } else {
                     *pending = Some(text.to_owned());
@@ -3961,6 +4020,10 @@ mod tests {
             types["GhosttyTerminalOption"]["values"]["UNKNOWN_MAX_BYTES"].as_i64(),
             Some(GhosttyTerminalOption::UnknownMaxBytes as i64)
         );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["CLIPBOARD_WRITE_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalData::ClipboardWriteMaxBytes as i64)
+        );
         for (name, size, align) in [
             (
                 "GhosttyWriter",
@@ -4596,13 +4659,30 @@ mod tests {
     #[test]
     fn terminal_clipboard_writes_require_opt_in_and_coalesce_pending_text() {
         let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+        let policy = Arc::new(ClipboardWritePolicy::new(true));
+        screen.set_clipboard_write_policy(policy.clone());
+        let clipboard_write_limit = || {
+            let inner = screen.inner.lock();
+            let mut limit = usize::MAX;
+            let rc = unsafe {
+                ghostty_terminal_get(
+                    inner.terminal,
+                    GhosttyTerminalData::ClipboardWriteMaxBytes,
+                    &mut limit as *mut _ as *mut c_void,
+                )
+            };
+            assert_eq!(rc, 0);
+            limit
+        };
 
+        assert_eq!(clipboard_write_limit(), 0);
         screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
         assert_eq!(screen.take_clipboard_write(), None);
 
         screen
             .set_clipboard_write_enabled(true)
             .expect("enable clipboard writes");
+        assert_eq!(clipboard_write_limit(), CLIPBOARD_WRITE_LIMIT_BYTES);
         screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
         screen.feed(b"\x1b]52;c;d29ybGQ=\x07");
         assert_eq!(screen.take_clipboard_write().as_deref(), Some("world"));
@@ -4614,10 +4694,18 @@ mod tests {
         screen.feed(b"\x1b]52;c;\x07");
         assert_eq!(screen.take_clipboard_write().as_deref(), Some(""));
 
+        screen.feed(b"\x1b]52;c;YmxvY2tlZA==\x07");
+        policy.set_enabled(false);
+        assert_eq!(screen.take_clipboard_write(), None);
+        screen.feed(b"\x1b]52;c;ZGVuaWVk\x07");
+        policy.set_enabled(true);
+        assert_eq!(screen.take_clipboard_write(), None);
+
         screen.feed(b"\x1b]52;c;YWdhaW4=\x07");
         screen
             .set_clipboard_write_enabled(false)
             .expect("disable clipboard writes");
+        assert_eq!(clipboard_write_limit(), 0);
         assert_eq!(screen.take_clipboard_write(), None);
     }
 

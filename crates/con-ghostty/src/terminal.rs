@@ -23,7 +23,10 @@ use std::time::Instant;
 use dispatch::Queue;
 use parking_lot::Mutex;
 
-use crate::{CLIPBOARD_WRITE_LIMIT_BYTES, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress, ffi};
+use crate::{
+    CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress,
+    clipboard_write_policy, ffi,
+};
 
 const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
 // Con does not ship Ghostty's `+ssh-cache` CLI helper. Do not advertise
@@ -323,7 +326,7 @@ pub struct TerminalState {
     pub last_command_finished_input_generation: u64,
     /// Surface handle — stored so clipboard callbacks can complete requests.
     pub surface: ffi::ghostty_surface_t,
-    clipboard_write_enabled: Arc<AtomicBool>,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
     /// Latest viewport scrollbar state emitted by Ghostty.
@@ -350,7 +353,7 @@ impl Default for TerminalState {
             input_generation: 0,
             last_command_finished_input_generation: 0,
             surface: std::ptr::null_mut(),
-            clipboard_write_enabled: Arc::new(AtomicBool::new(false)),
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
             pending_events: VecDeque::new(),
             scrollbar: None,
         }
@@ -481,7 +484,7 @@ struct GhosttyWakeHandle {
     app: AtomicPtr<c_void>,
     tick_scheduled: AtomicBool,
     generation: AtomicU64,
-    clipboard_write_enabled: Arc<AtomicBool>,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
 }
 
 impl Default for GhosttyWakeHandle {
@@ -490,7 +493,7 @@ impl Default for GhosttyWakeHandle {
             app: AtomicPtr::new(std::ptr::null_mut()),
             tick_scheduled: AtomicBool::new(false),
             generation: AtomicU64::new(0),
-            clipboard_write_enabled: Arc::new(AtomicBool::new(false)),
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
         }
     }
 }
@@ -532,10 +535,10 @@ impl GhosttyApp {
         };
         let config = build_ghostty_config(&appearance)?;
 
-        let wake_handle = Arc::new(GhosttyWakeHandle::default());
-        wake_handle
-            .clipboard_write_enabled
-            .store(clipboard_write_enabled, Ordering::Release);
+        let wake_handle = Arc::new(GhosttyWakeHandle {
+            clipboard_write_policy: clipboard_write_policy(clipboard_write_enabled),
+            ..GhosttyWakeHandle::default()
+        });
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
             userdata: Arc::as_ptr(&wake_handle) as *mut c_void,
             supports_selection_clipboard: false,
@@ -682,18 +685,14 @@ impl GhosttyApp {
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
         if !enabled {
-            self.wake_handle
-                .clipboard_write_enabled
-                .store(false, Ordering::Release);
+            self.wake_handle.clipboard_write_policy.set_enabled(false);
         }
         self.update_config(&GhosttyConfigPatch {
             clipboard_write: Some(enabled),
             ..Default::default()
         })?;
         if enabled {
-            self.wake_handle
-                .clipboard_write_enabled
-                .store(true, Ordering::Release);
+            self.wake_handle.clipboard_write_policy.set_enabled(true);
         }
         Ok(())
     }
@@ -714,7 +713,7 @@ impl GhosttyApp {
         // Per-surface state — stored as surface userdata so callbacks can
         // update the correct terminal's state.
         let state: StateRef = Arc::new(Mutex::new(TerminalState {
-            clipboard_write_enabled: self.wake_handle.clipboard_write_enabled.clone(),
+            clipboard_write_policy: self.wake_handle.clipboard_write_policy.clone(),
             ..TerminalState::default()
         }));
         let surface_userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
@@ -1835,8 +1834,8 @@ unsafe extern "C" fn write_clipboard_callback(
         if userdata.is_null()
             || !(*(userdata as *const StateRef))
                 .lock()
-                .clipboard_write_enabled
-                .load(Ordering::Acquire)
+                .clipboard_write_policy
+                .is_enabled()
             || clipboard != ffi::ghostty_clipboard_e::GHOSTTY_CLIPBOARD_STANDARD
             || content_count > 1
             || (content.is_null() && content_count > 0)

@@ -24,9 +24,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
-use crate::DesktopNotificationPolicy;
 use crate::stub::GhosttyScrollbar;
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
+use crate::{DesktopNotificationPolicy, clipboard_write_policy};
 
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
@@ -185,6 +185,7 @@ impl RenderSession {
             )
             .context("VtScreen::new failed")?,
         );
+        vt.set_clipboard_write_policy(clipboard_write_policy(clipboard_write_enabled));
         vt.set_desktop_notification_policy(desktop_notification_policy);
         vt.set_clipboard_write_enabled(clipboard_write_enabled)
             .map_err(anyhow::Error::msg)?;
