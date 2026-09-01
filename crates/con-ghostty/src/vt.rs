@@ -69,6 +69,8 @@ pub type GhosttyRowIterator = *mut c_void;
 pub type GhosttyRowCells = *mut c_void;
 pub type GhosttyKeyEncoder = *mut c_void;
 pub type GhosttyKeyEvent = *mut c_void;
+pub type GhosttySelectionGesture = *mut c_void;
+pub type GhosttySelectionGestureEvent = *mut c_void;
 pub type GhosttyKittyGraphics = *mut c_void;
 pub type GhosttyKittyGraphicsImage = *mut c_void;
 pub type GhosttyKittyGraphicsPlacementIterator = *mut c_void;
@@ -78,6 +80,7 @@ pub type GhosttyResult = c_int;
 const GHOSTTY_SUCCESS: GhosttyResult = 0;
 const GHOSTTY_INVALID_VALUE: GhosttyResult = -2;
 const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
+const GHOSTTY_NO_VALUE: GhosttyResult = -4;
 const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 const GHOSTTY_REJECTED: GhosttyResult = -7;
 
@@ -117,6 +120,7 @@ const METADATA_DIRTY_PWD: u8 = 1 << 1;
 const UNKNOWN_SEQUENCE_LOG_TARGET: &str = "con_ghostty::vt::unknown_sequence";
 const UNKNOWN_SEQUENCE_MAX_BYTES: usize = 256;
 const UNKNOWN_SEQUENCE_LOG_LIMIT: u8 = 16;
+const SELECTION_REPEAT_INTERVAL_NS: u64 = 500_000_000;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -141,6 +145,7 @@ pub enum GhosttyTerminalData {
     Pwd = 13,
     KittyImageStorageLimit = 26,
     KittyGraphics = 30,
+    Selection = 31,
     ScrollbackMaxLines = 35,
     Mode = 37,
     CursorAtPrompt = 39,
@@ -212,6 +217,7 @@ pub enum GhosttyTerminalOption {
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
     KittyImageStorageLimit = 15,
+    Selection = 21,
     PwdChanged = 25,
     ClipboardWrite = 26,
     ScrollbackMaxLines = 28,
@@ -221,6 +227,153 @@ pub enum GhosttyTerminalOption {
     UnknownMaxBytes = 36,
     ClipboardRead = 38,
     ClipboardWriteMaxBytes = 39,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyFormatterFormat {
+    Plain = 0,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttyPointTag {
+    Viewport = 1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union GhosttyPointValue {
+    coordinate: GhosttyPointCoordinate,
+    _padding: [u64; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct GhosttyPoint {
+    tag: GhosttyPointTag,
+    value: GhosttyPointValue,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct GhosttyPointCoordinate {
+    x: u16,
+    y: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GhosttyGridRef {
+    size: usize,
+    node: *mut c_void,
+    x: u16,
+    y: u16,
+}
+
+impl Default for GhosttyGridRef {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            node: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GhosttySelection {
+    size: usize,
+    start: GhosttyGridRef,
+    end: GhosttyGridRef,
+    rectangle: bool,
+}
+
+impl Default for GhosttySelection {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            start: GhosttyGridRef::default(),
+            end: GhosttyGridRef::default(),
+            rectangle: false,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GhosttyTerminalSelectionFormatOptions {
+    size: usize,
+    emit: GhosttyFormatterFormat,
+    unwrap: bool,
+    trim: bool,
+    selection: *const GhosttySelection,
+}
+
+impl Default for GhosttyTerminalSelectionFormatOptions {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            emit: GhosttyFormatterFormat::Plain,
+            unwrap: true,
+            trim: true,
+            selection: std::ptr::null(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttySelectionGestureData {
+    ClickCount = 0,
+    Autoscroll = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttySelectionGestureEventType {
+    Press = 0,
+    Release = 1,
+    Drag = 2,
+    AutoscrollTick = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttySelectionGestureEventOption {
+    Ref = 0,
+    Position = 1,
+    RepeatDistance = 2,
+    TimeNs = 3,
+    RepeatIntervalNs = 4,
+    Geometry = 8,
+    Viewport = 9,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GhosttySurfacePosition {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct GhosttySelectionGestureGeometry {
+    columns: u32,
+    cell_width: u32,
+    padding_left: u32,
+    screen_height: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhosttySelectionGestureAutoscroll {
+    None = 0,
+    Up = 1,
+    Down = 2,
 }
 
 /// `GHOSTTY_SYS_OPT_*` keys for process-global optional services.
@@ -862,10 +1015,55 @@ unsafe extern "C" {
         key: GhosttyTerminalData,
         out: *mut c_void,
     ) -> GhosttyResult;
+    fn ghostty_terminal_grid_ref(
+        terminal: GhosttyTerminal,
+        point: GhosttyPoint,
+        out_ref: *mut GhosttyGridRef,
+    ) -> GhosttyResult;
     pub fn ghostty_terminal_paste(
         terminal: GhosttyTerminal,
         paste: *const GhosttyPaste,
         out_written: *mut bool,
+    ) -> GhosttyResult;
+
+    // Selection gesture (`selection.h`). Handles and reusable events live
+    // under the same mutex as the terminal because the gesture owns tracked
+    // grid references into that terminal.
+    fn ghostty_selection_gesture_new(
+        allocator: *const GhosttyAllocator,
+        out_gesture: *mut GhosttySelectionGesture,
+    ) -> GhosttyResult;
+    fn ghostty_selection_gesture_free(gesture: GhosttySelectionGesture, terminal: GhosttyTerminal);
+    fn ghostty_selection_gesture_reset(gesture: GhosttySelectionGesture, terminal: GhosttyTerminal);
+    fn ghostty_selection_gesture_get(
+        gesture: GhosttySelectionGesture,
+        terminal: GhosttyTerminal,
+        data: GhosttySelectionGestureData,
+        value: *mut c_void,
+    ) -> GhosttyResult;
+    fn ghostty_selection_gesture_event_new(
+        allocator: *const GhosttyAllocator,
+        out_event: *mut GhosttySelectionGestureEvent,
+        event_type: GhosttySelectionGestureEventType,
+    ) -> GhosttyResult;
+    fn ghostty_selection_gesture_event_free(event: GhosttySelectionGestureEvent);
+    fn ghostty_selection_gesture_event_set(
+        event: GhosttySelectionGestureEvent,
+        option: GhosttySelectionGestureEventOption,
+        value: *const c_void,
+    ) -> GhosttyResult;
+    fn ghostty_selection_gesture_event(
+        gesture: GhosttySelectionGesture,
+        terminal: GhosttyTerminal,
+        event: GhosttySelectionGestureEvent,
+        out_selection: *mut GhosttySelection,
+    ) -> GhosttyResult;
+    fn ghostty_terminal_selection_format_buf(
+        terminal: GhosttyTerminal,
+        options: GhosttyTerminalSelectionFormatOptions,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 
     // Key encoder (`key/{encoder,event}.h`). The encoder and reusable
@@ -1237,6 +1435,58 @@ pub struct Cursor {
     pub visible: bool,
 }
 
+/// Pointer location for a selection gesture. Grid coordinates identify the
+/// viewport cell while surface coordinates preserve within-cell thresholds and
+/// allow drag autoscroll to detect positions outside the viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionPoint {
+    pub col: u16,
+    pub row: u16,
+    pub surface_x_px: f64,
+    pub surface_y_px: f64,
+}
+
+/// Physical geometry used by Ghostty's selection drag state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionGeometry {
+    pub columns: u32,
+    pub cell_width_px: u32,
+    pub padding_left_px: u32,
+    pub screen_height_px: u32,
+}
+
+impl SelectionGeometry {
+    fn to_ffi(self) -> anyhow::Result<GhosttySelectionGestureGeometry> {
+        if self.columns == 0 || self.cell_width_px == 0 || self.screen_height_px == 0 {
+            anyhow::bail!("selection geometry dimensions must be non-zero");
+        }
+        Ok(GhosttySelectionGestureGeometry {
+            columns: self.columns,
+            cell_width: self.cell_width_px,
+            padding_left: self.padding_left_px,
+            screen_height: self.screen_height_px,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SelectionAutoscroll {
+    #[default]
+    None,
+    Up,
+    Down,
+}
+
+impl From<GhosttySelectionGestureAutoscroll> for SelectionAutoscroll {
+    fn from(value: GhosttySelectionGestureAutoscroll) -> Self {
+        match value {
+            GhosttySelectionGestureAutoscroll::None => Self::None,
+            GhosttySelectionGestureAutoscroll::Up => Self::Up,
+            GhosttySelectionGestureAutoscroll::Down => Self::Down,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct KittyImage {
     pub id: u32,
@@ -1448,6 +1698,7 @@ struct VtInner {
     terminal: GhosttyTerminal,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
+    selection_gesture: Option<SelectionGestureState>,
     kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
     kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
     kitty_placements: Arc<[KittyPlacement]>,
@@ -1461,6 +1712,91 @@ struct VtInner {
     generation: u64,
     output_generation: u64,
     required_full_snapshot_generation: u64,
+}
+
+struct SelectionGestureState {
+    gesture: GhosttySelectionGesture,
+    press: GhosttySelectionGestureEvent,
+    release: GhosttySelectionGestureEvent,
+    drag: GhosttySelectionGestureEvent,
+    autoscroll_tick: GhosttySelectionGestureEvent,
+    clock: Instant,
+}
+
+impl SelectionGestureState {
+    fn new() -> anyhow::Result<Self> {
+        let mut state = Self {
+            gesture: std::ptr::null_mut(),
+            press: std::ptr::null_mut(),
+            release: std::ptr::null_mut(),
+            drag: std::ptr::null_mut(),
+            autoscroll_tick: std::ptr::null_mut(),
+            clock: Instant::now(),
+        };
+
+        let rc = unsafe { ghostty_selection_gesture_new(std::ptr::null(), &mut state.gesture) };
+        if rc != GHOSTTY_SUCCESS || state.gesture.is_null() {
+            if !state.gesture.is_null() {
+                unsafe { state.free(std::ptr::null_mut()) };
+            }
+            anyhow::bail!("ghostty_selection_gesture_new failed: rc={rc}");
+        }
+
+        macro_rules! new_event {
+            ($field:ident, $event_type:expr, $label:literal) => {{
+                let rc = unsafe {
+                    ghostty_selection_gesture_event_new(
+                        std::ptr::null(),
+                        &mut state.$field,
+                        $event_type,
+                    )
+                };
+                if rc != GHOSTTY_SUCCESS || state.$field.is_null() {
+                    unsafe { state.free(std::ptr::null_mut()) };
+                    anyhow::bail!(
+                        "ghostty_selection_gesture_event_new({}) failed: rc={rc}",
+                        $label
+                    );
+                }
+            }};
+        }
+        new_event!(press, GhosttySelectionGestureEventType::Press, "PRESS");
+        new_event!(
+            release,
+            GhosttySelectionGestureEventType::Release,
+            "RELEASE"
+        );
+        new_event!(drag, GhosttySelectionGestureEventType::Drag, "DRAG");
+        new_event!(
+            autoscroll_tick,
+            GhosttySelectionGestureEventType::AutoscrollTick,
+            "AUTOSCROLL_TICK"
+        );
+
+        Ok(state)
+    }
+
+    unsafe fn free(&mut self, terminal: GhosttyTerminal) {
+        for event in [
+            &mut self.autoscroll_tick,
+            &mut self.drag,
+            &mut self.release,
+            &mut self.press,
+        ] {
+            if !event.is_null() {
+                unsafe { ghostty_selection_gesture_event_free(*event) };
+                *event = std::ptr::null_mut();
+            }
+        }
+        if !self.gesture.is_null() {
+            unsafe { ghostty_selection_gesture_free(self.gesture, terminal) };
+            self.gesture = std::ptr::null_mut();
+        }
+    }
+
+    fn time_ns(&self) -> u64 {
+        u64::try_from(self.clock.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
 }
 
 struct VtRenderState {
@@ -2079,6 +2415,7 @@ impl VtScreen {
                 terminal,
                 key_encoder,
                 key_event,
+                selection_gesture: None,
                 kitty_placement_iter,
                 kitty_image_cache: HashMap::new(),
                 kitty_placements: Arc::from([]),
@@ -2238,6 +2575,240 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    /// Begin a local text-selection gesture at a viewport cell.
+    ///
+    /// A first click clears the previous active selection. Repeat clicks use
+    /// Ghostty's default cell/word/line behavior table.
+    pub fn selection_press(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> anyhow::Result<()> {
+        validate_selection_point(point)?;
+        let geometry = geometry.to_ffi()?;
+        let mut inner = self.inner.lock();
+        let terminal = inner.terminal;
+        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
+
+        if inner.selection_gesture.is_none() {
+            inner.selection_gesture = Some(SelectionGestureState::new()?);
+        }
+        let state = inner
+            .selection_gesture
+            .as_mut()
+            .expect("selection gesture initialized");
+        let event = state.press;
+        let gesture = state.gesture;
+        let time_ns = state.time_ns();
+        let position = selection_surface_position(point);
+        let repeat_distance = f64::from(geometry.cell_width);
+
+        selection_event_set(event, GhosttySelectionGestureEventOption::Ref, &grid_ref)?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Position,
+            &position,
+        )?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::RepeatDistance,
+            &repeat_distance,
+        )?;
+        selection_event_set(event, GhosttySelectionGestureEventOption::TimeNs, &time_ns)?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::RepeatIntervalNs,
+            &SELECTION_REPEAT_INTERVAL_NS,
+        )?;
+
+        let selection = apply_selection_gesture_event(gesture, terminal, event)?;
+        if let Some(selection) = selection {
+            set_selection_locked(&mut inner, Some(&selection))?;
+        } else if selection_gesture_click_count(&inner)? == 1 {
+            set_selection_locked(&mut inner, None)?;
+        }
+        Ok(())
+    }
+
+    /// Continue the active selection gesture. The returned direction tells the
+    /// view whether it should run selection autoscroll ticks.
+    pub fn selection_drag(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> anyhow::Result<SelectionAutoscroll> {
+        validate_selection_point(point)?;
+        let geometry = geometry.to_ffi()?;
+        let mut inner = self.inner.lock();
+        let terminal = inner.terminal;
+        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
+        let Some(state) = inner.selection_gesture.as_ref() else {
+            return Ok(SelectionAutoscroll::None);
+        };
+        let event = state.drag;
+        let gesture = state.gesture;
+        let position = selection_surface_position(point);
+
+        selection_event_set(event, GhosttySelectionGestureEventOption::Ref, &grid_ref)?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Position,
+            &position,
+        )?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Geometry,
+            &geometry,
+        )?;
+
+        let selection = apply_selection_gesture_event(gesture, terminal, event)?;
+        let click_count = selection_gesture_click_count(&inner)?;
+        if let Some(selection) = selection {
+            set_selection_locked(&mut inner, Some(&selection))?;
+        } else if click_count > 0 {
+            set_selection_locked(&mut inner, None)?;
+        }
+        selection_gesture_autoscroll(&inner)
+    }
+
+    /// Advance an active selection autoscroll gesture by one row.
+    pub fn selection_autoscroll_tick(
+        &self,
+        point: SelectionPoint,
+        geometry: SelectionGeometry,
+    ) -> anyhow::Result<SelectionAutoscroll> {
+        validate_selection_point(point)?;
+        let geometry = geometry.to_ffi()?;
+        let mut inner = self.inner.lock();
+        let terminal = inner.terminal;
+        let Some(state) = inner.selection_gesture.as_ref() else {
+            return Ok(SelectionAutoscroll::None);
+        };
+        let event = state.autoscroll_tick;
+        let gesture = state.gesture;
+        let viewport = GhosttyPointCoordinate {
+            x: point.col,
+            y: u32::from(point.row),
+        };
+        let position = selection_surface_position(point);
+        let autoscroll_before = selection_gesture_autoscroll(&inner)?;
+        if autoscroll_before == SelectionAutoscroll::None {
+            return Ok(SelectionAutoscroll::None);
+        }
+
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Viewport,
+            &viewport,
+        )?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Position,
+            &position,
+        )?;
+        selection_event_set(
+            event,
+            GhosttySelectionGestureEventOption::Geometry,
+            &geometry,
+        )?;
+
+        let selection = apply_selection_gesture_event(gesture, terminal, event)?;
+        // A successful AUTOSCROLL_TICK may scroll the viewport before any
+        // subsequent gesture query or selection install. Account for that
+        // mutation immediately so even a later FFI error cannot leave snapshot
+        // caching on the old generation.
+        inner.generation = inner.generation.wrapping_add(1);
+        let click_count = selection_gesture_click_count(&inner)?;
+        if let Some(selection) = selection {
+            set_selection_locked(&mut inner, Some(&selection))?;
+        } else if click_count > 0 {
+            set_selection_locked(&mut inner, None)?;
+        }
+        selection_gesture_autoscroll(&inner)
+    }
+
+    /// Finish a normal pointer gesture while retaining repeat-click state for
+    /// a possible double or triple click.
+    pub fn selection_release(&self, point: Option<(u16, u16)>) -> anyhow::Result<()> {
+        let inner = self.inner.lock();
+        let terminal = inner.terminal;
+        let Some(state) = inner.selection_gesture.as_ref() else {
+            return Ok(());
+        };
+        let event = state.release;
+        let gesture = state.gesture;
+
+        let grid_ref = point
+            .map(|(col, row)| selection_grid_ref(terminal, col, row))
+            .transpose()?;
+        let value = grid_ref.as_ref().map_or(std::ptr::null(), |grid_ref| {
+            grid_ref as *const _ as *const c_void
+        });
+        let rc = unsafe {
+            ghostty_selection_gesture_event_set(
+                event,
+                GhosttySelectionGestureEventOption::Ref,
+                value,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS {
+            anyhow::bail!("ghostty_selection_gesture_event_set(RELEASE REF) failed: rc={rc}");
+        }
+        let rc = unsafe {
+            ghostty_selection_gesture_event(gesture, terminal, event, std::ptr::null_mut())
+        };
+        if rc != GHOSTTY_NO_VALUE && rc != GHOSTTY_SUCCESS {
+            anyhow::bail!("ghostty_selection_gesture_event(RELEASE) failed: rc={rc}");
+        }
+        Ok(())
+    }
+
+    /// Abandon the active pointer gesture without changing the installed
+    /// terminal selection.
+    pub fn selection_cancel_gesture(&self) {
+        let inner = self.inner.lock();
+        if let Some(state) = inner.selection_gesture.as_ref() {
+            unsafe { ghostty_selection_gesture_reset(state.gesture, inner.terminal) };
+        }
+    }
+
+    pub fn selection_autoscroll(&self) -> anyhow::Result<SelectionAutoscroll> {
+        selection_gesture_autoscroll(&self.inner.lock())
+    }
+
+    pub fn has_selection(&self) -> bool {
+        match has_selection_locked(&self.inner.lock()) {
+            Ok(has_selection) => has_selection,
+            Err(err) => {
+                log::warn!("failed to read terminal selection: {err:#}");
+                false
+            }
+        }
+    }
+
+    pub fn selection_text(&self) -> Option<String> {
+        match selection_text_locked(&self.inner.lock()) {
+            Ok(selection) => selection,
+            Err(err) => {
+                log::warn!("failed to format terminal selection: {err:#}");
+                None
+            }
+        }
+    }
+
+    /// Clear the terminal-owned selection. Returns whether a selection was
+    /// present and successfully cleared.
+    pub fn clear_selection(&self) -> bool {
+        let mut inner = self.inner.lock();
+        match set_selection_locked(&mut inner, None) {
+            Ok(changed) => changed,
+            Err(err) => {
+                log::warn!("failed to clear terminal selection: {err:#}");
+                false
+            }
+        }
     }
 
     pub(crate) fn acknowledge_snapshot(&self, generation: u64) {
@@ -3667,6 +4238,187 @@ unsafe extern "C" fn vt_xtversion_callback(
     }
 }
 
+fn validate_selection_point(point: SelectionPoint) -> anyhow::Result<()> {
+    if !point.surface_x_px.is_finite() || !point.surface_y_px.is_finite() {
+        anyhow::bail!("selection surface position must be finite");
+    }
+    Ok(())
+}
+
+fn selection_surface_position(point: SelectionPoint) -> GhosttySurfacePosition {
+    GhosttySurfacePosition {
+        x: point.surface_x_px,
+        y: point.surface_y_px,
+    }
+}
+
+fn selection_grid_ref(
+    terminal: GhosttyTerminal,
+    col: u16,
+    row: u16,
+) -> anyhow::Result<GhosttyGridRef> {
+    let point = GhosttyPoint {
+        tag: GhosttyPointTag::Viewport,
+        value: GhosttyPointValue {
+            coordinate: GhosttyPointCoordinate {
+                x: col,
+                y: u32::from(row),
+            },
+        },
+    };
+    let mut grid_ref = GhosttyGridRef::default();
+    let rc = unsafe { ghostty_terminal_grid_ref(terminal, point, &mut grid_ref) };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_terminal_grid_ref(VIEWPORT {col},{row}) failed: rc={rc}");
+    }
+    Ok(grid_ref)
+}
+
+fn selection_event_set<T>(
+    event: GhosttySelectionGestureEvent,
+    option: GhosttySelectionGestureEventOption,
+    value: &T,
+) -> anyhow::Result<()> {
+    let rc = unsafe {
+        ghostty_selection_gesture_event_set(event, option, value as *const T as *const c_void)
+    };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_selection_gesture_event_set({option:?}) failed: rc={rc}");
+    }
+    Ok(())
+}
+
+fn apply_selection_gesture_event(
+    gesture: GhosttySelectionGesture,
+    terminal: GhosttyTerminal,
+    event: GhosttySelectionGestureEvent,
+) -> anyhow::Result<Option<GhosttySelection>> {
+    let mut selection = GhosttySelection::default();
+    let rc = unsafe { ghostty_selection_gesture_event(gesture, terminal, event, &mut selection) };
+    match rc {
+        GHOSTTY_SUCCESS => Ok(Some(selection)),
+        GHOSTTY_NO_VALUE => Ok(None),
+        _ => anyhow::bail!("ghostty_selection_gesture_event failed: rc={rc}"),
+    }
+}
+
+fn selection_gesture_click_count(inner: &VtInner) -> anyhow::Result<u8> {
+    let Some(state) = inner.selection_gesture.as_ref() else {
+        return Ok(0);
+    };
+    let mut click_count = 0_u8;
+    let rc = unsafe {
+        ghostty_selection_gesture_get(
+            state.gesture,
+            inner.terminal,
+            GhosttySelectionGestureData::ClickCount,
+            &mut click_count as *mut _ as *mut c_void,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_selection_gesture_get(CLICK_COUNT) failed: rc={rc}");
+    }
+    Ok(click_count)
+}
+
+fn selection_gesture_autoscroll(inner: &VtInner) -> anyhow::Result<SelectionAutoscroll> {
+    let Some(state) = inner.selection_gesture.as_ref() else {
+        return Ok(SelectionAutoscroll::None);
+    };
+    let mut autoscroll = GhosttySelectionGestureAutoscroll::None;
+    let rc = unsafe {
+        ghostty_selection_gesture_get(
+            state.gesture,
+            inner.terminal,
+            GhosttySelectionGestureData::Autoscroll,
+            &mut autoscroll as *mut _ as *mut c_void,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_selection_gesture_get(AUTOSCROLL) failed: rc={rc}");
+    }
+    Ok(autoscroll.into())
+}
+
+fn has_selection_locked(inner: &VtInner) -> anyhow::Result<bool> {
+    let mut selection = GhosttySelection::default();
+    let rc = unsafe {
+        ghostty_terminal_get(
+            inner.terminal,
+            GhosttyTerminalData::Selection,
+            &mut selection as *mut _ as *mut c_void,
+        )
+    };
+    match rc {
+        GHOSTTY_SUCCESS => Ok(true),
+        GHOSTTY_NO_VALUE => Ok(false),
+        _ => anyhow::bail!("ghostty_terminal_get(SELECTION) failed: rc={rc}"),
+    }
+}
+
+fn set_selection_locked(
+    inner: &mut VtInner,
+    selection: Option<&GhosttySelection>,
+) -> anyhow::Result<bool> {
+    if selection.is_none() && !has_selection_locked(inner)? {
+        return Ok(false);
+    }
+    let value = selection.map_or(std::ptr::null(), |selection| {
+        selection as *const GhosttySelection as *const c_void
+    });
+    let rc =
+        unsafe { ghostty_terminal_set(inner.terminal, GhosttyTerminalOption::Selection, value) };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_terminal_set(SELECTION) failed: rc={rc}");
+    }
+    inner.generation = inner.generation.wrapping_add(1);
+    Ok(true)
+}
+
+fn selection_text_locked(inner: &VtInner) -> anyhow::Result<Option<String>> {
+    let options = GhosttyTerminalSelectionFormatOptions::default();
+    let mut required = 0_usize;
+    let rc = unsafe {
+        ghostty_terminal_selection_format_buf(
+            inner.terminal,
+            options,
+            std::ptr::null_mut(),
+            0,
+            &mut required,
+        )
+    };
+    match rc {
+        GHOSTTY_NO_VALUE => return Ok(None),
+        GHOSTTY_OUT_OF_SPACE => {}
+        _ => anyhow::bail!("ghostty_terminal_selection_format_buf(size) failed: rc={rc}"),
+    }
+
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(required)?;
+    bytes.resize(required, 0);
+    let mut written = 0_usize;
+    let rc = unsafe {
+        ghostty_terminal_selection_format_buf(
+            inner.terminal,
+            options,
+            bytes.as_mut_ptr(),
+            bytes.len(),
+            &mut written,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_terminal_selection_format_buf(write) failed: rc={rc}");
+    }
+    if written > bytes.len() {
+        anyhow::bail!(
+            "ghostty_terminal_selection_format_buf wrote {written} bytes into {}-byte buffer",
+            bytes.len()
+        );
+    }
+    bytes.truncate(written);
+    Ok(Some(String::from_utf8(bytes)?))
+}
+
 fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
     ScreenSnapshot {
         cols,
@@ -4131,8 +4883,8 @@ impl Drop for VtScreen {
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
             let render = self.render.get_mut();
-            // Free in reverse-creation order: key event/encoder, render
-            // helpers, then terminal.
+            // Free every object that can refer to the terminal before the
+            // terminal itself.
             // SAFETY: unique owner via Arc::get_mut.
             if !inner.key_event.is_null() {
                 unsafe { ghostty_key_event_free(inner.key_event) };
@@ -4159,6 +4911,9 @@ impl Drop for VtScreen {
             if !render.render_state.is_null() {
                 unsafe { ghostty_render_state_free(render.render_state) };
                 render.render_state = std::ptr::null_mut();
+            }
+            if let Some(mut selection_gesture) = inner.selection_gesture.take() {
+                unsafe { selection_gesture.free(inner.terminal) };
             }
             if !inner.terminal.is_null() {
                 unsafe { ghostty_terminal_free(inner.terminal) };
@@ -4214,6 +4969,10 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["KITTY_IMAGE_STORAGE_LIMIT"].as_i64(),
             Some(GhosttyTerminalOption::KittyImageStorageLimit as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["SELECTION"].as_i64(),
+            Some(GhosttyTerminalOption::Selection as i64)
         );
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
@@ -4345,6 +5104,46 @@ mod tests {
                 std::mem::size_of::<GhosttyRenderStateColors>(),
                 std::mem::align_of::<GhosttyRenderStateColors>(),
             ),
+            (
+                "GhosttyPointValue",
+                std::mem::size_of::<GhosttyPointValue>(),
+                std::mem::align_of::<GhosttyPointValue>(),
+            ),
+            (
+                "GhosttyPoint",
+                std::mem::size_of::<GhosttyPoint>(),
+                std::mem::align_of::<GhosttyPoint>(),
+            ),
+            (
+                "GhosttyPointCoordinate",
+                std::mem::size_of::<GhosttyPointCoordinate>(),
+                std::mem::align_of::<GhosttyPointCoordinate>(),
+            ),
+            (
+                "GhosttyGridRef",
+                std::mem::size_of::<GhosttyGridRef>(),
+                std::mem::align_of::<GhosttyGridRef>(),
+            ),
+            (
+                "GhosttySelection",
+                std::mem::size_of::<GhosttySelection>(),
+                std::mem::align_of::<GhosttySelection>(),
+            ),
+            (
+                "GhosttyTerminalSelectionFormatOptions",
+                std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>(),
+                std::mem::align_of::<GhosttyTerminalSelectionFormatOptions>(),
+            ),
+            (
+                "GhosttySurfacePosition",
+                std::mem::size_of::<GhosttySurfacePosition>(),
+                std::mem::align_of::<GhosttySurfacePosition>(),
+            ),
+            (
+                "GhosttySelectionGestureGeometry",
+                std::mem::size_of::<GhosttySelectionGestureGeometry>(),
+                std::mem::align_of::<GhosttySelectionGestureGeometry>(),
+            ),
         ] {
             assert_eq!(
                 types[name]["size"].as_u64(),
@@ -4429,6 +5228,169 @@ mod tests {
                 "GhosttyRenderStateColors::{name} offset"
             );
         }
+        for (type_name, fields) in [
+            (
+                "GhosttyPoint",
+                &[
+                    ("tag", std::mem::offset_of!(GhosttyPoint, tag)),
+                    ("value", std::mem::offset_of!(GhosttyPoint, value)),
+                ][..],
+            ),
+            (
+                "GhosttyPointCoordinate",
+                &[
+                    ("x", std::mem::offset_of!(GhosttyPointCoordinate, x)),
+                    ("y", std::mem::offset_of!(GhosttyPointCoordinate, y)),
+                ],
+            ),
+            (
+                "GhosttyGridRef",
+                &[
+                    ("size", std::mem::offset_of!(GhosttyGridRef, size)),
+                    ("node", std::mem::offset_of!(GhosttyGridRef, node)),
+                    ("x", std::mem::offset_of!(GhosttyGridRef, x)),
+                    ("y", std::mem::offset_of!(GhosttyGridRef, y)),
+                ],
+            ),
+            (
+                "GhosttySelection",
+                &[
+                    ("size", std::mem::offset_of!(GhosttySelection, size)),
+                    ("start", std::mem::offset_of!(GhosttySelection, start)),
+                    ("end", std::mem::offset_of!(GhosttySelection, end)),
+                    (
+                        "rectangle",
+                        std::mem::offset_of!(GhosttySelection, rectangle),
+                    ),
+                ],
+            ),
+            (
+                "GhosttyTerminalSelectionFormatOptions",
+                &[
+                    (
+                        "size",
+                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, size),
+                    ),
+                    (
+                        "emit",
+                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, emit),
+                    ),
+                    (
+                        "unwrap",
+                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, unwrap),
+                    ),
+                    (
+                        "trim",
+                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, trim),
+                    ),
+                    (
+                        "selection",
+                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, selection),
+                    ),
+                ],
+            ),
+            (
+                "GhosttySurfacePosition",
+                &[
+                    ("x", std::mem::offset_of!(GhosttySurfacePosition, x)),
+                    ("y", std::mem::offset_of!(GhosttySurfacePosition, y)),
+                ],
+            ),
+            (
+                "GhosttySelectionGestureGeometry",
+                &[
+                    (
+                        "columns",
+                        std::mem::offset_of!(GhosttySelectionGestureGeometry, columns),
+                    ),
+                    (
+                        "cell_width",
+                        std::mem::offset_of!(GhosttySelectionGestureGeometry, cell_width),
+                    ),
+                    (
+                        "padding_left",
+                        std::mem::offset_of!(GhosttySelectionGestureGeometry, padding_left),
+                    ),
+                    (
+                        "screen_height",
+                        std::mem::offset_of!(GhosttySelectionGestureGeometry, screen_height),
+                    ),
+                ],
+            ),
+        ] {
+            for (field_name, offset) in fields {
+                assert_eq!(
+                    types[type_name]["fields"][field_name]["offset"].as_u64(),
+                    Some(*offset as u64),
+                    "{type_name}::{field_name} offset"
+                );
+            }
+        }
+        for (name, value) in [
+            ("NONE", GhosttySelectionGestureAutoscroll::None),
+            ("UP", GhosttySelectionGestureAutoscroll::Up),
+            ("DOWN", GhosttySelectionGestureAutoscroll::Down),
+        ] {
+            assert_eq!(
+                types["GhosttySelectionGestureAutoscroll"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttySelectionGestureAutoscroll::{name}"
+            );
+        }
+        for (name, value) in [
+            ("CLICK_COUNT", GhosttySelectionGestureData::ClickCount),
+            ("AUTOSCROLL", GhosttySelectionGestureData::Autoscroll),
+        ] {
+            assert_eq!(
+                types["GhosttySelectionGestureData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttySelectionGestureData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("PRESS", GhosttySelectionGestureEventType::Press),
+            ("RELEASE", GhosttySelectionGestureEventType::Release),
+            ("DRAG", GhosttySelectionGestureEventType::Drag),
+            (
+                "AUTOSCROLL_TICK",
+                GhosttySelectionGestureEventType::AutoscrollTick,
+            ),
+        ] {
+            assert_eq!(
+                types["GhosttySelectionGestureEventType"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttySelectionGestureEventType::{name}"
+            );
+        }
+        for (name, value) in [
+            ("REF", GhosttySelectionGestureEventOption::Ref),
+            ("POSITION", GhosttySelectionGestureEventOption::Position),
+            (
+                "REPEAT_DISTANCE",
+                GhosttySelectionGestureEventOption::RepeatDistance,
+            ),
+            ("TIME_NS", GhosttySelectionGestureEventOption::TimeNs),
+            (
+                "REPEAT_INTERVAL_NS",
+                GhosttySelectionGestureEventOption::RepeatIntervalNs,
+            ),
+            ("GEOMETRY", GhosttySelectionGestureEventOption::Geometry),
+            ("VIEWPORT", GhosttySelectionGestureEventOption::Viewport),
+        ] {
+            assert_eq!(
+                types["GhosttySelectionGestureEventOption"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttySelectionGestureEventOption::{name}"
+            );
+        }
+        assert_eq!(
+            types["GhosttyFormatterFormat"]["values"]["PLAIN"].as_i64(),
+            Some(GhosttyFormatterFormat::Plain as i64)
+        );
+        assert_eq!(
+            types["GhosttyPointTag"]["values"]["VIEWPORT"].as_i64(),
+            Some(GhosttyPointTag::Viewport as i64)
+        );
         for (name, value) in [
             ("STANDARD", GhosttyClipboardLocation::Standard),
             ("SELECTION", GhosttyClipboardLocation::Selection),
@@ -4489,6 +5451,10 @@ mod tests {
             types["GhosttyResult"]["values"]["REJECTED"].as_i64(),
             Some(GHOSTTY_REJECTED as i64)
         );
+        assert_eq!(
+            types["GhosttyResult"]["values"]["NO_VALUE"].as_i64(),
+            Some(GHOSTTY_NO_VALUE as i64)
+        );
         for (name, value) in [
             ("CURSOR", GhosttyRenderStateData::Cursor),
             ("COLORS", GhosttyRenderStateData::Colors),
@@ -4542,6 +5508,10 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalData"]["values"]["KITTY_GRAPHICS"].as_i64(),
             Some(GhosttyTerminalData::KittyGraphics as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["SELECTION"].as_i64(),
+            Some(GhosttyTerminalData::Selection as i64)
         );
         assert_eq!(
             types["GhosttySysOption"]["values"]["DECODE_PNG"].as_i64(),
@@ -4697,6 +5667,142 @@ mod tests {
         ] {
             assert_eq!(keys[name].as_i64(), Some(key as i64), "GhosttyKey::{key:?}");
         }
+    }
+
+    fn test_selection_geometry(columns: u32, rows: u32) -> SelectionGeometry {
+        SelectionGeometry {
+            columns,
+            cell_width_px: 10,
+            padding_left_px: 0,
+            screen_height_px: rows * 20,
+        }
+    }
+
+    fn test_selection_point(col: u16, row: u16, x_offset_px: f64) -> SelectionPoint {
+        SelectionPoint {
+            col,
+            row,
+            surface_x_px: f64::from(col) * 10.0 + x_offset_px,
+            surface_y_px: f64::from(row) * 20.0 + 10.0,
+        }
+    }
+
+    #[test]
+    fn terminal_selection_formats_text_and_advances_generation() {
+        let screen = VtScreen::new(20, 3, None).expect("create vt screen");
+        screen.feed(b"alpha beta\r\nsecond line");
+        let geometry = test_selection_geometry(20, 3);
+        let baseline_generation = screen.generation();
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        assert!(!screen.has_selection());
+        assert_eq!(screen.generation(), baseline_generation);
+
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("drag selection");
+        assert!(screen.has_selection());
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
+        assert_eq!(screen.generation(), baseline_generation.wrapping_add(1));
+
+        screen
+            .selection_release(Some((4, 0)))
+            .expect("release selection");
+        assert!(screen.clear_selection());
+        assert!(!screen.has_selection());
+        assert_eq!(screen.selection_text(), None);
+        assert_eq!(screen.generation(), baseline_generation.wrapping_add(2));
+
+        let cleared_generation = screen.generation();
+        assert!(!screen.clear_selection());
+        assert_eq!(screen.generation(), cleared_generation);
+    }
+
+    #[test]
+    fn repeat_clicks_select_word_then_line() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+        let point = test_selection_point(1, 0, 5.0);
+
+        screen
+            .selection_press(point, geometry)
+            .expect("first click");
+        screen
+            .selection_release(Some((point.col, point.row)))
+            .expect("first release");
+        assert_eq!(screen.selection_text(), None);
+
+        screen
+            .selection_press(point, geometry)
+            .expect("second click");
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
+        screen
+            .selection_release(Some((point.col, point.row)))
+            .expect("second release");
+
+        screen
+            .selection_press(point, geometry)
+            .expect("third click");
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha beta"));
+    }
+
+    #[test]
+    fn terminal_selection_survives_reflow_and_clears_across_screen_switches() {
+        let screen = VtScreen::new(20, 3, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 3);
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("drag selection");
+        screen
+            .selection_release(Some((4, 0)))
+            .expect("release selection");
+
+        screen.resize(8, 3, 10, 20).expect("reflow terminal");
+        assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
+
+        screen.feed(b"\x1b[?1049h");
+        assert!(!screen.has_selection());
+        assert_eq!(screen.selection_text(), None);
+
+        screen.feed(b"\x1b[?1049l");
+        assert!(!screen.has_selection());
+        assert_eq!(screen.selection_text(), None);
+    }
+
+    #[test]
+    fn selection_rejects_invalid_view_geometry_without_mutation() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        let generation = screen.generation();
+        let mut point = test_selection_point(0, 0, 1.0);
+        point.surface_x_px = f64::NAN;
+
+        assert!(
+            screen
+                .selection_press(point, test_selection_geometry(20, 2))
+                .is_err()
+        );
+        assert!(
+            screen
+                .selection_press(
+                    test_selection_point(0, 0, 1.0),
+                    SelectionGeometry {
+                        columns: 20,
+                        cell_width_px: 0,
+                        padding_left_px: 0,
+                        screen_height_px: 40,
+                    },
+                )
+                .is_err()
+        );
+        assert!(!screen.has_selection());
+        assert_eq!(screen.generation(), generation);
     }
 
     #[test]
