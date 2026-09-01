@@ -132,9 +132,10 @@ fn run_with_options(options: &Options) -> i32 {
                 options.cache && Cache::user().contains(destination, None).unwrap_or(false);
             if cached {
                 term = CON_TERM;
-                verbose(options, "terminfo cache hit for {destination}");
+                verbose(options, &format!("terminfo cache hit for {destination}"));
             } else if let Some(payload) = local_terminfo() {
-                match install_terminfo(options, &payload) {
+                let connection_args = ssh_connection_args(&options.ssh_args);
+                match install_terminfo(options, &connection_args, &payload) {
                     Ok(path) => {
                         term = CON_TERM;
                         control_path = Some(path);
@@ -147,7 +148,7 @@ fn run_with_options(options: &Options) -> i32 {
             } else {
                 verbose(
                     options,
-                    "terminfo setup skipped: local {TERMINFO_NAME} entry unavailable",
+                    &format!("terminfo setup skipped: local {TERMINFO_NAME} entry unavailable"),
                 );
             }
         } else {
@@ -233,7 +234,7 @@ fn local_terminfo() -> Option<Vec<u8>> {
     // `-Q2` asks infocmp for a compiled description. `tic -x -` expects the
     // source form, so keep this as source output and never pipe `b64:` data to
     // the remote compiler.
-    command.args(["-0", "-q", TERMINFO_NAME]);
+    command.args(["-x", "-0", "-q", TERMINFO_NAME]);
     if std::env::var_os("TERMINFO").is_none() {
         if let Some(path) = bundled_terminfo_dir() {
             command.env("TERMINFO", path);
@@ -252,7 +253,65 @@ fn bundled_terminfo_dir() -> Option<PathBuf> {
         .filter(|path| path.is_dir())
 }
 
-fn install_terminfo(options: &Options, payload: &[u8]) -> io::Result<String> {
+fn ssh_connection_args(args: &[OsString]) -> Vec<OsString> {
+    let mut connection = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            connection.push(arg.clone());
+            if let Some(destination) = args.get(index + 1) {
+                connection.push(destination.clone());
+            }
+            break;
+        }
+        let value = arg.to_string_lossy();
+        if !value.starts_with('-') || value == "-" {
+            connection.push(arg.clone());
+            break;
+        }
+        connection.push(arg.clone());
+        if value.len() == 2 && ssh_option_takes_value(value.as_bytes()[1] as char) {
+            if let Some(value) = args.get(index + 1) {
+                connection.push(value.clone());
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    connection
+}
+
+fn ssh_option_takes_value(option: char) -> bool {
+    matches!(
+        option,
+        'b' | 'c'
+            | 'D'
+            | 'E'
+            | 'e'
+            | 'F'
+            | 'I'
+            | 'i'
+            | 'J'
+            | 'L'
+            | 'l'
+            | 'm'
+            | 'O'
+            | 'o'
+            | 'p'
+            | 'Q'
+            | 'R'
+            | 'S'
+            | 'W'
+            | 'w'
+    )
+}
+
+fn install_terminfo(
+    options: &Options,
+    connection_args: &[OsString],
+    payload: &[u8],
+) -> io::Result<String> {
     let directory = unique_temp_dir()?;
     let control_path = directory.join("socket");
     let control_path_string = control_path.to_string_lossy().into_owned();
@@ -263,7 +322,7 @@ fn install_terminfo(options: &Options, payload: &[u8]) -> io::Result<String> {
             .args(["-o", "ControlMaster=yes"])
             .args(["-o", "ControlPersist=no"])
             .args(["-o", &control_option])
-            .args(&options.ssh_args)
+            .args(connection_args)
             .arg("command -v tic >/dev/null 2>&1 || exit 1; mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null");
         command.stdin(Stdio::piped()).stdout(Stdio::null());
         if !options.verbose {
@@ -330,6 +389,23 @@ mod tests {
     fn first_ssh_argument_stops_wrapper_parsing() {
         let parsed = Options::parse(&args(&["-p", "2222", "user@example.com"])).unwrap();
         assert_eq!(parsed.ssh_args, args(&["-p", "2222", "user@example.com"]));
+    }
+
+    #[test]
+    fn setup_connection_drops_remote_command_but_keeps_connection_options() {
+        let parsed = ssh_connection_args(&args(&[
+            "-p",
+            "2222",
+            "-o",
+            "BatchMode=yes",
+            "user@example.com",
+            "echo",
+            "do not run this during setup",
+        ]));
+        assert_eq!(
+            parsed,
+            args(&["-p", "2222", "-o", "BatchMode=yes", "user@example.com"])
+        );
     }
 
     #[test]
