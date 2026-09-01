@@ -11,12 +11,11 @@
 //!
 //! Per-frame:
 //!   - `ghostty_render_state_update(state, terminal)` to refresh
-//!   - `ghostty_render_state_get(state, DATA_ROW_ITERATOR, &iter)` to bind iterator
+//!   - `ghostty_render_state_get_multi(...)` to read state metadata and bind the iterator
 //!   - while `row_iterator_next(iter)` is true:
-//!       - `row_get(iter, DIRTY, &dirty)`, skip if false
-//!       - `row_get(iter, CELLS, &cells)` to bind cells iterator to the current row
+//!       - `row_get_multi(iter, DIRTY|CELLS, ...)`, skip if clean
 //!       - while `row_cells_next(cells)` is true:
-//!           - `row_cells_get(cells, RAW|STYLE|BG|FG, &out)`
+//!           - `row_cells_get_multi(cells, RAW|STYLE|FG|BG, ...)`
 //!
 //! All `_next` functions return `bool`. The `_get` family uses an enum
 //! key and writes to a typed `void*` out; key→type contract is per
@@ -70,6 +69,7 @@ pub type GhosttyAllocator = c_void;
 pub type GhosttyResult = c_int;
 
 const GHOSTTY_SUCCESS: GhosttyResult = 0;
+const GHOSTTY_INVALID_VALUE: GhosttyResult = -2;
 const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
 const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 const GHOSTTY_REJECTED: GhosttyResult = -7;
@@ -2198,49 +2198,57 @@ impl VtScreen {
             log::warn!("ghostty_render_state_update rc={rc}");
         }
 
-        // Palette defaults. Cells with no explicit SGR color report
-        // FG_COLOR / BG_COLOR as (0,0,0) — the renderer is expected to
-        // substitute the terminal's default foreground/background from
-        // the render state. Without this, the pwsh banner (and any
-        // unstyled text) renders black-on-black.
         let mut default_fg = GhosttyColorRgb {
             r: 0xCC,
             g: 0xCC,
             b: 0xCC,
         };
         let mut default_bg = GhosttyColorRgb::default();
-        // SAFETY: out params typed as GhosttyColorRgb per render.h.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::ColorForeground,
-                &mut default_fg as *mut _ as *mut c_void,
+        let mut cols = fallback_cols;
+        let mut rows = fallback_rows;
+        let mut state_dirty = GhosttyRenderStateDirty::False;
+        let mut cursor_data = GhosttyRenderStateCursor::default();
+        let render_state = inner.render_state;
+        let state_keys = [
+            GhosttyRenderStateData::ColorForeground,
+            GhosttyRenderStateData::ColorBackground,
+            GhosttyRenderStateData::Cols,
+            GhosttyRenderStateData::Rows,
+            GhosttyRenderStateData::Dirty,
+            GhosttyRenderStateData::RowIterator,
+            GhosttyRenderStateData::Cursor,
+        ];
+        let mut state_values = [
+            &mut default_fg as *mut _ as *mut c_void,
+            &mut default_bg as *mut _ as *mut c_void,
+            &mut cols as *mut _ as *mut c_void,
+            &mut rows as *mut _ as *mut c_void,
+            &mut state_dirty as *mut _ as *mut c_void,
+            &mut inner.row_iter as *mut _ as *mut c_void,
+            &mut cursor_data as *mut _ as *mut c_void,
+        ];
+        let mut state_written = 0_usize;
+        let rc = unsafe {
+            ghostty_render_state_get_multi(
+                render_state,
+                state_keys.len(),
+                state_keys.as_ptr(),
+                state_values.as_mut_ptr(),
+                &mut state_written,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS || state_written != state_keys.len() {
+            log::warn!(
+                "ghostty_render_state_get_multi rc={rc} written={state_written}/{}",
+                state_keys.len()
             );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::ColorBackground,
-                &mut default_bg as *mut _ as *mut c_void,
-            );
+            inner.force_full_snapshot = true;
+            return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
         }
 
         // Ghostty's render-state dimensions can lag the host resize by a
-        // frame or two. Snapshot the actual render-state geometry so we
-        // don't invent blank tail rows from our requested size while the
-        // terminal catches up asynchronously.
-        let mut cols = fallback_cols;
-        let mut rows = fallback_rows;
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Cols,
-                &mut cols as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Rows,
-                &mut rows as *mut _ as *mut c_void,
-            );
-        }
+        // frame or two. Snapshot its actual geometry instead of inventing
+        // blank tail rows from the requested host size.
         cols = cols.max(1);
         rows = rows.max(1);
 
@@ -2257,15 +2265,6 @@ impl VtScreen {
 
         let mut force_all_dirty = inner.force_full_snapshot;
         let mut full_redraw = force_all_dirty;
-        let mut state_dirty = GhosttyRenderStateDirty::False;
-        // SAFETY: DIRTY out param is sized for the enum.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Dirty,
-                &mut state_dirty as *mut _ as *mut c_void,
-            );
-        }
         if state_dirty == GhosttyRenderStateDirty::Full {
             full_redraw = true;
         }
@@ -2283,20 +2282,6 @@ impl VtScreen {
 
         let mut dirty_rows: Vec<u16> = Vec::new();
 
-        // Bind the row iterator to the current state.
-        // SAFETY: state + iter valid.
-        let rc = unsafe {
-            ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::RowIterator,
-                &mut inner.row_iter as *mut _ as *mut c_void,
-            )
-        };
-        if rc != 0 {
-            log::warn!("ghostty_render_state_get(ROW_ITERATOR) rc={rc}");
-            return empty_snapshot(cols, rows, inner.generation);
-        }
-
         let mut row_idx: u16 = 0;
         // SAFETY: row_iter valid; `_next` returns bool.
         while unsafe { ghostty_render_state_row_iterator_next(inner.row_iter) } {
@@ -2305,13 +2290,32 @@ impl VtScreen {
             }
 
             let mut dirty = GhosttyRenderStateDirty::False;
-            // SAFETY: DIRTY out param is sized for the enum.
-            unsafe {
-                let _ = ghostty_render_state_row_get(
-                    inner.row_iter,
-                    GhosttyRenderStateRowData::Dirty,
-                    &mut dirty as *mut _ as *mut c_void,
+            let row_iter = inner.row_iter;
+            let row_keys = [
+                GhosttyRenderStateRowData::Dirty,
+                GhosttyRenderStateRowData::Cells,
+            ];
+            let mut row_values = [
+                &mut dirty as *mut _ as *mut c_void,
+                &mut inner.row_cells as *mut _ as *mut c_void,
+            ];
+            let mut row_written = 0_usize;
+            let rc = unsafe {
+                ghostty_render_state_row_get_multi(
+                    row_iter,
+                    row_keys.len(),
+                    row_keys.as_ptr(),
+                    row_values.as_mut_ptr(),
+                    &mut row_written,
+                )
+            };
+            if rc != GHOSTTY_SUCCESS || row_written != row_keys.len() {
+                log::warn!(
+                    "ghostty_render_state_row_get_multi rc={rc} written={row_written}/{} at row {row_idx}",
+                    row_keys.len()
                 );
+                inner.force_full_snapshot = true;
+                return empty_snapshot(cols, rows, inner.generation);
             }
 
             if !full_redraw && dirty == GhosttyRenderStateDirty::False {
@@ -2320,21 +2324,6 @@ impl VtScreen {
             }
             let mut row_changed = force_all_dirty;
 
-            // Bind the cells iterator to the current row.
-            // SAFETY: iter + cells valid.
-            let rc = unsafe {
-                ghostty_render_state_row_get(
-                    inner.row_iter,
-                    GhosttyRenderStateRowData::Cells,
-                    &mut inner.row_cells as *mut _ as *mut c_void,
-                )
-            };
-            if rc != 0 {
-                log::warn!("row_get(CELLS) rc={rc} at row {row_idx}");
-                row_idx += 1;
-                continue;
-            }
-
             let row_start = row_idx as usize * cols as usize;
             let mut col_idx: u16 = 0;
             // SAFETY: cells valid; `_next` returns bool.
@@ -2342,7 +2331,13 @@ impl VtScreen {
                 if col_idx >= cols {
                     break;
                 }
-                let cell = read_cell(inner.row_cells, default_fg, default_bg, alternate_screen);
+                let Some(cell) =
+                    read_cell(inner.row_cells, default_fg, default_bg, alternate_screen)
+                else {
+                    log::warn!("failed to read render cell at row={row_idx} col={col_idx}");
+                    inner.force_full_snapshot = true;
+                    return empty_snapshot(cols, rows, inner.generation);
+                };
                 let idx = row_start + col_idx as usize;
                 row_changed |= inner.scratch[idx] != cell;
                 inner.scratch[idx] = cell;
@@ -2382,34 +2377,14 @@ impl VtScreen {
 
         inner.force_full_snapshot = false;
 
-        // Cursor read from the render state keys (not the terminal, to
-        // stay consistent with the render snapshot).
-        let mut visible: bool = false;
-        let mut col_u16: u16 = 0;
-        let mut row_u16: u16 = 0;
-        // SAFETY: out params sized per upstream render.h.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorViewportX,
-                &mut col_u16 as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorViewportY,
-                &mut row_u16 as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorVisible,
-                &mut visible as *mut _ as *mut c_void,
-            );
-        }
-
-        let cursor = Cursor {
-            col: col_u16,
-            row: row_u16,
-            visible,
+        let cursor = if cursor_data.viewport_has_value {
+            Cursor {
+                col: cursor_data.viewport_x,
+                row: cursor_data.viewport_y,
+                visible: cursor_data.visible,
+            }
+        } else {
+            Cursor::default()
         };
         let previous_cursor = inner.last_cursor;
         if previous_cursor != cursor {
@@ -3215,74 +3190,85 @@ fn read_cell(
     default_fg: GhosttyColorRgb,
     default_bg: GhosttyColorRgb,
     alternate_screen: bool,
-) -> Cell {
+) -> Option<Cell> {
     // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
     // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
     // per `screen.h`. Previous code bitshifted RAW directly and produced
     // nonsense codepoints (U+015C etc. for the "PowerShell" banner).
     let mut raw: GhosttyCell = 0;
     let mut style = GhosttyStyle::new();
-    // BG_COLOR / FG_COLOR write a `GhosttyColorRgb` (3 bytes: R, G, B)
-    // to the out pointer — NOT a packed u32.
-    let mut bg = GhosttyColorRgb::default();
-    let mut fg = GhosttyColorRgb::default();
-
-    // SAFETY: out params typed per upstream contract (RAW=GhosttyCell u64,
-    // STYLE=GhosttyStyle by value with `size` set to sizeof, BG/FG=GhosttyColorRgb).
-    unsafe {
-        let _ = ghostty_render_state_row_cells_get(
+    let mut fg = default_fg;
+    let mut bg = default_bg;
+    let keys = [
+        GhosttyRenderStateRowCellsData::Raw,
+        GhosttyRenderStateRowCellsData::Style,
+        GhosttyRenderStateRowCellsData::FgColor,
+        GhosttyRenderStateRowCellsData::BgColor,
+    ];
+    let mut values = [
+        &mut raw as *mut _ as *mut c_void,
+        &mut style as *mut _ as *mut c_void,
+        &mut fg as *mut _ as *mut c_void,
+        &mut bg as *mut _ as *mut c_void,
+    ];
+    let mut written = 0_usize;
+    let rc = unsafe {
+        ghostty_render_state_row_cells_get_multi(
             cells,
-            GhosttyRenderStateRowCellsData::Raw,
-            &mut raw as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::Style,
-            &mut style as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::BgColor,
-            &mut bg as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::FgColor,
-            &mut fg as *mut _ as *mut c_void,
-        );
-    }
+            keys.len(),
+            keys.as_ptr(),
+            values.as_mut_ptr(),
+            &mut written,
+        )
+    };
+    let bg_was_default = match (rc, written) {
+        (GHOSTTY_SUCCESS, 4) => false,
+        (GHOSTTY_INVALID_VALUE, 2) => {
+            let rc = unsafe {
+                ghostty_render_state_row_cells_get(
+                    cells,
+                    GhosttyRenderStateRowCellsData::BgColor,
+                    &mut bg as *mut _ as *mut c_void,
+                )
+            };
+            match rc {
+                GHOSTTY_SUCCESS => false,
+                GHOSTTY_INVALID_VALUE => true,
+                _ => return None,
+            }
+        }
+        (GHOSTTY_INVALID_VALUE, 3) => true,
+        _ => return None,
+    };
 
     // Gate codepoint decode on HAS_TEXT — blank cells carry a bogus
     // grapheme-tag codepoint we'd otherwise rasterize.
     let mut has_text: bool = false;
     let mut codepoint: u32 = 0;
-    // SAFETY: `has_text` is a C `_Bool` (1 byte); `codepoint` is uint32.
-    unsafe {
-        let _ = ghostty_cell_get(
+    let cell_keys = [GhosttyCellData::HasText, GhosttyCellData::Codepoint];
+    let mut cell_values = [
+        &mut has_text as *mut _ as *mut c_void,
+        &mut codepoint as *mut _ as *mut c_void,
+    ];
+    let mut cell_written = 0_usize;
+    let rc = unsafe {
+        ghostty_cell_get_multi(
             raw,
-            GhosttyCellData::HasText,
-            &mut has_text as *mut _ as *mut c_void,
-        );
-        if has_text {
-            let _ = ghostty_cell_get(
-                raw,
-                GhosttyCellData::Codepoint,
-                &mut codepoint as *mut _ as *mut c_void,
-            );
-        }
+            cell_keys.len(),
+            cell_keys.as_ptr(),
+            cell_values.as_mut_ptr(),
+            &mut cell_written,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS || cell_written != cell_keys.len() {
+        return None;
+    }
+    if !has_text {
+        codepoint = 0;
     }
 
-    // Substitute the palette's default fg/bg when the cell's style
-    // reports no SGR override (tag == GHOSTTY_STYLE_COLOR_NONE). The
-    // row_cells FG_COLOR / BG_COLOR accessors return (0,0,0) for
-    // unstyled cells, so without this substitution default-bg cells
-    // would paint pure black. Key off the style tag, not the RGB value:
-    // explicit black may still resolve to the same RGB as the default.
-    const STYLE_COLOR_TAG_NONE: u32 = 0;
     const STYLE_COLOR_TAG_PALETTE: u32 = 1;
     const PALETTE_BLACK: u8 = 0;
-    let fg_was_default = style.fg_color.tag == STYLE_COLOR_TAG_NONE;
-    let bg_was_default = style.bg_color.tag == STYLE_COLOR_TAG_NONE;
     // Curses-style full-screen apps often paint their canvas with SGR
     // 40 instead of default background. For themes whose ANSI black is
     // a raised surface (Catppuccin, Nord, Everforest), that makes htop
@@ -3293,7 +3279,6 @@ fn read_cell(
     let bg_is_alt_canvas_black = alternate_screen
         && style.bg_color.tag == STYLE_COLOR_TAG_PALETTE
         && style.bg_color.value as u8 == PALETTE_BLACK;
-    let fg = if fg_was_default { default_fg } else { fg };
     let bg = if bg_was_default || bg_is_alt_canvas_black {
         default_bg
     } else {
@@ -3334,13 +3319,13 @@ fn read_cell(
         attrs |= ATTR_INVERSE;
     }
 
-    Cell {
+    Some(Cell {
         codepoint,
         fg: pack(fg, 0xFF),
         bg: pack(bg, bg_alpha),
         attrs,
         _pad: [0; 3],
-    }
+    })
 }
 
 impl Drop for VtScreen {
@@ -3607,6 +3592,10 @@ mod tests {
         assert_eq!(
             types["GhosttyResult"]["values"]["IO_ERROR"].as_i64(),
             Some(GHOSTTY_IO_ERROR as i64)
+        );
+        assert_eq!(
+            types["GhosttyResult"]["values"]["INVALID_VALUE"].as_i64(),
+            Some(GHOSTTY_INVALID_VALUE as i64)
         );
         assert_eq!(
             types["GhosttyResult"]["values"]["REJECTED"].as_i64(),
