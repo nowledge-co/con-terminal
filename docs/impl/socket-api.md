@@ -111,6 +111,10 @@ JSON-RPC 2.0 over a Unix domain socket, one JSON request per line and one JSON r
 
 The first shipped client is `con-cli`.
 
+The same binary also provides the macOS shell-integration compatibility
+commands `+ssh` and `+ssh-cache`. Their protocol and fallback behavior are
+documented in [`ssh-integration.md`](ssh-integration.md).
+
 Examples:
 
 ```bash

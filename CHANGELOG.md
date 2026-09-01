@@ -8,6 +8,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**macOS**
+
+- SSH shell integration now supports Ghostty's `+ssh` wrapper through Con's
+  bundle-local `con-cli`, including terminal environment forwarding and
+  best-effort `xterm-ghostty` terminfo setup. If setup is unavailable, SSH
+  continues with the standard `xterm-256color` terminal type. _(PR
+  [#335](https://github.com/nowledge-co/con-terminal/pull/335) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Developer tools**
 
 - Terminal execution now recognizes semantic shell prompt state on Windows and
