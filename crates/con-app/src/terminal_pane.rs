@@ -46,6 +46,8 @@ impl TerminalPane {
             tty_name: GhosttyTerminal::SUPPORTS_TTY_NAME,
             ..PaneObservationSupport::default()
         }
+    }
+
     pub fn progress(&self, cx: &App) -> Option<TerminalProgress> {
         self.entity.read(cx).progress()
     }

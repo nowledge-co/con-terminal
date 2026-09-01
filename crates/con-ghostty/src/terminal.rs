@@ -1136,6 +1136,8 @@ impl GhosttyTerminal {
 
         let name = name?;
         Some(tty_name.insert(name).clone())
+    }
+
     pub fn progress(&self) -> Option<TerminalProgress> {
         let mut state = self.state.lock();
         let progress = state.progress?;
@@ -1148,7 +1150,6 @@ impl GhosttyTerminal {
         state.progress = None;
         state.progress_updated_at = None;
         None
-    }
     }
 
     /// Whether the child process has exited.
