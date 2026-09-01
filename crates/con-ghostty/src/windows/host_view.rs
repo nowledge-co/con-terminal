@@ -32,8 +32,8 @@ use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
 use super::render::{RenderOutcome, Renderer, RendererConfig, ThemeColors};
 use super::vt::{
-    SelectionAutoscroll, SelectionGeometry, SelectionPoint, VtKeyEvent, VtKeyOutcome,
-    VtPasteResult, VtPasteSource, VtScreen,
+    SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyEvent,
+    VtKeyOutcome, VtPasteResult, VtPasteSource, VtScreen,
 };
 
 use super::render::CellMetrics;
@@ -500,16 +500,18 @@ impl RenderSession {
     /// tracking is off or Shift is held, we drive local selection (left
     /// button only — non-left buttons never drive selection); otherwise
     /// we emit an SGR button-press report and leave selection alone.
-    /// Shift+click with an existing selection extends from the original
-    /// anchor (matches every other terminal). `button` follows the SGR
-    /// button index (0=Left, 1=Middle, 2=Right). The return value records
-    /// the chosen route so the view can preserve it through drag/release.
+    /// Shift+single-click with an existing selection extends from the original
+    /// anchor; repeated clicks retain the platform's word/line behavior.
+    /// `button` follows the SGR button index (0=Left, 1=Middle, 2=Right). The
+    /// return value records the chosen route so the view can preserve it
+    /// through drag/release.
     pub fn mouse_down(
         &self,
         button: u8,
         point: SelectionPoint,
         geometry: SelectionGeometry,
         mods: MouseEventMods,
+        click_count: u8,
     ) -> MouseDownRoute {
         if self.vt.mouse_tracking_active() && !mods.shift {
             self.vt.selection_cancel_gesture();
@@ -526,11 +528,9 @@ impl RenderSession {
             return MouseDownRoute::Ignored;
         }
         self.request_low_latency_present();
-        let result = if mods.shift && self.vt.has_selection() {
-            self.vt.selection_drag(point, geometry).map(|_| ())
-        } else {
-            self.vt.selection_press(point, geometry)
-        };
+        let result = self
+            .vt
+            .selection_press(point, geometry, click_count, mods.shift);
         match result {
             Ok(()) => MouseDownRoute::LocalSelection,
             Err(err) => {
@@ -616,14 +616,18 @@ impl RenderSession {
         &self,
         point: SelectionPoint,
         geometry: SelectionGeometry,
-    ) -> SelectionAutoscroll {
-        self.request_low_latency_present();
+    ) -> SelectionAutoscrollUpdate {
         match self.vt.selection_autoscroll_tick(point, geometry) {
-            Ok(autoscroll) => autoscroll,
+            Ok(update) => {
+                if update.changed {
+                    self.request_low_latency_present();
+                }
+                update
+            }
             Err(err) => {
                 log::debug!("windows terminal selection autoscroll failed: {err:#}");
                 self.vt.selection_cancel_gesture();
-                SelectionAutoscroll::None
+                SelectionAutoscrollUpdate::default()
             }
         }
     }
@@ -787,6 +791,10 @@ impl RenderSession {
     /// nothing is selected.
     pub fn selection_text(&self) -> Option<String> {
         self.vt.selection_text()
+    }
+
+    pub fn take_selection_text(&self) -> Option<String> {
+        self.vt.take_selection_text()
     }
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {

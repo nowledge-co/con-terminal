@@ -110,17 +110,12 @@ pub fn payload_from_external_paths(paths: &ExternalPaths) -> Option<TerminalPast
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::App) -> bool {
-    let has_selection = terminal.has_selection();
-    let selection = has_selection.then(|| terminal.selection_text()).flatten();
-    match copy_selection_decision(has_selection, selection.as_deref()) {
+    let selection = terminal.take_selection_text();
+    match copy_selection_decision(selection.as_deref()) {
         CopySelectionDecision::NoSelection => false,
-        CopySelectionDecision::ClearOnly => {
-            terminal.clear_selection();
-            true
-        }
+        CopySelectionDecision::ClearOnly => true,
         CopySelectionDecision::CopyAndClear(selection) => {
             cx.write_to_clipboard(ClipboardItem::new_string(selection.to_string()));
-            terminal.clear_selection();
             true
         }
     }
@@ -135,16 +130,11 @@ enum CopySelectionDecision<'a> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
-fn copy_selection_decision(
-    has_selection: bool,
-    selection: Option<&str>,
-) -> CopySelectionDecision<'_> {
-    if !has_selection {
-        return CopySelectionDecision::NoSelection;
-    }
+fn copy_selection_decision(selection: Option<&str>) -> CopySelectionDecision<'_> {
     match selection {
         Some(selection) if !selection.is_empty() => CopySelectionDecision::CopyAndClear(selection),
-        _ => CopySelectionDecision::ClearOnly,
+        Some(_) => CopySelectionDecision::ClearOnly,
+        None => CopySelectionDecision::NoSelection,
     }
 }
 
@@ -283,19 +273,15 @@ mod tests {
     #[test]
     fn copy_selection_decision_distinguishes_empty_and_absent_selection() {
         assert_eq!(
-            copy_selection_decision(false, Some("ignored")),
+            copy_selection_decision(None),
             CopySelectionDecision::NoSelection
         );
         assert_eq!(
-            copy_selection_decision(true, None),
+            copy_selection_decision(Some("")),
             CopySelectionDecision::ClearOnly
         );
         assert_eq!(
-            copy_selection_decision(true, Some("")),
-            CopySelectionDecision::ClearOnly
-        );
-        assert_eq!(
-            copy_selection_decision(true, Some("selected")),
+            copy_selection_decision(Some("selected")),
             CopySelectionDecision::CopyAndClear("selected")
         );
     }

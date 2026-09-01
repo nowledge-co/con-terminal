@@ -43,8 +43,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use con_ghostty::vt::{
-    SelectionAutoscroll, SelectionGeometry, SelectionPoint, VtKeyAction, VtKeyEvent,
-    VtKeyModifiers, VtPasteResult, VtPasteSource,
+    SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
+    VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource,
 };
 use con_ghostty::{DesktopNotification, TerminalProgress};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
@@ -871,15 +871,7 @@ impl GhosttyView {
     /// (col, row) cell address. Returns `None` when we don't yet have a
     /// session / bounds to project into.
     fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
-        self.cell_from_event_position_impl(pos, false)
-    }
-
-    fn cell_from_event_position_impl(
-        &self,
-        pos: Point<Pixels>,
-        clamp_to_grid: bool,
-    ) -> Option<(u16, u16)> {
-        self.selection_input_from_event_position(pos, clamp_to_grid)
+        self.selection_input_from_event_position(pos, false)
             .map(|(point, _)| (point.col, point.row))
     }
 
@@ -1003,12 +995,19 @@ impl GhosttyView {
         button: u8,
         pos: Point<Pixels>,
         mods: MouseEventMods,
+        click_count: usize,
     ) -> MouseDownRoute {
         if let Some((point, geometry)) = self.selection_input_from_event_position(pos, false) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
-                    return session.mouse_down(button, point, geometry, mods);
+                    return session.mouse_down(
+                        button,
+                        point,
+                        geometry,
+                        mods,
+                        u8::try_from(click_count).unwrap_or(u8::MAX),
+                    );
                 }
             }
         }
@@ -1108,12 +1107,14 @@ impl GhosttyView {
                         {
                             return false;
                         }
-                        let autoscroll = this.selection_autoscroll_tick();
-                        if autoscroll == SelectionAutoscroll::None {
+                        let update = this.selection_autoscroll_tick();
+                        if update.direction == SelectionAutoscroll::None {
                             this.stop_selection_autoscroll();
                             return false;
                         }
-                        cx.notify();
+                        if update.changed {
+                            cx.notify();
+                        }
                         true
                     })
                     .unwrap_or(false);
@@ -1125,22 +1126,24 @@ impl GhosttyView {
         .detach();
     }
 
-    fn selection_autoscroll_tick(&self) -> SelectionAutoscroll {
+    fn selection_autoscroll_tick(&self) -> SelectionAutoscrollUpdate {
         let Some(position) = self.last_mouse_position else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         let Some((point, geometry)) = self.selection_input_from_event_position(position, true)
         else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         let Some(terminal) = &self.terminal else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         let inner = terminal.inner();
         let guard = inner.lock();
-        guard.as_ref().map_or(SelectionAutoscroll::None, |session| {
-            session.selection_autoscroll_tick(point, geometry)
-        })
+        guard
+            .as_ref()
+            .map_or(SelectionAutoscrollUpdate::default(), |session| {
+                session.selection_autoscroll_tick(point, geometry)
+            })
     }
 
     fn stop_selection_autoscroll(&mut self) {
@@ -1977,6 +1980,7 @@ impl Render for GhosttyView {
                         2,
                         event.position,
                         mouse_mods_from(&event.modifiers),
+                        event.click_count,
                     ) == MouseDownRoute::TerminalReport;
                     this.terminal_mouse_right_consumed = Some(consumed);
                     if consumed {
@@ -2013,17 +2017,18 @@ impl Render for GhosttyView {
                     // written. Do not continue an SGR sequence after a failed
                     // PTY write.
                     let mods = mouse_mods_from(&event.modifiers);
-                    let route = match this.forward_mouse_down(0, event.position, mods) {
-                        MouseDownRoute::TerminalReport => Some(MousePressRoute {
-                            shift: mods.shift,
-                            local_selection: false,
-                        }),
-                        MouseDownRoute::LocalSelection => Some(MousePressRoute {
-                            shift: mods.shift,
-                            local_selection: true,
-                        }),
-                        MouseDownRoute::Ignored => None,
-                    };
+                    let route =
+                        match this.forward_mouse_down(0, event.position, mods, event.click_count) {
+                            MouseDownRoute::TerminalReport => Some(MousePressRoute {
+                                shift: mods.shift,
+                                local_selection: false,
+                            }),
+                            MouseDownRoute::LocalSelection => Some(MousePressRoute {
+                                shift: mods.shift,
+                                local_selection: true,
+                            }),
+                            MouseDownRoute::Ignored => None,
+                        };
                     if let Some(route) = route {
                         this.terminal_left_mouse_sequence.begin(route);
                     }

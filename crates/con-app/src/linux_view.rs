@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use con_ghostty::vt::{
-    SelectionAutoscroll, SelectionGeometry, SelectionPoint, VtKeyAction, VtKeyEvent,
-    VtKeyModifiers, VtPasteResult, VtPasteSource,
+    SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
+    VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource,
 };
 use con_ghostty::{
     ATTR_BOLD, ATTR_INVERSE, ATTR_ITALIC, ATTR_STRIKE, ATTR_UNDERLINE, DesktopNotification,
@@ -786,18 +786,20 @@ impl GhosttyView {
         changed
     }
 
-    fn begin_local_selection(&mut self, pos: Point<Pixels>, shift: bool) -> bool {
+    fn begin_local_selection(
+        &mut self,
+        pos: Point<Pixels>,
+        shift: bool,
+        click_count: usize,
+    ) -> bool {
         let Some((point, geometry)) = self.selection_input_from_event_position(pos, false) else {
             return false;
         };
         let Some(terminal) = self.terminal.as_ref() else {
             return false;
         };
-        let result = if shift && terminal.has_selection() {
-            terminal.selection_drag(point, geometry).map(|_| ())
-        } else {
-            terminal.selection_press(point, geometry)
-        };
+        let click_count = u8::try_from(click_count).unwrap_or(u8::MAX);
+        let result = terminal.selection_press(point, geometry, click_count, shift);
         match result {
             Ok(()) => {
                 self.terminal_left_mouse_sequence
@@ -942,12 +944,14 @@ impl GhosttyView {
                         {
                             return false;
                         }
-                        let autoscroll = this.selection_autoscroll_tick();
-                        if autoscroll == SelectionAutoscroll::None {
+                        let update = this.selection_autoscroll_tick();
+                        if update.direction == SelectionAutoscroll::None {
                             this.stop_selection_autoscroll();
                             return false;
                         }
-                        cx.notify();
+                        if update.changed {
+                            cx.notify();
+                        }
                         true
                     })
                     .unwrap_or(false);
@@ -959,23 +963,23 @@ impl GhosttyView {
         .detach();
     }
 
-    fn selection_autoscroll_tick(&self) -> SelectionAutoscroll {
+    fn selection_autoscroll_tick(&self) -> SelectionAutoscrollUpdate {
         let Some(position) = self.last_mouse_position else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         let Some((point, geometry)) = self.selection_input_from_event_position(position, true)
         else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         let Some(terminal) = self.terminal.as_ref() else {
-            return SelectionAutoscroll::None;
+            return SelectionAutoscrollUpdate::default();
         };
         match terminal.selection_autoscroll_tick(point, geometry) {
-            Ok(autoscroll) => autoscroll,
+            Ok(update) => update,
             Err(err) => {
                 log::debug!("linux terminal selection autoscroll failed: {err:#}");
                 terminal.selection_cancel_gesture();
-                SelectionAutoscroll::None
+                SelectionAutoscrollUpdate::default()
             }
         }
     }
@@ -1995,7 +1999,9 @@ impl Render for GhosttyView {
                                     .begin(LeftMouseSequence::TerminalReport);
                             }
                         }
-                    } else if !this.begin_local_selection(event.position, shift) && !shift {
+                    } else if !this.begin_local_selection(event.position, shift, event.click_count)
+                        && !shift
+                    {
                         this.clear_selection();
                     }
                     cx.emit(GhosttyFocusChanged);

@@ -11,8 +11,8 @@ use crate::stub::{
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{
-    ScreenSnapshot, SelectionAutoscroll, SelectionGeometry, SelectionPoint, VtKeyEvent,
-    VtKeyOutcome,
+    ScreenSnapshot, SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry,
+    SelectionPoint, VtKeyEvent, VtKeyOutcome,
 };
 use crate::{
     ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
@@ -613,6 +613,13 @@ impl LinuxGhosttyTerminal {
             .and_then(LinuxPtySession::selection_text)
     }
 
+    pub fn take_selection_text(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_selection_text)
+    }
+
     pub fn clear_selection(&self) {
         if let Some(session) = self.inner.lock().as_ref() {
             session.clear_selection();
@@ -623,12 +630,14 @@ impl LinuxGhosttyTerminal {
         &self,
         point: SelectionPoint,
         geometry: SelectionGeometry,
+        click_count: u8,
+        extend: bool,
     ) -> anyhow::Result<()> {
         let inner = self.inner.lock();
         let session = inner
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("linux terminal session is not attached"))?;
-        session.selection_press(point, geometry)
+        session.selection_press(point, geometry, click_count, extend)
     }
 
     pub fn selection_drag(
@@ -647,7 +656,7 @@ impl LinuxGhosttyTerminal {
         &self,
         point: SelectionPoint,
         geometry: SelectionGeometry,
-    ) -> anyhow::Result<SelectionAutoscroll> {
+    ) -> anyhow::Result<SelectionAutoscrollUpdate> {
         let inner = self.inner.lock();
         let session = inner
             .as_ref()

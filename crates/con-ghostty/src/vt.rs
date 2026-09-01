@@ -120,7 +120,6 @@ const METADATA_DIRTY_PWD: u8 = 1 << 1;
 const UNKNOWN_SEQUENCE_LOG_TARGET: &str = "con_ghostty::vt::unknown_sequence";
 const UNKNOWN_SEQUENCE_MAX_BYTES: usize = 256;
 const UNKNOWN_SEQUENCE_LOG_LIMIT: u8 = 16;
-const SELECTION_REPEAT_INTERVAL_NS: u64 = 500_000_000;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -994,6 +993,7 @@ unsafe extern "C" {
 
     // Allocator + process-global optional services (`allocator.h`, `sys.h`).
     fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
+    fn ghostty_free(allocator: *const GhosttyAllocator, ptr: *mut u8, len: usize);
     fn ghostty_sys_set(option: GhosttySysOption, value: *const c_void) -> GhosttyResult;
 
     // Terminal (`terminal.h`)
@@ -1082,12 +1082,12 @@ unsafe extern "C" {
         b: *const GhosttySelection,
         out_equal: *mut bool,
     ) -> GhosttyResult;
-    fn ghostty_terminal_selection_format_buf(
+    fn ghostty_terminal_selection_format_alloc(
         terminal: GhosttyTerminal,
+        allocator: *const GhosttyAllocator,
         options: GhosttyTerminalSelectionFormatOptions,
-        buf: *mut u8,
-        buf_len: usize,
-        out_written: *mut usize,
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
     ) -> GhosttyResult;
 
     // Key encoder (`key/{encoder,event}.h`). The encoder and reusable
@@ -1501,14 +1501,10 @@ pub enum SelectionAutoscroll {
     Down,
 }
 
-impl From<GhosttySelectionGestureAutoscroll> for SelectionAutoscroll {
-    fn from(value: GhosttySelectionGestureAutoscroll) -> Self {
-        match value {
-            GhosttySelectionGestureAutoscroll::None => Self::None,
-            GhosttySelectionGestureAutoscroll::Up => Self::Up,
-            GhosttySelectionGestureAutoscroll::Down => Self::Down,
-        }
-    }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectionAutoscrollUpdate {
+    pub direction: SelectionAutoscroll,
+    pub changed: bool,
 }
 
 #[derive(Debug)]
@@ -2624,31 +2620,65 @@ impl VtScreen {
 
     /// Begin a local text-selection gesture at a viewport cell.
     ///
-    /// A first click clears the previous active selection. Repeat clicks use
-    /// Ghostty's default cell/word/line behavior table.
+    /// `click_count` comes from the platform event so OS accessibility
+    /// settings remain authoritative. A shifted single click extends an
+    /// existing active gesture; otherwise Ghostty's default cell/word/line
+    /// behavior is selected from the platform click count.
     pub fn selection_press(
         &self,
         point: SelectionPoint,
         geometry: SelectionGeometry,
+        click_count: u8,
+        extend: bool,
     ) -> anyhow::Result<()> {
         validate_selection_point(point)?;
         let geometry = geometry.to_ffi()?;
         let mut inner = self.inner.lock();
         let terminal = inner.terminal;
-        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
 
         if inner.selection_gesture.is_none() {
             inner.selection_gesture = Some(SelectionGestureState::new()?);
         }
+        let can_extend = extend
+            && click_count == 1
+            && has_selection_locked(&inner)?
+            && selection_gesture_click_count(&inner)? > 0;
+        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
         let state = inner
             .selection_gesture
-            .as_mut()
+            .as_ref()
             .expect("selection gesture initialized");
-        let event = state.press;
         let gesture = state.gesture;
-        let time_ns = state.time_ns();
         let position = selection_surface_position(point);
+
+        if can_extend {
+            let event = state.drag;
+            selection_event_set(event, GhosttySelectionGestureEventOption::Ref, &grid_ref)?;
+            selection_event_set(
+                event,
+                GhosttySelectionGestureEventOption::Position,
+                &position,
+            )?;
+            selection_event_set(
+                event,
+                GhosttySelectionGestureEventOption::Geometry,
+                &geometry,
+            )?;
+            if let Some(selection) = apply_selection_gesture_event(gesture, terminal, event)? {
+                set_selection_locked(&mut inner, Some(&selection))?;
+            }
+            return Ok(());
+        }
+
+        // GPUI has already applied the platform's repeat interval and distance
+        // policy. Replay the reported count from a clean gesture so Ghostty
+        // selects the matching cell/word/line behavior without a second,
+        // hard-coded timing policy disagreeing with the OS.
+        unsafe { ghostty_selection_gesture_reset(gesture, terminal) };
+        let event = state.press;
+        let time_ns = state.time_ns();
         let repeat_distance = f64::from(geometry.cell_width);
+        let repeat_interval_ns = u64::MAX;
 
         selection_event_set(event, GhosttySelectionGestureEventOption::Ref, &grid_ref)?;
         selection_event_set(
@@ -2665,10 +2695,13 @@ impl VtScreen {
         selection_event_set(
             event,
             GhosttySelectionGestureEventOption::RepeatIntervalNs,
-            &SELECTION_REPEAT_INTERVAL_NS,
+            &repeat_interval_ns,
         )?;
 
-        let selection = apply_selection_gesture_event(gesture, terminal, event)?;
+        let mut selection = None;
+        for _ in 0..click_count.clamp(1, 3) {
+            selection = apply_selection_gesture_event(gesture, terminal, event)?;
+        }
         if let Some(selection) = selection {
             set_selection_locked(&mut inner, Some(&selection))?;
         } else if selection_gesture_click_count(&inner)? == 1 {
@@ -2688,12 +2721,12 @@ impl VtScreen {
         let geometry = geometry.to_ffi()?;
         let mut inner = self.inner.lock();
         let terminal = inner.terminal;
-        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
         let Some(state) = inner.selection_gesture.as_ref() else {
             return Ok(SelectionAutoscroll::None);
         };
         let event = state.drag;
         let gesture = state.gesture;
+        let grid_ref = selection_grid_ref(terminal, point.col, point.row)?;
         let position = selection_surface_position(point);
 
         selection_event_set(event, GhosttySelectionGestureEventOption::Ref, &grid_ref)?;
@@ -2723,13 +2756,13 @@ impl VtScreen {
         &self,
         point: SelectionPoint,
         geometry: SelectionGeometry,
-    ) -> anyhow::Result<SelectionAutoscroll> {
+    ) -> anyhow::Result<SelectionAutoscrollUpdate> {
         validate_selection_point(point)?;
         let geometry = geometry.to_ffi()?;
         let mut inner = self.inner.lock();
         let terminal = inner.terminal;
         let Some(state) = inner.selection_gesture.as_ref() else {
-            return Ok(SelectionAutoscroll::None);
+            return Ok(SelectionAutoscrollUpdate::default());
         };
         let event = state.autoscroll_tick;
         let gesture = state.gesture;
@@ -2740,7 +2773,7 @@ impl VtScreen {
         let position = selection_surface_position(point);
         let autoscroll_before = selection_gesture_autoscroll(&inner)?;
         if autoscroll_before == SelectionAutoscroll::None {
-            return Ok(SelectionAutoscroll::None);
+            return Ok(SelectionAutoscrollUpdate::default());
         }
 
         selection_event_set(
@@ -2759,19 +2792,40 @@ impl VtScreen {
             &geometry,
         )?;
 
+        let generation_before = inner.generation;
+        let offset_before = read_scrollbar(terminal).map(|scrollbar| scrollbar.offset);
         let selection = apply_selection_gesture_event(gesture, terminal, event)?;
-        // A successful AUTOSCROLL_TICK may scroll the viewport before any
-        // subsequent gesture query or selection install. Account for that
-        // mutation immediately so even a later FFI error cannot leave snapshot
-        // caching on the old generation.
-        inner.generation = inner.generation.wrapping_add(1);
-        let click_count = selection_gesture_click_count(&inner)?;
-        if let Some(selection) = selection {
-            set_selection_locked(&mut inner, Some(&selection))?;
-        } else if click_count > 0 {
-            set_selection_locked(&mut inner, None)?;
+        let offset_after = read_scrollbar(terminal).map(|scrollbar| scrollbar.offset);
+        let viewport_changed = match (offset_before, offset_after) {
+            (Some(before), Some(after)) => before != after,
+            // Preserve correctness if scrollbar introspection itself fails.
+            _ => true,
+        };
+        let result = (|| {
+            let click_count = selection_gesture_click_count(&inner)?;
+            let selection_changed = if let Some(selection) = selection {
+                set_selection_locked(&mut inner, Some(&selection))?
+            } else if click_count > 0 {
+                set_selection_locked(&mut inner, None)?
+            } else {
+                false
+            };
+            Ok::<_, anyhow::Error>((selection_gesture_autoscroll(&inner)?, selection_changed))
+        })();
+
+        // A successful tick mutates the viewport inside Ghostty. Keep that
+        // mutation and any selection install under this lock, but avoid a new
+        // snapshot generation when both were clamped/equal at a scrollback
+        // boundary. If a later query failed, still publish a real viewport
+        // movement before returning the error.
+        if viewport_changed && inner.generation == generation_before {
+            inner.generation = inner.generation.wrapping_add(1);
         }
-        selection_gesture_autoscroll(&inner)
+        let (direction, selection_changed) = result?;
+        Ok(SelectionAutoscrollUpdate {
+            direction,
+            changed: viewport_changed || selection_changed,
+        })
     }
 
     /// Finish a normal pointer gesture while retaining repeat-click state for
@@ -2819,10 +2873,7 @@ impl VtScreen {
         }
     }
 
-    pub fn selection_autoscroll(&self) -> anyhow::Result<SelectionAutoscroll> {
-        selection_gesture_autoscroll(&self.inner.lock())
-    }
-
+    /// Read selection presence. FFI failures are logged and reported as false.
     pub fn has_selection(&self) -> bool {
         match has_selection_locked(&self.inner.lock()) {
             Ok(has_selection) => has_selection,
@@ -2833,11 +2884,39 @@ impl VtScreen {
         }
     }
 
+    /// Format the active selection. FFI or UTF-8 failures are logged and
+    /// reported as no selection.
     pub fn selection_text(&self) -> Option<String> {
         match selection_text_locked(&self.inner.lock()) {
             Ok(selection) => selection,
             Err(err) => {
                 log::warn!("failed to format terminal selection: {err:#}");
+                None
+            }
+        }
+    }
+
+    /// Atomically format and clear the active selection.
+    ///
+    /// An empty string is a real empty selection; `None` means there was no
+    /// selection or formatting failed. Failures are logged and leave the
+    /// selection installed so a later copy can retry.
+    pub fn take_selection_text(&self) -> Option<String> {
+        let mut inner = self.inner.lock();
+        let result = (|| {
+            let Some(text) = selection_text_locked(&inner)? else {
+                return Ok(None);
+            };
+            if let Some(state) = inner.selection_gesture.as_ref() {
+                unsafe { ghostty_selection_gesture_reset(state.gesture, inner.terminal) };
+            }
+            set_selection_locked(&mut inner, None)?;
+            Ok::<_, anyhow::Error>(Some(text))
+        })();
+        match result {
+            Ok(selection) => selection,
+            Err(err) => {
+                log::warn!("failed to take terminal selection: {err:#}");
                 None
             }
         }
@@ -4417,7 +4496,10 @@ fn selection_gesture_autoscroll(inner: &VtInner) -> anyhow::Result<SelectionAuto
     let Some(state) = inner.selection_gesture.as_ref() else {
         return Ok(SelectionAutoscroll::None);
     };
-    let mut autoscroll = GhosttySelectionGestureAutoscroll::None;
+    // Read C enum output through its integer representation. Writing an
+    // upstream value added after our pinned revision directly into a Rust enum
+    // would create an invalid discriminant before we could validate it.
+    let mut autoscroll = GhosttySelectionGestureAutoscroll::None as c_int;
     let rc = unsafe {
         ghostty_selection_gesture_get(
             state.gesture,
@@ -4429,7 +4511,18 @@ fn selection_gesture_autoscroll(inner: &VtInner) -> anyhow::Result<SelectionAuto
     if rc != GHOSTTY_SUCCESS {
         anyhow::bail!("ghostty_selection_gesture_get(AUTOSCROLL) failed: rc={rc}");
     }
-    Ok(autoscroll.into())
+    match autoscroll {
+        value if value == GhosttySelectionGestureAutoscroll::None as c_int => {
+            Ok(SelectionAutoscroll::None)
+        }
+        value if value == GhosttySelectionGestureAutoscroll::Up as c_int => {
+            Ok(SelectionAutoscroll::Up)
+        }
+        value if value == GhosttySelectionGestureAutoscroll::Down as c_int => {
+            Ok(SelectionAutoscroll::Down)
+        }
+        value => anyhow::bail!("unknown Ghostty selection autoscroll value: {value}"),
+    }
 }
 
 fn selection_locked(inner: &VtInner) -> anyhow::Result<Option<GhosttySelection>> {
@@ -4487,46 +4580,39 @@ fn set_selection_locked(
 
 fn selection_text_locked(inner: &VtInner) -> anyhow::Result<Option<String>> {
     let options = GhosttyTerminalSelectionFormatOptions::default();
-    let mut required = 0_usize;
+    let mut ptr = std::ptr::null_mut();
+    let mut len = 0_usize;
     let rc = unsafe {
-        ghostty_terminal_selection_format_buf(
+        ghostty_terminal_selection_format_alloc(
             inner.terminal,
+            std::ptr::null(),
             options,
-            std::ptr::null_mut(),
-            0,
-            &mut required,
+            &mut ptr,
+            &mut len,
         )
     };
     match rc {
         GHOSTTY_NO_VALUE => return Ok(None),
-        GHOSTTY_OUT_OF_SPACE => {}
-        _ => anyhow::bail!("ghostty_terminal_selection_format_buf(size) failed: rc={rc}"),
+        GHOSTTY_SUCCESS => {}
+        _ => anyhow::bail!("ghostty_terminal_selection_format_alloc failed: rc={rc}"),
     }
-
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(required)?;
-    bytes.resize(required, 0);
-    let mut written = 0_usize;
-    let rc = unsafe {
-        ghostty_terminal_selection_format_buf(
-            inner.terminal,
-            options,
-            bytes.as_mut_ptr(),
-            bytes.len(),
-            &mut written,
-        )
-    };
-    if rc != GHOSTTY_SUCCESS {
-        anyhow::bail!("ghostty_terminal_selection_format_buf(write) failed: rc={rc}");
+    if ptr.is_null() && len != 0 {
+        anyhow::bail!("ghostty selection formatter returned a null {len}-byte buffer");
     }
-    if written > bytes.len() {
-        anyhow::bail!(
-            "ghostty_terminal_selection_format_buf wrote {written} bytes into {}-byte buffer",
-            bytes.len()
-        );
-    }
-    bytes.truncate(written);
-    Ok(Some(String::from_utf8(bytes)?))
+    let bytes = (|| {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len)?;
+        if len != 0 {
+            // SAFETY: format_alloc returned a readable `len`-byte allocation.
+            // Copy it because Ghostty and Rust may use different heaps on
+            // Windows; fallible reservation keeps the FFI buffer releasable if
+            // Rust cannot allocate the destination.
+            bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, len) });
+        }
+        Ok::<_, anyhow::Error>(bytes)
+    })();
+    unsafe { ghostty_free(std::ptr::null(), ptr, len) };
+    Ok(Some(String::from_utf8(bytes?)?))
 }
 
 fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
@@ -5832,7 +5918,7 @@ mod tests {
         let baseline_generation = screen.generation();
 
         screen
-            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         assert!(!screen.has_selection());
         assert_eq!(screen.generation(), baseline_generation);
@@ -5873,7 +5959,7 @@ mod tests {
         screen.acknowledge_snapshot(baseline.generation);
 
         screen
-            .selection_press(test_selection_point(2, 0, 1.0), geometry)
+            .selection_press(test_selection_point(2, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         screen
             .selection_drag(test_selection_point(3, 1, 9.0), geometry)
@@ -5919,7 +6005,7 @@ mod tests {
         let point = test_selection_point(1, 0, 5.0);
 
         screen
-            .selection_press(point, geometry)
+            .selection_press(point, geometry, 1, false)
             .expect("first click");
         screen
             .selection_release(Some((point.col, point.row)))
@@ -5927,7 +6013,7 @@ mod tests {
         assert_eq!(screen.selection_text(), None);
 
         screen
-            .selection_press(point, geometry)
+            .selection_press(point, geometry, 2, false)
             .expect("second click");
         assert_eq!(screen.selection_text().as_deref(), Some("alpha"));
         screen
@@ -5935,9 +6021,54 @@ mod tests {
             .expect("second release");
 
         screen
-            .selection_press(point, geometry)
+            .selection_press(point, geometry, 3, false)
             .expect("third click");
         assert_eq!(screen.selection_text().as_deref(), Some("alpha beta"));
+    }
+
+    #[test]
+    fn shifted_single_click_falls_back_to_a_fresh_press_after_gesture_reset() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
+            .expect("press initial anchor");
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("select alpha");
+        screen
+            .selection_release(Some((4, 0)))
+            .expect("release initial selection");
+        screen.selection_cancel_gesture();
+
+        screen
+            .selection_press(test_selection_point(6, 0, 1.0), geometry, 1, true)
+            .expect("shifted press after reset");
+        screen
+            .selection_drag(test_selection_point(9, 0, 9.0), geometry)
+            .expect("drag from fallback anchor");
+        assert_eq!(screen.selection_text().as_deref(), Some("beta"));
+    }
+
+    #[test]
+    fn shifted_repeat_click_keeps_platform_word_behavior() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
+            .expect("first click");
+        screen
+            .selection_release(Some((0, 0)))
+            .expect("first release");
+        screen
+            .selection_press(test_selection_point(7, 0, 5.0), geometry, 2, true)
+            .expect("shifted double click");
+
+        assert_eq!(screen.selection_text().as_deref(), Some("beta"));
     }
 
     #[test]
@@ -5948,7 +6079,7 @@ mod tests {
         let point = test_selection_point(1, 0, 5.0);
 
         screen
-            .selection_press(point, geometry)
+            .selection_press(point, geometry, 1, false)
             .expect("first click");
         screen
             .selection_release(Some((point.col, point.row)))
@@ -5956,7 +6087,7 @@ mod tests {
         assert!(!screen.clear_selection());
 
         screen
-            .selection_press(point, geometry)
+            .selection_press(point, geometry, 1, false)
             .expect("click after clear");
         assert_eq!(screen.selection_text(), None);
     }
@@ -5968,7 +6099,7 @@ mod tests {
         let geometry = test_selection_geometry(20, 2);
 
         screen
-            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         screen
             .selection_drag(test_selection_point(4, 0, 9.0), geometry)
@@ -6009,7 +6140,7 @@ mod tests {
         screen.feed(b"alpha beta");
         let geometry = test_selection_geometry(20, 3);
         screen
-            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         screen
             .selection_drag(test_selection_point(4, 0, 9.0), geometry)
@@ -6037,7 +6168,7 @@ mod tests {
         let geometry = test_selection_geometry(5, 3);
 
         screen
-            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         screen
             .selection_drag(test_selection_point(0, 1, 9.0), geometry)
@@ -6053,7 +6184,7 @@ mod tests {
         let geometry = test_selection_geometry(10, 2);
 
         screen
-            .selection_press(test_selection_point(0, 0, 1.0), geometry)
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
             .expect("press selection anchor");
         screen
             .selection_drag(test_selection_point(4, 0, 9.0), geometry)
@@ -6077,7 +6208,7 @@ mod tests {
         assert_eq!(screen.scrollbar().map(|state| state.offset), Some(1));
 
         screen
-            .selection_press(test_selection_point(4, 1, 9.0), geometry)
+            .selection_press(test_selection_point(4, 1, 9.0), geometry, 1, false)
             .expect("press selection anchor");
         assert_eq!(
             screen
@@ -6087,16 +6218,42 @@ mod tests {
         );
         let generation_before_tick = screen.generation();
 
-        assert_eq!(
-            screen
-                .selection_autoscroll_tick(point_above_viewport, geometry)
-                .expect("autoscroll selection"),
-            SelectionAutoscroll::Up
-        );
+        let update = screen
+            .selection_autoscroll_tick(point_above_viewport, geometry)
+            .expect("autoscroll selection");
+        assert_eq!(update.direction, SelectionAutoscroll::Up);
+        assert!(update.changed);
 
         assert!(screen.generation() > generation_before_tick);
         assert_eq!(screen.scrollbar().map(|state| state.offset), Some(0));
         assert_eq!(screen.selection_text().as_deref(), Some("one\ntwo\nthree"));
+
+        let generation_at_boundary = screen.generation();
+        let update = screen
+            .selection_autoscroll_tick(point_above_viewport, geometry)
+            .expect("clamped autoscroll selection");
+        assert_eq!(update.direction, SelectionAutoscroll::Up);
+        assert!(!update.changed);
+        assert_eq!(screen.generation(), generation_at_boundary);
+    }
+
+    #[test]
+    fn taking_selection_formats_and_clears_in_one_generation() {
+        let screen = VtScreen::new(20, 2, None).expect("create vt screen");
+        screen.feed(b"alpha beta");
+        let geometry = test_selection_geometry(20, 2);
+        screen
+            .selection_press(test_selection_point(0, 0, 1.0), geometry, 1, false)
+            .expect("press selection anchor");
+        screen
+            .selection_drag(test_selection_point(4, 0, 9.0), geometry)
+            .expect("select alpha");
+        let generation = screen.generation();
+
+        assert_eq!(screen.take_selection_text().as_deref(), Some("alpha"));
+        assert!(!screen.has_selection());
+        assert_eq!(screen.generation(), generation.wrapping_add(1));
+        assert_eq!(screen.take_selection_text(), None);
     }
 
     #[test]
@@ -6108,7 +6265,7 @@ mod tests {
 
         assert!(
             screen
-                .selection_press(point, test_selection_geometry(20, 2))
+                .selection_press(point, test_selection_geometry(20, 2), 1, false)
                 .is_err()
         );
         assert!(
@@ -6121,6 +6278,8 @@ mod tests {
                         padding_left_px: 0,
                         screen_height_px: 40,
                     },
+                    1,
+                    false,
                 )
                 .is_err()
         );
