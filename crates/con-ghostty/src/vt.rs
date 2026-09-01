@@ -1910,15 +1910,16 @@ impl VtScreen {
 
     pub(crate) fn acknowledge_snapshot(&self, generation: u64) {
         let mut render = self.render.lock();
-        if self.inner.lock().generation != generation
-            || !render
-                .snapshot_metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.generation == generation)
+        if !render
+            .snapshot_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.generation == generation)
         {
             return;
         }
 
+        // Newer terminal output remains terminal-dirty until the next begin;
+        // only a newer render snapshot makes this acknowledgment stale.
         let rc = unsafe { ghostty_render_state_clean(render.render_state) };
         if rc != GHOSTTY_SUCCESS {
             log::warn!("ghostty_render_state_clean rc={rc} generation={generation}");
@@ -3893,22 +3894,28 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_damage_accumulates_until_acknowledged() {
+    fn snapshot_damage_tracks_render_acknowledgment() {
         let screen = VtScreen::new(4, 3, None).expect("create vt screen");
 
         screen.feed(b"\x1b[?25l");
         let baseline = screen.snapshot();
         screen.acknowledge_snapshot(baseline.generation);
 
-        screen.feed(b"A");
+        screen.feed(b"A\x1b[3;1H");
         let first = screen.snapshot();
-        assert_eq!(first.dirty_rows, vec![0]);
+        assert!(first.dirty_rows.contains(&0));
         assert_eq!(screen.snapshot().dirty_rows, first.dirty_rows);
 
-        screen.feed(b"\x1b[2;1HB");
+        screen.feed(b"B");
         screen.acknowledge_snapshot(first.generation);
+        let second = screen.snapshot();
+        assert_eq!(second.dirty_rows, vec![2]);
+
+        screen.feed(b"\x1b[2;1HC");
         let combined = screen.snapshot();
-        assert_eq!(combined.dirty_rows, vec![0, 1]);
+        assert_eq!(combined.dirty_rows, vec![1, 2]);
+        screen.acknowledge_snapshot(second.generation);
+        assert_eq!(screen.snapshot().dirty_rows, combined.dirty_rows);
 
         screen.acknowledge_snapshot(combined.generation);
         assert!(screen.snapshot().dirty_rows.is_empty());
