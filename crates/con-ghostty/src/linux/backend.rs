@@ -340,11 +340,20 @@ impl LinuxGhosttyTerminal {
         Ok(())
     }
 
-    /// Returns the current libghostty-vt screen snapshot, if a PTY
-    /// session has been spawned. Used by `con-app/src/linux_view.rs`
-    /// to drive the styled-cell paint path.
+    /// Returns the current libghostty-vt screen snapshot when a PTY
+    /// session exists and render extraction succeeds. Used by
+    /// `con-app/src/linux_view.rs` to drive the styled-cell paint path.
     pub fn snapshot(&self) -> Option<ScreenSnapshot> {
-        self.inner.lock().as_ref().map(LinuxPtySession::snapshot)
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::snapshot)
+    }
+
+    pub fn acknowledge_snapshot(&self, generation: u64) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.acknowledge_snapshot(generation);
+        }
     }
 
     pub fn write_to_pty(&self, data: &[u8]) {

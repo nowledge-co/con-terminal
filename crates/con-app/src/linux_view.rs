@@ -1302,6 +1302,7 @@ impl GhosttyView {
             line_height,
         };
         let shape = (snapshot.cols, snapshot.rows);
+        let generation = snapshot.generation;
         let force_full_rebuild = self.row_cache_style.as_ref() != Some(&style)
             || self.row_cache_shape != Some(shape)
             || self.row_cache.len() != usize::from(snapshot.rows);
@@ -1331,7 +1332,7 @@ impl GhosttyView {
             let row_start = row_idx * usize::from(snapshot.cols);
             let row_end = row_start + usize::from(snapshot.cols);
             let Some(cells) = snapshot.cells.get(row_start..row_end) else {
-                break;
+                return;
             };
             let cursor_for_row = cursor_col_for_row(snapshot.cursor, row_idx);
             self.row_cache[row_idx] = build_terminal_row(
@@ -1349,6 +1350,9 @@ impl GhosttyView {
         self.row_cache_cursor = Some(snapshot.cursor);
         self.row_cache_style = Some(style);
         self.row_cache_shape = Some(shape);
+        if let Some(terminal) = self.terminal.as_ref() {
+            terminal.acknowledge_snapshot(generation);
+        }
     }
 }
 

@@ -467,18 +467,11 @@ impl Renderer {
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(sel_hash ^ geometry_hash.rotate_left(13));
-        let needs_draw = {
-            let mut last = self
-                .last_generation
-                .lock()
-                .expect("last_generation mutex poisoned in render()");
-            if *last == combined {
-                false
-            } else {
-                *last = combined;
-                true
-            }
-        };
+        let needs_draw = *self
+            .last_generation
+            .lock()
+            .expect("last_generation mutex poisoned in render()")
+            != combined;
 
         let mut ring = self
             .staging_ring
@@ -586,6 +579,10 @@ impl Renderer {
                 &readback_regions,
                 kitty_visuals,
             ));
+            *self
+                .last_generation
+                .lock()
+                .expect("last_generation mutex poisoned after submit") = combined;
             submit_ms = submit_started
                 .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                 .unwrap_or(0.0);

@@ -250,6 +250,29 @@ GhosttyResult ghostty_cell_get(uint64_t cell, int key, void* out) {
     return 0;
 }
 
+GhosttyResult ghostty_cell_get_multi(
+    uint64_t cell, size_t count, const int* keys,
+    void** values, size_t* out_written
+) {
+    if (!keys || !values) {
+        if (out_written) { *out_written = 0; }
+        return -2;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!values[i]) {
+            if (out_written) { *out_written = i; }
+            return -2;
+        }
+        GhosttyResult result = ghostty_cell_get(cell, keys[i], values[i]);
+        if (result != 0) {
+            if (out_written) { *out_written = i; }
+            return result;
+        }
+    }
+    if (out_written) { *out_written = count; }
+    return 0;
+}
+
 /* ── Render state ───────────────────────────────────────────────── */
 
 GhosttyResult ghostty_render_state_new(
@@ -269,11 +292,51 @@ GhosttyResult ghostty_render_state_update(
     return 0;
 }
 
+GhosttyResult ghostty_render_state_begin_update(
+    GhosttyRenderState state, GhosttyTerminal terminal
+) {
+    (void)state; (void)terminal;
+    return 0;
+}
+
+GhosttyResult ghostty_render_state_end_update(GhosttyRenderState state) {
+    (void)state;
+    return 0;
+}
+
+GhosttyResult ghostty_render_state_clean(GhosttyRenderState state) {
+    (void)state;
+    return 0;
+}
+
 GhosttyResult ghostty_render_state_get(
     GhosttyRenderState state, int key, void* out
 ) {
     (void)state; (void)key;
     if (out) { *(uint8_t*)out = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_render_state_get_multi(
+    GhosttyRenderState state, size_t count, const int* keys,
+    void** values, size_t* out_written
+) {
+    if (!keys || !values) {
+        if (out_written) { *out_written = 0; }
+        return -2;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!values[i]) {
+            if (out_written) { *out_written = i; }
+            return -2;
+        }
+        GhosttyResult result = ghostty_render_state_get(state, keys[i], values[i]);
+        if (result != 0) {
+            if (out_written) { *out_written = i; }
+            return result;
+        }
+    }
+    if (out_written) { *out_written = count; }
     return 0;
 }
 
@@ -286,12 +349,41 @@ GhosttyResult ghostty_render_state_row_iterator_new(
 }
 void ghostty_render_state_row_iterator_free(GhosttyRowIterator iter) { (void)iter; }
 bool ghostty_render_state_row_iterator_next(GhosttyRowIterator iter) { (void)iter; return false; }
+bool ghostty_render_state_row_iterator_next_dirty(
+    GhosttyRowIterator iter, uint16_t* out_y
+) {
+    (void)iter; (void)out_y;
+    return false;
+}
 
 GhosttyResult ghostty_render_state_row_get(
     GhosttyRowIterator iter, int key, void* out
 ) {
     (void)iter; (void)key;
     if (out) { *(uint8_t*)out = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_render_state_row_get_multi(
+    GhosttyRowIterator iter, size_t count, const int* keys,
+    void** values, size_t* out_written
+) {
+    if (!keys || !values) {
+        if (out_written) { *out_written = 0; }
+        return -2;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!values[i]) {
+            if (out_written) { *out_written = i; }
+            return -2;
+        }
+        GhosttyResult result = ghostty_render_state_row_get(iter, keys[i], values[i]);
+        if (result != 0) {
+            if (out_written) { *out_written = i; }
+            return result;
+        }
+    }
+    if (out_written) { *out_written = count; }
     return 0;
 }
 
@@ -310,5 +402,28 @@ GhosttyResult ghostty_render_state_row_cells_get(
 ) {
     (void)cells; (void)key;
     if (out) { *(uint8_t*)out = 0; }
+    return 0;
+}
+
+GhosttyResult ghostty_render_state_row_cells_get_multi(
+    GhosttyRowCells cells, size_t count, const int* keys,
+    void** values, size_t* out_written
+) {
+    if (!keys || !values) {
+        if (out_written) { *out_written = 0; }
+        return -2;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (!values[i]) {
+            if (out_written) { *out_written = i; }
+            return -2;
+        }
+        GhosttyResult result = ghostty_render_state_row_cells_get(cells, keys[i], values[i]);
+        if (result != 0) {
+            if (out_written) { *out_written = i; }
+            return result;
+        }
+    }
+    if (out_written) { *out_written = count; }
     return 0;
 }

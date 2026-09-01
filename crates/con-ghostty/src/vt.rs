@@ -10,21 +10,23 @@
 //! 4. `cells    = ghostty_render_state_row_cells_new(NULL_alloc)`
 //!
 //! Per-frame:
-//!   - `ghostty_render_state_update(state, terminal)` to refresh
-//!   - `ghostty_render_state_get(state, DATA_ROW_ITERATOR, &iter)` to bind iterator
-//!   - while `row_iterator_next(iter)` is true:
-//!       - `row_get(iter, DIRTY, &dirty)`, skip if false
-//!       - `row_get(iter, CELLS, &cells)` to bind cells iterator to the current row
+//!   - `ghostty_render_state_begin_update(state, terminal)` under the parser lock
+//!   - release the parser lock, then call `ghostty_render_state_end_update(state)`
+//!   - `ghostty_render_state_get_multi(...)` to read state metadata and bind the iterator
+//!   - while `row_iterator_next_dirty(iter, &row)` is true:
+//!       - `row_get(iter, CELLS, &cells)` to bind the dirty row
 //!       - while `row_cells_next(cells)` is true:
-//!           - `row_cells_get(cells, RAW|STYLE|BG|FG, &out)`
+//!           - `row_cells_get_multi(cells, RAW|STYLE|FG|BG, ...)`
+//!   - `acknowledge_snapshot(generation)` cleans damage after renderer acceptance
 //!
 //! All `_next` functions return `bool`. The `_get` family uses an enum
 //! key and writes to a typed `void*` out; key→type contract is per
 //! upstream header comments.
 //!
-//! libghostty-vt is NOT thread-safe; we serialize via a Mutex. The
-//! renderer reads a cloned `ScreenSnapshot` so the parser lock is
-//! released between feeds and frames.
+//! libghostty-vt terminal and render state access are serialized by
+//! separate mutexes. The parser lock is held only through the begin
+//! phase and terminal-owned metadata capture; render extraction and
+//! snapshot cloning proceed without blocking parser feeds.
 
 #![allow(non_camel_case_types, dead_code)]
 
@@ -74,6 +76,7 @@ pub type GhosttyAllocator = c_void;
 pub type GhosttyResult = c_int;
 
 const GHOSTTY_SUCCESS: GhosttyResult = 0;
+const GHOSTTY_INVALID_VALUE: GhosttyResult = -2;
 const GHOSTTY_OUT_OF_SPACE: GhosttyResult = -3;
 const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 const GHOSTTY_REJECTED: GhosttyResult = -7;
@@ -296,6 +299,8 @@ pub enum GhosttyRenderStateData {
     CursorViewportX = 15,
     CursorViewportY = 16,
     CursorViewportWideTail = 17,
+    Cursor = 18,
+    Colors = 19,
 }
 
 #[repr(C)]
@@ -315,6 +320,8 @@ pub enum GhosttyRenderStateRowData {
     Dirty = 1,
     Raw = 2,
     Cells = 3,
+    Selection = 4,
+    CellsRaw = 5,
 }
 
 /// `GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_*` keys.
@@ -328,6 +335,9 @@ pub enum GhosttyRenderStateRowCellsData {
     GraphemesBuf = 4,
     BgColor = 5,
     FgColor = 6,
+    Selected = 7,
+    HasStyling = 8,
+    GraphemesUtf8 = 9,
 }
 
 /// `GHOSTTY_CELL_DATA_*` keys for `ghostty_cell_get`. Integer values
@@ -410,6 +420,60 @@ pub struct GhosttyColorRgb {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyRenderStateCursor {
+    pub size: usize,
+    pub viewport_has_value: bool,
+    pub viewport_x: u16,
+    pub viewport_y: u16,
+    pub wide_tail: bool,
+    pub visible: bool,
+    pub blinking: bool,
+    pub password_input: bool,
+    pub visual_style: c_int,
+}
+
+impl Default for GhosttyRenderStateCursor {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            viewport_has_value: false,
+            viewport_x: 0,
+            viewport_y: 0,
+            wide_tail: false,
+            visible: false,
+            blinking: false,
+            password_input: false,
+            visual_style: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyRenderStateColors {
+    pub size: usize,
+    pub background: GhosttyColorRgb,
+    pub foreground: GhosttyColorRgb,
+    pub cursor: GhosttyColorRgb,
+    pub cursor_has_value: bool,
+    pub palette: [GhosttyColorRgb; 256],
+}
+
+impl Default for GhosttyRenderStateColors {
+    fn default() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            background: GhosttyColorRgb::default(),
+            foreground: GhosttyColorRgb::default(),
+            cursor: GhosttyColorRgb::default(),
+            cursor_has_value: false,
+            palette: [GhosttyColorRgb::default(); 256],
+        }
+    }
 }
 
 #[repr(C)]
@@ -893,10 +957,23 @@ unsafe extern "C" {
         state: GhosttyRenderState,
         terminal: GhosttyTerminal,
     ) -> GhosttyResult;
+    pub fn ghostty_render_state_begin_update(
+        state: GhosttyRenderState,
+        terminal: GhosttyTerminal,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_end_update(state: GhosttyRenderState) -> GhosttyResult;
+    pub fn ghostty_render_state_clean(state: GhosttyRenderState) -> GhosttyResult;
     pub fn ghostty_render_state_get(
         state: GhosttyRenderState,
         key: GhosttyRenderStateData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_get_multi(
+        state: GhosttyRenderState,
+        count: usize,
+        keys: *const GhosttyRenderStateData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_iterator_new(
@@ -907,10 +984,21 @@ unsafe extern "C" {
     /// Returns `bool` per upstream signature. Rust `bool` is 1 byte —
     /// matches MSVC/gcc/clang C99 `_Bool` layout.
     pub fn ghostty_render_state_row_iterator_next(iter: GhosttyRowIterator) -> bool;
+    pub fn ghostty_render_state_row_iterator_next_dirty(
+        iter: GhosttyRowIterator,
+        out_y: *mut u16,
+    ) -> bool;
     pub fn ghostty_render_state_row_get(
         iter: GhosttyRowIterator,
         key: GhosttyRenderStateRowData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_get_multi(
+        iter: GhosttyRowIterator,
+        count: usize,
+        keys: *const GhosttyRenderStateRowData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 
     pub fn ghostty_render_state_row_cells_new(
@@ -924,6 +1012,13 @@ unsafe extern "C" {
         key: GhosttyRenderStateRowCellsData,
         out: *mut c_void,
     ) -> GhosttyResult;
+    pub fn ghostty_render_state_row_cells_get_multi(
+        cells: GhosttyRowCells,
+        count: usize,
+        keys: *const GhosttyRenderStateRowCellsData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 
     // Cell accessor (`screen.h`). Decodes fields out of the opaque
     // `GhosttyCell` u64 we get from row_cells RAW.
@@ -931,6 +1026,13 @@ unsafe extern "C" {
         cell: GhosttyCell,
         key: GhosttyCellData,
         out: *mut c_void,
+    ) -> GhosttyResult;
+    pub fn ghostty_cell_get_multi(
+        cell: GhosttyCell,
+        count: usize,
+        keys: *const GhosttyCellData,
+        values: *mut *mut c_void,
+        out_written: *mut usize,
     ) -> GhosttyResult;
 }
 
@@ -1177,10 +1279,49 @@ pub struct ScreenSnapshot {
     pub generation: u64,
 }
 
+struct SnapshotMetadata {
+    cols: u16,
+    rows: u16,
+    kitty_placements: Arc<[KittyPlacement]>,
+    dirty_rows: Vec<u16>,
+    cursor: Cursor,
+    alternate_screen: bool,
+    scrollbar: Option<GhosttyScrollbar>,
+    generation: u64,
+}
+
+struct SnapshotEpoch {
+    fallback_cols: u16,
+    fallback_rows: u16,
+    kitty_placements: Arc<[KittyPlacement]>,
+    alternate_screen: bool,
+    scrollbar: Option<GhosttyScrollbar>,
+    generation: u64,
+    required_full_snapshot_generation: u64,
+}
+
+impl SnapshotMetadata {
+    fn snapshot(&self, cells: &[Cell]) -> ScreenSnapshot {
+        ScreenSnapshot {
+            cols: self.cols,
+            rows: self.rows,
+            cells: cells.to_vec(),
+            kitty_placements: self.kitty_placements.clone(),
+            dirty_rows: self.dirty_rows.clone(),
+            cursor: self.cursor,
+            alternate_screen: self.alternate_screen,
+            scrollbar: self.scrollbar,
+            title: None,
+            generation: self.generation,
+        }
+    }
+}
+
 // ── Safe wrapper ───────────────────────────────────────────────────────
 
 pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
+    render: Mutex<VtRenderState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1305,9 +1446,6 @@ struct VtCallbackState {
 
 struct VtInner {
     terminal: GhosttyTerminal,
-    render_state: GhosttyRenderState,
-    row_iter: GhosttyRowIterator,
-    row_cells: GhosttyRowCells,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
     kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
@@ -1321,15 +1459,58 @@ struct VtInner {
     cols: u16,
     rows: u16,
     generation: u64,
+    output_generation: u64,
+    required_full_snapshot_generation: u64,
+}
+
+struct VtRenderState {
+    render_state: GhosttyRenderState,
+    row_iter: GhosttyRowIterator,
+    row_cells: GhosttyRowCells,
+    applied_full_snapshot_generation: u64,
     force_full_snapshot: bool,
     scratch_cols: u16,
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
-    output_generation: u64,
+    snapshot_metadata: Option<SnapshotMetadata>,
+}
+
+impl VtRenderState {
+    fn ensure_render_state(&mut self) -> bool {
+        if !self.render_state.is_null() {
+            return true;
+        }
+
+        let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+        let rc = unsafe { ghostty_render_state_new(std::ptr::null(), &mut render_state) };
+        if rc != GHOSTTY_SUCCESS || render_state.is_null() {
+            log::warn!("ghostty_render_state_new retry rc={rc}");
+            return false;
+        }
+
+        self.render_state = render_state;
+        self.applied_full_snapshot_generation = u64::MAX;
+        self.force_full_snapshot = true;
+        self.last_cursor = Cursor::default();
+        self.snapshot_metadata = None;
+        true
+    }
+
+    fn invalidate_render_state(&mut self) {
+        if !self.render_state.is_null() {
+            unsafe { ghostty_render_state_free(self.render_state) };
+            self.render_state = std::ptr::null_mut();
+        }
+        self.applied_full_snapshot_generation = u64::MAX;
+        self.force_full_snapshot = true;
+        self.last_cursor = Cursor::default();
+        self.snapshot_metadata = None;
+    }
 }
 
 unsafe impl Send for VtInner {}
+unsafe impl Send for VtRenderState {}
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
@@ -1896,9 +2077,6 @@ impl VtScreen {
         Ok(Self {
             inner: Arc::new(Mutex::new(VtInner {
                 terminal,
-                render_state,
-                row_iter,
-                row_cells,
                 key_encoder,
                 key_event,
                 kitty_placement_iter,
@@ -1912,13 +2090,21 @@ impl VtScreen {
                 cols,
                 rows,
                 generation: 0,
-                force_full_snapshot: true,
+                output_generation: 0,
+                required_full_snapshot_generation: 0,
+            })),
+            render: Mutex::new(VtRenderState {
+                render_state,
+                row_iter,
+                row_cells,
+                applied_full_snapshot_generation: u64::MAX,
+                force_full_snapshot: false,
                 scratch_cols: cols,
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
-                output_generation: 0,
-            })),
+                snapshot_metadata: None,
+            }),
         })
     }
 
@@ -2035,8 +2221,8 @@ impl VtScreen {
     pub fn set_theme(&self, theme: &ThemeColors) {
         let mut inner = self.inner.lock();
         unsafe { apply_theme_to_terminal(inner.terminal, theme) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
     }
 
     /// Force the next `snapshot()` to report a new generation so the
@@ -2052,6 +2238,28 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    pub(crate) fn acknowledge_snapshot(&self, generation: u64) {
+        let mut render = self.render.lock();
+        if !render
+            .snapshot_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.generation == generation)
+        {
+            return;
+        }
+
+        // Newer terminal output remains terminal-dirty until the next begin;
+        // only a newer render snapshot makes this acknowledgment stale.
+        let rc = unsafe { ghostty_render_state_clean(render.render_state) };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_render_state_clean rc={rc} generation={generation}");
+            return;
+        }
+        if let Some(metadata) = render.snapshot_metadata.as_mut() {
+            metadata.dirty_rows.clear();
+        }
     }
 
     /// Consume one or more bells coalesced since the previous drain.
@@ -2387,260 +2595,255 @@ impl VtScreen {
         state
             .cell_height
             .store(cell_height_px.max(1), Ordering::Release);
-        let total = cols as usize * rows as usize;
-        inner.scratch.clear();
-        inner.scratch.resize(total, Cell::default());
-        inner.scratch_cols = cols;
-        inner.scratch_rows = rows;
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         Ok(())
     }
 
     pub fn snapshot(&self) -> ScreenSnapshot {
+        self.try_snapshot().unwrap_or_else(|| {
+            let inner = self.inner.lock();
+            empty_snapshot(inner.cols, inner.rows, inner.generation)
+        })
+    }
+
+    pub(crate) fn try_snapshot(&self) -> Option<ScreenSnapshot> {
         let snapshot_started = perf_trace_enabled().then(Instant::now);
-        let mut inner = self.inner.lock();
+        let mut render = self.render.lock();
+        if !render.ensure_render_state() {
+            return None;
+        }
+        let epoch = {
+            let mut inner = self.inner.lock();
+            let fallback_cols = inner.cols;
+            let fallback_rows = inner.rows;
 
-        let fallback_cols = inner.cols;
-        let fallback_rows = inner.rows;
+            if render
+                .snapshot_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.generation == inner.generation)
+            {
+                drop(inner);
+                let metadata = render
+                    .snapshot_metadata
+                    .as_ref()
+                    .expect("snapshot metadata checked above");
+                return Some(metadata.snapshot(&render.scratch));
+            }
 
-        if inner.render_state.is_null() {
-            // Render-state path disabled — return empty snapshot. The
-            // renderer still clears the pane to the background.
-            return ScreenSnapshot {
-                cols: fallback_cols,
-                rows: fallback_rows,
-                cells: Vec::new(),
-                kitty_placements: Arc::from([]),
-                dirty_rows: Vec::new(),
-                cursor: Cursor::default(),
-                alternate_screen: false,
-                scrollbar: None,
-                title: None,
-                generation: inner.generation,
+            let mut active_screen = GhosttyTerminalScreen::Primary;
+            let rc = unsafe {
+                ghostty_terminal_get(
+                    inner.terminal,
+                    GhosttyTerminalData::ActiveScreen,
+                    &mut active_screen as *mut _ as *mut c_void,
+                )
             };
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_terminal_get(ACTIVE_SCREEN) rc={rc}");
+                render.force_full_snapshot = true;
+                return None;
+            }
+
+            let kitty_placements = snapshot_kitty_placements(&mut inner);
+            let epoch = SnapshotEpoch {
+                fallback_cols,
+                fallback_rows,
+                kitty_placements,
+                alternate_screen: active_screen == GhosttyTerminalScreen::Alternate,
+                scrollbar: read_scrollbar(inner.terminal),
+                generation: inner.generation,
+                required_full_snapshot_generation: inner.required_full_snapshot_generation,
+            };
+
+            let rc =
+                unsafe { ghostty_render_state_begin_update(render.render_state, inner.terminal) };
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_render_state_begin_update rc={rc}");
+                // begin_update may consume terminal dirty state before an
+                // allocation fails. A new state forces the retry to rebuild
+                // from the terminal instead of reusing a partial update.
+                render.invalidate_render_state();
+                return None;
+            }
+            epoch
+        };
+
+        let rc = unsafe { ghostty_render_state_end_update(render.render_state) };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_render_state_end_update rc={rc}");
+            render.invalidate_render_state();
+            return None;
         }
 
-        // SAFETY: state + terminal valid for the lifetime of `inner`.
-        let rc = unsafe { ghostty_render_state_update(inner.render_state, inner.terminal) };
-        if rc != 0 {
-            log::warn!("ghostty_render_state_update rc={rc}");
-        }
-
-        // Palette defaults. Cells with no explicit SGR color report
-        // FG_COLOR / BG_COLOR as (0,0,0) — the renderer is expected to
-        // substitute the terminal's default foreground/background from
-        // the render state. Without this, the pwsh banner (and any
-        // unstyled text) renders black-on-black.
         let mut default_fg = GhosttyColorRgb {
             r: 0xCC,
             g: 0xCC,
             b: 0xCC,
         };
         let mut default_bg = GhosttyColorRgb::default();
-        // SAFETY: out params typed as GhosttyColorRgb per render.h.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::ColorForeground,
-                &mut default_fg as *mut _ as *mut c_void,
+        let mut cols = epoch.fallback_cols;
+        let mut rows = epoch.fallback_rows;
+        let mut state_dirty = GhosttyRenderStateDirty::False;
+        let mut cursor_data = GhosttyRenderStateCursor::default();
+        let render_state = render.render_state;
+        let state_keys = [
+            GhosttyRenderStateData::ColorForeground,
+            GhosttyRenderStateData::ColorBackground,
+            GhosttyRenderStateData::Cols,
+            GhosttyRenderStateData::Rows,
+            GhosttyRenderStateData::Dirty,
+            GhosttyRenderStateData::RowIterator,
+            GhosttyRenderStateData::Cursor,
+        ];
+        let mut state_values = [
+            &mut default_fg as *mut _ as *mut c_void,
+            &mut default_bg as *mut _ as *mut c_void,
+            &mut cols as *mut _ as *mut c_void,
+            &mut rows as *mut _ as *mut c_void,
+            &mut state_dirty as *mut _ as *mut c_void,
+            &mut render.row_iter as *mut _ as *mut c_void,
+            &mut cursor_data as *mut _ as *mut c_void,
+        ];
+        let mut state_written = 0_usize;
+        let rc = unsafe {
+            ghostty_render_state_get_multi(
+                render_state,
+                state_keys.len(),
+                state_keys.as_ptr(),
+                state_values.as_mut_ptr(),
+                &mut state_written,
+            )
+        };
+        if rc != GHOSTTY_SUCCESS || state_written != state_keys.len() {
+            log::warn!(
+                "ghostty_render_state_get_multi rc={rc} written={state_written}/{}",
+                state_keys.len()
             );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::ColorBackground,
-                &mut default_bg as *mut _ as *mut c_void,
-            );
+            render.force_full_snapshot = true;
+            return None;
         }
 
         // Ghostty's render-state dimensions can lag the host resize by a
-        // frame or two. Snapshot the actual render-state geometry so we
-        // don't invent blank tail rows from our requested size while the
-        // terminal catches up asynchronously.
-        let mut cols = fallback_cols;
-        let mut rows = fallback_rows;
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Cols,
-                &mut cols as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Rows,
-                &mut rows as *mut _ as *mut c_void,
-            );
-        }
+        // frame or two. Snapshot its actual geometry instead of inventing
+        // blank tail rows from the requested host size.
         cols = cols.max(1);
         rows = rows.max(1);
 
-        let mut active_screen = GhosttyTerminalScreen::Primary;
-        let active_screen_rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::ActiveScreen,
-                &mut active_screen as *mut _ as *mut c_void,
-            )
-        };
-        let alternate_screen =
-            active_screen_rc == 0 && active_screen == GhosttyTerminalScreen::Alternate;
-
-        let mut force_all_dirty = inner.force_full_snapshot;
-        let mut full_redraw = force_all_dirty;
-        let mut state_dirty = GhosttyRenderStateDirty::False;
-        // SAFETY: DIRTY out param is sized for the enum.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::Dirty,
-                &mut state_dirty as *mut _ as *mut c_void,
-            );
-        }
+        let mut full_redraw = render.force_full_snapshot
+            || render.applied_full_snapshot_generation != epoch.required_full_snapshot_generation;
         if state_dirty == GhosttyRenderStateDirty::Full {
             full_redraw = true;
         }
 
         let total = cols as usize * rows as usize;
-        if inner.scratch.len() != total || inner.scratch_cols != cols || inner.scratch_rows != rows
+        if render.scratch.len() != total
+            || render.scratch_cols != cols
+            || render.scratch_rows != rows
         {
-            inner.scratch.clear();
-            inner.scratch.resize(total, Cell::default());
-            inner.scratch_cols = cols;
-            inner.scratch_rows = rows;
-            force_all_dirty = true;
+            render.scratch.clear();
+            render.scratch.resize(total, Cell::default());
+            render.scratch_cols = cols;
+            render.scratch_rows = rows;
             full_redraw = true;
         }
 
         let mut dirty_rows: Vec<u16> = Vec::new();
-
-        // Bind the row iterator to the current state.
-        // SAFETY: state + iter valid.
-        let rc = unsafe {
-            ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::RowIterator,
-                &mut inner.row_iter as *mut _ as *mut c_void,
-            )
-        };
-        if rc != 0 {
-            log::warn!("ghostty_render_state_get(ROW_ITERATOR) rc={rc}");
-            return empty_snapshot(cols, rows, inner.generation);
-        }
-
-        let mut row_idx: u16 = 0;
-        // SAFETY: row_iter valid; `_next` returns bool.
-        while unsafe { ghostty_render_state_row_iterator_next(inner.row_iter) } {
+        let mut next_full_row = 0_u16;
+        loop {
+            let row_idx = if full_redraw {
+                if !unsafe { ghostty_render_state_row_iterator_next(render.row_iter) } {
+                    break;
+                }
+                let row = next_full_row;
+                next_full_row = next_full_row.saturating_add(1);
+                row
+            } else {
+                let mut row = 0_u16;
+                if !unsafe {
+                    ghostty_render_state_row_iterator_next_dirty(render.row_iter, &mut row)
+                } {
+                    break;
+                }
+                row
+            };
             if row_idx >= rows {
+                if !full_redraw {
+                    log::warn!(
+                        "ghostty_render_state_row_iterator_next_dirty returned row {row_idx} for {rows} rows"
+                    );
+                    render.force_full_snapshot = true;
+                    return None;
+                }
                 break;
             }
 
-            let mut dirty = GhosttyRenderStateDirty::False;
-            // SAFETY: DIRTY out param is sized for the enum.
-            unsafe {
-                let _ = ghostty_render_state_row_get(
-                    inner.row_iter,
-                    GhosttyRenderStateRowData::Dirty,
-                    &mut dirty as *mut _ as *mut c_void,
-                );
-            }
-
-            if !full_redraw && dirty == GhosttyRenderStateDirty::False {
-                row_idx += 1;
-                continue;
-            }
-            let mut row_changed = force_all_dirty;
-
-            // Bind the cells iterator to the current row.
-            // SAFETY: iter + cells valid.
             let rc = unsafe {
                 ghostty_render_state_row_get(
-                    inner.row_iter,
+                    render.row_iter,
                     GhosttyRenderStateRowData::Cells,
-                    &mut inner.row_cells as *mut _ as *mut c_void,
+                    &mut render.row_cells as *mut _ as *mut c_void,
                 )
             };
-            if rc != 0 {
-                log::warn!("row_get(CELLS) rc={rc} at row {row_idx}");
-                row_idx += 1;
-                continue;
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_render_state_row_get(CELLS) rc={rc} at row {row_idx}");
+                render.force_full_snapshot = true;
+                return None;
             }
 
             let row_start = row_idx as usize * cols as usize;
             let mut col_idx: u16 = 0;
             // SAFETY: cells valid; `_next` returns bool.
-            while unsafe { ghostty_render_state_row_cells_next(inner.row_cells) } {
+            while unsafe { ghostty_render_state_row_cells_next(render.row_cells) } {
                 if col_idx >= cols {
                     break;
                 }
-                let cell = read_cell(inner.row_cells, default_fg, default_bg, alternate_screen);
+                let Some(cell) = read_cell(
+                    render.row_cells,
+                    default_fg,
+                    default_bg,
+                    epoch.alternate_screen,
+                ) else {
+                    log::warn!("failed to read render cell at row={row_idx} col={col_idx}");
+                    render.force_full_snapshot = true;
+                    return None;
+                };
                 let idx = row_start + col_idx as usize;
-                row_changed |= inner.scratch[idx] != cell;
-                inner.scratch[idx] = cell;
+                render.scratch[idx] = cell;
                 col_idx += 1;
             }
-            // Clear trailing cells in the row.
-            for c in col_idx..cols {
-                let idx = row_start + c as usize;
-                row_changed |= inner.scratch[idx] != Cell::default();
-                inner.scratch[idx] = Cell::default();
+            if col_idx != cols {
+                log::warn!(
+                    "vt snapshot row ended early: row={row_idx} cells={col_idx} expected={cols}"
+                );
+                render.force_full_snapshot = true;
+                return None;
             }
 
-            if row_changed {
-                dirty_rows.push(row_idx);
-            }
-
-            row_idx += 1;
+            dirty_rows.push(row_idx);
         }
 
-        if full_redraw && row_idx < rows {
+        if full_redraw && next_full_row != rows {
             log::warn!(
-                "vt snapshot full redraw ended early: iter_rows={row_idx} expected_rows={rows} cols={cols}"
+                "vt snapshot full redraw ended early: iter_rows={next_full_row} expected_rows={rows} cols={cols}"
             );
-            for trailing_row in row_idx..rows {
-                let row_start = trailing_row as usize * cols as usize;
-                let row_end = row_start + cols as usize;
-                let mut row_changed = force_all_dirty;
-                for cell in &mut inner.scratch[row_start..row_end] {
-                    row_changed |= *cell != Cell::default();
-                    *cell = Cell::default();
-                }
-                if row_changed {
-                    dirty_rows.push(trailing_row);
-                }
+            render.force_full_snapshot = true;
+            return None;
+        }
+
+        render.force_full_snapshot = false;
+        render.applied_full_snapshot_generation = epoch.required_full_snapshot_generation;
+
+        let cursor = if cursor_data.viewport_has_value {
+            Cursor {
+                col: cursor_data.viewport_x,
+                row: cursor_data.viewport_y,
+                visible: cursor_data.visible,
             }
-        }
-
-        inner.force_full_snapshot = false;
-
-        // Cursor read from the render state keys (not the terminal, to
-        // stay consistent with the render snapshot).
-        let mut visible: bool = false;
-        let mut col_u16: u16 = 0;
-        let mut row_u16: u16 = 0;
-        // SAFETY: out params sized per upstream render.h.
-        unsafe {
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorViewportX,
-                &mut col_u16 as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorViewportY,
-                &mut row_u16 as *mut _ as *mut c_void,
-            );
-            let _ = ghostty_render_state_get(
-                inner.render_state,
-                GhosttyRenderStateData::CursorVisible,
-                &mut visible as *mut _ as *mut c_void,
-            );
-        }
-
-        let cursor = Cursor {
-            col: col_u16,
-            row: row_u16,
-            visible,
+        } else {
+            Cursor::default()
         };
-        let previous_cursor = inner.last_cursor;
+        let previous_cursor = render.last_cursor;
         if previous_cursor != cursor {
             if previous_cursor.visible && previous_cursor.row < rows {
                 push_unique_row(&mut dirty_rows, previous_cursor.row);
@@ -2648,27 +2851,25 @@ impl VtScreen {
             if cursor.visible && cursor.row < rows {
                 push_unique_row(&mut dirty_rows, cursor.row);
             }
-            inner.last_cursor = cursor;
+            render.last_cursor = cursor;
         }
         dirty_rows.sort_unstable();
 
-        let kitty_placements = snapshot_kitty_placements(&mut inner);
-        let clone_started = perf_trace_enabled().then(Instant::now);
-        let cells = inner.scratch.clone();
-        let clone_elapsed_ms =
-            clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
-        let snapshot = ScreenSnapshot {
+        let metadata = SnapshotMetadata {
             cols,
             rows,
-            cells,
-            kitty_placements,
+            kitty_placements: epoch.kitty_placements,
             dirty_rows,
             cursor,
-            alternate_screen,
-            scrollbar: read_scrollbar(inner.terminal),
-            title: None,
-            generation: inner.generation,
+            alternate_screen: epoch.alternate_screen,
+            scrollbar: epoch.scrollbar,
+            generation: epoch.generation,
         };
+        let clone_started = perf_trace_enabled().then(Instant::now);
+        let snapshot = metadata.snapshot(&render.scratch);
+        let clone_elapsed_ms =
+            clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
+        render.snapshot_metadata = Some(metadata);
 
         if let Some(started) = snapshot_started {
             let total_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -2699,7 +2900,7 @@ impl VtScreen {
             }
         }
 
-        snapshot
+        Some(snapshot)
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -2821,8 +3022,8 @@ impl VtScreen {
             value: GhosttyTerminalScrollViewportValue { delta: delta_rows },
         };
         unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         true
     }
 
@@ -2839,8 +3040,8 @@ impl VtScreen {
             value: GhosttyTerminalScrollViewportValue { delta: 0 },
         };
         unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         true
     }
 
@@ -3787,74 +3988,85 @@ fn read_cell(
     default_fg: GhosttyColorRgb,
     default_bg: GhosttyColorRgb,
     alternate_screen: bool,
-) -> Cell {
+) -> Option<Cell> {
     // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
     // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
     // per `screen.h`. Previous code bitshifted RAW directly and produced
     // nonsense codepoints (U+015C etc. for the "PowerShell" banner).
     let mut raw: GhosttyCell = 0;
     let mut style = GhosttyStyle::new();
-    // BG_COLOR / FG_COLOR write a `GhosttyColorRgb` (3 bytes: R, G, B)
-    // to the out pointer — NOT a packed u32.
-    let mut bg = GhosttyColorRgb::default();
-    let mut fg = GhosttyColorRgb::default();
-
-    // SAFETY: out params typed per upstream contract (RAW=GhosttyCell u64,
-    // STYLE=GhosttyStyle by value with `size` set to sizeof, BG/FG=GhosttyColorRgb).
-    unsafe {
-        let _ = ghostty_render_state_row_cells_get(
+    let mut fg = default_fg;
+    let mut bg = default_bg;
+    let keys = [
+        GhosttyRenderStateRowCellsData::Raw,
+        GhosttyRenderStateRowCellsData::Style,
+        GhosttyRenderStateRowCellsData::FgColor,
+        GhosttyRenderStateRowCellsData::BgColor,
+    ];
+    let mut values = [
+        &mut raw as *mut _ as *mut c_void,
+        &mut style as *mut _ as *mut c_void,
+        &mut fg as *mut _ as *mut c_void,
+        &mut bg as *mut _ as *mut c_void,
+    ];
+    let mut written = 0_usize;
+    let rc = unsafe {
+        ghostty_render_state_row_cells_get_multi(
             cells,
-            GhosttyRenderStateRowCellsData::Raw,
-            &mut raw as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::Style,
-            &mut style as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::BgColor,
-            &mut bg as *mut _ as *mut c_void,
-        );
-        let _ = ghostty_render_state_row_cells_get(
-            cells,
-            GhosttyRenderStateRowCellsData::FgColor,
-            &mut fg as *mut _ as *mut c_void,
-        );
-    }
+            keys.len(),
+            keys.as_ptr(),
+            values.as_mut_ptr(),
+            &mut written,
+        )
+    };
+    let bg_was_default = match (rc, written) {
+        (GHOSTTY_SUCCESS, 4) => false,
+        (GHOSTTY_INVALID_VALUE, 2) => {
+            let rc = unsafe {
+                ghostty_render_state_row_cells_get(
+                    cells,
+                    GhosttyRenderStateRowCellsData::BgColor,
+                    &mut bg as *mut _ as *mut c_void,
+                )
+            };
+            match rc {
+                GHOSTTY_SUCCESS => false,
+                GHOSTTY_INVALID_VALUE => true,
+                _ => return None,
+            }
+        }
+        (GHOSTTY_INVALID_VALUE, 3) => true,
+        _ => return None,
+    };
 
     // Gate codepoint decode on HAS_TEXT — blank cells carry a bogus
     // grapheme-tag codepoint we'd otherwise rasterize.
     let mut has_text: bool = false;
     let mut codepoint: u32 = 0;
-    // SAFETY: `has_text` is a C `_Bool` (1 byte); `codepoint` is uint32.
-    unsafe {
-        let _ = ghostty_cell_get(
+    let cell_keys = [GhosttyCellData::HasText, GhosttyCellData::Codepoint];
+    let mut cell_values = [
+        &mut has_text as *mut _ as *mut c_void,
+        &mut codepoint as *mut _ as *mut c_void,
+    ];
+    let mut cell_written = 0_usize;
+    let rc = unsafe {
+        ghostty_cell_get_multi(
             raw,
-            GhosttyCellData::HasText,
-            &mut has_text as *mut _ as *mut c_void,
-        );
-        if has_text {
-            let _ = ghostty_cell_get(
-                raw,
-                GhosttyCellData::Codepoint,
-                &mut codepoint as *mut _ as *mut c_void,
-            );
-        }
+            cell_keys.len(),
+            cell_keys.as_ptr(),
+            cell_values.as_mut_ptr(),
+            &mut cell_written,
+        )
+    };
+    if rc != GHOSTTY_SUCCESS || cell_written != cell_keys.len() {
+        return None;
+    }
+    if !has_text {
+        codepoint = 0;
     }
 
-    // Substitute the palette's default fg/bg when the cell's style
-    // reports no SGR override (tag == GHOSTTY_STYLE_COLOR_NONE). The
-    // row_cells FG_COLOR / BG_COLOR accessors return (0,0,0) for
-    // unstyled cells, so without this substitution default-bg cells
-    // would paint pure black. Key off the style tag, not the RGB value:
-    // explicit black may still resolve to the same RGB as the default.
-    const STYLE_COLOR_TAG_NONE: u32 = 0;
     const STYLE_COLOR_TAG_PALETTE: u32 = 1;
     const PALETTE_BLACK: u8 = 0;
-    let fg_was_default = style.fg_color.tag == STYLE_COLOR_TAG_NONE;
-    let bg_was_default = style.bg_color.tag == STYLE_COLOR_TAG_NONE;
     // Curses-style full-screen apps often paint their canvas with SGR
     // 40 instead of default background. For themes whose ANSI black is
     // a raised surface (Catppuccin, Nord, Everforest), that makes htop
@@ -3865,7 +4077,6 @@ fn read_cell(
     let bg_is_alt_canvas_black = alternate_screen
         && style.bg_color.tag == STYLE_COLOR_TAG_PALETTE
         && style.bg_color.value as u8 == PALETTE_BLACK;
-    let fg = if fg_was_default { default_fg } else { fg };
     let bg = if bg_was_default || bg_is_alt_canvas_black {
         default_bg
     } else {
@@ -3906,19 +4117,20 @@ fn read_cell(
         attrs |= ATTR_INVERSE;
     }
 
-    Cell {
+    Some(Cell {
         codepoint,
         fg: pack(fg, 0xFF),
         bg: pack(bg, bg_alpha),
         attrs,
         _pad: [0; 3],
-    }
+    })
 }
 
 impl Drop for VtScreen {
     fn drop(&mut self) {
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
+            let render = self.render.get_mut();
             // Free in reverse-creation order: key event/encoder, render
             // helpers, then terminal.
             // SAFETY: unique owner via Arc::get_mut.
@@ -3936,17 +4148,17 @@ impl Drop for VtScreen {
                 };
                 inner.kitty_placement_iter = std::ptr::null_mut();
             }
-            if !inner.row_cells.is_null() {
-                unsafe { ghostty_render_state_row_cells_free(inner.row_cells) };
-                inner.row_cells = std::ptr::null_mut();
+            if !render.row_cells.is_null() {
+                unsafe { ghostty_render_state_row_cells_free(render.row_cells) };
+                render.row_cells = std::ptr::null_mut();
             }
-            if !inner.row_iter.is_null() {
-                unsafe { ghostty_render_state_row_iterator_free(inner.row_iter) };
-                inner.row_iter = std::ptr::null_mut();
+            if !render.row_iter.is_null() {
+                unsafe { ghostty_render_state_row_iterator_free(render.row_iter) };
+                render.row_iter = std::ptr::null_mut();
             }
-            if !inner.render_state.is_null() {
-                unsafe { ghostty_render_state_free(inner.render_state) };
-                inner.render_state = std::ptr::null_mut();
+            if !render.render_state.is_null() {
+                unsafe { ghostty_render_state_free(render.render_state) };
+                render.render_state = std::ptr::null_mut();
             }
             if !inner.terminal.is_null() {
                 unsafe { ghostty_terminal_free(inner.terminal) };
@@ -4123,6 +4335,16 @@ mod tests {
                 std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
                 std::mem::align_of::<GhosttyKittyGraphicsPlacementRenderInfo>(),
             ),
+            (
+                "GhosttyRenderStateCursor",
+                std::mem::size_of::<GhosttyRenderStateCursor>(),
+                std::mem::align_of::<GhosttyRenderStateCursor>(),
+            ),
+            (
+                "GhosttyRenderStateColors",
+                std::mem::size_of::<GhosttyRenderStateColors>(),
+                std::mem::align_of::<GhosttyRenderStateColors>(),
+            ),
         ] {
             assert_eq!(
                 types[name]["size"].as_u64(),
@@ -4133,6 +4355,78 @@ mod tests {
                 types[name]["align"].as_u64(),
                 Some(align as u64),
                 "{name} alignment"
+            );
+        }
+        let cursor_fields = &types["GhosttyRenderStateCursor"]["fields"];
+        for (name, offset) in [
+            ("size", std::mem::offset_of!(GhosttyRenderStateCursor, size)),
+            (
+                "viewport_has_value",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_has_value),
+            ),
+            (
+                "viewport_x",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_x),
+            ),
+            (
+                "viewport_y",
+                std::mem::offset_of!(GhosttyRenderStateCursor, viewport_y),
+            ),
+            (
+                "wide_tail",
+                std::mem::offset_of!(GhosttyRenderStateCursor, wide_tail),
+            ),
+            (
+                "visible",
+                std::mem::offset_of!(GhosttyRenderStateCursor, visible),
+            ),
+            (
+                "blinking",
+                std::mem::offset_of!(GhosttyRenderStateCursor, blinking),
+            ),
+            (
+                "password_input",
+                std::mem::offset_of!(GhosttyRenderStateCursor, password_input),
+            ),
+            (
+                "visual_style",
+                std::mem::offset_of!(GhosttyRenderStateCursor, visual_style),
+            ),
+        ] {
+            assert_eq!(
+                cursor_fields[name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyRenderStateCursor::{name} offset"
+            );
+        }
+        let colors_fields = &types["GhosttyRenderStateColors"]["fields"];
+        for (name, offset) in [
+            ("size", std::mem::offset_of!(GhosttyRenderStateColors, size)),
+            (
+                "background",
+                std::mem::offset_of!(GhosttyRenderStateColors, background),
+            ),
+            (
+                "foreground",
+                std::mem::offset_of!(GhosttyRenderStateColors, foreground),
+            ),
+            (
+                "cursor",
+                std::mem::offset_of!(GhosttyRenderStateColors, cursor),
+            ),
+            (
+                "cursor_has_value",
+                std::mem::offset_of!(GhosttyRenderStateColors, cursor_has_value),
+            ),
+            (
+                "palette",
+                std::mem::offset_of!(GhosttyRenderStateColors, palette),
+            ),
+        ] {
+            assert_eq!(
+                colors_fields[name]["offset"].as_u64(),
+                Some(offset as u64),
+                "GhosttyRenderStateColors::{name} offset"
             );
         }
         for (name, value) in [
@@ -4188,9 +4482,47 @@ mod tests {
             Some(GHOSTTY_IO_ERROR as i64)
         );
         assert_eq!(
+            types["GhosttyResult"]["values"]["INVALID_VALUE"].as_i64(),
+            Some(GHOSTTY_INVALID_VALUE as i64)
+        );
+        assert_eq!(
             types["GhosttyResult"]["values"]["REJECTED"].as_i64(),
             Some(GHOSTTY_REJECTED as i64)
         );
+        for (name, value) in [
+            ("CURSOR", GhosttyRenderStateData::Cursor),
+            ("COLORS", GhosttyRenderStateData::Colors),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SELECTION", GhosttyRenderStateRowData::Selection),
+            ("CELLS_RAW", GhosttyRenderStateRowData::CellsRaw),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateRowData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateRowData::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SELECTED", GhosttyRenderStateRowCellsData::Selected),
+            ("HAS_STYLING", GhosttyRenderStateRowCellsData::HasStyling),
+            (
+                "GRAPHEMES_UTF8",
+                GhosttyRenderStateRowCellsData::GraphemesUtf8,
+            ),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateRowCellsData"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyRenderStateRowCellsData::{name}"
+            );
+        }
         assert_eq!(
             types["GhosttyTerminalData"]["values"]["MODE"].as_i64(),
             Some(GhosttyTerminalData::Mode as i64)
@@ -4365,6 +4697,50 @@ mod tests {
         ] {
             assert_eq!(keys[name].as_i64(), Some(key as i64), "GhosttyKey::{key:?}");
         }
+    }
+
+    #[test]
+    fn snapshot_damage_tracks_render_acknowledgment() {
+        let screen = VtScreen::new(4, 3, None).expect("create vt screen");
+
+        screen.feed(b"\x1b[?25l");
+        let baseline = screen.snapshot();
+        screen.acknowledge_snapshot(baseline.generation);
+
+        screen.feed(b"A\x1b[3;1H");
+        let first = screen.snapshot();
+        assert!(first.dirty_rows.contains(&0));
+        assert_eq!(screen.snapshot().dirty_rows, first.dirty_rows);
+
+        screen.feed(b"B");
+        screen.acknowledge_snapshot(first.generation);
+        let second = screen.snapshot();
+        assert_eq!(second.dirty_rows, vec![2]);
+
+        screen.feed(b"\x1b[2;1HC");
+        let combined = screen.snapshot();
+        assert_eq!(combined.dirty_rows, vec![1, 2]);
+        screen.acknowledge_snapshot(second.generation);
+        assert_eq!(screen.snapshot().dirty_rows, combined.dirty_rows);
+
+        screen.acknowledge_snapshot(combined.generation);
+        assert!(screen.snapshot().dirty_rows.is_empty());
+    }
+
+    #[test]
+    fn discarded_render_state_rebuilds_from_clean_terminal() {
+        let screen = VtScreen::new(4, 3, None).expect("create vt screen");
+
+        screen.feed(b"A");
+        let first = screen.try_snapshot().expect("extract initial snapshot");
+        assert_eq!(first.cells[0].codepoint, u32::from('A'));
+
+        screen.render.lock().invalidate_render_state();
+
+        let recovered = screen.try_snapshot().expect("rebuild render state");
+        assert_eq!(recovered.generation, first.generation);
+        assert_eq!(recovered.cells[0].codepoint, u32::from('A'));
+        assert_eq!(recovered.cells.len(), 12);
     }
 
     #[test]
