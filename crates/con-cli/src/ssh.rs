@@ -271,10 +271,12 @@ fn ssh_connection_args(args: &[OsString]) -> Vec<OsString> {
             break;
         }
         connection.push(arg.clone());
-        if value.len() == 2 && ssh_option_takes_value(value.as_bytes()[1] as char) {
-            if let Some(value) = args.get(index + 1) {
-                connection.push(value.clone());
-                index += 1;
+        if let Some(consumes_next) = short_option_value_form(&value) {
+            if consumes_next {
+                if let Some(value) = args.get(index + 1) {
+                    connection.push(value.clone());
+                    index += 1;
+                }
             }
         }
         index += 1;
@@ -282,10 +284,31 @@ fn ssh_connection_args(args: &[OsString]) -> Vec<OsString> {
     connection
 }
 
+/// Return whether a short-option token needs the following argv item.
+///
+/// OpenSSH accepts both clustered flags (`-vT`) and an option argument
+/// attached to the last flag (`-vp2222`, `-oProxyJump=bastion`). Once an
+/// option requiring a value is encountered, the remainder of the token is
+/// that value; otherwise the next argv item is its value.
+fn short_option_value_form(arg: &str) -> Option<bool> {
+    let bytes = arg.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'-' || bytes[1] == b'-' {
+        return None;
+    }
+
+    for (offset, byte) in bytes[1..].iter().enumerate() {
+        if ssh_option_takes_value(*byte as char) {
+            return Some(offset + 2 == bytes.len());
+        }
+    }
+    Some(false)
+}
+
 fn ssh_option_takes_value(option: char) -> bool {
     matches!(
         option,
-        'b' | 'c'
+        'B' | 'b'
+            | 'c'
             | 'D'
             | 'E'
             | 'e'
@@ -405,6 +428,34 @@ mod tests {
         assert_eq!(
             parsed,
             args(&["-p", "2222", "-o", "BatchMode=yes", "user@example.com"])
+        );
+    }
+
+    #[test]
+    fn setup_connection_handles_clustered_and_attached_short_options() {
+        assert_eq!(
+            ssh_connection_args(&args(&["-vp2222", "user@example.com", "echo"])),
+            args(&["-vp2222", "user@example.com"])
+        );
+        assert_eq!(
+            ssh_connection_args(&args(&[
+                "-B",
+                "10.0.0.2",
+                "-oProxyJump=bastion",
+                "user@example.com",
+                "echo",
+            ])),
+            args(&["-B", "10.0.0.2", "-oProxyJump=bastion", "user@example.com"])
+        );
+    }
+
+    #[test]
+    fn setup_connection_handles_clustered_option_with_following_value() {
+        assert_eq!(
+            ssh_connection_args(&args(
+                &["-vo", "BatchMode=yes", "user@example.com", "echo",]
+            )),
+            args(&["-vo", "BatchMode=yes", "user@example.com"])
         );
     }
 
