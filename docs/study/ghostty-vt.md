@@ -84,6 +84,8 @@ What the C API gives us well:
 - surface config inputs such as `font_size` and `working_directory`
 - live app and surface config updates via `ghostty_app_update_config` / `ghostty_surface_update_config`
 - native binding actions such as `clear_screen`
+- local foreground process-group ID via `ghostty_surface_foreground_pid`
+- local PTY slave name via `ghostty_surface_tty_name`
 - `SET_TITLE`
 - `PWD`
 - `COMMAND_FINISHED`
@@ -103,7 +105,6 @@ What Ghostty clearly tracks internally in Zig:
 What the embedded API does **not** currently give us as a stable product contract:
 
 - the exact foreground program identity
-- PTY foreground process group
 - a nested scope stack such as `ssh -> tmux -> agent CLI`
 - a direct export of Ghostty's richer semantic prompt model for host applications
 
@@ -111,8 +112,10 @@ This matters for con:
 
 - Ghostty should be treated as a strong source of terminal facts
 - con still needs its own pane runtime observer
-- if con needs process-group identity, the durable move is to upstream a libghostty API for it
+- the foreground process-group ID must not be presented as an exact process identity
 - we should not design external-agent or tmux awareness around assumptions that Ghostty will directly tell us the whole runtime state
+
+These process and TTY functions belong to the full embedded surface API used on macOS. `libghostty-vt` does not own a PTY, so Windows and Linux must obtain equivalent platform facts from ConPTY or the Unix PTY owner when available.
 
 One more important limit: Ghostty's OSC 7 handling validates host information against the local system when reporting `PWD`. That means `PWD` is not a durable embedded signal for remote host identity in the way a naive reader might expect.
 

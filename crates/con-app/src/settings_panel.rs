@@ -3261,6 +3261,25 @@ impl SettingsPanel {
                     theme,
                 ))),
         )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Security", &theme))
+                .child(card(theme, card_opacity).child(toggle_row(
+                    "Clipboard Writes",
+                    "Allow terminal programs to copy plain text to the system clipboard.",
+                    Switch::new("clipboard-write-toggle")
+                        .checked(self.config.terminal.clipboard_write)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.config.terminal.clipboard_write = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))),
+        )
         // Skills paths
         .child(
             div()

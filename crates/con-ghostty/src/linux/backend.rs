@@ -11,6 +11,10 @@ use crate::stub::{
     GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{ScreenSnapshot, VtKeyEvent, VtKeyOutcome};
+use crate::{
+    ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
+    desktop_notification_policy,
+};
 
 #[derive(Debug, Clone)]
 pub struct LinuxBackendConfig {
@@ -31,6 +35,7 @@ pub struct LinuxBackendConfig {
     /// itself — the `WindowBackgroundAppearance::Blurred` toggle is
     /// applied at the GPUI window level in `con-app/main.rs`.
     pub background_blur: bool,
+    pub clipboard_write: bool,
 }
 
 impl Default for LinuxBackendConfig {
@@ -42,6 +47,7 @@ impl Default for LinuxBackendConfig {
             colors: None,
             background_opacity: 1.0,
             background_blur: false,
+            clipboard_write: false,
         }
     }
 }
@@ -51,6 +57,8 @@ impl Default for LinuxBackendConfig {
 pub struct LinuxGhosttyApp {
     config: Mutex<LinuxBackendConfig>,
     wake_generation: Arc<AtomicU64>,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
 impl LinuxGhosttyApp {
@@ -67,6 +75,7 @@ impl LinuxGhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        clipboard_write: bool,
     ) -> Result<Self, String> {
         Ok(Self {
             config: Mutex::new(LinuxBackendConfig {
@@ -76,8 +85,11 @@ impl LinuxGhosttyApp {
                 colors: colors.cloned(),
                 background_opacity: clamp_opacity(background_opacity.unwrap_or(1.0)),
                 background_blur: background_blur.unwrap_or(false),
+                clipboard_write,
             }),
             wake_generation: Arc::new(AtomicU64::new(1)),
+            clipboard_write_policy: clipboard_write_policy(clipboard_write),
+            desktop_notification_policy: desktop_notification_policy(),
         })
     }
 
@@ -131,6 +143,17 @@ impl LinuxGhosttyApp {
 
     pub fn set_color_scheme(&self, _dark: bool) {}
 
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.clipboard_write_policy.set_enabled(false);
+        }
+        self.config.lock().clipboard_write = enabled;
+        if enabled {
+            self.clipboard_write_policy.set_enabled(true);
+        }
+        Ok(())
+    }
+
     pub fn backend_config(&self) -> LinuxBackendConfig {
         self.config.lock().clone()
     }
@@ -142,6 +165,9 @@ impl LinuxGhosttyApp {
             program: config.shell_program,
             wake_generation: Some(self.wake_generation.clone()),
             theme: config.colors,
+            clipboard_write: config.clipboard_write,
+            clipboard_write_policy: self.clipboard_write_policy.clone(),
+            desktop_notification_policy: self.desktop_notification_policy.clone(),
             ..LinuxPtyOptions::default()
         }
     }
@@ -194,6 +220,9 @@ pub struct LinuxGhosttyTerminal {
 }
 
 impl LinuxGhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -439,11 +468,54 @@ impl LinuxGhosttyTerminal {
         self.inner.lock().as_ref().and_then(LinuxPtySession::title)
     }
 
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::take_bell)
+    }
+
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::progress)
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_clipboard_write)
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::take_desktop_notification)
+    }
+
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()
             .as_ref()
             .and_then(LinuxPtySession::current_dir)
+    }
+
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+
+    pub fn tty_name(&self) -> Option<String> {
+        None
     }
 
     pub fn is_alive(&self) -> bool {

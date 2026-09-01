@@ -16,11 +16,12 @@
 
 use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
+use con_ghostty::TerminalProgress;
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
     Render, SharedString, Size, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div, point, prelude::*, px, svg,
+    div, point, prelude::*, px, relative, svg,
 };
 use gpui_component::{
     ActiveTheme, ElementExt, InteractiveElementExt, Sizable,
@@ -71,6 +72,7 @@ pub struct SessionEntry {
     pub subtitle: Option<String>,
     pub is_ssh: bool,
     pub needs_attention: bool,
+    pub progress: Option<TerminalProgress>,
     pub icon: &'static str,
     pub has_user_label: bool,
     /// How many panes the tab contains (split count). Surfaced in
@@ -1091,6 +1093,9 @@ impl SessionSidebar {
                         .bg(theme.primary),
                 );
             }
+            if let Some(progress) = session.progress {
+                pill = pill.child(tab_progress_indicator(theme, progress, is_active, 4.0));
+            }
             if is_active {
                 let dot_color = if let Some(color) = session.color {
                     crate::tab_colors::tab_accent_color_hsla(color, cx)
@@ -1441,6 +1446,7 @@ impl SessionSidebar {
                 subtitle: self.sessions[i].subtitle.clone(),
                 is_ssh: self.sessions[i].is_ssh,
                 needs_attention: self.sessions[i].needs_attention,
+                progress: self.sessions[i].progress,
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
                 pane_count: self.sessions[i].pane_count,
@@ -1682,7 +1688,7 @@ impl SessionSidebar {
             );
         }
 
-        let row = div()
+        let mut row = div()
             .id(SharedString::from(format!("panel-tab-{i}")))
             .group(row_group.clone())
             .relative()
@@ -1813,6 +1819,9 @@ impl SessionSidebar {
                     .child(rename_btn)
                     .child(close_btn),
             );
+        if let Some(progress) = session.progress {
+            row = row.child(tab_progress_indicator(theme, progress, is_active, 8.0));
+        }
         row.into_any_element()
     }
 }
@@ -1929,6 +1938,38 @@ fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
         bar.top(px(-2.0))
     } else {
         bar.bottom(px(-2.0))
+    }
+}
+
+fn tab_progress_indicator(
+    theme: &gpui_component::Theme,
+    progress: TerminalProgress,
+    is_active: bool,
+    inset: f32,
+) -> Div {
+    let (color, percent) = match progress {
+        TerminalProgress::Running(percent) => (theme.progress_bar, percent),
+        TerminalProgress::Error(percent) => (theme.danger, percent),
+        TerminalProgress::Indeterminate => (theme.progress_bar, None),
+        TerminalProgress::Paused(percent) => (theme.warning, percent),
+    };
+    let indicator = div()
+        .absolute()
+        .left(px(inset))
+        .right(px(inset))
+        .bottom(px(1.0))
+        .h(px(2.0));
+    if let Some(percent) = percent {
+        indicator
+            .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(f32::from(percent) / 100.0))
+                    .bg(color.opacity(if is_active { 0.82 } else { 0.58 })),
+            )
+    } else {
+        indicator.bg(color.opacity(if is_active { 0.62 } else { 0.42 }))
     }
 }
 

@@ -81,6 +81,7 @@ impl ConWorkspace {
             Some(&background_image_position),
             Some(&background_image_fit),
             Some(background_image_repeat),
+            config.terminal.clipboard_write,
         )
         .map(std::sync::Arc::new)
         .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
@@ -268,6 +269,7 @@ impl ConWorkspace {
                         subtitle: presentation.subtitle,
                         is_ssh: presentation.is_ssh,
                         needs_attention: false,
+                        progress: None,
                         icon: presentation.icon,
                         has_user_label: tab.user_label.is_some(),
                         pane_count,
@@ -908,6 +910,9 @@ impl ConWorkspace {
         });
         editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         cx.notify();
     }
 

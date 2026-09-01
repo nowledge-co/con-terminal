@@ -86,6 +86,13 @@ ASSERT_ACTION(GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW, 68);
 
 _Static_assert(sizeof(ghostty_action_u) == 24, "ghostty_action_u changed layout");
 _Static_assert(sizeof(ghostty_action_s) == 32, "ghostty_action_s changed layout");
+_Static_assert(sizeof(ghostty_string_s) == 24, "ghostty_string_s changed layout");
+_Static_assert(offsetof(ghostty_string_s, ptr) == 0,
+               "ghostty string pointer changed offset");
+_Static_assert(offsetof(ghostty_string_s, len) == 8,
+               "ghostty string length changed offset");
+_Static_assert(offsetof(ghostty_string_s, sentinel) == 16,
+               "ghostty string sentinel changed offset");
 _Static_assert(sizeof(ghostty_surface_message_childexited_s) == 16,
                "ghostty child-exited payload changed layout");
 _Static_assert(offsetof(ghostty_surface_message_childexited_s, timetime_ms) == 8,

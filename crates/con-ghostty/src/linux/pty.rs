@@ -18,6 +18,7 @@ use crate::vt::{
     PtyWriteClass, ScreenSnapshot, ThemeColors, VtKeyEvent, VtKeyOutcome, VtPasteResult,
     VtPasteSource, VtScreen,
 };
+use crate::{ClipboardWritePolicy, DesktopNotificationPolicy};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
@@ -88,6 +89,9 @@ pub struct LinuxPtyOptions {
     pub wake_generation: Option<Arc<AtomicU64>>,
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
+    pub clipboard_write: bool,
+    pub(crate) clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    pub(crate) desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
 impl Default for LinuxPtyOptions {
@@ -109,6 +113,9 @@ impl Default for LinuxPtyOptions {
             wake_generation: None,
             wake_callback: None,
             theme: None,
+            clipboard_write: false,
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(true)),
+            desktop_notification_policy: Arc::new(DesktopNotificationPolicy::default()),
         }
     }
 }
@@ -504,7 +511,30 @@ impl LinuxPtySession {
     }
 
     pub fn title(&self) -> Option<String> {
-        self.title.clone()
+        self.shared
+            .screen
+            .reported_title()
+            .unwrap_or_else(|| self.title.clone())
+    }
+
+    pub fn take_bell(&self) -> bool {
+        self.shared.screen.take_bell()
+    }
+
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.shared.screen.progress()
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.shared.screen.set_clipboard_write_enabled(enabled)
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.shared.screen.take_clipboard_write()
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.shared.screen.take_desktop_notification()
     }
 
     pub fn current_dir(&self) -> Option<String> {
@@ -723,6 +753,11 @@ fn spawn_local(
         )
         .context("failed to create linux vt screen")?,
     );
+    screen.set_clipboard_write_policy(options.clipboard_write_policy.clone());
+    screen.set_desktop_notification_policy(options.desktop_notification_policy.clone());
+    screen
+        .set_clipboard_write_enabled(options.clipboard_write)
+        .map_err(anyhow::Error::msg)?;
     if let Some(output) = options
         .initial_output
         .as_deref()
@@ -1043,6 +1078,15 @@ fn spawn_host_bridge(
         )
         .context("failed to create linux vt screen")?,
     );
+    screen.set_clipboard_write_policy(options.clipboard_write_policy.clone());
+    screen.set_desktop_notification_policy(options.desktop_notification_policy.clone());
+    screen
+        .set_clipboard_write_enabled(options.clipboard_write)
+        .map_err(|message| {
+            stop_host_bridge_child(&mut child);
+            let _ = std::fs::remove_file(&socket_path);
+            anyhow::Error::msg(message)
+        })?;
 
     if let Some(output) = options
         .initial_output

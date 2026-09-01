@@ -63,11 +63,14 @@ use crate::sidebar::{
 };
 use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
+use con_ghostty::TerminalProgress;
 use con_terminal::TerminalTheme;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use crate::ghostty_view::GhosttyDesktopNotification;
 use crate::ghostty_view::{
-    GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested,
-    GhosttyTitleChanged, GhosttyView,
+    GhosttyBell, GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited,
+    GhosttyProgressChanged, GhosttySplitRequested, GhosttyTitleChanged, GhosttyView,
 };
 use crate::{
     AddWorkspaceLayoutTabs, AskAi, ClearRestoredTerminalHistory, ClearTerminal, ClosePane,

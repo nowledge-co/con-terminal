@@ -42,6 +42,7 @@ pub struct GhosttyConfigPatch {
     pub background_image_position: Option<String>,
     pub background_image_fit: Option<String>,
     pub background_image_repeat: Option<bool>,
+    pub clipboard_write: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,7 @@ impl GhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        _clipboard_write_enabled: bool,
     ) -> Result<Self, String> {
         Ok(Self { _sealed: () })
     }
@@ -158,6 +160,10 @@ impl GhosttyApp {
     }
 
     pub fn set_color_scheme(&self, _dark: bool) {}
+
+    pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // SAFETY: the stub has no interior state, so it is trivially Send+Sync.
@@ -172,6 +178,9 @@ pub struct GhosttyTerminal {
 }
 
 impl GhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn draw(&self) {}
     pub fn refresh(&self) {}
     pub fn set_size(&self, _w: u32, _h: u32) {}
@@ -189,6 +198,9 @@ impl GhosttyTerminal {
     pub fn set_focus(&self, _focused: bool) {}
     pub fn set_occlusion(&self, _occluded: bool) {}
     pub fn set_color_scheme(&self, _dark: bool) {}
+    pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
     pub fn perform_binding_action(&self, _action: &str) -> Result<bool, String> {
         Ok(false)
     }
@@ -231,6 +243,15 @@ impl GhosttyTerminal {
         None
     }
     pub fn current_dir(&self) -> Option<String> {
+        None
+    }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
+        None
+    }
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
         None
     }
     pub fn is_alive(&self) -> bool {

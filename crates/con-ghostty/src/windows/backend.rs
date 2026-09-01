@@ -5,6 +5,7 @@
 //! across platforms.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -16,6 +17,10 @@ use crate::stub::{
     GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{VtKeyEvent, VtKeyOutcome};
+use crate::{
+    ClipboardWritePolicy, DesktopNotificationPolicy, clipboard_write_policy,
+    desktop_notification_policy,
+};
 
 fn theme_from_colors(colors: &TerminalColors) -> ThemeColors {
     ThemeColors::from_ansi16(colors.foreground, colors.background, colors.palette)
@@ -28,6 +33,9 @@ fn clamp_opacity(v: f32) -> f32 {
 /// One per GPUI window. Holds shared, app-wide terminal config.
 pub struct WindowsGhosttyApp {
     config: Mutex<RendererConfig>,
+    clipboard_write_enabled: AtomicBool,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
 }
 
 impl WindowsGhosttyApp {
@@ -44,6 +52,7 @@ impl WindowsGhosttyApp {
         _background_image_position: Option<&str>,
         _background_image_fit: Option<&str>,
         _background_image_repeat: Option<bool>,
+        clipboard_write_enabled: bool,
     ) -> Result<Self, String> {
         let mut config = RendererConfig::default();
         if let Some(family) = font_family {
@@ -67,6 +76,9 @@ impl WindowsGhosttyApp {
         }
         Ok(Self {
             config: Mutex::new(config),
+            clipboard_write_enabled: AtomicBool::new(clipboard_write_enabled),
+            clipboard_write_policy: clipboard_write_policy(clipboard_write_enabled),
+            desktop_notification_policy: desktop_notification_policy(),
         })
     }
 
@@ -75,6 +87,10 @@ impl WindowsGhosttyApp {
     /// Stub for parity with the macOS `GhosttyApp::wake_generation`.
     pub fn wake_generation(&self) -> u64 {
         0
+    }
+
+    pub fn desktop_notification_policy(&self) -> Arc<DesktopNotificationPolicy> {
+        self.desktop_notification_policy.clone()
     }
 
     pub fn update_colors(&self, _colors: &TerminalColors) -> Result<(), String> {
@@ -117,6 +133,22 @@ impl WindowsGhosttyApp {
 
     pub fn set_color_scheme(&self, _dark: bool) {}
 
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if !enabled {
+            self.clipboard_write_policy.set_enabled(false);
+        }
+        self.clipboard_write_enabled
+            .store(enabled, Ordering::Release);
+        if enabled {
+            self.clipboard_write_policy.set_enabled(true);
+        }
+        Ok(())
+    }
+
+    pub fn clipboard_write_enabled(&self) -> bool {
+        self.clipboard_write_enabled.load(Ordering::Acquire)
+    }
+
     /// Snapshot the current renderer config — used by `WindowsTerminalView`
     /// when constructing a new `RenderSession`.
     pub fn renderer_config(&self) -> RendererConfig {
@@ -134,6 +166,9 @@ pub struct WindowsGhosttyTerminal {
 }
 
 impl WindowsGhosttyTerminal {
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_TTY_NAME: bool = false;
+
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
@@ -265,13 +300,46 @@ impl WindowsGhosttyTerminal {
     }
 
     pub fn title(&self) -> Option<String> {
-        None
+        self.inner.lock().as_ref().and_then(RenderSession::title)
+    }
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(RenderSession::take_bell)
+    }
+    pub fn progress(&self) -> Option<crate::TerminalProgress> {
+        self.inner.lock().as_ref().and_then(RenderSession::progress)
+    }
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
+    }
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::take_clipboard_write)
+    }
+    pub fn take_desktop_notification(&self) -> Option<crate::DesktopNotification> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::take_desktop_notification)
     }
     pub fn current_dir(&self) -> Option<String> {
         self.inner
             .lock()
             .as_ref()
             .and_then(RenderSession::current_dir)
+    }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
+        None
     }
     pub fn is_alive(&self) -> bool {
         match self.inner.lock().as_ref() {

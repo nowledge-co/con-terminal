@@ -164,6 +164,16 @@ pub struct ghostty_surface_size_s {
     pub cell_height_px: u32,
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct ghostty_string_s {
+    pub ptr: *const c_char,
+    pub len: usize,
+    pub sentinel: bool,
+}
+
+const _: [(); 24] = [(); std::mem::size_of::<ghostty_string_s>()];
+
 // ── Text / selection types ──────────────────────────────────
 
 #[repr(C)]
@@ -367,6 +377,13 @@ pub struct ghostty_action_pwd_s {
     pub pwd: *const c_char,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_progress_report_s {
+    pub state: c_int,
+    pub progress: i8,
+}
+
 /// Action payload for COMMAND_FINISHED (shell integration OSC 133;D).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -442,6 +459,7 @@ pub union ghostty_action_u {
     pub desktop_notification: ghostty_action_desktop_notification_s,
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
+    pub progress_report: ghostty_action_progress_report_s,
     pub command_finished: ghostty_action_command_finished_s,
     pub start_search: ghostty_action_start_search_s,
     pub search_total: ghostty_action_search_total_s,
@@ -460,6 +478,7 @@ pub struct ghostty_action_s {
 // must exactly match ghostty.h at the pinned Ghostty revision.
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_desktop_notification_s>()];
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_surface_message_childexited_s>()];
+const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_progress_report_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_start_search_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_total_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_selected_s>()];
@@ -603,6 +622,7 @@ unsafe extern "C" {
         key: *const c_char,
         key_len: usize,
     ) -> bool;
+    pub fn ghostty_string_free(string: ghostty_string_s);
 
     // App
     pub fn ghostty_app_new(
@@ -635,6 +655,8 @@ unsafe extern "C" {
     // Surface size
     pub fn ghostty_surface_set_size(surface: ghostty_surface_t, w: u32, h: u32);
     pub fn ghostty_surface_size(surface: ghostty_surface_t) -> ghostty_surface_size_s;
+    pub fn ghostty_surface_foreground_pid(surface: ghostty_surface_t) -> u64;
+    pub fn ghostty_surface_tty_name(surface: ghostty_surface_t) -> ghostty_string_s;
     pub fn ghostty_surface_set_content_scale(surface: ghostty_surface_t, x: c_double, y: c_double);
 
     // Surface focus / state
