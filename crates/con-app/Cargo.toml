@@ -81,6 +81,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Kernel",             # EXCEPTION_POINTERS definition
     "Win32_System_Pipes",              # WaitNamedPipeW
     "Win32_Graphics_Dwm",              # DwmSetWindowAttribute — Mica/Acrylic backdrop
+    "Win32_UI_WindowsAndMessaging",     # FlashWindowEx for terminal notifications
 ] }
 # Used only by the Windows `GhosttyView` to wrap D3D11-readback BGRA into
 # a GPUI `RenderImage` (GPUI's `RenderImage::new` takes a
@@ -92,6 +93,7 @@ smallvec = "1"
 raw-window-handle = "0.6"
 unicode-width.workspace = true
 x11rb = "0.13.2"
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "notification"] }
 # Linux wraps shared libghostty-vt Kitty RGBA snapshots in GPUI
 # `RenderImage`s, whose constructor exposes these concrete crate types.
 image = { version = "0.25", default-features = false }

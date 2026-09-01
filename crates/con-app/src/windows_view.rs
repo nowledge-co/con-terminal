@@ -43,6 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use con_ghostty::vt::{VtKeyAction, VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource};
+use con_ghostty::{DesktopNotification, TerminalProgress};
 use con_ghostty::{GhosttyApp, GhosttyScrollbar, GhosttySplitDirection, GhosttyTerminal};
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
@@ -98,16 +99,22 @@ actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
 pub struct GhosttyTitleChanged(pub Option<String>);
+pub struct GhosttyBell;
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
 pub struct GhosttyCwdChanged(pub Option<String>);
+pub struct GhosttyProgressChanged;
+pub struct GhosttyDesktopNotification(pub DesktopNotification);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
+impl EventEmitter<GhosttyBell> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
 impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
+impl EventEmitter<GhosttyProgressChanged> for GhosttyView {}
+impl EventEmitter<GhosttyDesktopNotification> for GhosttyView {}
 
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -123,7 +130,9 @@ pub struct GhosttyView {
     init_failed: bool,
     /// Emit `GhosttyProcessExited` exactly once on shell death.
     process_exit_emitted: bool,
+    last_title: Option<String>,
     last_cwd: Option<String>,
+    last_progress: Option<TerminalProgress>,
     /// Pane bounds in logical window pixels, captured during prepaint.
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -230,7 +239,9 @@ impl GhosttyView {
             initialized: false,
             init_failed: false,
             process_exit_emitted: false,
+            last_title: None,
             last_cwd: None,
+            last_progress: None,
             pane_bounds: None,
             scale_factor: 1.0,
             ime_marked_text: None,
@@ -281,6 +292,10 @@ impl GhosttyView {
             .as_ref()
             .and_then(|t| t.current_dir())
             .or_else(|| self.initial_cwd.clone())
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        self.last_progress
     }
 
     pub fn is_alive(&self) -> bool {
@@ -404,8 +419,8 @@ impl GhosttyView {
         self.poll_terminal_state(cx)
     }
 
-    pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
-        self.poll_terminal_state(cx)
+    pub fn pump_deferred_work(&mut self, _cx: &mut Context<Self>) -> bool {
+        false
     }
 
     fn poll_terminal_state(&mut self, cx: &mut Context<Self>) -> bool {
@@ -419,6 +434,27 @@ impl GhosttyView {
 
         let mut changed = false;
 
+        if terminal.take_bell() {
+            changed = true;
+            cx.emit(GhosttyBell);
+        }
+
+        if let Some(text) = terminal.take_clipboard_write() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+
+        if let Some(notification) = terminal.take_desktop_notification() {
+            changed = true;
+            cx.emit(GhosttyDesktopNotification(notification));
+        }
+
+        let title = terminal.title();
+        if title != self.last_title {
+            self.last_title = title.clone();
+            changed = true;
+            cx.emit(GhosttyTitleChanged(title));
+        }
+
         let cwd = terminal.current_dir();
         if cwd != self.last_cwd {
             self.last_cwd = cwd.clone();
@@ -426,9 +462,16 @@ impl GhosttyView {
             cx.emit(GhosttyCwdChanged(cwd));
         }
 
-        // No action-callback channel on Windows (cf. macOS's
-        // `wake_generation`). Poll `is_alive` so workspace's
-        // `on_terminal_process_exited` runs when the child shell exits.
+        let progress = terminal.progress();
+        if progress != self.last_progress {
+            self.last_progress = progress;
+            changed = true;
+            cx.emit(GhosttyProgressChanged);
+        }
+
+        // Portable effects reuse the existing output wake and are drained
+        // above. Process exit has no corresponding VT effect, so poll it to
+        // ensure workspace's `on_terminal_process_exited` still runs.
         if !self.process_exit_emitted && !terminal.is_alive() {
             self.process_exit_emitted = true;
             changed = true;
@@ -470,13 +513,24 @@ impl GhosttyView {
 
         let cwd = self.initial_cwd.as_deref().map(std::path::PathBuf::from);
         let initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
-        match RenderSession::new(width_px, height_px, dpi, config, cwd, initial_output, wake) {
+        match RenderSession::new(
+            width_px,
+            height_px,
+            dpi,
+            config,
+            cwd,
+            initial_output,
+            self.app.clipboard_write_enabled(),
+            self.app.desktop_notification_policy(),
+            wake,
+        ) {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);
                 }
                 self.restored_screen_text = None;
                 self.initialized = true;
+                self.last_title = self.terminal.as_ref().and_then(|t| t.title());
                 self.last_cwd = self.terminal.as_ref().and_then(|t| t.current_dir());
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;

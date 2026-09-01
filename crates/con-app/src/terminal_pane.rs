@@ -1,7 +1,9 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::{GhosttyTerminal, TerminalColors, TerminalPromptState};
+<<<<<<< HEAD
+use con_ghostty::{GhosttyTerminal, TerminalColors, TerminalProgress, TerminalPromptState};
+>>>>>>> origin/main
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -46,6 +48,8 @@ impl TerminalPane {
             tty_name: GhosttyTerminal::SUPPORTS_TTY_NAME,
             ..PaneObservationSupport::default()
         }
+    pub fn progress(&self, cx: &App) -> Option<TerminalProgress> {
+        self.entity.read(cx).progress()
     }
 
     pub fn is_alive(&self, cx: &App) -> bool {
@@ -153,6 +157,13 @@ impl TerminalPane {
                 log::error!("Failed to clear Ghostty scrollback: {}", err);
             }
         }
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool, cx: &App) -> Result<(), String> {
+        if let Some(terminal) = self.entity.read(cx).terminal() {
+            terminal.set_clipboard_write_enabled(enabled)?;
+        }
+        Ok(())
     }
 
     pub fn notify(&self, cx: &mut App) {
@@ -380,8 +391,23 @@ pub fn subscribe_terminal_pane(
         ConWorkspace::on_terminal_title_changed,
     )
     .detach();
+    cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_bell)
+        .detach();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_desktop_notification,
+    )
+    .detach();
     cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_cwd_changed)
         .detach();
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_progress_changed,
+    )
+    .detach();
     cx.subscribe_in(
         &pane.entity,
         window,

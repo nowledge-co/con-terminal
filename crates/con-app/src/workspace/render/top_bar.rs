@@ -393,6 +393,10 @@ impl ConWorkspace {
                 let session_id = tab.summary_id;
                 let tab_id = session_id;
                 let tab_color = tab.color;
+                let terminal_progress = tab
+                    .pane_tree
+                    .focused_pane_terminal()
+                    .and_then(|terminal| terminal.progress(cx));
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
                 let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
                 let (hostname_for_tab, title_for_tab, dir_for_tab) =
@@ -718,6 +722,34 @@ impl ConWorkspace {
                             .rounded(px(1.0))
                             .bg(indicator_color),
                     );
+                }
+
+                if let Some(progress) = terminal_progress {
+                    let (color, percent) = match progress {
+                        TerminalProgress::Running(percent) => (theme.progress_bar, percent),
+                        TerminalProgress::Error(percent) => (theme.danger, percent),
+                        TerminalProgress::Indeterminate => (theme.progress_bar, None),
+                        TerminalProgress::Paused(percent) => (theme.warning, percent),
+                    };
+                    let mut progress_indicator =
+                        div().absolute().left_0().right_0().bottom_0().h(px(2.0));
+                    if let Some(percent) = percent {
+                        progress_indicator = progress_indicator
+                            .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(relative(f32::from(percent) / 100.0))
+                                    .bg(color.opacity(if is_active { 0.82 } else { 0.58 })),
+                            );
+                    } else {
+                        progress_indicator = progress_indicator.bg(color.opacity(if is_active {
+                            0.62
+                        } else {
+                            0.42
+                        }));
+                    }
+                    tab_el = tab_el.child(progress_indicator);
                 }
 
                 let mut tab_content = div()

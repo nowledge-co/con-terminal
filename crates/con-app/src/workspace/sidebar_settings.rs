@@ -634,6 +634,10 @@ impl ConWorkspace {
                     subtitle: presentation.subtitle,
                     is_ssh: presentation.is_ssh,
                     needs_attention: tab.needs_attention,
+                    progress: tab
+                        .pane_tree
+                        .focused_pane_terminal()
+                        .and_then(|terminal| terminal.progress(cx)),
                     icon: presentation.icon,
                     has_user_label: tab.user_label.is_some(),
                     pane_count,
@@ -894,6 +898,23 @@ impl ConWorkspace {
 
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
+        match self
+            .ghostty_app
+            .set_clipboard_write_enabled(term_config.clipboard_write)
+        {
+            Ok(()) => {
+                for tab in &self.tabs {
+                    for terminal in tab.pane_tree.all_surface_terminals() {
+                        if let Err(err) =
+                            terminal.set_clipboard_write_enabled(term_config.clipboard_write, cx)
+                        {
+                            log::error!("Failed to update terminal clipboard write policy: {err}");
+                        }
+                    }
+                }
+            }
+            Err(err) => log::error!("Failed to update clipboard write policy: {err}"),
+        }
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
         self.sync_tab_strip_motion();
         if restore_terminal_text_was_enabled && !appearance_config.restore_terminal_text {

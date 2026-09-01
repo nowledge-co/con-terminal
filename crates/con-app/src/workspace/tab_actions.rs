@@ -366,6 +366,9 @@ impl ConWorkspace {
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
         self.clear_terminal_focus_states_for_active_tab(cx);
         self.sync_active_tab_native_view_visibility(cx);
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         let editor_view = self.tabs[self.active_tab]
             .pane_tree
             .editor_view_for_pane(pane_id);
@@ -439,6 +442,9 @@ impl ConWorkspace {
             pane_tree.focus(pane_id);
             entity.focus_handle(cx).focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
+            if self.vertical_tabs_enabled() {
+                self.sync_sidebar(cx);
+            }
         }
         cx.notify();
     }
@@ -497,6 +503,9 @@ impl ConWorkspace {
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
+            if self.vertical_tabs_enabled() {
+                self.sync_sidebar(cx);
+            }
             self.save_session(cx);
             cx.notify();
             return;
@@ -536,6 +545,85 @@ impl ConWorkspace {
         // dedupes on cache key so this is cheap if context didn't
         // actually change.
         self.request_tab_summaries(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_terminal_bell(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        _event: &GhosttyBell,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        window.play_system_bell();
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub(crate) fn on_terminal_desktop_notification(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        event: &GhosttyDesktopNotification,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let title = if event.0.title.is_empty() {
+            "Con".to_owned()
+        } else {
+            event.0.title.clone()
+        };
+        let body = event.0.body.clone();
+
+        #[cfg(target_os = "linux")]
+        {
+            let notification_id = format!("co.nowledge.con.terminal.{}", uuid::Uuid::new_v4());
+            cx.spawn(async move |_, _| {
+                use ashpd::desktop::notification::{Notification, NotificationProxy};
+
+                let proxy = match NotificationProxy::new().await {
+                    Ok(proxy) => proxy,
+                    Err(err) => {
+                        log::warn!("Failed to connect to desktop notification portal: {err}");
+                        return;
+                    }
+                };
+                let notification =
+                    Notification::new(&title).body((!body.is_empty()).then_some(body.as_str()));
+                if let Err(err) = proxy.add_notification(&notification_id, notification).await {
+                    log::warn!("Failed to show desktop notification: {err}");
+                }
+            })
+            .detach();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use gpui_component::{WindowExt as _, notification::Notification};
+
+            _window.push_notification(Notification::new().title(title).message(body), cx);
+            if !_window.is_window_active() {
+                flash_windows_taskbar(_window);
+            }
+        }
+    }
+
+    pub(crate) fn on_terminal_progress_changed(
+        &mut self,
+        entity: &Entity<GhosttyView>,
+        _event: &GhosttyProgressChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entity_id = entity.entity_id();
+        if !self
+            .tabs
+            .iter()
+            .any(|tab| tab.pane_tree.focused_terminal_entity_id() == Some(entity_id))
+        {
+            return;
+        }
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         cx.notify();
     }
 
@@ -882,5 +970,31 @@ impl ConWorkspace {
         if let Some(index) = self.tab_index_for_summary_id(tab_id) {
             self.set_tab_color(index, color, cx);
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn flash_windows_taskbar(window: &Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    };
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let info = FLASHWINFO {
+        cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+        hwnd: HWND(handle.hwnd.get() as *mut std::ffi::c_void),
+        dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+        uCount: 0,
+        dwTimeout: 0,
+    };
+    unsafe {
+        let _ = FlashWindowEx(&info);
     }
 }

@@ -343,8 +343,12 @@ impl PaneTree {
     /// Like `focused_terminal` but returns `None` if no terminal exists
     /// (e.g. the tab contains only editor panes).
     pub fn try_focused_terminal(&self) -> Option<&TerminalPane> {
-        Self::find_terminal(&self.root, self.focused_pane_id)
+        self.focused_pane_terminal()
             .or_else(|| Self::try_first_terminal(&self.root))
+    }
+
+    pub fn focused_pane_terminal(&self) -> Option<&TerminalPane> {
+        Self::find_terminal(&self.root, self.focused_pane_id)
     }
 
     /// Get all terminals in the tree
@@ -938,7 +942,8 @@ impl PaneTree {
     }
 
     pub fn focused_terminal_entity_id(&self) -> Option<EntityId> {
-        Self::find_terminal(&self.root, self.focused_pane_id).map(|terminal| terminal.entity_id())
+        self.focused_pane_terminal()
+            .map(|terminal| terminal.entity_id())
     }
 
     /// Find the pane ID for a given terminal by entity ID
