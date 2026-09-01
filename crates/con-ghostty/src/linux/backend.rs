@@ -318,6 +318,12 @@ impl LinuxGhosttyTerminal {
         self.inner.lock().as_ref().map(LinuxPtySession::snapshot)
     }
 
+    pub fn acknowledge_snapshot(&self, generation: u64) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.acknowledge_snapshot(generation);
+        }
+    }
+
     pub fn write_to_pty(&self, data: &[u8]) {
         if let Some(session) = self.inner.lock().as_ref() {
             if let Err(err) = session.write_input(data) {

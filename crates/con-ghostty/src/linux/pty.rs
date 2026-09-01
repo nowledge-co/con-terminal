@@ -550,6 +550,10 @@ impl LinuxPtySession {
         self.shared.screen.snapshot()
     }
 
+    pub fn acknowledge_snapshot(&self, generation: u64) {
+        self.shared.screen.acknowledge_snapshot(generation);
+    }
+
     pub fn set_theme(&self, colors: &TerminalColors) {
         let theme = theme_colors_to_vt(colors);
         self.shared.screen.set_theme(&theme);

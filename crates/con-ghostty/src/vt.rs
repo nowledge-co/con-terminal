@@ -12,10 +12,11 @@
 //! Per-frame:
 //!   - `ghostty_render_state_update(state, terminal)` to refresh
 //!   - `ghostty_render_state_get_multi(...)` to read state metadata and bind the iterator
-//!   - while `row_iterator_next(iter)` is true:
-//!       - `row_get_multi(iter, DIRTY|CELLS, ...)`, skip if clean
+//!   - while `row_iterator_next_dirty(iter, &row)` is true:
+//!       - `row_get(iter, CELLS, &cells)` to bind the dirty row
 //!       - while `row_cells_next(cells)` is true:
 //!           - `row_cells_get_multi(cells, RAW|STYLE|FG|BG, ...)`
+//!   - `acknowledge_snapshot(generation)` cleans damage after renderer acceptance
 //!
 //! All `_next` functions return `bool`. The `_get` family uses an enum
 //! key and writes to a typed `void*` out; key→type contract is per
@@ -1182,6 +1183,34 @@ pub struct ScreenSnapshot {
     pub generation: u64,
 }
 
+struct SnapshotMetadata {
+    cols: u16,
+    rows: u16,
+    kitty_placements: Arc<[KittyPlacement]>,
+    dirty_rows: Vec<u16>,
+    cursor: Cursor,
+    alternate_screen: bool,
+    scrollbar: Option<GhosttyScrollbar>,
+    generation: u64,
+}
+
+impl SnapshotMetadata {
+    fn snapshot(&self, cells: &[Cell]) -> ScreenSnapshot {
+        ScreenSnapshot {
+            cols: self.cols,
+            rows: self.rows,
+            cells: cells.to_vec(),
+            kitty_placements: self.kitty_placements.clone(),
+            dirty_rows: self.dirty_rows.clone(),
+            cursor: self.cursor,
+            alternate_screen: self.alternate_screen,
+            scrollbar: self.scrollbar,
+            title: None,
+            generation: self.generation,
+        }
+    }
+}
+
 // ── Safe wrapper ───────────────────────────────────────────────────────
 
 pub struct VtScreen {
@@ -1319,6 +1348,7 @@ struct VtInner {
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
+    snapshot_metadata: Option<SnapshotMetadata>,
 }
 
 unsafe impl Send for VtInner {}
@@ -1826,6 +1856,7 @@ impl VtScreen {
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
+                snapshot_metadata: None,
             })),
         })
     }
@@ -1852,6 +1883,27 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    pub(crate) fn acknowledge_snapshot(&self, generation: u64) {
+        let mut inner = self.inner.lock();
+        if inner.generation != generation
+            || !inner
+                .snapshot_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.generation == generation)
+        {
+            return;
+        }
+
+        let rc = unsafe { ghostty_render_state_clean(inner.render_state) };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_render_state_clean rc={rc} generation={generation}");
+            return;
+        }
+        if let Some(metadata) = inner.snapshot_metadata.as_mut() {
+            metadata.dirty_rows.clear();
+        }
     }
 
     pub fn is_write_desynchronized(&self) -> bool {
@@ -2192,10 +2244,20 @@ impl VtScreen {
             };
         }
 
+        if let Some(metadata) = inner
+            .snapshot_metadata
+            .as_ref()
+            .filter(|metadata| metadata.generation == inner.generation)
+        {
+            return metadata.snapshot(&inner.scratch);
+        }
+
         // SAFETY: state + terminal valid for the lifetime of `inner`.
         let rc = unsafe { ghostty_render_state_update(inner.render_state, inner.terminal) };
-        if rc != 0 {
+        if rc != GHOSTTY_SUCCESS {
             log::warn!("ghostty_render_state_update rc={rc}");
+            inner.force_full_snapshot = true;
+            return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
         }
 
         let mut default_fg = GhosttyColorRgb {
@@ -2260,11 +2322,14 @@ impl VtScreen {
                 &mut active_screen as *mut _ as *mut c_void,
             )
         };
-        let alternate_screen =
-            active_screen_rc == 0 && active_screen == GhosttyTerminalScreen::Alternate;
+        if active_screen_rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_terminal_get(ACTIVE_SCREEN) rc={active_screen_rc}");
+            inner.force_full_snapshot = true;
+            return empty_snapshot(cols, rows, inner.generation);
+        }
+        let alternate_screen = active_screen == GhosttyTerminalScreen::Alternate;
 
-        let mut force_all_dirty = inner.force_full_snapshot;
-        let mut full_redraw = force_all_dirty;
+        let mut full_redraw = inner.force_full_snapshot;
         if state_dirty == GhosttyRenderStateDirty::Full {
             full_redraw = true;
         }
@@ -2276,53 +2341,51 @@ impl VtScreen {
             inner.scratch.resize(total, Cell::default());
             inner.scratch_cols = cols;
             inner.scratch_rows = rows;
-            force_all_dirty = true;
             full_redraw = true;
         }
 
         let mut dirty_rows: Vec<u16> = Vec::new();
-
-        let mut row_idx: u16 = 0;
-        // SAFETY: row_iter valid; `_next` returns bool.
-        while unsafe { ghostty_render_state_row_iterator_next(inner.row_iter) } {
+        let mut next_full_row = 0_u16;
+        loop {
+            let row_idx = if full_redraw {
+                if !unsafe { ghostty_render_state_row_iterator_next(inner.row_iter) } {
+                    break;
+                }
+                let row = next_full_row;
+                next_full_row = next_full_row.saturating_add(1);
+                row
+            } else {
+                let mut row = 0_u16;
+                if !unsafe {
+                    ghostty_render_state_row_iterator_next_dirty(inner.row_iter, &mut row)
+                } {
+                    break;
+                }
+                row
+            };
             if row_idx >= rows {
+                if !full_redraw {
+                    log::warn!(
+                        "ghostty_render_state_row_iterator_next_dirty returned row {row_idx} for {rows} rows"
+                    );
+                    inner.force_full_snapshot = true;
+                    return empty_snapshot(cols, rows, inner.generation);
+                }
                 break;
             }
 
-            let mut dirty = GhosttyRenderStateDirty::False;
-            let row_iter = inner.row_iter;
-            let row_keys = [
-                GhosttyRenderStateRowData::Dirty,
-                GhosttyRenderStateRowData::Cells,
-            ];
-            let mut row_values = [
-                &mut dirty as *mut _ as *mut c_void,
-                &mut inner.row_cells as *mut _ as *mut c_void,
-            ];
-            let mut row_written = 0_usize;
             let rc = unsafe {
-                ghostty_render_state_row_get_multi(
-                    row_iter,
-                    row_keys.len(),
-                    row_keys.as_ptr(),
-                    row_values.as_mut_ptr(),
-                    &mut row_written,
+                ghostty_render_state_row_get(
+                    inner.row_iter,
+                    GhosttyRenderStateRowData::Cells,
+                    &mut inner.row_cells as *mut _ as *mut c_void,
                 )
             };
-            if rc != GHOSTTY_SUCCESS || row_written != row_keys.len() {
-                log::warn!(
-                    "ghostty_render_state_row_get_multi rc={rc} written={row_written}/{} at row {row_idx}",
-                    row_keys.len()
-                );
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_render_state_row_get(CELLS) rc={rc} at row {row_idx}");
                 inner.force_full_snapshot = true;
                 return empty_snapshot(cols, rows, inner.generation);
             }
-
-            if !full_redraw && dirty == GhosttyRenderStateDirty::False {
-                row_idx += 1;
-                continue;
-            }
-            let mut row_changed = force_all_dirty;
 
             let row_start = row_idx as usize * cols as usize;
             let mut col_idx: u16 = 0;
@@ -2339,40 +2402,26 @@ impl VtScreen {
                     return empty_snapshot(cols, rows, inner.generation);
                 };
                 let idx = row_start + col_idx as usize;
-                row_changed |= inner.scratch[idx] != cell;
                 inner.scratch[idx] = cell;
                 col_idx += 1;
             }
-            // Clear trailing cells in the row.
-            for c in col_idx..cols {
-                let idx = row_start + c as usize;
-                row_changed |= inner.scratch[idx] != Cell::default();
-                inner.scratch[idx] = Cell::default();
+            if col_idx != cols {
+                log::warn!(
+                    "vt snapshot row ended early: row={row_idx} cells={col_idx} expected={cols}"
+                );
+                inner.force_full_snapshot = true;
+                return empty_snapshot(cols, rows, inner.generation);
             }
 
-            if row_changed {
-                dirty_rows.push(row_idx);
-            }
-
-            row_idx += 1;
+            dirty_rows.push(row_idx);
         }
 
-        if full_redraw && row_idx < rows {
+        if full_redraw && next_full_row != rows {
             log::warn!(
-                "vt snapshot full redraw ended early: iter_rows={row_idx} expected_rows={rows} cols={cols}"
+                "vt snapshot full redraw ended early: iter_rows={next_full_row} expected_rows={rows} cols={cols}"
             );
-            for trailing_row in row_idx..rows {
-                let row_start = trailing_row as usize * cols as usize;
-                let row_end = row_start + cols as usize;
-                let mut row_changed = force_all_dirty;
-                for cell in &mut inner.scratch[row_start..row_end] {
-                    row_changed |= *cell != Cell::default();
-                    *cell = Cell::default();
-                }
-                if row_changed {
-                    dirty_rows.push(trailing_row);
-                }
-            }
+            inner.force_full_snapshot = true;
+            return empty_snapshot(cols, rows, inner.generation);
         }
 
         inner.force_full_snapshot = false;
@@ -2399,22 +2448,21 @@ impl VtScreen {
         dirty_rows.sort_unstable();
 
         let kitty_placements = snapshot_kitty_placements(&mut inner);
-        let clone_started = perf_trace_enabled().then(Instant::now);
-        let cells = inner.scratch.clone();
-        let clone_elapsed_ms =
-            clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
-        let snapshot = ScreenSnapshot {
+        let metadata = SnapshotMetadata {
             cols,
             rows,
-            cells,
             kitty_placements,
             dirty_rows,
             cursor,
             alternate_screen,
             scrollbar: read_scrollbar(inner.terminal),
-            title: None,
             generation: inner.generation,
         };
+        let clone_started = perf_trace_enabled().then(Instant::now);
+        let snapshot = metadata.snapshot(&inner.scratch);
+        let clone_elapsed_ms =
+            clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
+        inner.snapshot_metadata = Some(metadata);
 
         if let Some(started) = snapshot_started {
             let total_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -3805,6 +3853,28 @@ mod tests {
         ] {
             assert_eq!(keys[name].as_i64(), Some(key as i64), "GhosttyKey::{key:?}");
         }
+    }
+
+    #[test]
+    fn snapshot_damage_accumulates_until_acknowledged() {
+        let screen = VtScreen::new(4, 3, None).expect("create vt screen");
+
+        screen.feed(b"\x1b[?25l");
+        let baseline = screen.snapshot();
+        screen.acknowledge_snapshot(baseline.generation);
+
+        screen.feed(b"A");
+        let first = screen.snapshot();
+        assert_eq!(first.dirty_rows, vec![0]);
+        assert_eq!(screen.snapshot().dirty_rows, first.dirty_rows);
+
+        screen.feed(b"\x1b[2;1HB");
+        screen.acknowledge_snapshot(first.generation);
+        let combined = screen.snapshot();
+        assert_eq!(combined.dirty_rows, vec![0, 1]);
+
+        screen.acknowledge_snapshot(combined.generation);
+        assert!(screen.snapshot().dirty_rows.is_empty());
     }
 
     #[test]

@@ -264,6 +264,7 @@ impl RenderSession {
         let prefer_latest = immediate || generation_ready || burst_active;
         let render_started = perf_trace_enabled().then(Instant::now);
         let outcome = renderer.render(&snapshot, &config, prefer_latest)?;
+        self.vt.acknowledge_snapshot(snapshot.generation);
         let render_ms = render_started
             .map(|started| started.elapsed().as_secs_f64() * 1000.0)
             .unwrap_or(0.0);
