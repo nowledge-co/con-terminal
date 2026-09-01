@@ -566,15 +566,6 @@ impl GhosttyApp {
             .map(|colors| colors.background)
     }
 
-    /// Current configured terminal foreground color.
-    pub fn foreground_rgb(&self) -> Option<[u8; 3]> {
-        self.appearance
-            .lock()
-            .colors
-            .as_ref()
-            .map(|colors| colors.foreground)
-    }
-
     /// Current configured terminal background opacity. This lets the macOS
     /// embedding layer keep short-lived AppKit backing mattes visually aligned
     /// with Ghostty's own transparent terminal background.
@@ -941,6 +932,14 @@ impl GhosttyTerminal {
         // terminal semantics where NUL in text input is meaningless.
     }
 
+    pub fn set_preedit(&self, text: Option<&str>) {
+        let text = text.filter(|text| !text.is_empty());
+        let (ptr, len) = text.map_or((std::ptr::null(), 0), |text| {
+            (text.as_ptr().cast(), text.len())
+        });
+        unsafe { ffi::ghostty_surface_preedit(self.surface, ptr, len) }
+    }
+
     pub fn ime_point(&self) -> ImePoint {
         let mut x = 0.0;
         let mut y = 0.0;
@@ -1091,6 +1090,10 @@ impl GhosttyTerminal {
     /// Whether the child process has exited.
     pub fn is_alive(&self) -> bool {
         !unsafe { ffi::ghostty_surface_process_exited(self.surface) }
+    }
+
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        crate::TerminalPromptState::default()
     }
 
     /// Take the command-finished signal (if any). Consuming — returns None on second call.

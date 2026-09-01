@@ -4,7 +4,34 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.91` - unreleased
+## `v0.1.0-beta.93` - unreleased
+
+### Added
+
+**Developer tools**
+
+- Terminal execution now recognizes semantic shell prompt state on Windows and
+  Linux when shell integration is available, improving completion detection
+  for visible agent-run commands while retaining the existing fallback. _(PR
+  [#328](https://github.com/nowledge-co/con-terminal/pull/328) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.92` - 2026-08-31
+
+### Fixed
+
+**macOS**
+
+- Improved IME composition rendering by keeping marked text, cursor
+  suppression, underlining, and cell layout in the terminal renderer. _(PR
+  [#326](https://github.com/nowledge-co/con-terminal/pull/326) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.91` - 2026-08-31
 
 ### Fixed
 
