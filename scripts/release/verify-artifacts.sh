@@ -52,6 +52,14 @@ verify_terminal_desktop_contract() {
   require_desktop_entry "$desktop" "X-TerminalArgAppId=--app-id="
 }
 
+verify_macos_app_contract() {
+  local app="$1"
+  require_executable "$app/Contents/MacOS/con"
+  require_executable "$app/Contents/MacOS/con-cli"
+  require_symlink_target "$app/Contents/MacOS/ghostty" con-cli
+  "$app/Contents/MacOS/con-cli" --help >/dev/null
+}
+
 verify_linux() {
   local tarball="$1"
   local checksum="$2"
@@ -118,10 +126,7 @@ verify_macos() {
   require_file "$dmg"
   require_file "$checksum"
 
-  require_executable "$app/Contents/MacOS/con"
-  require_executable "$app/Contents/MacOS/con-cli"
-  require_symlink_target "$app/Contents/MacOS/ghostty" con-cli
-  "$app/Contents/MacOS/con-cli" --help >/dev/null
+  verify_macos_app_contract "$app"
 
   log "checking macOS checksum"
   (
@@ -130,10 +135,19 @@ verify_macos() {
   )
 
   log "checking macOS ZIP layout"
-  unzip -l "$zip" | grep -F ".app/Contents/MacOS/con-cli" >/dev/null \
-    || fail "$(basename "$zip") does not contain bundled con-cli"
-  unzip -l "$zip" | grep -F ".app/Contents/MacOS/ghostty" >/dev/null \
-    || fail "$(basename "$zip") does not contain Ghostty SSH compatibility entry point"
+  local zip_root
+  zip_root="$(mktemp -d)"
+  unzip -q "$zip" -d "$zip_root"
+  local zip_app=""
+  for candidate in "$zip_root"/*.app; do
+    if [[ -d "$candidate" ]]; then
+      zip_app="$candidate"
+      break
+    fi
+  done
+  [[ -n "$zip_app" ]] || fail "$(basename "$zip") does not contain an app bundle"
+  verify_macos_app_contract "$zip_app"
+  rm -rf "$zip_root"
 
   log "checking macOS DMG layout"
   local mount_point
@@ -149,10 +163,7 @@ verify_macos() {
     fi
   done
   [[ -n "$mounted_app" ]] || fail "$(basename "$dmg") does not contain an app bundle"
-  require_executable "$mounted_app/Contents/MacOS/con"
-  require_executable "$mounted_app/Contents/MacOS/con-cli"
-  require_symlink_target "$mounted_app/Contents/MacOS/ghostty" con-cli
-  "$mounted_app/Contents/MacOS/con-cli" --help >/dev/null
+  verify_macos_app_contract "$mounted_app"
 
   log "macOS artifact OK: $(basename "$dmg")"
 }
