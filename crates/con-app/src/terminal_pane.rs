@@ -1,7 +1,7 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::{TerminalColors, TerminalProgress};
+use con_ghostty::{TerminalColors, TerminalProgress, TerminalPromptState};
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -32,6 +32,14 @@ impl TerminalPane {
 
     pub fn is_alive(&self, cx: &App) -> bool {
         self.entity.read(cx).is_alive()
+    }
+
+    pub fn prompt_state(&self, cx: &App) -> TerminalPromptState {
+        self.entity
+            .read(cx)
+            .terminal()
+            .map(|terminal| terminal.prompt_state())
+            .unwrap_or_default()
     }
 
     pub fn surface_ready(&self, cx: &App) -> bool {

@@ -172,6 +172,12 @@ fn bounded_lossy_utf8(bytes: &[u8], limit: usize) -> String {
     text[..end].to_owned()
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TerminalPromptState {
+    pub cursor_at_prompt: bool,
+    pub output_generation: u64,
+}
+
 pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     if lines.is_empty() {
         return None;

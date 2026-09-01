@@ -324,8 +324,10 @@ impl SessionShared {
         }
     }
 
-    fn push_output(&self, chunk: &str) {
-        self.transcript.lock().push(chunk);
+    fn push_output(&self, chunk: &[u8]) {
+        let text = String::from_utf8_lossy(chunk);
+        self.transcript.lock().push(text.as_ref());
+        self.screen.feed(chunk);
         self.needs_render.store(true, Ordering::Release);
         self.wake();
     }
@@ -545,6 +547,10 @@ impl LinuxPtySession {
     pub fn is_alive(&self) -> bool {
         self.poll_child_status();
         self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.is_write_desynchronized()
+    }
+
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        self.shared.screen.prompt_state()
     }
 
     pub fn take_command_finished(&self) -> Option<CommandFinishedSignal> {
@@ -1156,9 +1162,7 @@ fn spawn_bridge_reader_thread(
                             shared.mark_exited(None, started_at.elapsed());
                             break;
                         }
-                        shared.screen.feed(&payload);
-                        let chunk = String::from_utf8_lossy(&payload);
-                        shared.push_output(chunk.as_ref());
+                        shared.push_output(&payload);
                     }
                     0x02 => {
                         let mut code_bytes = [0u8; 4];
@@ -1207,9 +1211,7 @@ fn spawn_reader_thread(
                         break;
                     }
                     Ok(read) => {
-                        shared.screen.feed(&buffer[..read]);
-                        let chunk = String::from_utf8_lossy(&buffer[..read]);
-                        shared.push_output(chunk.as_ref());
+                        shared.push_output(&buffer[..read]);
                     }
                     Err(err)
                         if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
