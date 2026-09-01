@@ -690,6 +690,9 @@ impl ConWorkspace {
         }
         // Focus the target pane first so toggle_zoom_focused acts on it.
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         self.toggle_focused_pane_zoom(window, cx);
     }
 
@@ -930,6 +933,9 @@ impl ConWorkspace {
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
+            if self.vertical_tabs_enabled() {
+                self.sync_sidebar(cx);
+            }
             cx.notify();
             return true;
         }
@@ -991,6 +997,9 @@ impl ConWorkspace {
             self.sync_active_terminal_focus_states(cx);
         }
 
+        if self.vertical_tabs_enabled() {
+            self.sync_sidebar(cx);
+        }
         self.save_session(cx);
         cx.notify();
         true

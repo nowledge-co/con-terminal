@@ -33,10 +33,14 @@ use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use crate::stub::GhosttyScrollbar;
+use crate::{
+    CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, DesktopNotification,
+    DesktopNotificationPolicy, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress,
+};
 
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
@@ -105,6 +109,11 @@ const GHOSTTY_MODS_ALT: u16 = 1 << 2;
 const GHOSTTY_MODS_SUPER: u16 = 1 << 3;
 const GHOSTTY_KITTY_KEY_REPORT_EVENTS: u8 = 1 << 1;
 const TEXT_PLAIN_MIME: &[u8] = b"text/plain";
+const METADATA_DIRTY_TITLE: u8 = 1 << 0;
+const METADATA_DIRTY_PWD: u8 = 1 << 1;
+const UNKNOWN_SEQUENCE_LOG_TARGET: &str = "con_ghostty::vt::unknown_sequence";
+const UNKNOWN_SEQUENCE_MAX_BYTES: usize = 256;
+const UNKNOWN_SEQUENCE_LOG_LIMIT: u8 = 16;
 
 // ── Enums (keys) ───────────────────────────────────────────────────────
 //
@@ -132,6 +141,7 @@ pub enum GhosttyTerminalData {
     ScrollbackMaxLines = 35,
     Mode = 37,
     CursorAtPrompt = 39,
+    ClipboardWriteMaxBytes = 40,
 }
 
 /// `GhosttyTerminalScrollbar` — current viewport position in the full
@@ -199,8 +209,15 @@ pub enum GhosttyTerminalOption {
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
     ColorPalette = 14,
     KittyImageStorageLimit = 15,
+    PwdChanged = 25,
+    ClipboardWrite = 26,
     ScrollbackMaxLines = 28,
+    DesktopNotification = 29,
+    ProgressReport = 30,
+    UnknownSequence = 35,
+    UnknownMaxBytes = 36,
     ClipboardRead = 38,
+    ClipboardWriteMaxBytes = 39,
 }
 
 /// `GHOSTTY_SYS_OPT_*` keys for process-global optional services.
@@ -403,6 +420,45 @@ pub struct GhosttyString {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyTerminalDesktopNotification {
+    pub size: usize,
+    pub title: GhosttyString,
+    pub body: GhosttyString,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalProgressReport {
+    pub size: usize,
+    pub state: i32,
+    pub progress: i8,
+}
+
+const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: i32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalUnknownStringSequence {
+    pub truncated: bool,
+    pub content: GhosttyString,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union GhosttyTerminalUnknownSequenceValue {
+    pub apc: GhosttyTerminalUnknownStringSequence,
+    pub _padding: [u64; 16],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalUnknownSequence {
+    pub tag: i32,
+    pub value: GhosttyTerminalUnknownSequenceValue,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyWriter {
     pub write: Option<unsafe extern "C" fn(*mut c_void, *const u8, usize) -> bool>,
@@ -448,6 +504,40 @@ pub struct GhosttyPaste {
 pub struct GhosttyClipboardContent {
     pub mime: GhosttyString,
     pub data: GhosttyString,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyClipboardWriteResult {
+    Success = 0,
+    Denied = 1,
+    Unsupported = 2,
+    Busy = 3,
+    InvalidData = 4,
+    IoError = 5,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct GhosttyClipboardWriteReply {
+    pub size: usize,
+    pub result: GhosttyClipboardWriteResult,
+    pub remember: bool,
+}
+
+#[repr(C)]
+pub struct GhosttyClipboardWrite {
+    pub size: usize,
+    pub location: GhosttyClipboardLocation,
+    pub contents: *const GhosttyClipboardContent,
+    pub contents_len: usize,
+    pub name: GhosttyString,
+    pub granted: bool,
+    pub can_remember: bool,
+    pub ctx: *const c_void,
+    pub reply: Option<
+        unsafe extern "C" fn(*const GhosttyClipboardWrite, *const GhosttyClipboardWriteReply),
+    >,
 }
 
 #[repr(C)]
@@ -527,8 +617,11 @@ const _: [(); 16] = [(); std::mem::size_of::<GhosttyWriter>()];
 const _: [(); 16] = [(); std::mem::size_of::<GhosttyMimeReader>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyPaste>()];
 const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
+const _: [(); 16] = [(); std::mem::size_of::<GhosttyClipboardWriteReply>()];
+const _: [(); 72] = [(); std::mem::size_of::<GhosttyClipboardWrite>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
 const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
+const _: [(); 40] = [(); std::mem::size_of::<GhosttyTerminalDesktopNotification>()];
 const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>()];
 
@@ -1175,7 +1268,7 @@ impl PendingPasteWrite {
 }
 
 struct VtCallbackState {
-    write_pty: PtyWriteCallback,
+    write_pty: Option<PtyWriteCallback>,
     /// Serializes host callback entry. `send_key` acquires this while it still
     /// owns the VT mutex, then releases the VT mutex before invoking the host;
     /// a parser reply therefore cannot overtake the already-encoded key.
@@ -1189,6 +1282,9 @@ struct VtCallbackState {
     /// callback ABI. If its reserved queue capacity is exhausted, fail the
     /// session explicitly rather than continuing with desynchronized state.
     write_failed: Arc<AtomicBool>,
+    clipboard_write_enabled: AtomicBool,
+    clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    pending_clipboard_write: Mutex<Option<String>>,
     /// Active only during `ghostty_terminal_paste`. The C callback cannot
     /// return an I/O result, so buffer the complete logical paste and perform
     /// one fallible host enqueue after libghostty returns.
@@ -1199,6 +1295,12 @@ struct VtCallbackState {
     cell_height: AtomicU32,
     dark_mode: AtomicBool,
     device_attributes: GhosttyDeviceAttributes,
+    metadata_dirty: AtomicU8,
+    bell_pending: AtomicBool,
+    desktop_notification_policy: Arc<DesktopNotificationPolicy>,
+    progress_epoch: Instant,
+    progress: AtomicU64,
+    unknown_sequence_log_count: AtomicU8,
 }
 
 struct VtInner {
@@ -1212,7 +1314,10 @@ struct VtInner {
     kitty_image_cache: HashMap<u32, Arc<KittyImage>>,
     kitty_placements: Arc<[KittyPlacement]>,
     kitty_snapshot_generation: u64,
-    callback_state: Option<Box<VtCallbackState>>,
+    callback_state: Box<VtCallbackState>,
+    title: Option<String>,
+    title_reported: bool,
+    current_dir: Option<String>,
     cols: u16,
     rows: u16,
     generation: u64,
@@ -1518,32 +1623,51 @@ impl VtScreen {
             anyhow::bail!("ghostty_terminal_set(KITTY_IMAGE_STORAGE_LIMIT) failed: rc={rc}");
         }
 
-        let mut callback_state = write_pty.map(|write_pty| {
-            Box::new(VtCallbackState {
-                write_pty,
-                write_order: Arc::new(Mutex::new(())),
-                enquiry_response: b"con".to_vec().into_boxed_slice(),
-                clipboard_text: Mutex::new(None),
-                write_failed: Arc::new(AtomicBool::new(false)),
-                pending_paste_write: Mutex::new(None),
-                rows: AtomicU16::new(rows),
-                cols: AtomicU16::new(cols),
-                cell_width: AtomicU32::new(1),
-                cell_height: AtomicU32::new(1),
-                dark_mode: AtomicBool::new(false),
-                device_attributes: default_device_attributes(),
-            })
-        });
-        if let Some(state) = callback_state.as_mut() {
-            let userdata = state.as_mut() as *mut VtCallbackState as *mut c_void;
-            let rc = unsafe {
-                ghostty_terminal_set(terminal, GhosttyTerminalOption::Userdata, userdata)
-            };
-            if rc != 0 {
-                unsafe { ghostty_terminal_free(terminal) };
-                anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
-            }
+        let clipboard_write_max_bytes = 0_usize;
+        let rc = unsafe {
+            ghostty_terminal_set(
+                terminal,
+                GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                &clipboard_write_max_bytes as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={rc}");
+        }
 
+        let mut callback_state = Box::new(VtCallbackState {
+            write_pty,
+            write_order: Arc::new(Mutex::new(())),
+            enquiry_response: b"con".to_vec().into_boxed_slice(),
+            clipboard_text: Mutex::new(None),
+            write_failed: Arc::new(AtomicBool::new(false)),
+            clipboard_write_enabled: AtomicBool::new(false),
+            clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(true)),
+            pending_clipboard_write: Mutex::new(None),
+            pending_paste_write: Mutex::new(None),
+            rows: AtomicU16::new(rows),
+            cols: AtomicU16::new(cols),
+            cell_width: AtomicU32::new(1),
+            cell_height: AtomicU32::new(1),
+            dark_mode: AtomicBool::new(false),
+            device_attributes: default_device_attributes(),
+            metadata_dirty: AtomicU8::new(0),
+            bell_pending: AtomicBool::new(false),
+            desktop_notification_policy: Arc::new(DesktopNotificationPolicy::default()),
+            progress_epoch: Instant::now(),
+            progress: AtomicU64::new(0),
+            unknown_sequence_log_count: AtomicU8::new(0),
+        });
+        let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
+        let rc =
+            unsafe { ghostty_terminal_set(terminal, GhosttyTerminalOption::Userdata, userdata) };
+        if rc != 0 {
+            unsafe { ghostty_terminal_free(terminal) };
+            anyhow::bail!("ghostty_terminal_set(USERDATA) failed: rc={rc}");
+        }
+
+        if callback_state.write_pty.is_some() {
             let rc = unsafe {
                 ghostty_terminal_set(
                     terminal,
@@ -1595,6 +1719,67 @@ impl VtScreen {
                     unsafe { ghostty_terminal_free(terminal) };
                     anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
                 }
+            }
+        }
+
+        let effect_callbacks = [
+            (
+                GhosttyTerminalOption::Bell,
+                vt_bell_callback as *const c_void,
+                "BELL",
+            ),
+            (
+                GhosttyTerminalOption::TitleChanged,
+                vt_title_changed_callback as *const c_void,
+                "TITLE_CHANGED",
+            ),
+            (
+                GhosttyTerminalOption::PwdChanged,
+                vt_pwd_changed_callback as *const c_void,
+                "PWD_CHANGED",
+            ),
+            (
+                GhosttyTerminalOption::DesktopNotification,
+                vt_desktop_notification_callback as *const c_void,
+                "DESKTOP_NOTIFICATION",
+            ),
+            (
+                GhosttyTerminalOption::ProgressReport,
+                vt_progress_report_callback as *const c_void,
+                "PROGRESS_REPORT",
+            ),
+        ];
+        for (option, callback, label) in effect_callbacks {
+            let rc = unsafe { ghostty_terminal_set(terminal, option, callback) };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set({label}) failed: rc={rc}");
+            }
+        }
+
+        if log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug) {
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::UnknownMaxBytes,
+                    &UNKNOWN_SEQUENCE_MAX_BYTES as *const _ as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(UNKNOWN_MAX_BYTES) failed: rc={rc}");
+            }
+
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::UnknownSequence,
+                    vt_unknown_sequence_callback as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(UNKNOWN_SEQUENCE) failed: rc={rc}");
             }
         }
 
@@ -1721,6 +1906,9 @@ impl VtScreen {
                 kitty_placements: Arc::from([]),
                 kitty_snapshot_generation: u64::MAX,
                 callback_state,
+                title: None,
+                title_reported: false,
+                current_dir: None,
                 cols,
                 rows,
                 generation: 0,
@@ -1732,6 +1920,114 @@ impl VtScreen {
                 output_generation: 0,
             })),
         })
+    }
+
+    pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
+        let inner = self.inner.lock();
+        if enabled {
+            let clipboard_write_max_bytes = CLIPBOARD_WRITE_LIMIT_BYTES;
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    inner.terminal,
+                    GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                    &clipboard_write_max_bytes as *const _ as *const c_void,
+                )
+            };
+            if rc != 0 {
+                return Err(format!(
+                    "ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={rc}"
+                ));
+            }
+
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    inner.terminal,
+                    GhosttyTerminalOption::ClipboardWrite,
+                    vt_clipboard_write_callback as *const c_void,
+                )
+            };
+            if rc != 0 {
+                let disabled_limit = 0_usize;
+                let _ = unsafe {
+                    ghostty_terminal_set(
+                        inner.terminal,
+                        GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                        &disabled_limit as *const _ as *const c_void,
+                    )
+                };
+                return Err(format!(
+                    "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={rc}"
+                ));
+            }
+            inner
+                .callback_state
+                .clipboard_write_enabled
+                .store(true, Ordering::Release);
+            return Ok(());
+        }
+
+        inner
+            .callback_state
+            .clipboard_write_enabled
+            .store(false, Ordering::Release);
+        inner.callback_state.pending_clipboard_write.lock().take();
+        let callback_rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::ClipboardWrite,
+                std::ptr::null(),
+            )
+        };
+        let disabled_limit = 0_usize;
+        let limit_rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::ClipboardWriteMaxBytes,
+                &disabled_limit as *const _ as *const c_void,
+            )
+        };
+        if callback_rc != 0 {
+            return Err(format!(
+                "ghostty_terminal_set(CLIPBOARD_WRITE) failed: rc={callback_rc}"
+            ));
+        }
+        if limit_rc != 0 {
+            return Err(format!(
+                "ghostty_terminal_set(CLIPBOARD_WRITE_MAX_BYTES) failed: rc={limit_rc}"
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn take_clipboard_write(&self) -> Option<String> {
+        let inner = self.inner.lock();
+        let state = &inner.callback_state;
+        let pending = state.pending_clipboard_write.lock().take();
+        if state.clipboard_write_policy.is_enabled() {
+            pending
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_clipboard_write_policy(&self, policy: Arc<ClipboardWritePolicy>) {
+        let mut inner = self.inner.lock();
+        if !policy.is_enabled() {
+            inner.callback_state.pending_clipboard_write.lock().take();
+        }
+        inner.callback_state.clipboard_write_policy = policy;
+    }
+
+    pub fn take_desktop_notification(&self) -> Option<DesktopNotification> {
+        self.inner
+            .lock()
+            .callback_state
+            .desktop_notification_policy
+            .take()
+    }
+
+    pub(crate) fn set_desktop_notification_policy(&self, policy: Arc<DesktopNotificationPolicy>) {
+        self.inner.lock().callback_state.desktop_notification_policy = policy;
     }
 
     /// Replace the default fg/bg/palette. Bumps the snapshot
@@ -1758,12 +2054,39 @@ impl VtScreen {
         self.inner.lock().generation
     }
 
+    /// Consume one or more bells coalesced since the previous drain.
+    pub fn take_bell(&self) -> bool {
+        self.inner
+            .lock()
+            .callback_state
+            .bell_pending
+            .swap(false, Ordering::Relaxed)
+    }
+
+    pub fn progress(&self) -> Option<TerminalProgress> {
+        let inner = self.inner.lock();
+        let state = &inner.callback_state;
+        let encoded = state.progress.load(Ordering::Relaxed);
+        if encoded == 0 {
+            return None;
+        }
+        let progress =
+            decode_timed_terminal_progress(encoded, terminal_progress_tick(&state.progress_epoch));
+        if progress.is_none() {
+            let _ =
+                state
+                    .progress
+                    .compare_exchange(encoded, 0, Ordering::Relaxed, Ordering::Relaxed);
+        }
+        progress
+    }
+
     pub fn is_write_desynchronized(&self) -> bool {
         self.inner
             .lock()
             .callback_state
-            .as_ref()
-            .is_some_and(|state| state.write_failed.load(Ordering::Acquire))
+            .write_failed
+            .load(Ordering::Acquire)
     }
 
     /// Enqueue raw user input through the same ordering boundary as encoded
@@ -1783,13 +2106,13 @@ impl VtScreen {
             return Ok(());
         }
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.clone() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "terminal input requires a WRITE_PTY callback",
             ));
         };
-        let write_pty = callback_state.write_pty.clone();
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
         let write_guard = write_order.lock();
@@ -1810,6 +2133,7 @@ impl VtScreen {
         let mut inner = self.inner.lock();
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        refresh_terminal_metadata(&mut inner);
         inner.output_generation = inner.output_generation.wrapping_add(1);
         inner.generation = inner.generation.wrapping_add(1);
     }
@@ -1822,10 +2146,10 @@ impl VtScreen {
     /// change between parsing output and encoding the next key.
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> anyhow::Result<VtKeyOutcome> {
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.clone() else {
             anyhow::bail!("terminal key encoding requires a WRITE_PTY callback");
         };
-        let write_pty = callback_state.write_pty.clone();
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
 
@@ -1955,7 +2279,8 @@ impl VtScreen {
         }
 
         let inner = self.inner.lock();
-        let Some(callback_state) = inner.callback_state.as_ref() else {
+        let callback_state = &inner.callback_state;
+        let Some(write_pty) = callback_state.write_pty.as_ref() else {
             anyhow::bail!("terminal paste requires a WRITE_PTY callback");
         };
         let previous = callback_state
@@ -2005,7 +2330,7 @@ impl VtScreen {
                     // one-time Kitty grant is installed before a program can
                     // react to the event and request its clipboard payload.
                     let _write_guard = callback_state.write_order.lock();
-                    (callback_state.write_pty)(&output, PtyWriteClass::Regular).map_err(|err| {
+                    write_pty(&output, PtyWriteClass::Regular).map_err(|err| {
                         anyhow::anyhow!("terminal paste failed to enqueue PTY bytes: {err}")
                     })?;
                 }
@@ -2053,16 +2378,15 @@ impl VtScreen {
         }
         inner.cols = cols;
         inner.rows = rows;
-        if let Some(state) = inner.callback_state.as_ref() {
-            state.cols.store(cols, Ordering::Release);
-            state.rows.store(rows, Ordering::Release);
-            state
-                .cell_width
-                .store(cell_width_px.max(1), Ordering::Release);
-            state
-                .cell_height
-                .store(cell_height_px.max(1), Ordering::Release);
-        }
+        let state = &inner.callback_state;
+        state.cols.store(cols, Ordering::Release);
+        state.rows.store(rows, Ordering::Release);
+        state
+            .cell_width
+            .store(cell_width_px.max(1), Ordering::Release);
+        state
+            .cell_height
+            .store(cell_height_px.max(1), Ordering::Release);
         let total = cols as usize * rows as usize;
         inner.scratch.clear();
         inner.scratch.resize(total, Cell::default());
@@ -2385,9 +2709,10 @@ impl VtScreen {
 
     pub fn set_dark_mode(&self, dark: bool) {
         let inner = self.inner.lock();
-        if let Some(state) = inner.callback_state.as_ref() {
-            state.dark_mode.store(dark, Ordering::Release);
-        }
+        inner
+            .callback_state
+            .dark_mode
+            .store(dark, Ordering::Release);
     }
 
     /// Returns `true` when at least one mouse-tracking mode is set
@@ -2425,37 +2750,24 @@ impl VtScreen {
         read_scrollbar(inner.terminal)
     }
 
-    /// Current working directory reported by shell integration (OSC 7).
-    ///
-    /// Returns `None` when the shell has not reported a cwd yet. Callers
-    /// should keep their launch cwd as a fallback for plain shells.
-    pub fn current_dir(&self) -> Option<String> {
-        let inner = self.inner.lock();
-        if inner.terminal.is_null() {
-            return None;
-        }
-        let mut pwd = GhosttyString::default();
-        let rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::Pwd,
-                &mut pwd as *mut _ as *mut c_void,
-            )
-        };
-        if rc != 0 || pwd.ptr.is_null() || pwd.len == 0 {
-            return None;
-        }
+    /// Current title reported by OSC 0/2.
+    pub fn title(&self) -> Option<String> {
+        self.inner.lock().title.clone()
+    }
 
-        let bytes = unsafe { std::slice::from_raw_parts(pwd.ptr, pwd.len) };
-        let pwd = std::str::from_utf8(bytes).ok()?;
-        if pwd.is_empty() {
-            return None;
-        }
-        if pwd.starts_with("file://") {
-            parse_osc7_cwd(pwd)
-        } else {
-            Some(pwd.to_string())
-        }
+    /// Distinguishes no title report from an explicit title clear.
+    pub(crate) fn reported_title(&self) -> Option<Option<String>> {
+        let inner = self.inner.lock();
+        inner.title_reported.then(|| inner.title.clone())
+    }
+
+    /// Current working directory reported by shell integration.
+    ///
+    /// OSC 7 file URIs are decoded when the callback fires; OSC 9 and OSC 1337
+    /// paths are retained as reported. Returns `None` when the shell has not
+    /// reported a cwd or explicitly clears it.
+    pub fn current_dir(&self) -> Option<String> {
+        self.inner.lock().current_dir.clone()
     }
 
     /// Returns `true` while the alternate screen buffer is active.
@@ -2566,6 +2878,57 @@ impl VtScreen {
     }
 }
 
+fn refresh_terminal_metadata(inner: &mut VtInner) {
+    let dirty = inner
+        .callback_state
+        .metadata_dirty
+        .swap(0, Ordering::Relaxed);
+    if dirty & METADATA_DIRTY_TITLE != 0 {
+        let title = with_terminal_bytes(inner.terminal, GhosttyTerminalData::Title, |bytes| {
+            (!bytes.is_empty()).then(|| String::from_utf8_lossy(bytes).into_owned())
+        });
+        if let Some(title) = title {
+            inner.title_reported = true;
+            inner.title = title;
+        }
+    }
+
+    if dirty & METADATA_DIRTY_PWD != 0 {
+        let current_dir = with_terminal_bytes(inner.terminal, GhosttyTerminalData::Pwd, |bytes| {
+            let pwd = std::str::from_utf8(bytes).ok()?;
+            if pwd.is_empty() {
+                None
+            } else if pwd.starts_with("file://") {
+                parse_osc7_cwd(pwd)
+            } else {
+                Some(pwd.to_owned())
+            }
+        });
+        if let Some(current_dir) = current_dir {
+            inner.current_dir = current_dir;
+        }
+    }
+}
+
+fn with_terminal_bytes<R>(
+    terminal: GhosttyTerminal,
+    data: GhosttyTerminalData,
+    read: impl FnOnce(&[u8]) -> R,
+) -> Option<R> {
+    let mut value = GhosttyString::default();
+    let rc =
+        unsafe { ghostty_terminal_get(terminal, data, (&mut value as *mut GhosttyString).cast()) };
+    if rc != GHOSTTY_SUCCESS || (value.ptr.is_null() && value.len > 0) {
+        return None;
+    }
+    if value.len == 0 {
+        return Some(read(&[]));
+    }
+    Some(read(unsafe {
+        std::slice::from_raw_parts(value.ptr, value.len)
+    }))
+}
+
 unsafe extern "C" fn vt_paste_read_callback(
     userdata: *mut c_void,
     mime: GhosttyString,
@@ -2583,6 +2946,85 @@ unsafe extern "C" fn vt_paste_read_callback(
         return true;
     }
     unsafe { write(writer.userdata, reader.text.as_ptr(), reader.text.len()) }
+}
+
+unsafe extern "C" fn vt_clipboard_write_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    write: *const GhosttyClipboardWrite,
+) {
+    if userdata.is_null() || write.is_null() {
+        return;
+    }
+    if unsafe { (*write).size } < std::mem::size_of::<GhosttyClipboardWrite>() {
+        return;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let write = unsafe { &*write };
+    if write.reply.is_none() {
+        return;
+    }
+
+    let result = if !state.clipboard_write_enabled.load(Ordering::Acquire)
+        || !state.clipboard_write_policy.is_enabled()
+    {
+        GhosttyClipboardWriteResult::Denied
+    } else if write.location != GhosttyClipboardLocation::Standard {
+        GhosttyClipboardWriteResult::Unsupported
+    } else {
+        let text = if write.contents_len == 0 {
+            Ok("")
+        } else if write.contents_len > 1 {
+            Err(GhosttyClipboardWriteResult::Unsupported)
+        } else if write.contents.is_null() {
+            Err(GhosttyClipboardWriteResult::InvalidData)
+        } else {
+            let content = unsafe { &*write.contents };
+            if !ghostty_string_is_supported_text(content.mime) {
+                Err(GhosttyClipboardWriteResult::Unsupported)
+            } else if content.data.len > CLIPBOARD_WRITE_LIMIT_BYTES
+                || (content.data.ptr.is_null() && content.data.len > 0)
+            {
+                Err(GhosttyClipboardWriteResult::InvalidData)
+            } else {
+                let bytes = if content.data.len == 0 {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(content.data.ptr, content.data.len) }
+                };
+                std::str::from_utf8(bytes).map_err(|_| GhosttyClipboardWriteResult::InvalidData)
+            }
+        };
+        match text {
+            Err(result) => result,
+            Ok(text) => {
+                let mut pending = state.pending_clipboard_write.lock();
+                if !state.clipboard_write_enabled.load(Ordering::Acquire)
+                    || !state.clipboard_write_policy.is_enabled()
+                {
+                    GhosttyClipboardWriteResult::Denied
+                } else {
+                    *pending = Some(text.to_owned());
+                    GhosttyClipboardWriteResult::Success
+                }
+            }
+        }
+    };
+
+    reply_clipboard_write(write, result);
+}
+
+fn reply_clipboard_write(write: &GhosttyClipboardWrite, result: GhosttyClipboardWriteResult) {
+    let Some(reply) = write.reply else {
+        return;
+    };
+    let reply_value = GhosttyClipboardWriteReply {
+        size: std::mem::size_of::<GhosttyClipboardWriteReply>(),
+        result,
+        remember: false,
+    };
+    unsafe { reply(write, &reply_value) };
 }
 
 /// Clipboard reads initiated by a running program are denied by default.
@@ -2712,6 +3154,9 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let Some(write_pty) = state.write_pty.as_ref() else {
+        return;
+    };
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
     {
         let mut pending = state.pending_paste_write.lock();
@@ -2722,9 +3167,212 @@ unsafe extern "C" fn vt_write_pty_callback(
     }
 
     let _write_guard = state.write_order.lock();
-    if let Err(err) = (state.write_pty)(bytes, PtyWriteClass::ReservedControl) {
+    if let Err(err) = write_pty(bytes, PtyWriteClass::ReservedControl) {
         mark_control_write_failed(&state.write_failed, &err);
     }
+}
+
+unsafe extern "C" fn vt_bell_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.bell_pending.store(true, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn vt_desktop_notification_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    notification: *const GhosttyTerminalDesktopNotification,
+) {
+    if userdata.is_null() || notification.is_null() {
+        return;
+    }
+    if unsafe { notification.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalDesktopNotification>()
+    {
+        return;
+    }
+
+    let notification = unsafe { &*notification };
+    let Some(title) = (unsafe { ghostty_string_bytes(&notification.title) }) else {
+        return;
+    };
+    let Some(body) = (unsafe { ghostty_string_bytes(&notification.body) }) else {
+        return;
+    };
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.desktop_notification_policy.push(title, body);
+}
+
+unsafe fn ghostty_string_bytes(value: &GhosttyString) -> Option<&[u8]> {
+    if value.ptr.is_null() && value.len > 0 {
+        return None;
+    }
+    Some(if value.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(value.ptr, value.len) }
+    })
+}
+
+unsafe extern "C" fn vt_progress_report_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    report: *const GhosttyTerminalProgressReport,
+) {
+    if userdata.is_null() || report.is_null() {
+        return;
+    }
+    if unsafe { report.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalProgressReport>()
+    {
+        return;
+    }
+    let report = unsafe { &*report };
+    let Some(progress) = TerminalProgress::from_ghostty_report(report.state, report.progress)
+    else {
+        return;
+    };
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state.progress.store(
+        encode_timed_terminal_progress(progress, terminal_progress_tick(&state.progress_epoch)),
+        Ordering::Relaxed,
+    );
+}
+
+fn encode_terminal_progress(progress: Option<TerminalProgress>) -> u16 {
+    let (state, percent) = match progress {
+        None => return 0,
+        Some(TerminalProgress::Running(percent)) => (1, percent),
+        Some(TerminalProgress::Error(percent)) => (2, percent),
+        Some(TerminalProgress::Indeterminate) => (3, None),
+        Some(TerminalProgress::Paused(percent)) => (4, percent),
+    };
+    (state << 8) | percent.map_or(0, |percent| u16::from(percent) + 1)
+}
+
+fn terminal_progress_tick(epoch: &Instant) -> u64 {
+    const MAX_TICK: u64 = u64::MAX >> u16::BITS;
+    u64::try_from(epoch.elapsed().as_millis())
+        .unwrap_or(u64::MAX)
+        .min(MAX_TICK - 1)
+        + 1
+}
+
+fn encode_timed_terminal_progress(progress: Option<TerminalProgress>, tick: u64) -> u64 {
+    let progress = encode_terminal_progress(progress);
+    if progress == 0 {
+        0
+    } else {
+        (tick << u16::BITS) | u64::from(progress)
+    }
+}
+
+fn decode_timed_terminal_progress(value: u64, now: u64) -> Option<TerminalProgress> {
+    let updated_at = value >> u16::BITS;
+    if updated_at == 0
+        || now.saturating_sub(updated_at)
+            >= u64::try_from(TERMINAL_PROGRESS_TIMEOUT.as_millis()).unwrap_or(u64::MAX)
+    {
+        return None;
+    }
+    decode_terminal_progress(value as u16)
+}
+
+fn decode_terminal_progress(value: u16) -> Option<TerminalProgress> {
+    let percent = match value & 0xff {
+        0 => None,
+        value => Some((value - 1) as u8),
+    };
+    match value >> 8 {
+        1 => Some(TerminalProgress::Running(percent)),
+        2 => Some(TerminalProgress::Error(percent)),
+        3 => Some(TerminalProgress::Indeterminate),
+        4 => Some(TerminalProgress::Paused(percent)),
+        _ => None,
+    }
+}
+
+unsafe extern "C" fn vt_unknown_sequence_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    sequence: *const GhosttyTerminalUnknownSequence,
+) {
+    if userdata.is_null()
+        || sequence.is_null()
+        || !log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug)
+    {
+        return;
+    }
+
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let Ok(log_index) = state.unknown_sequence_log_count.fetch_update(
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+        |count| (count <= UNKNOWN_SEQUENCE_LOG_LIMIT).then_some(count + 1),
+    ) else {
+        return;
+    };
+    if log_index == UNKNOWN_SEQUENCE_LOG_LIMIT {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "further unknown terminal sequences suppressed"
+        );
+        return;
+    }
+
+    let sequence = unsafe { &*sequence };
+    if sequence.tag != GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "unknown terminal sequence tag={}",
+            sequence.tag
+        );
+        return;
+    }
+
+    let apc = unsafe { sequence.value.apc };
+    if apc.content.ptr.is_null() && apc.content.len != 0 {
+        log::debug!(
+            target: UNKNOWN_SEQUENCE_LOG_TARGET,
+            "unknown APC has invalid content pointer len={} truncated={}",
+            apc.content.len,
+            apc.truncated
+        );
+        return;
+    }
+    let content = if apc.content.len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(apc.content.ptr, apc.content.len) }
+    };
+    log::debug!(
+        target: UNKNOWN_SEQUENCE_LOG_TARGET,
+        "unknown APC len={} truncated={} content={content:02x?}",
+        content.len(),
+        apc.truncated
+    );
+}
+
+unsafe extern "C" fn vt_title_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state
+        .metadata_dirty
+        .fetch_or(METADATA_DIRTY_TITLE, Ordering::Relaxed);
+}
+
+unsafe extern "C" fn vt_pwd_changed_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    state
+        .metadata_dirty
+        .fetch_or(METADATA_DIRTY_PWD, Ordering::Relaxed);
 }
 
 fn mark_control_write_failed(write_failed: &AtomicBool, err: &std::io::Error) {
@@ -3359,6 +4007,46 @@ mod tests {
             types["GhosttyTerminalOption"]["values"]["CLIPBOARD_READ"].as_i64(),
             Some(GhosttyTerminalOption::ClipboardRead as i64)
         );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["CLIPBOARD_WRITE"].as_i64(),
+            Some(GhosttyTerminalOption::ClipboardWrite as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["CLIPBOARD_WRITE_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalOption::ClipboardWriteMaxBytes as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["BELL"].as_i64(),
+            Some(GhosttyTerminalOption::Bell as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["TITLE_CHANGED"].as_i64(),
+            Some(GhosttyTerminalOption::TitleChanged as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["PWD_CHANGED"].as_i64(),
+            Some(GhosttyTerminalOption::PwdChanged as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["DESKTOP_NOTIFICATION"].as_i64(),
+            Some(GhosttyTerminalOption::DesktopNotification as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["PROGRESS_REPORT"].as_i64(),
+            Some(GhosttyTerminalOption::ProgressReport as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["UNKNOWN_SEQUENCE"].as_i64(),
+            Some(GhosttyTerminalOption::UnknownSequence as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["UNKNOWN_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalOption::UnknownMaxBytes as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalData"]["values"]["CLIPBOARD_WRITE_MAX_BYTES"].as_i64(),
+            Some(GhosttyTerminalData::ClipboardWriteMaxBytes as i64)
+        );
         for (name, size, align) in [
             (
                 "GhosttyWriter",
@@ -3381,6 +4069,16 @@ mod tests {
                 std::mem::align_of::<GhosttyClipboardContent>(),
             ),
             (
+                "GhosttyClipboardWriteReply",
+                std::mem::size_of::<GhosttyClipboardWriteReply>(),
+                std::mem::align_of::<GhosttyClipboardWriteReply>(),
+            ),
+            (
+                "GhosttyClipboardWrite",
+                std::mem::size_of::<GhosttyClipboardWrite>(),
+                std::mem::align_of::<GhosttyClipboardWrite>(),
+            ),
+            (
                 "GhosttyClipboardReadReply",
                 std::mem::size_of::<GhosttyClipboardReadReply>(),
                 std::mem::align_of::<GhosttyClipboardReadReply>(),
@@ -3389,6 +4087,31 @@ mod tests {
                 "GhosttyClipboardRead",
                 std::mem::size_of::<GhosttyClipboardRead>(),
                 std::mem::align_of::<GhosttyClipboardRead>(),
+            ),
+            (
+                "GhosttyTerminalDesktopNotification",
+                std::mem::size_of::<GhosttyTerminalDesktopNotification>(),
+                std::mem::align_of::<GhosttyTerminalDesktopNotification>(),
+            ),
+            (
+                "GhosttyTerminalProgressReport",
+                std::mem::size_of::<GhosttyTerminalProgressReport>(),
+                std::mem::align_of::<GhosttyTerminalProgressReport>(),
+            ),
+            (
+                "GhosttyTerminalUnknownStringSequence",
+                std::mem::size_of::<GhosttyTerminalUnknownStringSequence>(),
+                std::mem::align_of::<GhosttyTerminalUnknownStringSequence>(),
+            ),
+            (
+                "GhosttyTerminalUnknownSequenceValue",
+                std::mem::size_of::<GhosttyTerminalUnknownSequenceValue>(),
+                std::mem::align_of::<GhosttyTerminalUnknownSequenceValue>(),
+            ),
+            (
+                "GhosttyTerminalUnknownSequence",
+                std::mem::size_of::<GhosttyTerminalUnknownSequence>(),
+                std::mem::align_of::<GhosttyTerminalUnknownSequence>(),
             ),
             (
                 "GhosttySysImage",
@@ -3431,6 +4154,20 @@ mod tests {
                 types["GhosttyPasteSource"]["values"][name].as_i64(),
                 Some(value as i64),
                 "GhosttyPasteSource::{name}"
+            );
+        }
+        for (name, value) in [
+            ("SUCCESS", GhosttyClipboardWriteResult::Success),
+            ("DENIED", GhosttyClipboardWriteResult::Denied),
+            ("UNSUPPORTED", GhosttyClipboardWriteResult::Unsupported),
+            ("BUSY", GhosttyClipboardWriteResult::Busy),
+            ("INVALID_DATA", GhosttyClipboardWriteResult::InvalidData),
+            ("IO_ERROR", GhosttyClipboardWriteResult::IoError),
+        ] {
+            assert_eq!(
+                types["GhosttyClipboardWriteResult"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyClipboardWriteResult::{name}"
             );
         }
         for (name, value) in [
@@ -3947,6 +4684,75 @@ mod tests {
     }
 
     #[test]
+    fn terminal_clipboard_writes_require_opt_in_and_coalesce_pending_text() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+        let policy = Arc::new(ClipboardWritePolicy::new(true));
+        screen.set_clipboard_write_policy(policy.clone());
+        let clipboard_write_limit = || {
+            let inner = screen.inner.lock();
+            let mut limit = usize::MAX;
+            let rc = unsafe {
+                ghostty_terminal_get(
+                    inner.terminal,
+                    GhosttyTerminalData::ClipboardWriteMaxBytes,
+                    &mut limit as *mut _ as *mut c_void,
+                )
+            };
+            assert_eq!(rc, 0);
+            limit
+        };
+
+        assert_eq!(clipboard_write_limit(), 0);
+        screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen
+            .set_clipboard_write_enabled(true)
+            .expect("enable clipboard writes");
+        assert_eq!(clipboard_write_limit(), CLIPBOARD_WRITE_LIMIT_BYTES);
+        screen.feed(b"\x1b]52;c;aGVsbG8=\x07");
+        screen.feed(b"\x1b]52;c;d29ybGQ=\x07");
+        assert_eq!(screen.take_clipboard_write().as_deref(), Some("world"));
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen.feed(b"\x1b]52;c;/w==\x07");
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen.feed(b"\x1b]52;c;\x07");
+        assert_eq!(screen.take_clipboard_write().as_deref(), Some(""));
+
+        screen.feed(b"\x1b]52;c;YmxvY2tlZA==\x07");
+        policy.set_enabled(false);
+        assert_eq!(screen.take_clipboard_write(), None);
+        screen.feed(b"\x1b]52;c;ZGVuaWVk\x07");
+        policy.set_enabled(true);
+        assert_eq!(screen.take_clipboard_write(), None);
+
+        screen.feed(b"\x1b]52;c;YWdhaW4=\x07");
+        screen
+            .set_clipboard_write_enabled(false)
+            .expect("disable clipboard writes");
+        assert_eq!(clipboard_write_limit(), 0);
+        assert_eq!(screen.take_clipboard_write(), None);
+    }
+
+    #[test]
+    fn terminal_desktop_notifications_are_bounded_on_utf8_boundaries() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+        let title = format!("{}é", "a".repeat(62));
+        let sequence = format!("\x1b]777;notify;{title};Needs attention\x07");
+
+        screen.feed(sequence.as_bytes());
+
+        let notification = screen
+            .take_desktop_notification()
+            .expect("desktop notification");
+        assert_eq!(notification.title, "a".repeat(62));
+        assert_eq!(notification.body, "Needs attention");
+        assert_eq!(screen.take_desktop_notification(), None);
+    }
+
+    #[test]
     fn vt_screen_queries_modes_through_terminal_data() {
         let screen = VtScreen::new(80, 24, None).expect("create vt screen");
 
@@ -4144,8 +4950,6 @@ mod tests {
                     .inner
                     .lock()
                     .callback_state
-                    .as_ref()
-                    .expect("callback state")
                     .clipboard_text
                     .lock()
                     .as_deref(),
@@ -4179,6 +4983,77 @@ mod tests {
     }
 
     #[test]
+    fn vt_screen_coalesces_bell_effects_until_the_host_drains_them() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]2;OSC terminator\x07");
+        assert!(
+            !screen.take_bell(),
+            "an OSC terminator is not a bell effect"
+        );
+
+        screen.feed(b"\x07\x07");
+        assert!(screen.take_bell());
+        assert!(!screen.take_bell());
+    }
+
+    #[test]
+    fn vt_screen_tracks_latest_progress_report() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]9;4;1;42\x07\x1b]9;4;4;75\x1b\\");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Paused(Some(75))));
+
+        screen.feed(b"\x1b]9;4;2");
+        screen.feed(b";7\x1b\\");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Error(Some(7))));
+
+        screen.feed(b"\x1b]9;4;3\x07");
+        assert_eq!(screen.progress(), Some(TerminalProgress::Indeterminate));
+
+        screen.feed(b"\x1b]9;4;0\x07");
+        assert_eq!(screen.progress(), None);
+    }
+
+    #[test]
+    fn terminal_progress_expires_without_a_fresh_report() {
+        let progress = Some(TerminalProgress::Running(Some(42)));
+        let reported_at = 10;
+        let encoded = encode_timed_terminal_progress(progress, reported_at);
+        let timeout = u64::try_from(TERMINAL_PROGRESS_TIMEOUT.as_millis()).unwrap();
+
+        assert_eq!(
+            decode_timed_terminal_progress(encoded, reported_at + timeout - 1),
+            progress
+        );
+        assert_eq!(
+            decode_timed_terminal_progress(encoded, reported_at + timeout),
+            None
+        );
+    }
+
+    #[test]
+    fn vt_screen_tracks_title_effects_without_a_pty_writer() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        assert_eq!(screen.reported_title(), None);
+        assert_eq!(screen.title(), None);
+
+        screen.feed(b"\x1b]0;first title\x07\x1b]2;final title\x1b\\");
+
+        assert_eq!(
+            screen.reported_title(),
+            Some(Some("final title".to_owned()))
+        );
+        assert_eq!(screen.title().as_deref(), Some("final title"));
+
+        screen.feed(b"\x1b]2;\x07");
+
+        assert_eq!(screen.reported_title(), Some(None));
+        assert_eq!(screen.title(), None);
+    }
+
+    #[test]
     fn vt_screen_reports_osc7_current_dir() {
         let screen = VtScreen::new(80, 24, None).expect("create vt screen");
 
@@ -4186,6 +5061,19 @@ mod tests {
         screen.feed(b"\x1b]7;file:///tmp/con-vt-cwd\x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some("/tmp/con-vt-cwd"));
+    }
+
+    #[test]
+    fn vt_screen_coalesces_and_clears_current_dir_effects_without_a_pty_writer() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///tmp/first\x07\x1b]9;9;/tmp/final\x1b\\");
+
+        assert_eq!(screen.current_dir().as_deref(), Some("/tmp/final"));
+
+        screen.feed(b"\x1b]7;\x07");
+
+        assert_eq!(screen.current_dir(), None);
     }
 
     #[test]

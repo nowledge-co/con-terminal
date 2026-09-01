@@ -1272,6 +1272,7 @@ name = "con"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ashpd",
  "cc",
  "chrono",
  "cocoa 0.26.0",
