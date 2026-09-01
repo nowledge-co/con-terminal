@@ -235,4 +235,4 @@ Verified behavior notes:
 
 Current known limitation from the same live run:
 
-- `panes.create` returns promptly with `tab_index`, `pane_index`, `pane_id`, `surface_ready`, `is_alive`, and `has_shell_integration`. Use `pane_id` for follow-up targeting, then confirm the created pane exposes the exact control capabilities you need before driving it further.
+- `panes.create` returns promptly with `tab_index`, `pane_index`, `pane_id`, `surface_ready`, `is_alive`, and `has_shell_integration`. On macOS it also reports `foreground_process_group_id` and `tty_name` when libghostty can provide them. Use `pane_id` for follow-up targeting, then confirm the created pane exposes the exact control capabilities you need before driving it further.

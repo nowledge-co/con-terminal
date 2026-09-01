@@ -273,6 +273,12 @@ impl WindowsGhosttyTerminal {
             .as_ref()
             .and_then(RenderSession::current_dir)
     }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
+        None
+    }
     pub fn is_alive(&self) -> bool {
         match self.inner.lock().as_ref() {
             Some(session) => session.is_alive(),

@@ -26,6 +26,20 @@ impl TerminalPane {
         self.entity.read(cx).current_dir()
     }
 
+    pub fn foreground_process_group_id(&self, cx: &App) -> Option<u64> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.foreground_process_group_id())
+    }
+
+    pub fn tty_name(&self, cx: &App) -> Option<String> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.tty_name())
+    }
+
     pub fn is_alive(&self, cx: &App) -> bool {
         self.entity.read(cx).is_alive()
     }
@@ -274,6 +288,8 @@ impl TerminalPane {
         PaneObservationFrame {
             title: title.clone(),
             cwd: self.current_dir(cx),
+            foreground_process_group_id: self.foreground_process_group_id(cx),
+            tty_name: self.tty_name(cx),
             screen_hints: derive_screen_hints(
                 title.as_deref(),
                 if visible_output.is_empty() {

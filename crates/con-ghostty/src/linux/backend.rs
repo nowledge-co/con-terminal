@@ -437,6 +437,14 @@ impl LinuxGhosttyTerminal {
             .and_then(LinuxPtySession::current_dir)
     }
 
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+
+    pub fn tty_name(&self) -> Option<String> {
+        None
+    }
+
     pub fn is_alive(&self) -> bool {
         self.inner
             .lock()

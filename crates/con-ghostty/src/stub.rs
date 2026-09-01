@@ -233,6 +233,12 @@ impl GhosttyTerminal {
     pub fn current_dir(&self) -> Option<String> {
         None
     }
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        None
+    }
+    pub fn tty_name(&self) -> Option<String> {
+        None
+    }
     pub fn is_alive(&self) -> bool {
         false
     }

@@ -758,6 +758,8 @@ impl ConWorkspace {
             "surface_ready": terminal.surface_ready(cx),
             "is_alive": terminal.is_alive(cx),
             "has_shell_integration": terminal.has_shell_integration(cx),
+            "foreground_process_group_id": terminal.foreground_process_group_id(cx),
+            "tty_name": terminal.tty_name(cx),
         })
     }
 
@@ -779,6 +781,8 @@ impl ConWorkspace {
             "is_alive": resolved.terminal.is_alive(cx),
             "has_shell_integration": resolved.terminal.has_shell_integration(cx),
             "is_busy": resolved.terminal.is_busy(cx),
+            "foreground_process_group_id": resolved.terminal.foreground_process_group_id(cx),
+            "tty_name": resolved.terminal.tty_name(cx),
         })
     }
 
@@ -810,6 +814,8 @@ impl ConWorkspace {
             "is_alive": surface.terminal.is_alive(cx),
             "has_shell_integration": surface.terminal.has_shell_integration(cx),
             "is_busy": surface.terminal.is_busy(cx),
+            "foreground_process_group_id": surface.terminal.foreground_process_group_id(cx),
+            "tty_name": surface.terminal.tty_name(cx),
             "rows": rows,
             "cols": cols,
             "owner": surface.owner,
@@ -1011,6 +1017,8 @@ impl ConWorkspace {
                         hostname_source: runtime.remote_host_source,
                         remote_workspace,
                         title: observation.title.clone(),
+                        foreground_process_group_id: observation.foreground_process_group_id,
+                        tty_name: observation.tty_name.clone(),
                         front_state: runtime.front_state,
                         mode: runtime.mode,
                         has_shell_integration: observation.has_shell_integration,

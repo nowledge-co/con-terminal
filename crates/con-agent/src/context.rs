@@ -256,6 +256,10 @@ impl Default for PaneObservationSupport {
 pub struct PaneObservationFrame {
     pub title: Option<String>,
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub foreground_process_group_id: Option<u64>,
+    #[serde(default)]
+    pub tty_name: Option<String>,
     pub recent_output: Vec<String>,
     pub screen_hints: Vec<PaneObservationHint>,
     pub last_command: Option<String>,
@@ -640,6 +644,31 @@ impl PaneRuntimeTracker {
                 note: Some(
                     "Ghostty shell integration observed a clean shell prompt after the most recent input.".to_string(),
                 ),
+            });
+        }
+
+        if let Some(process_group_id) = observation.foreground_process_group_id {
+            evidence.push(PaneEvidence {
+                subject: "foreground_process_group_id".to_string(),
+                value: Some(process_group_id.to_string()),
+                source: PaneEvidenceSource::SurfaceState,
+                confidence: PaneConfidence::Strong,
+                generation,
+                note: Some(
+                    "The local PTY reports this foreground job-control group. It is not an exact process identity."
+                        .to_string(),
+                ),
+            });
+        }
+
+        if let Some(tty_name) = observation.tty_name.as_ref() {
+            evidence.push(PaneEvidence {
+                subject: "tty_name".to_string(),
+                value: Some(tty_name.clone()),
+                source: PaneEvidenceSource::SurfaceState,
+                confidence: PaneConfidence::Strong,
+                generation,
+                note: None,
             });
         }
 
@@ -1118,6 +1147,12 @@ pub struct TerminalContext {
     pub focused_hostname_source: Option<PaneEvidenceSource>,
     /// Focused pane title if available.
     pub focused_title: Option<String>,
+    /// Foreground job-control process group reported by the local PTY.
+    #[serde(default)]
+    pub focused_foreground_process_group_id: Option<u64>,
+    /// Local PTY slave name for the focused pane.
+    #[serde(default)]
+    pub focused_tty_name: Option<String>,
     /// Current verified front-state for the focused pane.
     pub focused_front_state: PaneFrontState,
     /// Whether the focused pane looks like a shell, multiplexer, or TUI.
@@ -1198,6 +1233,10 @@ pub struct PaneSummary {
     pub hostname_source: Option<PaneEvidenceSource>,
     pub remote_workspace: Option<RemoteWorkspaceAnchor>,
     pub title: Option<String>,
+    #[serde(default)]
+    pub foreground_process_group_id: Option<u64>,
+    #[serde(default)]
+    pub tty_name: Option<String>,
     pub front_state: PaneFrontState,
     pub mode: PaneMode,
     pub has_shell_integration: bool,
@@ -1232,6 +1271,22 @@ fn format_runtime_stack(scopes: &[PaneRuntimeScope]) -> String {
             .collect::<Vec<_>>()
             .join(" > ")
     }
+}
+
+fn format_pty_attributes(
+    foreground_process_group_id: Option<u64>,
+    tty_name: Option<&str>,
+) -> String {
+    let mut attributes = String::new();
+    if let Some(process_group_id) = foreground_process_group_id {
+        attributes.push_str(&format!(
+            " foreground_process_group_id=\"{process_group_id}\""
+        ));
+    }
+    if let Some(tty_name) = tty_name {
+        attributes.push_str(&format!(" tty_name=\"{}\"", xml_escape(tty_name)));
+    }
+    attributes
 }
 
 pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<String> {
@@ -2484,6 +2539,8 @@ impl TerminalContext {
             focused_hostname_confidence: None,
             focused_hostname_source: None,
             focused_title: None,
+            focused_foreground_process_group_id: None,
+            focused_tty_name: None,
             focused_front_state: PaneFrontState::Unknown,
             focused_pane_mode: PaneMode::Unknown,
             focused_has_shell_integration: false,
@@ -2669,6 +2726,7 @@ impl TerminalContext {
              - `<remote_workspaces>` is not a guess. It is con's current host-workspace inventory for this tab, built from pane-local runtime facts and con-managed SSH continuity.\n\
              - `<local_workspaces>` is con's current local coding-workspace inventory for this tab. Use it to reuse local shell and local agent-cli panes for the same project path instead of opening duplicates.\n\
              - Backend support is explicit. If `supports_foreground_command`, `supports_alt_screen`, or `supports_remote_host_identity` is false, treat missing runtime data as unavailable backend truth, not as proof of absence.\n\
+             - `foreground_process_group_id` is the local PTY job-control group, not an exact process identity and not the foreground program inside SSH or tmux. A missing process-group or TTY value means unavailable, not absent.\n\
              - `screen_hints` are weak observations derived from the current visible screen snapshot. They can describe what appears to be on screen now, but they are not backend facts and must not unlock control.\n\
              - Do not end a session-state answer with a vague offer to \"inspect more closely\". Only propose a next step when a stronger fact source is concretely available, such as `probe_shell_context`, `tmux_snapshot`, or tmux native tools already present on the pane.\n\
              - Addressing is layered. A con pane index ≠ tmux pane id ≠ tmux window index ≠ editor buffer.\n\
@@ -2720,6 +2778,10 @@ impl TerminalContext {
         if let Some(cwd) = &self.cwd {
             prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
         }
+        prompt.push_str(&format_pty_attributes(
+            self.focused_foreground_process_group_id,
+            self.focused_tty_name.as_deref(),
+        ));
         if let Some(scope) = self.focused_runtime_stack.last() {
             prompt.push_str(&format!(
                 " active_scope=\"{}\"",
@@ -2911,6 +2973,10 @@ impl TerminalContext {
                 self.focused_observation_support.alternate_screen,
                 self.focused_observation_support.remote_host_identity,
             ));
+            prompt.push_str(&format_pty_attributes(
+                self.focused_foreground_process_group_id,
+                self.focused_tty_name.as_deref(),
+            ));
             if let Some(host) = &self.focused_hostname {
                 prompt.push_str(&format!(" host=\"{}\"", xml_escape(host)));
                 if let Some(confidence) = self.focused_hostname_confidence {
@@ -3008,8 +3074,12 @@ impl TerminalContext {
                     pane.observation_support.alternate_screen,
                     pane.observation_support.remote_host_identity,
                 );
+                let pty = format_pty_attributes(
+                    pane.foreground_process_group_id,
+                    pane.tty_name.as_deref(),
+                );
                 prompt.push_str(&format!(
-                    "  <pane index=\"{}\" pane_id=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
+                    "  <pane index=\"{}\" pane_id=\"{}\" cwd=\"{}\" front_state=\"{}\" mode=\"{}\" runtime=\"{}\" last_verified_shell_stack=\"{}\"{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}/>\n",
                     pane.pane_index,
                     pane.pane_id,
                     xml_escape(cwd),
@@ -3031,6 +3101,7 @@ impl TerminalContext {
                     control_channels,
                     control_capabilities,
                     support,
+                    pty,
                 ));
                 for note in &pane.control.notes {
                     prompt.push_str(&format!(
@@ -3475,6 +3546,33 @@ mod tests {
     }
 
     #[test]
+    fn pty_facts_do_not_promote_exact_foreground_identity() {
+        let observation = PaneObservationFrame {
+            foreground_process_group_id: Some(42),
+            tty_name: Some("/dev/ttys001".to_string()),
+            ..PaneObservationFrame::default()
+        };
+
+        let runtime = PaneRuntimeState::from_observation(&observation);
+
+        assert_eq!(runtime.front_state, PaneFrontState::Unknown);
+        assert_eq!(runtime.mode, PaneMode::Unknown);
+        assert_eq!(runtime.agent_cli, None);
+        assert!(runtime.evidence.iter().any(|evidence| {
+            evidence.subject == "foreground_process_group_id"
+                && evidence.value.as_deref() == Some("42")
+                && evidence.source == PaneEvidenceSource::SurfaceState
+                && evidence.confidence == PaneConfidence::Strong
+        }));
+        assert!(runtime.evidence.iter().any(|evidence| {
+            evidence.subject == "tty_name"
+                && evidence.value.as_deref() == Some("/dev/ttys001")
+                && evidence.source == PaneEvidenceSource::SurfaceState
+                && evidence.confidence == PaneConfidence::Strong
+        }));
+    }
+
+    #[test]
     fn infer_pane_mode_requires_confirmed_shell_prompt() {
         assert_eq!(infer_pane_mode(None, true, false, 0, 0), PaneMode::Shell);
         assert_eq!(infer_pane_mode(None, true, false, 2, 1), PaneMode::Unknown);
@@ -3485,6 +3583,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("haswell ❐ 0 ● 4 nvim".to_string()),
             cwd: None,
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec![
                 "❐ 0  ↑ 63d 6h 21m  <4 nvim      ↗  | 11:31 | 05 Apr  w  haswell".to_string(),
             ],
@@ -3511,6 +3611,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("tmux attach -t deploy".to_string()),
@@ -3541,6 +3643,8 @@ mod tests {
         let tmux = PaneObservationFrame {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("tmux a -t work".to_string()),
@@ -3559,6 +3663,8 @@ mod tests {
         let sparse = PaneObservationFrame {
             title: Some("tmux".to_string()),
             cwd: Some("/home/w".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["".to_string()],
             screen_hints: Vec::new(),
             last_command: None,
@@ -3574,6 +3680,8 @@ mod tests {
         let shell = PaneObservationFrame {
             title: Some("bash".to_string()),
             cwd: Some("/Users/weyl/conductor/workspaces/con/kingston".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["$".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("cargo test".to_string()),
@@ -3605,6 +3713,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("Codex".to_string()),
             cwd: Some("/tmp".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("codex".to_string()),
@@ -3633,6 +3743,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("con-bench-codex-git".to_string()),
             cwd: Some("/tmp".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec![
                 "╭────────────────────────────────────────────╮".to_string(),
                 "│ >_ OpenAI Codex (v0.118.0)                 │".to_string(),
@@ -3696,6 +3808,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("zsh".to_string()),
             cwd: Some("/home/weyl".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["$".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("ls".to_string()),
@@ -3753,6 +3867,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("nvim test.sh".to_string()),
             cwd: Some("/tmp".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec!["".to_string()],
             screen_hints: Vec::new(),
             last_command: Some("nvim test.sh".to_string()),
@@ -3816,6 +3932,8 @@ mod tests {
             focused_hostname_confidence: None,
             focused_hostname_source: None,
             focused_title: Some("Terminal".to_string()),
+            focused_foreground_process_group_id: None,
+            focused_tty_name: None,
             focused_front_state: PaneFrontState::Unknown,
             focused_pane_mode: PaneMode::Shell,
             focused_has_shell_integration: false,
@@ -3938,6 +4056,8 @@ mod tests {
             focused_hostname_confidence: None,
             focused_hostname_source: None,
             focused_title: None,
+            focused_foreground_process_group_id: None,
+            focused_tty_name: None,
             focused_front_state: PaneFrontState::ShellPrompt,
             focused_pane_mode: PaneMode::Shell,
             focused_has_shell_integration: true,
@@ -4133,6 +4253,8 @@ mod tests {
         let observation = PaneObservationFrame {
             title: Some("ssh haswell".to_string()),
             cwd: None,
+            foreground_process_group_id: None,
+            tty_name: None,
             recent_output: vec![">".to_string()],
             screen_hints: vec![PaneObservationHint {
                 kind: PaneObservationHintKind::PromptLikeInput,
@@ -4197,6 +4319,8 @@ mod tests {
             hostname_source: Some(PaneEvidenceSource::ShellProbe),
             remote_workspace: None,
             title: Some("ssh haswell".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             has_shell_integration: false,
@@ -4278,6 +4402,19 @@ mod tests {
     }
 
     #[test]
+    fn prompt_emits_escaped_pty_facts() {
+        let mut ctx = TerminalContext::empty();
+        ctx.focused_foreground_process_group_id = Some(42);
+        ctx.focused_tty_name = Some("/dev/ttys&1".to_string());
+
+        let prompt = ctx.to_system_prompt();
+
+        assert!(prompt.contains("foreground_process_group_id=\"42\""));
+        assert!(prompt.contains("tty_name=\"/dev/ttys&amp;1\""));
+        assert!(prompt.contains("not an exact process identity"));
+    }
+
+    #[test]
     fn prompt_emits_work_target_hints_for_multi_pane_tabs() {
         let mut ctx = make_shell_context();
         ctx.focused_hostname = Some("cinnamon".to_string());
@@ -4289,6 +4426,8 @@ mod tests {
             hostname_source: Some(PaneEvidenceSource::ShellProbe),
             remote_workspace: None,
             title: Some("ops".to_string()),
+            foreground_process_group_id: None,
+            tty_name: None,
             front_state: PaneFrontState::Unknown,
             mode: PaneMode::Unknown,
             has_shell_integration: false,

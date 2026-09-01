@@ -750,6 +750,10 @@ pub struct PaneInfo {
     pub pane_id: usize,
     pub title: String,
     pub cwd: Option<String>,
+    /// Foreground job-control process group reported by the local PTY.
+    pub foreground_process_group_id: Option<u64>,
+    /// Local PTY slave name for this pane.
+    pub tty_name: Option<String>,
     pub is_focused: bool,
     pub rows: usize,
     pub cols: usize,
@@ -6919,6 +6923,8 @@ mod tests {
             pane_id: index,
             title: title.to_string(),
             cwd: None,
+            foreground_process_group_id: None,
+            tty_name: None,
             is_focused: false,
             rows: 24,
             cols: 80,

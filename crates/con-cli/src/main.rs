@@ -1014,6 +1014,19 @@ fn render_surface_rows(surfaces: &[Value], prefix: &str) {
         if !title.is_empty() {
             println!("{prefix}    title: {title}");
         }
+        let foreground_process_group_id = surface
+            .get("foreground_process_group_id")
+            .and_then(Value::as_u64);
+        let tty_name = surface.get("tty_name").and_then(Value::as_str);
+        if foreground_process_group_id.is_some() || tty_name.is_some() {
+            let process_group_id = foreground_process_group_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let tty_name = tty_name.unwrap_or("?");
+            println!(
+                "{prefix}    foreground_process_group_id: {process_group_id}  tty: {tty_name}"
+            );
+        }
     }
 }
 

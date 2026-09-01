@@ -361,6 +361,8 @@ impl AgentHarness {
             focused_hostname_confidence: focused_runtime.remote_host_confidence,
             focused_hostname_source: focused_runtime.remote_host_source,
             focused_title: focused_observation.title.clone(),
+            focused_foreground_process_group_id: focused_observation.foreground_process_group_id,
+            focused_tty_name: focused_observation.tty_name.clone(),
             focused_front_state: focused_runtime.front_state,
             focused_pane_mode: focused_runtime.mode,
             focused_has_shell_integration: focused_observation.has_shell_integration,
