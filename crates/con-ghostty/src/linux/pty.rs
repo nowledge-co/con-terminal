@@ -546,8 +546,12 @@ impl LinuxPtySession {
 
     /// Drive the libghostty-vt render-state pipeline once and return a
     /// fresh `ScreenSnapshot`.
-    pub fn snapshot(&self) -> ScreenSnapshot {
-        self.shared.screen.snapshot()
+    pub fn snapshot(&self) -> Option<ScreenSnapshot> {
+        let snapshot = self.shared.screen.try_snapshot();
+        if snapshot.is_none() {
+            self.mark_needs_render();
+        }
+        snapshot
     }
 
     pub fn acknowledge_snapshot(&self, generation: u64) {

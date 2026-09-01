@@ -253,7 +253,9 @@ impl RenderSession {
         let renderer = self.renderer.lock();
         let config = self.config.lock().clone();
         let snapshot_started = perf_trace_enabled().then(Instant::now);
-        let snapshot = self.vt.snapshot();
+        let Some(snapshot) = self.vt.try_snapshot() else {
+            return Ok(RenderOutcome::Pending);
+        };
         let snapshot_ms = snapshot_started
             .map(|started| started.elapsed().as_secs_f64() * 1000.0)
             .unwrap_or(0.0);

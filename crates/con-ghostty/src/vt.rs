@@ -1369,6 +1369,39 @@ struct VtRenderState {
     snapshot_metadata: Option<SnapshotMetadata>,
 }
 
+impl VtRenderState {
+    fn ensure_render_state(&mut self) -> bool {
+        if !self.render_state.is_null() {
+            return true;
+        }
+
+        let mut render_state: GhosttyRenderState = std::ptr::null_mut();
+        let rc = unsafe { ghostty_render_state_new(std::ptr::null(), &mut render_state) };
+        if rc != GHOSTTY_SUCCESS || render_state.is_null() {
+            log::warn!("ghostty_render_state_new retry rc={rc}");
+            return false;
+        }
+
+        self.render_state = render_state;
+        self.applied_full_snapshot_generation = u64::MAX;
+        self.force_full_snapshot = true;
+        self.last_cursor = Cursor::default();
+        self.snapshot_metadata = None;
+        true
+    }
+
+    fn invalidate_render_state(&mut self) {
+        if !self.render_state.is_null() {
+            unsafe { ghostty_render_state_free(self.render_state) };
+            self.render_state = std::ptr::null_mut();
+        }
+        self.applied_full_snapshot_generation = u64::MAX;
+        self.force_full_snapshot = true;
+        self.last_cursor = Cursor::default();
+        self.snapshot_metadata = None;
+    }
+}
+
 unsafe impl Send for VtInner {}
 unsafe impl Send for VtRenderState {}
 
@@ -2240,16 +2273,22 @@ impl VtScreen {
     }
 
     pub fn snapshot(&self) -> ScreenSnapshot {
+        self.try_snapshot().unwrap_or_else(|| {
+            let inner = self.inner.lock();
+            empty_snapshot(inner.cols, inner.rows, inner.generation)
+        })
+    }
+
+    pub(crate) fn try_snapshot(&self) -> Option<ScreenSnapshot> {
         let snapshot_started = perf_trace_enabled().then(Instant::now);
         let mut render = self.render.lock();
+        if !render.ensure_render_state() {
+            return None;
+        }
         let epoch = {
             let mut inner = self.inner.lock();
             let fallback_cols = inner.cols;
             let fallback_rows = inner.rows;
-
-            if render.render_state.is_null() {
-                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
-            }
 
             if render
                 .snapshot_metadata
@@ -2261,7 +2300,7 @@ impl VtScreen {
                     .snapshot_metadata
                     .as_ref()
                     .expect("snapshot metadata checked above");
-                return metadata.snapshot(&render.scratch);
+                return Some(metadata.snapshot(&render.scratch));
             }
 
             let mut active_screen = GhosttyTerminalScreen::Primary;
@@ -2275,7 +2314,7 @@ impl VtScreen {
             if rc != GHOSTTY_SUCCESS {
                 log::warn!("ghostty_terminal_get(ACTIVE_SCREEN) rc={rc}");
                 render.force_full_snapshot = true;
-                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+                return None;
             }
 
             let kitty_placements = snapshot_kitty_placements(&mut inner);
@@ -2293,8 +2332,11 @@ impl VtScreen {
                 unsafe { ghostty_render_state_begin_update(render.render_state, inner.terminal) };
             if rc != GHOSTTY_SUCCESS {
                 log::warn!("ghostty_render_state_begin_update rc={rc}");
-                render.force_full_snapshot = true;
-                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+                // begin_update may consume terminal dirty state before an
+                // allocation fails. A new state forces the retry to rebuild
+                // from the terminal instead of reusing a partial update.
+                render.invalidate_render_state();
+                return None;
             }
             epoch
         };
@@ -2302,8 +2344,8 @@ impl VtScreen {
         let rc = unsafe { ghostty_render_state_end_update(render.render_state) };
         if rc != GHOSTTY_SUCCESS {
             log::warn!("ghostty_render_state_end_update rc={rc}");
-            render.force_full_snapshot = true;
-            return empty_snapshot(epoch.fallback_cols, epoch.fallback_rows, epoch.generation);
+            render.invalidate_render_state();
+            return None;
         }
 
         let mut default_fg = GhosttyColorRgb {
@@ -2351,7 +2393,7 @@ impl VtScreen {
                 state_keys.len()
             );
             render.force_full_snapshot = true;
-            return empty_snapshot(epoch.fallback_cols, epoch.fallback_rows, epoch.generation);
+            return None;
         }
 
         // Ghostty's render-state dimensions can lag the host resize by a
@@ -2403,7 +2445,7 @@ impl VtScreen {
                         "ghostty_render_state_row_iterator_next_dirty returned row {row_idx} for {rows} rows"
                     );
                     render.force_full_snapshot = true;
-                    return empty_snapshot(cols, rows, epoch.generation);
+                    return None;
                 }
                 break;
             }
@@ -2418,7 +2460,7 @@ impl VtScreen {
             if rc != GHOSTTY_SUCCESS {
                 log::warn!("ghostty_render_state_row_get(CELLS) rc={rc} at row {row_idx}");
                 render.force_full_snapshot = true;
-                return empty_snapshot(cols, rows, epoch.generation);
+                return None;
             }
 
             let row_start = row_idx as usize * cols as usize;
@@ -2436,7 +2478,7 @@ impl VtScreen {
                 ) else {
                     log::warn!("failed to read render cell at row={row_idx} col={col_idx}");
                     render.force_full_snapshot = true;
-                    return empty_snapshot(cols, rows, epoch.generation);
+                    return None;
                 };
                 let idx = row_start + col_idx as usize;
                 render.scratch[idx] = cell;
@@ -2447,7 +2489,7 @@ impl VtScreen {
                     "vt snapshot row ended early: row={row_idx} cells={col_idx} expected={cols}"
                 );
                 render.force_full_snapshot = true;
-                return empty_snapshot(cols, rows, epoch.generation);
+                return None;
             }
 
             dirty_rows.push(row_idx);
@@ -2458,7 +2500,7 @@ impl VtScreen {
                 "vt snapshot full redraw ended early: iter_rows={next_full_row} expected_rows={rows} cols={cols}"
             );
             render.force_full_snapshot = true;
-            return empty_snapshot(cols, rows, epoch.generation);
+            return None;
         }
 
         render.force_full_snapshot = false;
@@ -2530,7 +2572,7 @@ impl VtScreen {
             }
         }
 
-        snapshot
+        Some(snapshot)
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -3919,6 +3961,22 @@ mod tests {
 
         screen.acknowledge_snapshot(combined.generation);
         assert!(screen.snapshot().dirty_rows.is_empty());
+    }
+
+    #[test]
+    fn discarded_render_state_rebuilds_from_clean_terminal() {
+        let screen = VtScreen::new(4, 3, None).expect("create vt screen");
+
+        screen.feed(b"A");
+        let first = screen.try_snapshot().expect("extract initial snapshot");
+        assert_eq!(first.cells[0].codepoint, u32::from('A'));
+
+        screen.render.lock().invalidate_render_state();
+
+        let recovered = screen.try_snapshot().expect("rebuild render state");
+        assert_eq!(recovered.generation, first.generation);
+        assert_eq!(recovered.cells[0].codepoint, u32::from('A'));
+        assert_eq!(recovered.cells.len(), 12);
     }
 
     #[test]
