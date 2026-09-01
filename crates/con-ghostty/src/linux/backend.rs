@@ -453,6 +453,14 @@ impl LinuxGhosttyTerminal {
             .is_some_and(LinuxPtySession::is_alive)
     }
 
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(LinuxPtySession::prompt_state)
+            .unwrap_or_default()
+    }
+
     pub fn is_busy(&self) -> bool {
         false
     }

@@ -134,6 +134,7 @@ pub enum GhosttyTerminalData {
     KittyGraphics = 30,
     ScrollbackMaxLines = 35,
     Mode = 37,
+    CursorAtPrompt = 39,
 }
 
 /// `GhosttyTerminalScrollbar` — current viewport position in the full
@@ -1353,6 +1354,7 @@ struct VtInner {
     cols: u16,
     rows: u16,
     generation: u64,
+    output_generation: u64,
     required_full_snapshot_generation: u64,
 }
 
@@ -1900,6 +1902,7 @@ impl VtScreen {
                 cols,
                 rows,
                 generation: 0,
+                output_generation: 0,
                 required_full_snapshot_generation: 0,
             })),
             render: Mutex::new(VtRenderState {
@@ -2015,6 +2018,7 @@ impl VtScreen {
         let mut inner = self.inner.lock();
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
+        inner.output_generation = inner.output_generation.wrapping_add(1);
         inner.generation = inner.generation.wrapping_add(1);
     }
 
@@ -2670,6 +2674,25 @@ impl VtScreen {
             )
         };
         rc == 0 && screen == GhosttyTerminalScreen::Alternate
+    }
+
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        let inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return crate::TerminalPromptState::default();
+        }
+        let mut at_prompt = false;
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::CursorAtPrompt,
+                &mut at_prompt as *mut _ as *mut c_void,
+            )
+        };
+        crate::TerminalPromptState {
+            cursor_at_prompt: rc == GHOSTTY_SUCCESS && at_prompt,
+            output_generation: inner.output_generation,
+        }
     }
 
     /// Scroll the visible viewport by terminal rows. Negative is up;
@@ -3768,6 +3791,10 @@ mod tests {
             Some(GhosttyTerminalData::Mode as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalData"]["values"]["CURSOR_AT_PROMPT"].as_i64(),
+            Some(GhosttyTerminalData::CursorAtPrompt as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalData"]["values"]["KITTY_KEYBOARD_FLAGS"].as_i64(),
             Some(GhosttyTerminalData::KittyKeyboardFlags as i64)
         );
@@ -4304,6 +4331,47 @@ mod tests {
         assert!(screen.is_bracketed_paste());
         screen.feed(b"\x1b[?2004l");
         assert!(!screen.is_bracketed_paste());
+    }
+
+    #[test]
+    fn vt_screen_queries_semantic_prompt_state() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        assert_eq!(screen.prompt_state(), crate::TerminalPromptState::default());
+        screen.feed(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(
+            screen.prompt_state(),
+            crate::TerminalPromptState {
+                cursor_at_prompt: true,
+                output_generation: 1,
+            }
+        );
+
+        screen.feed(b"echo test\r\n\x1b]133;C\x07");
+        assert_eq!(
+            screen.prompt_state(),
+            crate::TerminalPromptState {
+                cursor_at_prompt: false,
+                output_generation: 2,
+            }
+        );
+        screen.feed(b"\x1b]133;D;0\x07\x1b]133;A\x07");
+        assert_eq!(
+            screen.prompt_state(),
+            crate::TerminalPromptState {
+                cursor_at_prompt: true,
+                output_generation: 3,
+            }
+        );
+
+        screen.feed(b"\x1b[?1049h");
+        assert_eq!(
+            screen.prompt_state(),
+            crate::TerminalPromptState {
+                cursor_at_prompt: false,
+                output_generation: 4,
+            }
+        );
     }
 
     #[test]

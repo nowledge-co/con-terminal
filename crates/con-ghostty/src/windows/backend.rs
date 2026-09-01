@@ -279,6 +279,13 @@ impl WindowsGhosttyTerminal {
             None => true,
         }
     }
+    pub fn prompt_state(&self) -> crate::TerminalPromptState {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(|session| session.vt().prompt_state())
+            .unwrap_or_default()
+    }
     pub fn is_busy(&self) -> bool {
         false
     }
