@@ -10,7 +10,8 @@
 //! 4. `cells    = ghostty_render_state_row_cells_new(NULL_alloc)`
 //!
 //! Per-frame:
-//!   - `ghostty_render_state_update(state, terminal)` to refresh
+//!   - `ghostty_render_state_begin_update(state, terminal)` under the parser lock
+//!   - release the parser lock, then call `ghostty_render_state_end_update(state)`
 //!   - `ghostty_render_state_get_multi(...)` to read state metadata and bind the iterator
 //!   - while `row_iterator_next_dirty(iter, &row)` is true:
 //!       - `row_get(iter, CELLS, &cells)` to bind the dirty row
@@ -22,9 +23,10 @@
 //! key and writes to a typed `void*` out; key→type contract is per
 //! upstream header comments.
 //!
-//! libghostty-vt is NOT thread-safe; we serialize via a Mutex. The
-//! renderer reads a cloned `ScreenSnapshot` so the parser lock is
-//! released between feeds and frames.
+//! libghostty-vt terminal and render state access are serialized by
+//! separate mutexes. The parser lock is held only through the begin
+//! phase and terminal-owned metadata capture; render extraction and
+//! snapshot cloning proceed without blocking parser feeds.
 
 #![allow(non_camel_case_types, dead_code)]
 
@@ -1194,6 +1196,16 @@ struct SnapshotMetadata {
     generation: u64,
 }
 
+struct SnapshotEpoch {
+    fallback_cols: u16,
+    fallback_rows: u16,
+    kitty_placements: Arc<[KittyPlacement]>,
+    alternate_screen: bool,
+    scrollbar: Option<GhosttyScrollbar>,
+    generation: u64,
+    required_full_snapshot_generation: u64,
+}
+
 impl SnapshotMetadata {
     fn snapshot(&self, cells: &[Cell]) -> ScreenSnapshot {
         ScreenSnapshot {
@@ -1215,6 +1227,7 @@ impl SnapshotMetadata {
 
 pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
+    render: Mutex<VtRenderState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1330,9 +1343,6 @@ struct VtCallbackState {
 
 struct VtInner {
     terminal: GhosttyTerminal,
-    render_state: GhosttyRenderState,
-    row_iter: GhosttyRowIterator,
-    row_cells: GhosttyRowCells,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
     kitty_placement_iter: GhosttyKittyGraphicsPlacementIterator,
@@ -1343,6 +1353,14 @@ struct VtInner {
     cols: u16,
     rows: u16,
     generation: u64,
+    required_full_snapshot_generation: u64,
+}
+
+struct VtRenderState {
+    render_state: GhosttyRenderState,
+    row_iter: GhosttyRowIterator,
+    row_cells: GhosttyRowCells,
+    applied_full_snapshot_generation: u64,
     force_full_snapshot: bool,
     scratch_cols: u16,
     scratch_rows: u16,
@@ -1352,6 +1370,7 @@ struct VtInner {
 }
 
 unsafe impl Send for VtInner {}
+unsafe impl Send for VtRenderState {}
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
@@ -1838,9 +1857,6 @@ impl VtScreen {
         Ok(Self {
             inner: Arc::new(Mutex::new(VtInner {
                 terminal,
-                render_state,
-                row_iter,
-                row_cells,
                 key_encoder,
                 key_event,
                 kitty_placement_iter,
@@ -1851,13 +1867,20 @@ impl VtScreen {
                 cols,
                 rows,
                 generation: 0,
-                force_full_snapshot: true,
+                required_full_snapshot_generation: 0,
+            })),
+            render: Mutex::new(VtRenderState {
+                render_state,
+                row_iter,
+                row_cells,
+                applied_full_snapshot_generation: u64::MAX,
+                force_full_snapshot: false,
                 scratch_cols: cols,
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
                 snapshot_metadata: None,
-            })),
+            }),
         })
     }
 
@@ -1866,8 +1889,8 @@ impl VtScreen {
     pub fn set_theme(&self, theme: &ThemeColors) {
         let mut inner = self.inner.lock();
         unsafe { apply_theme_to_terminal(inner.terminal, theme) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
     }
 
     /// Force the next `snapshot()` to report a new generation so the
@@ -1886,9 +1909,9 @@ impl VtScreen {
     }
 
     pub(crate) fn acknowledge_snapshot(&self, generation: u64) {
-        let mut inner = self.inner.lock();
-        if inner.generation != generation
-            || !inner
+        let mut render = self.render.lock();
+        if self.inner.lock().generation != generation
+            || !render
                 .snapshot_metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.generation == generation)
@@ -1896,12 +1919,12 @@ impl VtScreen {
             return;
         }
 
-        let rc = unsafe { ghostty_render_state_clean(inner.render_state) };
+        let rc = unsafe { ghostty_render_state_clean(render.render_state) };
         if rc != GHOSTTY_SUCCESS {
             log::warn!("ghostty_render_state_clean rc={rc} generation={generation}");
             return;
         }
-        if let Some(metadata) = inner.snapshot_metadata.as_mut() {
+        if let Some(metadata) = render.snapshot_metadata.as_mut() {
             metadata.dirty_rows.clear();
         }
     }
@@ -2210,54 +2233,76 @@ impl VtScreen {
                 .cell_height
                 .store(cell_height_px.max(1), Ordering::Release);
         }
-        let total = cols as usize * rows as usize;
-        inner.scratch.clear();
-        inner.scratch.resize(total, Cell::default());
-        inner.scratch_cols = cols;
-        inner.scratch_rows = rows;
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         Ok(())
     }
 
     pub fn snapshot(&self) -> ScreenSnapshot {
         let snapshot_started = perf_trace_enabled().then(Instant::now);
-        let mut inner = self.inner.lock();
+        let mut render = self.render.lock();
+        let epoch = {
+            let mut inner = self.inner.lock();
+            let fallback_cols = inner.cols;
+            let fallback_rows = inner.rows;
 
-        let fallback_cols = inner.cols;
-        let fallback_rows = inner.rows;
+            if render.render_state.is_null() {
+                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+            }
 
-        if inner.render_state.is_null() {
-            // Render-state path disabled — return empty snapshot. The
-            // renderer still clears the pane to the background.
-            return ScreenSnapshot {
-                cols: fallback_cols,
-                rows: fallback_rows,
-                cells: Vec::new(),
-                kitty_placements: Arc::from([]),
-                dirty_rows: Vec::new(),
-                cursor: Cursor::default(),
-                alternate_screen: false,
-                scrollbar: None,
-                title: None,
-                generation: inner.generation,
+            if render
+                .snapshot_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.generation == inner.generation)
+            {
+                drop(inner);
+                let metadata = render
+                    .snapshot_metadata
+                    .as_ref()
+                    .expect("snapshot metadata checked above");
+                return metadata.snapshot(&render.scratch);
+            }
+
+            let mut active_screen = GhosttyTerminalScreen::Primary;
+            let rc = unsafe {
+                ghostty_terminal_get(
+                    inner.terminal,
+                    GhosttyTerminalData::ActiveScreen,
+                    &mut active_screen as *mut _ as *mut c_void,
+                )
             };
-        }
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_terminal_get(ACTIVE_SCREEN) rc={rc}");
+                render.force_full_snapshot = true;
+                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+            }
 
-        if let Some(metadata) = inner
-            .snapshot_metadata
-            .as_ref()
-            .filter(|metadata| metadata.generation == inner.generation)
-        {
-            return metadata.snapshot(&inner.scratch);
-        }
+            let kitty_placements = snapshot_kitty_placements(&mut inner);
+            let epoch = SnapshotEpoch {
+                fallback_cols,
+                fallback_rows,
+                kitty_placements,
+                alternate_screen: active_screen == GhosttyTerminalScreen::Alternate,
+                scrollbar: read_scrollbar(inner.terminal),
+                generation: inner.generation,
+                required_full_snapshot_generation: inner.required_full_snapshot_generation,
+            };
 
-        // SAFETY: state + terminal valid for the lifetime of `inner`.
-        let rc = unsafe { ghostty_render_state_update(inner.render_state, inner.terminal) };
+            let rc =
+                unsafe { ghostty_render_state_begin_update(render.render_state, inner.terminal) };
+            if rc != GHOSTTY_SUCCESS {
+                log::warn!("ghostty_render_state_begin_update rc={rc}");
+                render.force_full_snapshot = true;
+                return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+            }
+            epoch
+        };
+
+        let rc = unsafe { ghostty_render_state_end_update(render.render_state) };
         if rc != GHOSTTY_SUCCESS {
-            log::warn!("ghostty_render_state_update rc={rc}");
-            inner.force_full_snapshot = true;
-            return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+            log::warn!("ghostty_render_state_end_update rc={rc}");
+            render.force_full_snapshot = true;
+            return empty_snapshot(epoch.fallback_cols, epoch.fallback_rows, epoch.generation);
         }
 
         let mut default_fg = GhosttyColorRgb {
@@ -2266,11 +2311,11 @@ impl VtScreen {
             b: 0xCC,
         };
         let mut default_bg = GhosttyColorRgb::default();
-        let mut cols = fallback_cols;
-        let mut rows = fallback_rows;
+        let mut cols = epoch.fallback_cols;
+        let mut rows = epoch.fallback_rows;
         let mut state_dirty = GhosttyRenderStateDirty::False;
         let mut cursor_data = GhosttyRenderStateCursor::default();
-        let render_state = inner.render_state;
+        let render_state = render.render_state;
         let state_keys = [
             GhosttyRenderStateData::ColorForeground,
             GhosttyRenderStateData::ColorBackground,
@@ -2286,7 +2331,7 @@ impl VtScreen {
             &mut cols as *mut _ as *mut c_void,
             &mut rows as *mut _ as *mut c_void,
             &mut state_dirty as *mut _ as *mut c_void,
-            &mut inner.row_iter as *mut _ as *mut c_void,
+            &mut render.row_iter as *mut _ as *mut c_void,
             &mut cursor_data as *mut _ as *mut c_void,
         ];
         let mut state_written = 0_usize;
@@ -2304,8 +2349,8 @@ impl VtScreen {
                 "ghostty_render_state_get_multi rc={rc} written={state_written}/{}",
                 state_keys.len()
             );
-            inner.force_full_snapshot = true;
-            return empty_snapshot(fallback_cols, fallback_rows, inner.generation);
+            render.force_full_snapshot = true;
+            return empty_snapshot(epoch.fallback_cols, epoch.fallback_rows, epoch.generation);
         }
 
         // Ghostty's render-state dimensions can lag the host resize by a
@@ -2314,33 +2359,21 @@ impl VtScreen {
         cols = cols.max(1);
         rows = rows.max(1);
 
-        let mut active_screen = GhosttyTerminalScreen::Primary;
-        let active_screen_rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::ActiveScreen,
-                &mut active_screen as *mut _ as *mut c_void,
-            )
-        };
-        if active_screen_rc != GHOSTTY_SUCCESS {
-            log::warn!("ghostty_terminal_get(ACTIVE_SCREEN) rc={active_screen_rc}");
-            inner.force_full_snapshot = true;
-            return empty_snapshot(cols, rows, inner.generation);
-        }
-        let alternate_screen = active_screen == GhosttyTerminalScreen::Alternate;
-
-        let mut full_redraw = inner.force_full_snapshot;
+        let mut full_redraw = render.force_full_snapshot
+            || render.applied_full_snapshot_generation != epoch.required_full_snapshot_generation;
         if state_dirty == GhosttyRenderStateDirty::Full {
             full_redraw = true;
         }
 
         let total = cols as usize * rows as usize;
-        if inner.scratch.len() != total || inner.scratch_cols != cols || inner.scratch_rows != rows
+        if render.scratch.len() != total
+            || render.scratch_cols != cols
+            || render.scratch_rows != rows
         {
-            inner.scratch.clear();
-            inner.scratch.resize(total, Cell::default());
-            inner.scratch_cols = cols;
-            inner.scratch_rows = rows;
+            render.scratch.clear();
+            render.scratch.resize(total, Cell::default());
+            render.scratch_cols = cols;
+            render.scratch_rows = rows;
             full_redraw = true;
         }
 
@@ -2348,7 +2381,7 @@ impl VtScreen {
         let mut next_full_row = 0_u16;
         loop {
             let row_idx = if full_redraw {
-                if !unsafe { ghostty_render_state_row_iterator_next(inner.row_iter) } {
+                if !unsafe { ghostty_render_state_row_iterator_next(render.row_iter) } {
                     break;
                 }
                 let row = next_full_row;
@@ -2357,7 +2390,7 @@ impl VtScreen {
             } else {
                 let mut row = 0_u16;
                 if !unsafe {
-                    ghostty_render_state_row_iterator_next_dirty(inner.row_iter, &mut row)
+                    ghostty_render_state_row_iterator_next_dirty(render.row_iter, &mut row)
                 } {
                     break;
                 }
@@ -2368,49 +2401,52 @@ impl VtScreen {
                     log::warn!(
                         "ghostty_render_state_row_iterator_next_dirty returned row {row_idx} for {rows} rows"
                     );
-                    inner.force_full_snapshot = true;
-                    return empty_snapshot(cols, rows, inner.generation);
+                    render.force_full_snapshot = true;
+                    return empty_snapshot(cols, rows, epoch.generation);
                 }
                 break;
             }
 
             let rc = unsafe {
                 ghostty_render_state_row_get(
-                    inner.row_iter,
+                    render.row_iter,
                     GhosttyRenderStateRowData::Cells,
-                    &mut inner.row_cells as *mut _ as *mut c_void,
+                    &mut render.row_cells as *mut _ as *mut c_void,
                 )
             };
             if rc != GHOSTTY_SUCCESS {
                 log::warn!("ghostty_render_state_row_get(CELLS) rc={rc} at row {row_idx}");
-                inner.force_full_snapshot = true;
-                return empty_snapshot(cols, rows, inner.generation);
+                render.force_full_snapshot = true;
+                return empty_snapshot(cols, rows, epoch.generation);
             }
 
             let row_start = row_idx as usize * cols as usize;
             let mut col_idx: u16 = 0;
             // SAFETY: cells valid; `_next` returns bool.
-            while unsafe { ghostty_render_state_row_cells_next(inner.row_cells) } {
+            while unsafe { ghostty_render_state_row_cells_next(render.row_cells) } {
                 if col_idx >= cols {
                     break;
                 }
-                let Some(cell) =
-                    read_cell(inner.row_cells, default_fg, default_bg, alternate_screen)
-                else {
+                let Some(cell) = read_cell(
+                    render.row_cells,
+                    default_fg,
+                    default_bg,
+                    epoch.alternate_screen,
+                ) else {
                     log::warn!("failed to read render cell at row={row_idx} col={col_idx}");
-                    inner.force_full_snapshot = true;
-                    return empty_snapshot(cols, rows, inner.generation);
+                    render.force_full_snapshot = true;
+                    return empty_snapshot(cols, rows, epoch.generation);
                 };
                 let idx = row_start + col_idx as usize;
-                inner.scratch[idx] = cell;
+                render.scratch[idx] = cell;
                 col_idx += 1;
             }
             if col_idx != cols {
                 log::warn!(
                     "vt snapshot row ended early: row={row_idx} cells={col_idx} expected={cols}"
                 );
-                inner.force_full_snapshot = true;
-                return empty_snapshot(cols, rows, inner.generation);
+                render.force_full_snapshot = true;
+                return empty_snapshot(cols, rows, epoch.generation);
             }
 
             dirty_rows.push(row_idx);
@@ -2420,11 +2456,12 @@ impl VtScreen {
             log::warn!(
                 "vt snapshot full redraw ended early: iter_rows={next_full_row} expected_rows={rows} cols={cols}"
             );
-            inner.force_full_snapshot = true;
-            return empty_snapshot(cols, rows, inner.generation);
+            render.force_full_snapshot = true;
+            return empty_snapshot(cols, rows, epoch.generation);
         }
 
-        inner.force_full_snapshot = false;
+        render.force_full_snapshot = false;
+        render.applied_full_snapshot_generation = epoch.required_full_snapshot_generation;
 
         let cursor = if cursor_data.viewport_has_value {
             Cursor {
@@ -2435,7 +2472,7 @@ impl VtScreen {
         } else {
             Cursor::default()
         };
-        let previous_cursor = inner.last_cursor;
+        let previous_cursor = render.last_cursor;
         if previous_cursor != cursor {
             if previous_cursor.visible && previous_cursor.row < rows {
                 push_unique_row(&mut dirty_rows, previous_cursor.row);
@@ -2443,26 +2480,25 @@ impl VtScreen {
             if cursor.visible && cursor.row < rows {
                 push_unique_row(&mut dirty_rows, cursor.row);
             }
-            inner.last_cursor = cursor;
+            render.last_cursor = cursor;
         }
         dirty_rows.sort_unstable();
 
-        let kitty_placements = snapshot_kitty_placements(&mut inner);
         let metadata = SnapshotMetadata {
             cols,
             rows,
-            kitty_placements,
+            kitty_placements: epoch.kitty_placements,
             dirty_rows,
             cursor,
-            alternate_screen,
-            scrollbar: read_scrollbar(inner.terminal),
-            generation: inner.generation,
+            alternate_screen: epoch.alternate_screen,
+            scrollbar: epoch.scrollbar,
+            generation: epoch.generation,
         };
         let clone_started = perf_trace_enabled().then(Instant::now);
-        let snapshot = metadata.snapshot(&inner.scratch);
+        let snapshot = metadata.snapshot(&render.scratch);
         let clone_elapsed_ms =
             clone_started.map(|started| started.elapsed().as_secs_f64() * 1000.0);
-        inner.snapshot_metadata = Some(metadata);
+        render.snapshot_metadata = Some(metadata);
 
         if let Some(started) = snapshot_started {
             let total_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -2608,8 +2644,8 @@ impl VtScreen {
             value: GhosttyTerminalScrollViewportValue { delta: delta_rows },
         };
         unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         true
     }
 
@@ -2626,8 +2662,8 @@ impl VtScreen {
             value: GhosttyTerminalScrollViewportValue { delta: 0 },
         };
         unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
-        inner.force_full_snapshot = true;
         inner.generation = inner.generation.wrapping_add(1);
+        inner.required_full_snapshot_generation = inner.generation;
         true
     }
 
@@ -3380,6 +3416,7 @@ impl Drop for VtScreen {
     fn drop(&mut self) {
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
+            let render = self.render.get_mut();
             // Free in reverse-creation order: key event/encoder, render
             // helpers, then terminal.
             // SAFETY: unique owner via Arc::get_mut.
@@ -3397,17 +3434,17 @@ impl Drop for VtScreen {
                 };
                 inner.kitty_placement_iter = std::ptr::null_mut();
             }
-            if !inner.row_cells.is_null() {
-                unsafe { ghostty_render_state_row_cells_free(inner.row_cells) };
-                inner.row_cells = std::ptr::null_mut();
+            if !render.row_cells.is_null() {
+                unsafe { ghostty_render_state_row_cells_free(render.row_cells) };
+                render.row_cells = std::ptr::null_mut();
             }
-            if !inner.row_iter.is_null() {
-                unsafe { ghostty_render_state_row_iterator_free(inner.row_iter) };
-                inner.row_iter = std::ptr::null_mut();
+            if !render.row_iter.is_null() {
+                unsafe { ghostty_render_state_row_iterator_free(render.row_iter) };
+                render.row_iter = std::ptr::null_mut();
             }
-            if !inner.render_state.is_null() {
-                unsafe { ghostty_render_state_free(inner.render_state) };
-                inner.render_state = std::ptr::null_mut();
+            if !render.render_state.is_null() {
+                unsafe { ghostty_render_state_free(render.render_state) };
+                render.render_state = std::ptr::null_mut();
             }
             if !inner.terminal.is_null() {
                 unsafe { ghostty_terminal_free(inner.terminal) };
