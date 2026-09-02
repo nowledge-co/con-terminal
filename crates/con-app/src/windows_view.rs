@@ -148,11 +148,11 @@ pub struct GhosttyView {
     scale_factor: f32,
     ime_marked_text: Option<String>,
     ime_selected_range: Option<Range<usize>>,
-    /// Last physical-pixel size we sent to `session.resize`. Avoids
-    /// resize churn when the logical bounds round to the same physical
-    /// size frame-to-frame.
+    /// Last physical-pixel size successfully applied by `session.resize`.
+    /// Avoids resize churn when the logical bounds round to the same
+    /// physical size frame-to-frame.
     last_physical_size: Option<(u32, u32)>,
-    /// Last physical DPI handed to `session.set_dpi`.
+    /// Last physical DPI successfully applied by `session.set_dpi`.
     last_dpi: u32,
     /// The most recently rendered frame, wrapped as a GPUI image.
     cached_image: Option<Arc<RenderImage>>,
@@ -610,21 +610,38 @@ impl GhosttyView {
             return SyncRenderResult::Unchanged;
         };
 
-        let dpi_changed = dpi != self.last_dpi;
-        if dpi_changed {
-            if let Err(err) = session.set_dpi(dpi) {
-                log::warn!("RenderSession::set_dpi failed: {err:#}");
-            }
-            self.last_dpi = dpi;
-        }
-
         // Recompute the grid and mouse cell geometry after a DPI change even
         // when physical dimensions happen to be unchanged.
-        if dpi_changed || self.last_physical_size != Some((width_px, height_px)) {
-            if let Err(err) = session.resize(width_px, height_px) {
-                log::warn!("RenderSession::resize failed: {err:#}");
+        let dpi_changed = dpi != self.last_dpi;
+        let resize_needed = dpi_changed || self.last_physical_size != Some((width_px, height_px));
+        if resize_needed {
+            let dpi_ready = if dpi_changed {
+                match session.set_dpi(dpi) {
+                    Ok(()) => {
+                        self.last_dpi = dpi;
+                        true
+                    }
+                    Err(err) => {
+                        log::warn!("RenderSession::set_dpi failed: {err:#}");
+                        false
+                    }
+                }
+            } else {
+                true
+            };
+
+            if dpi_ready {
+                match session.resize(width_px, height_px) {
+                    Ok(()) => self.last_physical_size = Some((width_px, height_px)),
+                    Err(err) => {
+                        // A resize may have updated an earlier subsystem before
+                        // a later one failed. Force the full idempotent sequence
+                        // to run again on the next prepaint.
+                        self.last_physical_size = None;
+                        log::warn!("RenderSession::resize failed: {err:#}");
+                    }
+                }
             }
-            self.last_physical_size = Some((width_px, height_px));
         }
 
         let render_started = perf_trace_enabled().then(Instant::now);

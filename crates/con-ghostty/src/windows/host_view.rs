@@ -419,17 +419,18 @@ impl RenderSession {
     /// `resize` to match the new physical dimensions.
     pub fn set_dpi(&self, dpi: u32) -> Result<()> {
         let new_dpi = dpi.max(1);
-        let prev = self.dpi.swap(new_dpi, Ordering::AcqRel);
+        let renderer = self.renderer.lock();
+        let prev = self.dpi.load(Ordering::Acquire);
         if prev == new_dpi {
             return Ok(());
         }
         let new_font = scale_font_size(self.base_font_size_px, new_dpi);
-        let renderer = self.renderer.lock();
         renderer
             .rebuild_atlas(new_font)
             .context("rebuild_atlas on DPI change failed")?;
         let mut config = self.config.lock();
         config.font_size_px = new_font;
+        self.dpi.store(new_dpi, Ordering::Release);
         log::info!("RenderSession::set_dpi {prev} -> {new_dpi} font_px={new_font:.2}");
         Ok(())
     }
