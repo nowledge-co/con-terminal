@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use con_ghostty::GhosttyScrollbar;
 use con_ghostty::ffi;
 use con_ghostty::{
-    GhosttyApp, GhosttyOpenUrlKind, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal,
-    MouseButton, TerminalProgress,
+    GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
+    TerminalProgress,
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -78,7 +78,7 @@ static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
 static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
-static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_GHOSTTY_VIEW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy)]
@@ -231,7 +231,7 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
-    native_transition_underlay_owner_id: u64,
+    view_id: u64,
     left_mouse_sequence: MouseButtonSequence<i32>,
     right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
@@ -305,8 +305,7 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_visible: Cell::new(false),
             #[cfg(target_os = "macos")]
-            native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
-                .fetch_add(1, Ordering::Relaxed),
+            view_id: NEXT_GHOSTTY_VIEW_ID.fetch_add(1, Ordering::Relaxed),
             left_mouse_sequence: MouseButtonSequence::default(),
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
@@ -460,6 +459,7 @@ impl GhosttyView {
         if self.blocked_osc8_url.take().is_none() {
             return false;
         }
+        self.hovered_osc8_url = None;
         window.focus(&self.focus_handle, cx);
         cx.notify();
         true
@@ -594,7 +594,7 @@ impl GhosttyView {
                         .child(
                             div()
                                 .flex()
-                                .items_start()
+                                .items_center()
                                 .gap(px(8.0))
                                 .child(
                                     Icon::default()
@@ -606,23 +606,10 @@ impl GhosttyView {
                                     div()
                                         .min_w_0()
                                         .flex_1()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme.foreground)
-                                                .child("Terminal link blocked"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(11.0))
-                                                .line_height(px(15.0))
-                                                .text_color(theme.foreground.opacity(0.72))
-                                                .child(target.reason.message()),
-                                        ),
+                                        .text_size(px(11.0))
+                                        .line_height(px(15.0))
+                                        .text_color(theme.foreground.opacity(0.78))
+                                        .child(target.reason.message()),
                                 )
                                 .child(
                                     Button::new("dismiss-blocked-osc8-url")
@@ -643,27 +630,22 @@ impl GhosttyView {
                         .child(
                             div()
                                 .min_w_0()
-                                .truncate()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
                                 .px(px(8.0))
                                 .py(px(6.0))
                                 .rounded(px(6.0))
                                 .bg(theme.foreground.opacity(0.06))
-                                .font_family(theme.mono_font_family.clone())
-                                .text_size(px(11.0))
-                                .text_color(theme.foreground.opacity(0.84))
-                                .child(target.display.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap(px(8.0))
                                 .child(
                                     div()
-                                        .text_size(px(10.0))
-                                        .text_color(theme.muted_foreground)
-                                        .child("Copy the displayed target only if you trust it."),
+                                        .min_w_0()
+                                        .flex_1()
+                                        .truncate()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_size(px(11.0))
+                                        .text_color(theme.foreground.opacity(0.84))
+                                        .child(target.display.clone()),
                                 )
                                 .child(
                                     Clipboard::new(target.copy_control_id.clone())
@@ -754,25 +736,20 @@ impl GhosttyView {
                 GhosttySurfaceEvent::SplitRequest(direction) => {
                     cx.emit(GhosttySplitRequested(direction));
                 }
-                GhosttySurfaceEvent::OpenUrl { kind, url } => {
-                    if kind != GhosttyOpenUrlKind::Osc8 {
-                        cx.open_url(String::from_utf8_lossy(&url).as_ref());
-                        continue;
+                GhosttySurfaceEvent::OpenUrl(url) => cx.open_url(&url),
+                GhosttySurfaceEvent::OpenOsc8Url(url) => match evaluate_osc8_url(&url) {
+                    Osc8UrlDecision::Allow(url) => cx.open_url(&url),
+                    Osc8UrlDecision::Deny { display, reason } => {
+                        let id = self.next_blocked_osc8_url_id;
+                        self.next_blocked_osc8_url_id = id.wrapping_add(1);
+                        self.blocked_osc8_url = Some(BlockedOsc8Url {
+                            display: display.into(),
+                            reason,
+                            copy_control_id: format!("blocked-osc8-url-copy-{}-{id}", self.view_id)
+                                .into(),
+                        });
                     }
-
-                    match evaluate_osc8_url(&url) {
-                        Osc8UrlDecision::Allow(url) => cx.open_url(&url),
-                        Osc8UrlDecision::Deny { display, reason } => {
-                            let id = self.next_blocked_osc8_url_id;
-                            self.next_blocked_osc8_url_id = id.wrapping_add(1);
-                            self.blocked_osc8_url = Some(BlockedOsc8Url {
-                                display: display.into(),
-                                reason,
-                                copy_control_id: format!("blocked-osc8-url-copy-{id}").into(),
-                            });
-                        }
-                    }
-                }
+                },
                 GhosttySurfaceEvent::Osc8LinkHoverChanged(url) => {
                     self.hovered_osc8_url = url.map(|url| match evaluate_osc8_url(&url) {
                         Osc8UrlDecision::Allow(url) => Osc8LinkPreview {
@@ -994,11 +971,7 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
         if let Some(underlay_view) = self.native_underlay_view {
-            Self::set_transition_underlay_owner_visible(
-                underlay_view,
-                self.native_transition_underlay_owner_id,
-                false,
-            );
+            Self::set_transition_underlay_owner_visible(underlay_view, self.view_id, false);
         }
         self.native_underlay_view = None;
         if let Some(nsview) = self.nsview {
@@ -1473,7 +1446,7 @@ impl GhosttyView {
         if let Some(underlay_view) = self.native_underlay_view {
             Self::set_transition_underlay_owner_visible(
                 underlay_view,
-                self.native_transition_underlay_owner_id,
+                self.view_id,
                 self.native_transition_underlay_visible.get(),
             );
         }

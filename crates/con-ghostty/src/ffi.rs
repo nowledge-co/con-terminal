@@ -429,15 +429,8 @@ pub struct ghostty_action_mouse_over_link_s {
     pub len: usize,
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(clippy::upper_case_acronyms)]
-pub enum ghostty_action_open_url_kind_e {
-    GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN = 0,
-    GHOSTTY_ACTION_OPEN_URL_KIND_TEXT = 1,
-    GHOSTTY_ACTION_OPEN_URL_KIND_HTML = 2,
-    GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 = 3,
-}
+pub type ghostty_action_open_url_kind_e = c_int;
+pub const GHOSTTY_ACTION_OPEN_URL_KIND_OSC8: ghostty_action_open_url_kind_e = 3;
 
 /// Action payload for OPEN_URL.
 #[repr(C)]

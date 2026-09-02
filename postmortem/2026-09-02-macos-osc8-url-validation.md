@@ -16,18 +16,18 @@ show the terminal-controlled URI before a click.
 
 ## Fix applied
 
-The macOS transport now preserves the open-URL kind and copies raw URL payload
-bytes while they are valid. Con asks Ghostty to emit previews only for OSC 8
-links, deduplicates repeated hover targets, and shows the canonical target in
-a non-interactive preview.
+The macOS transport now separates OSC 8 opens from ordinary URL opens and
+copies their raw payload bytes while they are valid. Con asks Ghostty to emit
+previews only for OSC 8 links, deduplicates repeated hover targets, and shows
+the canonical target in a non-interactive preview.
 
 OSC 8 clicks now scan the raw input for control, bidirectional, zero-width, and
 line-separator characters before URL parsing. Invalid UTF-8 and surrounding
 whitespace are also rejected before parsing can replace or remove them. Con
-opens only explicit HTTP(S) URLs with a host and non-empty email URLs, using
-the same serialized value shown to the user. Other targets enter a persistent
-blocked state rather than reaching the platform opener. The user may
-explicitly copy only the escaped display value.
+opens only explicit HTTP(S) URLs with a host and no embedded credentials, plus
+non-empty email URLs, using the same serialized value shown to the user. Other
+targets enter a persistent blocked state rather than reaching the platform
+opener. The user may explicitly copy only the escaped display value.
 
 ## What we learned
 

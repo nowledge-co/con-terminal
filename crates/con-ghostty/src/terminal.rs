@@ -291,34 +291,11 @@ pub enum GhosttySplitDirection {
     Up,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GhosttyOpenUrlKind {
-    Unknown,
-    Text,
-    Html,
-    Osc8,
-}
-
-impl From<ffi::ghostty_action_open_url_kind_e> for GhosttyOpenUrlKind {
-    fn from(kind: ffi::ghostty_action_open_url_kind_e) -> Self {
-        match kind {
-            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN => {
-                Self::Unknown
-            }
-            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_TEXT => Self::Text,
-            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_HTML => Self::Html,
-            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 => Self::Osc8,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
-    OpenUrl {
-        kind: GhosttyOpenUrlKind,
-        url: Vec<u8>,
-    },
+    OpenUrl(String),
+    OpenOsc8Url(Vec<u8>),
     Osc8LinkHoverChanged(Option<Arc<[u8]>>),
     PwdChanged(String),
     StartSearch(String),
@@ -1667,13 +1644,12 @@ unsafe extern "C" fn action_callback(
                 }
 
                 let bytes = std::slice::from_raw_parts(open_url.url as *const u8, open_url.len);
-                state
-                    .lock()
-                    .pending_events
-                    .push_back(GhosttySurfaceEvent::OpenUrl {
-                        kind: open_url.kind.into(),
-                        url: bytes.to_vec(),
-                    });
+                let event = if open_url.kind == ffi::GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 {
+                    GhosttySurfaceEvent::OpenOsc8Url(bytes.to_vec())
+                } else {
+                    GhosttySurfaceEvent::OpenUrl(String::from_utf8_lossy(bytes).into_owned())
+                };
+                state.lock().pending_events.push_back(event);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_MOUSE_OVER_LINK => {

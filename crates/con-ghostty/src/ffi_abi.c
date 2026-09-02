@@ -113,12 +113,6 @@ _Static_assert(offsetof(ghostty_action_mouse_over_link_s, url) == 0,
                "ghostty mouse-over-link pointer changed offset");
 _Static_assert(offsetof(ghostty_action_mouse_over_link_s, len) == 8,
                "ghostty mouse-over-link length changed offset");
-_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN == 0,
-               "ghostty unknown open-url kind changed value");
-_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_TEXT == 1,
-               "ghostty text open-url kind changed value");
-_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_HTML == 2,
-               "ghostty HTML open-url kind changed value");
 _Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 == 3,
                "ghostty OSC 8 open-url kind changed value");
 _Static_assert(sizeof(ghostty_action_open_url_s) == 24,

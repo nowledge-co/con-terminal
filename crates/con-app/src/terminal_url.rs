@@ -22,7 +22,7 @@ impl Osc8UrlDenialReason {
             Self::UnsafeCharacters => "The target contains invisible or line-breaking characters.",
             Self::SurroundingWhitespace => "The target contains leading or trailing whitespace.",
             Self::InvalidWebUrl => {
-                "The web target must use http:// or https:// and contain a valid host."
+                "The web target must contain a valid host and no embedded credentials."
             }
             Self::EmptyEmailAddress => "The email target does not contain an address.",
             Self::LocalFile => "Opening local files from terminal links is blocked.",
@@ -70,17 +70,16 @@ pub(crate) fn evaluate_osc8_url(raw: &[u8]) -> Osc8UrlDecision {
     };
 
     match url.scheme() {
-        "http" => {
-            if !has_explicit_web_authority(raw, "http://")
+        scheme @ ("http" | "https") => {
+            let prefix = if scheme == "http" {
+                "http://"
+            } else {
+                "https://"
+            };
+            if !has_explicit_web_authority(raw, prefix)
                 || !url.host_str().is_some_and(|host| !host.is_empty())
-            {
-                return deny(raw, Osc8UrlDenialReason::InvalidWebUrl);
-            }
-            Osc8UrlDecision::Allow(url.into())
-        }
-        "https" => {
-            if !has_explicit_web_authority(raw, "https://")
-                || !url.host_str().is_some_and(|host| !host.is_empty())
+                || !url.username().is_empty()
+                || url.password().is_some()
             {
                 return deny(raw, Osc8UrlDenialReason::InvalidWebUrl);
             }
@@ -220,6 +219,14 @@ mod tests {
             ),
             ("https:///path", Osc8UrlDenialReason::InvalidWebUrl),
             ("https://\\example.com", Osc8UrlDenialReason::InvalidWebUrl),
+            (
+                "https://trusted.example@evil.example/",
+                Osc8UrlDenialReason::InvalidWebUrl,
+            ),
+            (
+                "https://:secret@evil.example/",
+                Osc8UrlDenialReason::InvalidWebUrl,
+            ),
             ("mailto:", Osc8UrlDenialReason::EmptyEmailAddress),
             ("file:///tmp/report.txt", Osc8UrlDenialReason::LocalFile),
             (
