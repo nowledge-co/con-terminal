@@ -223,7 +223,8 @@ impl RenderSession {
             renderer_config.initial_height,
             cell_width_px,
             cell_height_px,
-        );
+        )
+        .context("initial mouse geometry failed")?;
         let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
             .as_deref()
@@ -356,7 +357,8 @@ impl RenderSession {
             .resize(cols, rows, cell_width_px, cell_height_px)
             .context("VtScreen::resize failed")?;
         self.vt
-            .set_mouse_geometry(width_px, height_px, cell_width_px, cell_height_px);
+            .set_mouse_geometry(width_px, height_px, cell_width_px, cell_height_px)
+            .context("mouse geometry resize failed")?;
         self.conpty
             .resize(PtySize { cols, rows })
             .context("ConPty::resize failed")?;
