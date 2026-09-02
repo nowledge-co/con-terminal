@@ -174,6 +174,10 @@ impl GhosttyConfigPatch {
         s.push_str("shell-integration-features = ");
         s.push_str(CON_SHELL_INTEGRATION_FEATURES);
         s.push('\n');
+        // Plain links already display their target as terminal text. Restrict
+        // host-side previews to OSC 8, whose visible label can differ from the
+        // producer-controlled URI and therefore needs an explicit preview.
+        s.push_str("link-previews = osc8\n");
         let clipboard_write = self.clipboard_write.unwrap_or(false);
         s.push_str(if clipboard_write {
             "clipboard-write = allow\n"
@@ -287,10 +291,35 @@ pub enum GhosttySplitDirection {
     Up,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GhosttyOpenUrlKind {
+    Unknown,
+    Text,
+    Html,
+    Osc8,
+}
+
+impl From<ffi::ghostty_action_open_url_kind_e> for GhosttyOpenUrlKind {
+    fn from(kind: ffi::ghostty_action_open_url_kind_e) -> Self {
+        match kind {
+            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN => {
+                Self::Unknown
+            }
+            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_TEXT => Self::Text,
+            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_HTML => Self::Html,
+            ffi::ghostty_action_open_url_kind_e::GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 => Self::Osc8,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
-    OpenUrl(String),
+    OpenUrl {
+        kind: GhosttyOpenUrlKind,
+        url: Vec<u8>,
+    },
+    Osc8LinkHoverChanged(Option<Arc<[u8]>>),
     PwdChanged(String),
     StartSearch(String),
     EndSearch,
@@ -329,6 +358,10 @@ pub struct TerminalState {
     clipboard_write_policy: Arc<ClipboardWritePolicy>,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
+    /// Latest OSC 8 URI under the pointer. Hover is level-triggered UI state,
+    /// so only the final value needs to survive until the next host drain.
+    hovered_osc8_link_url: Option<Arc<[u8]>>,
+    osc8_link_hover_changed: bool,
     /// Latest viewport scrollbar state emitted by Ghostty.
     pub scrollbar: Option<GhosttyScrollbar>,
 }
@@ -355,8 +388,30 @@ impl Default for TerminalState {
             surface: std::ptr::null_mut(),
             clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
             pending_events: VecDeque::new(),
+            hovered_osc8_link_url: None,
+            osc8_link_hover_changed: false,
             scrollbar: None,
         }
+    }
+}
+
+impl TerminalState {
+    fn update_osc8_link_hover(&mut self, url: Option<Arc<[u8]>>) {
+        if self.hovered_osc8_link_url == url {
+            return;
+        }
+        self.hovered_osc8_link_url = url;
+        self.osc8_link_hover_changed = true;
+    }
+
+    fn drain_pending_events(&mut self) -> Vec<GhosttySurfaceEvent> {
+        let mut events: Vec<_> = self.pending_events.drain(..).collect();
+        if std::mem::take(&mut self.osc8_link_hover_changed) {
+            events.push(GhosttySurfaceEvent::Osc8LinkHoverChanged(
+                self.hovered_osc8_link_url.clone(),
+            ));
+        }
+        events
     }
 }
 
@@ -1388,8 +1443,7 @@ impl GhosttyTerminal {
     }
 
     pub fn take_pending_events(&self) -> Vec<GhosttySurfaceEvent> {
-        let mut state = self.state.lock();
-        state.pending_events.drain(..).collect()
+        self.state.lock().drain_pending_events()
     }
 }
 
@@ -1613,11 +1667,35 @@ unsafe extern "C" fn action_callback(
                 }
 
                 let bytes = std::slice::from_raw_parts(open_url.url as *const u8, open_url.len);
-                let url = String::from_utf8_lossy(bytes).into_owned();
                 state
                     .lock()
                     .pending_events
-                    .push_back(GhosttySurfaceEvent::OpenUrl(url));
+                    .push_back(GhosttySurfaceEvent::OpenUrl {
+                        kind: open_url.kind.into(),
+                        url: bytes.to_vec(),
+                    });
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_MOUSE_OVER_LINK => {
+                let mouse_over_link = action.action.mouse_over_link;
+                let mut state = state.lock();
+                if mouse_over_link.len == 0 {
+                    state.update_osc8_link_hover(None);
+                    return true;
+                }
+                if mouse_over_link.url.is_null() {
+                    return false;
+                }
+
+                let bytes = std::slice::from_raw_parts(
+                    mouse_over_link.url as *const u8,
+                    mouse_over_link.len,
+                );
+                if state.hovered_osc8_link_url.as_deref() == Some(bytes) {
+                    return true;
+                }
+                let url = Arc::<[u8]>::from(bytes);
+                state.update_osc8_link_hover(Some(url));
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
@@ -1947,7 +2025,7 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::{
-        GhosttyConfigPatch, TerminalColors, TerminalState,
+        GhosttyConfigPatch, GhosttySurfaceEvent, TerminalColors, TerminalState,
         installed_app_ghostty_resources_dir_for_exe, mark_child_exited_state,
     };
 
@@ -1979,6 +2057,30 @@ mod tests {
         assert!(state.needs_render);
         assert!(!state.is_busy);
         assert_eq!(state.last_command_finished_input_generation, 7);
+    }
+
+    #[test]
+    fn osc8_hover_updates_coalesce_to_the_latest_state() {
+        let mut state = TerminalState::default();
+        let latest: Arc<[u8]> = Arc::from(&b"https://two.example"[..]);
+
+        state.update_osc8_link_hover(Some(Arc::from(&b"https://one.example"[..])));
+        state.update_osc8_link_hover(Some(Arc::clone(&latest)));
+        assert_eq!(
+            state.drain_pending_events(),
+            vec![GhosttySurfaceEvent::Osc8LinkHoverChanged(Some(Arc::clone(
+                &latest
+            )))]
+        );
+        assert!(state.drain_pending_events().is_empty());
+        state.update_osc8_link_hover(Some(latest));
+        assert!(state.drain_pending_events().is_empty());
+
+        state.update_osc8_link_hover(None);
+        assert_eq!(
+            state.drain_pending_events(),
+            vec![GhosttySurfaceEvent::Osc8LinkHoverChanged(None)]
+        );
     }
 
     #[test]
@@ -2051,6 +2153,13 @@ mod tests {
 
         assert!(config.contains("shell-integration-features = no-cursor,ssh-env\n"));
         assert!(!config.contains("ssh-terminfo"));
+    }
+
+    #[test]
+    fn ghostty_config_only_previews_osc8_links() {
+        let config = GhosttyConfigPatch::default().to_config_string();
+
+        assert!(config.contains("link-previews = osc8\n"));
     }
 
     #[test]

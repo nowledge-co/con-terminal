@@ -421,6 +421,14 @@ pub struct ghostty_action_scrollbar_s {
     pub len: u64,
 }
 
+/// Action payload for MOUSE_OVER_LINK.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_mouse_over_link_s {
+    pub url: *const c_char,
+    pub len: usize,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::upper_case_acronyms)]
@@ -464,6 +472,7 @@ pub union ghostty_action_u {
     pub start_search: ghostty_action_start_search_s,
     pub search_total: ghostty_action_search_total_s,
     pub search_selected: ghostty_action_search_selected_s,
+    pub mouse_over_link: ghostty_action_mouse_over_link_s,
     pub open_url: ghostty_action_open_url_s,
     pub child_exited: ghostty_surface_message_childexited_s,
 }
@@ -482,6 +491,8 @@ const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_progress_report_s>()]
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_start_search_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_total_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_selected_s>()];
+const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_mouse_over_link_s>()];
+const _: [(); 24] = [(); std::mem::size_of::<ghostty_action_open_url_s>()];
 const _: [(); 24] = [(); std::mem::size_of::<ghostty_action_u>()];
 const _: [(); 32] = [(); std::mem::size_of::<ghostty_action_s>()];
 

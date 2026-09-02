@@ -107,6 +107,28 @@ _Static_assert(sizeof(ghostty_action_search_total_s) == sizeof(ssize_t),
                "ghostty search-total payload changed layout");
 _Static_assert(sizeof(ghostty_action_search_selected_s) == sizeof(ssize_t),
                "ghostty search-selected payload changed layout");
+_Static_assert(sizeof(ghostty_action_mouse_over_link_s) == 16,
+               "ghostty mouse-over-link payload changed layout");
+_Static_assert(offsetof(ghostty_action_mouse_over_link_s, url) == 0,
+               "ghostty mouse-over-link pointer changed offset");
+_Static_assert(offsetof(ghostty_action_mouse_over_link_s, len) == 8,
+               "ghostty mouse-over-link length changed offset");
+_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN == 0,
+               "ghostty unknown open-url kind changed value");
+_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_TEXT == 1,
+               "ghostty text open-url kind changed value");
+_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_HTML == 2,
+               "ghostty HTML open-url kind changed value");
+_Static_assert(GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 == 3,
+               "ghostty OSC 8 open-url kind changed value");
+_Static_assert(sizeof(ghostty_action_open_url_s) == 24,
+               "ghostty open-url payload changed layout");
+_Static_assert(offsetof(ghostty_action_open_url_s, kind) == 0,
+               "ghostty open-url kind changed offset");
+_Static_assert(offsetof(ghostty_action_open_url_s, url) == 8,
+               "ghostty open-url pointer changed offset");
+_Static_assert(offsetof(ghostty_action_open_url_s, len) == 16,
+               "ghostty open-url length changed offset");
 
 _Static_assert(GHOSTTY_CLIPBOARD_STANDARD == 0,
                "ghostty standard clipboard changed value");

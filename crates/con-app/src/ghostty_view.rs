@@ -26,12 +26,14 @@ use std::time::{Duration, Instant};
 use con_ghostty::GhosttyScrollbar;
 use con_ghostty::ffi;
 use con_ghostty::{
-    GhosttyApp, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal, MouseButton,
-    TerminalProgress,
+    GhosttyApp, GhosttyOpenUrlKind, GhosttySplitDirection, GhosttySurfaceEvent, GhosttyTerminal,
+    MouseButton, TerminalProgress,
 };
 use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::clipboard::Clipboard;
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
 use crate::mouse_sequence::MouseButtonSequence;
 use crate::terminal_find::{TerminalFind, TerminalFindDismissed};
@@ -39,6 +41,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
 use crate::terminal_restore::key_down_may_write_terminal;
+use crate::terminal_url::{Osc8UrlDecision, Osc8UrlDenialReason, evaluate_osc8_url};
 
 // Actions owned by the embedded terminal view.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -150,6 +153,17 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+struct Osc8LinkPreview {
+    display: SharedString,
+    will_open: bool,
+}
+
+struct BlockedOsc8Url {
+    display: SharedString,
+    reason: Osc8UrlDenialReason,
+    copy_control_id: SharedString,
+}
+
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -205,6 +219,11 @@ pub struct GhosttyView {
     /// mouse-move event when the pointer is stationary.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
+    /// Transient preview for the OSC 8 target currently under the pointer.
+    hovered_osc8_url: Option<Osc8LinkPreview>,
+    /// Persistent explanation for the last OSC 8 target denied on click.
+    blocked_osc8_url: Option<BlockedOsc8Url>,
+    next_blocked_osc8_url_id: u64,
     #[cfg(target_os = "macos")]
     scrollbar_drag: Option<ScrollbarDrag>,
     #[cfg(target_os = "macos")]
@@ -276,6 +295,9 @@ impl GhosttyView {
             next_surface_init_retry_at: None,
             #[cfg(target_os = "macos")]
             last_mouse_position: None,
+            hovered_osc8_url: None,
+            blocked_osc8_url: None,
+            next_blocked_osc8_url_id: 0,
             #[cfg(target_os = "macos")]
             scrollbar_drag: None,
             #[cfg(target_os = "macos")]
@@ -434,6 +456,226 @@ impl GhosttyView {
         )
     }
 
+    fn dismiss_blocked_osc8_url(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.blocked_osc8_url.take().is_none() {
+            return false;
+        }
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+        true
+    }
+
+    fn render_osc8_link_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.blocked_osc8_url.is_some() {
+            return None;
+        }
+        let preview = self.hovered_osc8_url.as_ref()?;
+        let theme = cx.theme();
+        let accent = if preview.will_open {
+            theme.foreground.opacity(0.72)
+        } else {
+            theme.warning
+        };
+        let surface = if preview.will_open {
+            theme
+                .background
+                .opacity(if theme.is_dark() { 0.92 } else { 0.96 })
+        } else {
+            theme
+                .warning
+                .opacity(if theme.is_dark() { 0.18 } else { 0.12 })
+        };
+        let align_right = self
+            .last_bounds
+            .zip(self.last_mouse_position)
+            .is_some_and(|(bounds, mouse)| mouse.x < bounds.origin.x + bounds.size.width / 2.0);
+
+        let mut overlay = div()
+            .absolute()
+            .left(px(10.0))
+            .right(px(10.0))
+            .bottom(px(10.0))
+            .flex();
+        if align_right {
+            overlay = overlay.justify_end();
+        }
+
+        Some(
+            overlay
+                .child(
+                    div()
+                        .max_w(relative(0.72))
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .px(px(8.0))
+                        .py(px(5.0))
+                        .rounded(px(6.0))
+                        .bg(surface)
+                        .child(
+                            Icon::default()
+                                .path(if preview.will_open {
+                                    "phosphor/link.svg"
+                                } else {
+                                    "phosphor/shield-warning-fill.svg"
+                                })
+                                .xsmall()
+                                .text_color(accent),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11.0))
+                                .text_color(theme.foreground.opacity(0.86))
+                                .child(preview.display.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(accent)
+                                .child(if preview.will_open {
+                                    "Opens"
+                                } else {
+                                    "Blocked"
+                                }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_blocked_osc8_url(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let target = self.blocked_osc8_url.as_ref()?;
+        let theme = cx.theme();
+        let warning = theme.warning;
+
+        Some(
+            div()
+                .absolute()
+                .left(px(12.0))
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .occlude()
+                        .w_full()
+                        .max_w(px(620.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(8.0))
+                        .bg(warning.opacity(if theme.is_dark() { 0.18 } else { 0.12 }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(|_this, _event, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        .on_scroll_wheel(cx.listener(|_this, _event, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_start()
+                                .gap(px(8.0))
+                                .child(
+                                    Icon::default()
+                                        .path("phosphor/shield-warning-fill.svg")
+                                        .small()
+                                        .text_color(warning),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(2.0))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.foreground)
+                                                .child("Terminal link blocked"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.0))
+                                                .line_height(px(15.0))
+                                                .text_color(theme.foreground.opacity(0.72))
+                                                .child(target.reason.message()),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("dismiss-blocked-osc8-url")
+                                        .icon(
+                                            Icon::default()
+                                                .path("phosphor/x.svg")
+                                                .text_color(theme.muted_foreground),
+                                        )
+                                        .ghost()
+                                        .xsmall()
+                                        .tooltip("Dismiss")
+                                        .on_click(cx.listener(|this, _event, window, cx| {
+                                            cx.stop_propagation();
+                                            this.dismiss_blocked_osc8_url(window, cx);
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(theme.foreground.opacity(0.06))
+                                .font_family(theme.mono_font_family.clone())
+                                .text_size(px(11.0))
+                                .text_color(theme.foreground.opacity(0.84))
+                                .child(target.display.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .text_size(px(10.0))
+                                        .text_color(theme.muted_foreground)
+                                        .child("Copy the displayed target only if you trust it."),
+                                )
+                                .child(
+                                    Clipboard::new(target.copy_control_id.clone())
+                                        .value(target.display.clone())
+                                        .tooltip("Copy displayed target"),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn show_terminal_find(
         &mut self,
         needle: String,
@@ -512,8 +754,36 @@ impl GhosttyView {
                 GhosttySurfaceEvent::SplitRequest(direction) => {
                     cx.emit(GhosttySplitRequested(direction));
                 }
-                GhosttySurfaceEvent::OpenUrl(url) => {
-                    cx.open_url(&url);
+                GhosttySurfaceEvent::OpenUrl { kind, url } => {
+                    if kind != GhosttyOpenUrlKind::Osc8 {
+                        cx.open_url(String::from_utf8_lossy(&url).as_ref());
+                        continue;
+                    }
+
+                    match evaluate_osc8_url(&url) {
+                        Osc8UrlDecision::Allow(url) => cx.open_url(&url),
+                        Osc8UrlDecision::Deny { display, reason } => {
+                            let id = self.next_blocked_osc8_url_id;
+                            self.next_blocked_osc8_url_id = id.wrapping_add(1);
+                            self.blocked_osc8_url = Some(BlockedOsc8Url {
+                                display: display.into(),
+                                reason,
+                                copy_control_id: format!("blocked-osc8-url-copy-{id}").into(),
+                            });
+                        }
+                    }
+                }
+                GhosttySurfaceEvent::Osc8LinkHoverChanged(url) => {
+                    self.hovered_osc8_url = url.map(|url| match evaluate_osc8_url(&url) {
+                        Osc8UrlDecision::Allow(url) => Osc8LinkPreview {
+                            display: url.into(),
+                            will_open: true,
+                        },
+                        Osc8UrlDecision::Deny { display, .. } => Osc8LinkPreview {
+                            display: display.into(),
+                            will_open: false,
+                        },
+                    });
                 }
                 GhosttySurfaceEvent::PwdChanged(cwd) => {
                     self.last_cwd = Some(cwd.clone());
@@ -2451,6 +2721,11 @@ impl Render for GhosttyView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.dismiss_blocked_osc8_url(window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
@@ -2499,6 +2774,8 @@ impl Render for GhosttyView {
                 .size_full(),
             )
             .children(self.render_terminal_scrollbar(cx))
+            .children(self.render_osc8_link_preview(cx))
+            .children(self.render_blocked_osc8_url(cx))
             .children(terminal_find)
             .context_menu(move |menu, window, cx| {
                 // An empty PopupMenu renders nothing (ContextMenu checks
