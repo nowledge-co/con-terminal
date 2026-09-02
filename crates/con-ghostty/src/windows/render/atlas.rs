@@ -834,9 +834,9 @@ impl GlyphCache {
     }
 
     pub fn rebuild(&mut self, font_size_px: f32) -> Result<()> {
-        // Build every fallible resource before replacing the live atlas
-        // state. A transient DirectWrite failure must leave the old formats,
-        // metrics, and cached glyphs usable so the caller can retry safely.
+        // Build every fallible DirectWrite resource before replacing the live
+        // atlas state. A transient format or metrics failure must leave the old
+        // state usable so the caller can retry safely.
         let text_format_regular = make_text_format(
             &self.dwrite,
             self.font_collection.as_ref(),
