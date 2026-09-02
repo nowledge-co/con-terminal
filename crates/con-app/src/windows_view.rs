@@ -154,6 +154,9 @@ pub struct GhosttyView {
     last_physical_size: Option<(u32, u32)>,
     /// Last physical DPI successfully applied by `session.set_dpi`.
     last_dpi: u32,
+    /// Current geometry synchronization failure, retained so a retry loop
+    /// reports each failing stage once instead of warning every prepaint.
+    geometry_sync_failure: Option<GeometrySyncFailure>,
     /// The most recently rendered frame, wrapped as a GPUI image.
     cached_image: Option<Arc<RenderImage>>,
     /// CPU-side copy of the current BGRA frame. Dirty-row readbacks
@@ -203,6 +206,12 @@ enum SyncRenderResult {
     Unchanged,
     Rendered { needs_followup_prepaint: bool },
     Pending,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GeometrySyncFailure {
+    SetDpi,
+    Resize,
 }
 
 pub fn init(cx: &mut App) {
@@ -261,6 +270,7 @@ impl GhosttyView {
             ime_selected_range: None,
             last_physical_size: None,
             last_dpi: 0,
+            geometry_sync_failure: None,
             cached_image: None,
             cached_image_size: None,
             cached_frame: None,
@@ -375,6 +385,7 @@ impl GhosttyView {
         self.pending_unsafe_paste = None;
         self.images_to_drop.clear();
         self.last_physical_size = None;
+        self.geometry_sync_failure = None;
     }
 
     pub fn set_surface_focus_state(&mut self, focused: bool) {
@@ -552,6 +563,7 @@ impl GhosttyView {
                 self.last_cwd = self.terminal.as_ref().and_then(|t| t.current_dir());
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_dpi = dpi;
+                self.geometry_sync_failure = None;
                 self.scrollbar_cache = None;
             }
             Err(err) => {
@@ -567,6 +579,22 @@ impl GhosttyView {
         self.pane_bounds = Some(bounds);
         self.scale_factor = scale_factor;
         bounds_changed || scale_changed
+    }
+
+    fn report_geometry_sync_failure(
+        &mut self,
+        failure: GeometrySyncFailure,
+        error: &anyhow::Error,
+    ) {
+        if self.geometry_sync_failure == Some(failure) {
+            return;
+        }
+        self.geometry_sync_failure = Some(failure);
+        let operation = match failure {
+            GeometrySyncFailure::SetDpi => "set_dpi",
+            GeometrySyncFailure::Resize => "resize",
+        };
+        log::warn!("RenderSession::{operation} failed: {error:#}");
     }
 
     /// Drives session lifecycle (init/resize/DPI) and pumps one render
@@ -622,7 +650,7 @@ impl GhosttyView {
                         true
                     }
                     Err(err) => {
-                        log::warn!("RenderSession::set_dpi failed: {err:#}");
+                        self.report_geometry_sync_failure(GeometrySyncFailure::SetDpi, &err);
                         false
                     }
                 }
@@ -632,16 +660,23 @@ impl GhosttyView {
 
             if dpi_ready {
                 match session.resize(width_px, height_px) {
-                    Ok(()) => self.last_physical_size = Some((width_px, height_px)),
+                    Ok(()) => {
+                        self.last_physical_size = Some((width_px, height_px));
+                        self.geometry_sync_failure = None;
+                    }
                     Err(err) => {
                         // A resize may have updated an earlier subsystem before
                         // a later one failed. Force the full idempotent sequence
                         // to run again on the next prepaint.
                         self.last_physical_size = None;
-                        log::warn!("RenderSession::resize failed: {err:#}");
+                        self.report_geometry_sync_failure(GeometrySyncFailure::Resize, &err);
                     }
                 }
             }
+        } else {
+            // Returning to the last applied geometry also ends a failed DPI
+            // transition, even though no synchronization call was required.
+            self.geometry_sync_failure = None;
         }
 
         let render_started = perf_trace_enabled().then(Instant::now);
