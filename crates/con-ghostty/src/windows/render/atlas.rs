@@ -834,10 +834,10 @@ impl GlyphCache {
     }
 
     pub fn rebuild(&mut self, font_size_px: f32) -> Result<()> {
-        self.font_size_px = font_size_px;
-        self.entries.clear();
-        self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
-        self.text_format_regular = make_text_format(
+        // Build every fallible DirectWrite resource before replacing the live
+        // atlas state. A transient format or metrics failure must leave the old
+        // state usable so the caller can retry safely.
+        let text_format_regular = make_text_format(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -846,7 +846,7 @@ impl GlyphCache {
             false,
             false,
         )?;
-        self.text_format_bold = make_text_format(
+        let text_format_bold = make_text_format(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -855,7 +855,7 @@ impl GlyphCache {
             true,
             false,
         )?;
-        self.text_format_italic = make_text_format(
+        let text_format_italic = make_text_format(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -864,7 +864,7 @@ impl GlyphCache {
             false,
             true,
         )?;
-        self.text_format_bold_italic = make_text_format(
+        let text_format_bold_italic = make_text_format(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -873,7 +873,7 @@ impl GlyphCache {
             true,
             true,
         )?;
-        self.text_format_cjk_regular = make_text_format_with_weight(
+        let text_format_cjk_regular = make_text_format_with_weight(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -882,7 +882,7 @@ impl GlyphCache {
             DWRITE_FONT_WEIGHT_MEDIUM,
             false,
         )?;
-        self.text_format_cjk_italic = make_text_format_with_weight(
+        let text_format_cjk_italic = make_text_format_with_weight(
             &self.dwrite,
             self.font_collection.as_ref(),
             self.font_fallback.as_ref(),
@@ -891,25 +891,25 @@ impl GlyphCache {
             DWRITE_FONT_WEIGHT_MEDIUM,
             true,
         )?;
-        self.metrics = measure_cell(
+        let metrics = measure_cell(
             &self.dwrite,
             self.font_collection.as_ref(),
             &self.font_family,
             font_size_px,
         )?;
-        self.layout_baselines = TextFormatBaselines::measure(
+        let layout_baselines = TextFormatBaselines::measure(
             &self.dwrite,
-            self.metrics.baseline_px as f32,
-            &self.text_format_regular,
-            &self.text_format_bold,
-            &self.text_format_italic,
-            &self.text_format_bold_italic,
+            metrics.baseline_px as f32,
+            &text_format_regular,
+            &text_format_bold,
+            &text_format_italic,
+            &text_format_bold_italic,
         );
         // Refresh the primary face + upm so per-glyph scale-to-fit
         // works after a font-size change (the face itself doesn't
         // depend on size, but re-resolving keeps the field in lockstep
         // with the current collection / family).
-        match resolve_font_face(
+        let (primary_face, primary_upm) = match resolve_font_face(
             &self.dwrite,
             self.font_collection.as_ref(),
             &self.font_family,
@@ -918,18 +918,31 @@ impl GlyphCache {
                 let mut fm = DWRITE_FONT_METRICS::default();
                 // SAFETY: windows-rs writes through the out pointer.
                 unsafe { face.GetMetrics(&mut fm) };
-                self.primary_upm = fm.designUnitsPerEm as f32;
-                self.primary_face = Some(face);
+                (Some(face), fm.designUnitsPerEm as f32)
             }
             Err(err) => {
                 log::warn!(
                     "GlyphCache::rebuild: primary face resolution failed ({err:?}); \
                      wide Nerd-Font icons will render clipped at the cell edge"
                 );
-                self.primary_face = None;
-                self.primary_upm = 1.0;
+                (None, 1.0)
             }
-        }
+        };
+
+        self.font_size_px = font_size_px;
+        self.entries.clear();
+        self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
+        self.text_format_regular = text_format_regular;
+        self.text_format_bold = text_format_bold;
+        self.text_format_italic = text_format_italic;
+        self.text_format_bold_italic = text_format_bold_italic;
+        self.text_format_cjk_regular = text_format_cjk_regular;
+        self.text_format_cjk_italic = text_format_cjk_italic;
+        self.metrics = metrics;
+        self.layout_baselines = layout_baselines;
+        self.primary_face = primary_face;
+        self.primary_upm = primary_upm;
+
         // Clear the atlas texture so fresh rasterization doesn't blend
         // with stale pixels from the previous size. BeginDraw/Clear/End
         // is a single D2D op — the DXGI-backed RT aliases the same
