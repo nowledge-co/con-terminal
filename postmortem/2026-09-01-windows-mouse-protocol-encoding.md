@@ -38,9 +38,9 @@ gates instead of incorrectly falling back to local selection or scrolling.
   Ghostty revision, so geometry updates must be cached. PTY output still resets
   deduplication until Ghostty can preserve it when effective state is unchanged.
 - The current public tracking query exposes requested mode bits, not effective
-  flags. A conflicting DECSET/DECRST sequence can therefore consume one event
-  after effective reporting has stopped, but the encoder now prevents stale
-  bytes from reaching the child. An effective-state getter is the clean
-  upstream follow-up.
+  flags. A conflicting DECSET/DECRST sequence can therefore keep consuming
+  pointer input after effective reporting has stopped, but the encoder now
+  prevents stale bytes from reaching the child. An effective-state getter is
+  the clean upstream follow-up.
 - Linux still has a separate handwritten SGR path and should reuse the shared
   encoder in a follow-up change.
