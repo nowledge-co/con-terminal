@@ -85,6 +85,7 @@ mod terminal_pane;
 mod terminal_paste;
 mod terminal_restore;
 mod terminal_shortcuts;
+mod terminal_url;
 mod theme;
 mod ui_scale;
 mod updater;
