@@ -41,7 +41,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
 use crate::terminal_restore::key_down_may_write_terminal;
-use crate::terminal_url::{Osc8UrlDecision, Osc8UrlDenialReason, evaluate_osc8_url};
+use crate::terminal_url::{Osc8UrlDecision, Osc8UrlDenial, evaluate_osc8_url};
 
 // Actions owned by the embedded terminal view.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -78,7 +78,7 @@ static NATIVE_TRANSITION_UNDERLAY_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
 static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
-static NEXT_GHOSTTY_VIEW_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy)]
@@ -153,19 +153,8 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
-/// Distance between the OSC 8 hover card and the pane edges.
-const OSC8_LINK_PREVIEW_INSET_PX: f32 = 10.0;
-
-struct Osc8LinkPreview {
-    display: SharedString,
-    will_open: bool,
-}
-
-struct BlockedOsc8Url {
-    display: SharedString,
-    reason: Osc8UrlDenialReason,
-    copy_control_id: SharedString,
-}
+/// Distance between the OSC 8 hover / blocked cards and the pane edges.
+const OSC8_CARD_INSET_PX: f32 = 10.0;
 
 /// Surface color for the OSC 8 hover and blocked cards.
 ///
@@ -199,21 +188,20 @@ fn osc8_card_surface(theme: &gpui_component::Theme, warning: bool) -> Hsla {
 /// (and truncates) once the whole card reaches `max_width`, because the icon
 /// and status are `flex_none`.
 fn osc8_link_preview_card(
-    preview: &Osc8LinkPreview,
+    decision: &Osc8UrlDecision,
     theme: &gpui_component::Theme,
     max_width: Pixels,
 ) -> Div {
-    let accent = if preview.will_open {
+    let (display, will_open) = match decision {
+        Osc8UrlDecision::Allow(url) => (url, true),
+        Osc8UrlDecision::Deny(denial) => (&denial.display, false),
+    };
+    let accent = if will_open {
         theme.foreground.opacity(0.72)
     } else {
         theme.warning
     };
-    let surface = osc8_card_surface(theme, !preview.will_open);
-    let status = if preview.will_open {
-        "Opens"
-    } else {
-        "Blocked"
-    };
+    let status = if will_open { "Opens" } else { "Blocked" };
 
     div()
         .debug_selector(|| "osc8-link-preview-card".into())
@@ -226,10 +214,10 @@ fn osc8_link_preview_card(
         .px(px(8.0))
         .py(px(5.0))
         .rounded(px(6.0))
-        .bg(surface)
+        .bg(osc8_card_surface(theme, !will_open))
         .child(
             Icon::default()
-                .path(if preview.will_open {
+                .path(if will_open {
                     "phosphor/link.svg"
                 } else {
                     "phosphor/shield-warning-fill.svg"
@@ -248,7 +236,7 @@ fn osc8_link_preview_card(
                 .font_family(theme.mono_font_family.clone())
                 .text_size(px(11.0))
                 .text_color(theme.foreground.opacity(0.86))
-                .child(preview.display.clone()),
+                .child(display.clone()),
         )
         .child(
             div()
@@ -316,11 +304,10 @@ pub struct GhosttyView {
     /// mouse-move event when the pointer is stationary.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
-    /// Transient preview for the OSC 8 target currently under the pointer.
-    hovered_osc8_url: Option<Osc8LinkPreview>,
-    /// Persistent explanation for the last OSC 8 target denied on click.
-    blocked_osc8_url: Option<BlockedOsc8Url>,
-    next_blocked_osc8_url_id: u64,
+    /// Decision for the OSC 8 target under the pointer; shown while hovering.
+    hovered_osc8_url: Option<Osc8UrlDecision>,
+    /// The last OSC 8 target denied on click; shown until dismissed.
+    blocked_osc8_url: Option<Osc8UrlDenial>,
     #[cfg(target_os = "macos")]
     scrollbar_drag: Option<ScrollbarDrag>,
     #[cfg(target_os = "macos")]
@@ -328,7 +315,7 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_transition_underlay_visible: Cell<bool>,
     #[cfg(target_os = "macos")]
-    view_id: u64,
+    native_transition_underlay_owner_id: u64,
     left_mouse_sequence: MouseButtonSequence<i32>,
     right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
@@ -394,7 +381,6 @@ impl GhosttyView {
             last_mouse_position: None,
             hovered_osc8_url: None,
             blocked_osc8_url: None,
-            next_blocked_osc8_url_id: 0,
             #[cfg(target_os = "macos")]
             scrollbar_drag: None,
             #[cfg(target_os = "macos")]
@@ -402,7 +388,8 @@ impl GhosttyView {
             #[cfg(target_os = "macos")]
             native_transition_underlay_visible: Cell::new(false),
             #[cfg(target_os = "macos")]
-            view_id: NEXT_GHOSTTY_VIEW_ID.fetch_add(1, Ordering::Relaxed),
+            native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
+                .fetch_add(1, Ordering::Relaxed),
             left_mouse_sequence: MouseButtonSequence::default(),
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
@@ -566,17 +553,17 @@ impl GhosttyView {
         if self.blocked_osc8_url.is_some() {
             return None;
         }
-        let preview = self.hovered_osc8_url.as_ref()?;
+        let decision = self.hovered_osc8_url.as_ref()?;
         let theme = cx.theme();
         let bounds = self.last_bounds?;
         let align_right = self
             .last_mouse_position
             .is_some_and(|mouse| mouse.x < bounds.origin.x + bounds.size.width / 2.0);
 
-        // The card may use the whole overlay width (pane minus the 10px side
+        // The card may use the whole overlay width (pane minus the side
         // insets): the target is security-relevant text, so prefer showing it
         // in full over truncating it to a fraction of the pane.
-        let inset = px(OSC8_LINK_PREVIEW_INSET_PX);
+        let inset = px(OSC8_CARD_INSET_PX);
         let max_width = (bounds.size.width - inset * 2.0).max(px(0.0));
 
         let mut overlay = div()
@@ -591,22 +578,24 @@ impl GhosttyView {
 
         Some(
             overlay
-                .child(osc8_link_preview_card(preview, theme, max_width))
+                .child(osc8_link_preview_card(decision, theme, max_width))
                 .into_any_element(),
         )
     }
 
     fn render_blocked_osc8_url(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let target = self.blocked_osc8_url.as_ref()?;
+        let denial = self.blocked_osc8_url.as_ref()?;
         let theme = cx.theme();
         let warning = theme.warning;
+        let display: SharedString = denial.display.clone().into();
+        let inset = px(OSC8_CARD_INSET_PX);
 
         Some(
             div()
                 .absolute()
-                .left(px(12.0))
-                .right(px(12.0))
-                .bottom(px(12.0))
+                .left(inset)
+                .right(inset)
+                .bottom(inset)
                 .flex()
                 .justify_center()
                 .child(
@@ -656,7 +645,7 @@ impl GhosttyView {
                                         .text_size(px(11.0))
                                         .line_height(px(15.0))
                                         .text_color(theme.foreground.opacity(0.78))
-                                        .child(target.reason.message()),
+                                        .child(denial.reason.message()),
                                 )
                                 .child(
                                     Button::new("dismiss-blocked-osc8-url")
@@ -692,11 +681,14 @@ impl GhosttyView {
                                         .font_family(theme.mono_font_family.clone())
                                         .text_size(px(11.0))
                                         .text_color(theme.foreground.opacity(0.84))
-                                        .child(target.display.clone()),
+                                        .child(display.clone()),
                                 )
                                 .child(
-                                    Clipboard::new(target.copy_control_id.clone())
-                                        .value(target.display.clone())
+                                    // Keyed by the displayed text so the
+                                    // "copied" state cannot carry over to a
+                                    // different blocked target.
+                                    Clipboard::new(display.clone())
+                                        .value(display)
                                         .tooltip("Copy displayed target"),
                                 ),
                         ),
@@ -786,28 +778,10 @@ impl GhosttyView {
                 GhosttySurfaceEvent::OpenUrl(url) => cx.open_url(&url),
                 GhosttySurfaceEvent::OpenOsc8Url(url) => match evaluate_osc8_url(&url) {
                     Osc8UrlDecision::Allow(url) => cx.open_url(&url),
-                    Osc8UrlDecision::Deny { display, reason } => {
-                        let id = self.next_blocked_osc8_url_id;
-                        self.next_blocked_osc8_url_id = id.wrapping_add(1);
-                        self.blocked_osc8_url = Some(BlockedOsc8Url {
-                            display: display.into(),
-                            reason,
-                            copy_control_id: format!("blocked-osc8-url-copy-{}-{id}", self.view_id)
-                                .into(),
-                        });
-                    }
+                    Osc8UrlDecision::Deny(denial) => self.blocked_osc8_url = Some(denial),
                 },
                 GhosttySurfaceEvent::Osc8LinkHoverChanged(url) => {
-                    self.hovered_osc8_url = url.map(|url| match evaluate_osc8_url(&url) {
-                        Osc8UrlDecision::Allow(url) => Osc8LinkPreview {
-                            display: url.into(),
-                            will_open: true,
-                        },
-                        Osc8UrlDecision::Deny { display, .. } => Osc8LinkPreview {
-                            display: display.into(),
-                            will_open: false,
-                        },
-                    });
+                    self.hovered_osc8_url = url.map(|url| evaluate_osc8_url(&url));
                 }
                 GhosttySurfaceEvent::PwdChanged(cwd) => {
                     self.last_cwd = Some(cwd.clone());
@@ -1018,7 +992,11 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
         if let Some(underlay_view) = self.native_underlay_view {
-            Self::set_transition_underlay_owner_visible(underlay_view, self.view_id, false);
+            Self::set_transition_underlay_owner_visible(
+                underlay_view,
+                self.native_transition_underlay_owner_id,
+                false,
+            );
         }
         self.native_underlay_view = None;
         if let Some(nsview) = self.nsview {
@@ -1493,7 +1471,7 @@ impl GhosttyView {
         if let Some(underlay_view) = self.native_underlay_view {
             Self::set_transition_underlay_owner_visible(
                 underlay_view,
-                self.view_id,
+                self.native_transition_underlay_owner_id,
                 self.native_transition_underlay_visible.get(),
             );
         }
@@ -2816,7 +2794,7 @@ impl Render for GhosttyView {
 #[cfg(test)]
 mod tests {
     use super::{
-        Osc8LinkPreview, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
+        Osc8UrlDecision, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
         should_send_ime_insert_as_key_event,
     };
     use con_ghostty::ffi;
@@ -2859,12 +2837,9 @@ mod tests {
                     )
                     .width(),
             );
-            let preview = Osc8LinkPreview {
-                display: self.display.clone(),
-                will_open: true,
-            };
+            let decision = Osc8UrlDecision::Allow(self.display.to_string());
             div().w(px(1_000.0)).flex().child(osc8_link_preview_card(
-                &preview,
+                &decision,
                 &theme,
                 self.max_width,
             ))

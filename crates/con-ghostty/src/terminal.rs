@@ -295,8 +295,11 @@ pub enum GhosttySplitDirection {
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
     OpenUrl(String),
-    OpenOsc8Url(Vec<u8>),
-    Osc8LinkHoverChanged(Option<Arc<[u8]>>),
+    /// An OSC 8 hyperlink was clicked. The URL is terminal-authored and must
+    /// be validated before it is opened.
+    OpenOsc8Url(String),
+    /// The OSC 8 hyperlink under the pointer changed (`None` = no link).
+    Osc8LinkHoverChanged(Option<String>),
     PwdChanged(String),
     StartSearch(String),
     EndSearch,
@@ -335,10 +338,9 @@ pub struct TerminalState {
     clipboard_write_policy: Arc<ClipboardWritePolicy>,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
-    /// Latest OSC 8 URI under the pointer. Hover is level-triggered UI state,
-    /// so only the final value needs to survive until the next host drain.
-    hovered_osc8_link_url: Option<Arc<[u8]>>,
-    osc8_link_hover_changed: bool,
+    /// OSC 8 URI under the pointer. Ghostty reports it on every mouse move
+    /// while hovering; this lets us emit an event only when it changes.
+    hovered_osc8_link_url: Option<String>,
     /// Latest viewport scrollbar state emitted by Ghostty.
     pub scrollbar: Option<GhosttyScrollbar>,
 }
@@ -366,29 +368,23 @@ impl Default for TerminalState {
             clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
             pending_events: VecDeque::new(),
             hovered_osc8_link_url: None,
-            osc8_link_hover_changed: false,
             scrollbar: None,
         }
     }
 }
 
 impl TerminalState {
-    fn update_osc8_link_hover(&mut self, url: Option<Arc<[u8]>>) {
-        if self.hovered_osc8_link_url == url {
+    /// Records the OSC 8 link under the pointer and queues a hover event if
+    /// it differs from the previous one.
+    fn set_hovered_osc8_link(&mut self, url: Option<&str>) {
+        if self.hovered_osc8_link_url.as_deref() == url {
             return;
         }
-        self.hovered_osc8_link_url = url;
-        self.osc8_link_hover_changed = true;
-    }
-
-    fn drain_pending_events(&mut self) -> Vec<GhosttySurfaceEvent> {
-        let mut events: Vec<_> = self.pending_events.drain(..).collect();
-        if std::mem::take(&mut self.osc8_link_hover_changed) {
-            events.push(GhosttySurfaceEvent::Osc8LinkHoverChanged(
+        self.hovered_osc8_link_url = url.map(str::to_owned);
+        self.pending_events
+            .push_back(GhosttySurfaceEvent::Osc8LinkHoverChanged(
                 self.hovered_osc8_link_url.clone(),
             ));
-        }
-        events
     }
 }
 
@@ -1420,7 +1416,7 @@ impl GhosttyTerminal {
     }
 
     pub fn take_pending_events(&self) -> Vec<GhosttySurfaceEvent> {
-        self.state.lock().drain_pending_events()
+        self.state.lock().pending_events.drain(..).collect()
     }
 }
 
@@ -1644,19 +1640,20 @@ unsafe extern "C" fn action_callback(
                 }
 
                 let bytes = std::slice::from_raw_parts(open_url.url as *const u8, open_url.len);
+                let url = String::from_utf8_lossy(bytes).into_owned();
                 let event = if open_url.kind == ffi::GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 {
-                    GhosttySurfaceEvent::OpenOsc8Url(bytes.to_vec())
+                    GhosttySurfaceEvent::OpenOsc8Url(url)
                 } else {
-                    GhosttySurfaceEvent::OpenUrl(String::from_utf8_lossy(bytes).into_owned())
+                    GhosttySurfaceEvent::OpenUrl(url)
                 };
                 state.lock().pending_events.push_back(event);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_MOUSE_OVER_LINK => {
+                // Ghostty sends an empty URL when the pointer leaves a link.
                 let mouse_over_link = action.action.mouse_over_link;
-                let mut state = state.lock();
                 if mouse_over_link.len == 0 {
-                    state.update_osc8_link_hover(None);
+                    state.lock().set_hovered_osc8_link(None);
                     return true;
                 }
                 if mouse_over_link.url.is_null() {
@@ -1667,11 +1664,8 @@ unsafe extern "C" fn action_callback(
                     mouse_over_link.url as *const u8,
                     mouse_over_link.len,
                 );
-                if state.hovered_osc8_link_url.as_deref() == Some(bytes) {
-                    return true;
-                }
-                let url = Arc::<[u8]>::from(bytes);
-                state.update_osc8_link_hover(Some(url));
+                let url = String::from_utf8_lossy(bytes);
+                state.lock().set_hovered_osc8_link(Some(&url));
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COMMAND_FINISHED => {
@@ -2036,26 +2030,21 @@ mod tests {
     }
 
     #[test]
-    fn osc8_hover_updates_coalesce_to_the_latest_state() {
+    fn osc8_hover_only_queues_an_event_when_the_link_changes() {
         let mut state = TerminalState::default();
-        let latest: Arc<[u8]> = Arc::from(&b"https://two.example"[..]);
 
-        state.update_osc8_link_hover(Some(Arc::from(&b"https://one.example"[..])));
-        state.update_osc8_link_hover(Some(Arc::clone(&latest)));
-        assert_eq!(
-            state.drain_pending_events(),
-            vec![GhosttySurfaceEvent::Osc8LinkHoverChanged(Some(Arc::clone(
-                &latest
-            )))]
-        );
-        assert!(state.drain_pending_events().is_empty());
-        state.update_osc8_link_hover(Some(latest));
-        assert!(state.drain_pending_events().is_empty());
+        // Ghostty repeats MOUSE_OVER_LINK on every pointer move over a link.
+        state.set_hovered_osc8_link(Some("https://one.example"));
+        state.set_hovered_osc8_link(Some("https://one.example"));
+        state.set_hovered_osc8_link(None);
+        state.set_hovered_osc8_link(None);
 
-        state.update_osc8_link_hover(None);
         assert_eq!(
-            state.drain_pending_events(),
-            vec![GhosttySurfaceEvent::Osc8LinkHoverChanged(None)]
+            state.pending_events.drain(..).collect::<Vec<_>>(),
+            vec![
+                GhosttySurfaceEvent::Osc8LinkHoverChanged(Some("https://one.example".into())),
+                GhosttySurfaceEvent::Osc8LinkHoverChanged(None),
+            ]
         );
     }
 

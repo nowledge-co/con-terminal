@@ -5,9 +5,7 @@ use url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Osc8UrlDenialReason {
     Malformed,
-    InvalidEncoding,
     UnsafeCharacters,
-    SurroundingWhitespace,
     InvalidWebUrl,
     EmptyEmailAddress,
     LocalFile,
@@ -18,9 +16,9 @@ impl Osc8UrlDenialReason {
     pub(crate) fn message(self) -> &'static str {
         match self {
             Self::Malformed => "The target is not an absolute URL with a scheme.",
-            Self::InvalidEncoding => "The target is not valid UTF-8.",
-            Self::UnsafeCharacters => "The target contains invisible or line-breaking characters.",
-            Self::SurroundingWhitespace => "The target contains leading or trailing whitespace.",
+            Self::UnsafeCharacters => {
+                "The target contains whitespace, control, or invisible characters."
+            }
             Self::InvalidWebUrl => {
                 "The web target must contain a valid host and no embedded credentials."
             }
@@ -31,38 +29,33 @@ impl Osc8UrlDenialReason {
     }
 }
 
+/// A denied OSC 8 target: what to show the user, with unsafe characters made
+/// visible, and why it was denied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Osc8UrlDenial {
+    pub(crate) display: String,
+    pub(crate) reason: Osc8UrlDenialReason,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Osc8UrlDecision {
+    /// Open, and display, exactly this serialized URL.
     Allow(String),
-    Deny {
-        display: String,
-        reason: Osc8UrlDenialReason,
-    },
+    Deny(Osc8UrlDenial),
 }
 
 /// Classifies a URL supplied by terminal-controlled OSC 8 output.
 ///
-/// Raw Unicode checks intentionally happen before URL parsing. The WHATWG
-/// parser removes tabs, newlines, and some zero-width host characters, which
-/// would otherwise erase the evidence needed to reject a deceptive target.
-pub(crate) fn evaluate_osc8_url(raw: &[u8]) -> Osc8UrlDecision {
-    let Ok(raw) = std::str::from_utf8(raw) else {
-        return Osc8UrlDecision::Deny {
-            display: escape_unsafe_url_bytes(raw),
-            reason: Osc8UrlDenialReason::InvalidEncoding,
-        };
-    };
+/// Raw character checks intentionally happen before URL parsing. The WHATWG
+/// parser strips tabs, newlines, and surrounding whitespace and drops some
+/// zero-width host characters, which would otherwise erase the evidence needed
+/// to reject a deceptive target.
+pub(crate) fn evaluate_osc8_url(raw: &str) -> Osc8UrlDecision {
     if raw.is_empty() {
         return deny(raw, Osc8UrlDenialReason::Malformed);
     }
     if raw.chars().any(is_unsafe_url_character) {
         return deny(raw, Osc8UrlDenialReason::UnsafeCharacters);
-    }
-    if raw.trim() != raw {
-        return Osc8UrlDecision::Deny {
-            display: escape_surrounding_whitespace(raw),
-            reason: Osc8UrlDenialReason::SurroundingWhitespace,
-        };
     }
 
     let Ok(url) = Url::parse(raw) else {
@@ -71,12 +64,7 @@ pub(crate) fn evaluate_osc8_url(raw: &[u8]) -> Osc8UrlDecision {
 
     match url.scheme() {
         scheme @ ("http" | "https") => {
-            let prefix = if scheme == "http" {
-                "http://"
-            } else {
-                "https://"
-            };
-            if !has_explicit_web_authority(raw, prefix)
+            if !has_explicit_web_authority(raw, scheme)
                 || !url.host_str().is_some_and(|host| !host.is_empty())
                 || !url.username().is_empty()
                 || url.password().is_some()
@@ -97,69 +85,31 @@ pub(crate) fn evaluate_osc8_url(raw: &[u8]) -> Osc8UrlDecision {
 }
 
 fn deny(raw: &str, reason: Osc8UrlDenialReason) -> Osc8UrlDecision {
-    Osc8UrlDecision::Deny {
-        display: escape_unsafe_url_characters(raw),
+    Osc8UrlDecision::Deny(Osc8UrlDenial {
+        display: escape_unsafe_characters(raw),
         reason,
-    }
+    })
 }
 
-fn has_explicit_web_authority(raw: &str, prefix: &str) -> bool {
+/// The WHATWG parser accepts `https:relative` (host `relative`) and
+/// `https:///host`. Require the literal `scheme://` spelling followed by a host
+/// character so the target means what it looks like.
+fn has_explicit_web_authority(raw: &str, scheme: &str) -> bool {
     let bytes = raw.as_bytes();
+    let authority_start = scheme.len() + "://".len();
     bytes
-        .get(..prefix.len())
-        .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
+        .get(..scheme.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(scheme.as_bytes()))
+        && bytes.get(scheme.len()..authority_start) == Some(b"://")
         && bytes
-            .get(prefix.len())
+            .get(authority_start)
             .is_some_and(|first| !matches!(first, b'/' | b'\\'))
 }
 
-fn escape_unsafe_url_characters(raw: &str) -> String {
+/// Renders unsafe characters as `\u{…}` so a denied target can be shown and
+/// copied without carrying whitespace, control, or invisible characters.
+fn escape_unsafe_characters(raw: &str) -> String {
     let mut display = String::with_capacity(raw.len());
-    append_escaped_url_characters(&mut display, raw);
-    display
-}
-
-fn escape_surrounding_whitespace(raw: &str) -> String {
-    let leading_end = raw.len() - raw.trim_start().len();
-    let trailing_start = raw.trim_end().len();
-    let mut display = String::with_capacity(raw.len());
-    for (offset, character) in raw.char_indices() {
-        if offset < leading_end || offset >= trailing_start {
-            write!(display, "\\u{{{:X}}}", character as u32)
-                .expect("writing to a String cannot fail");
-        } else {
-            display.push(character);
-        }
-    }
-    display
-}
-
-fn escape_unsafe_url_bytes(mut raw: &[u8]) -> String {
-    let mut display = String::with_capacity(raw.len());
-    while !raw.is_empty() {
-        match std::str::from_utf8(raw) {
-            Ok(valid) => {
-                append_escaped_url_characters(&mut display, valid);
-                break;
-            }
-            Err(error) => {
-                let (valid, invalid) = raw.split_at(error.valid_up_to());
-                append_escaped_url_characters(
-                    &mut display,
-                    std::str::from_utf8(valid).expect("prefix before UTF-8 error must be valid"),
-                );
-                let invalid_len = error.error_len().unwrap_or(invalid.len());
-                for byte in &invalid[..invalid_len] {
-                    write!(display, "\\x{{{byte:02X}}}").expect("writing to a String cannot fail");
-                }
-                raw = &invalid[invalid_len..];
-            }
-        }
-    }
-    display
-}
-
-fn append_escaped_url_characters(display: &mut String, raw: &str) {
     for character in raw.chars() {
         if is_unsafe_url_character(character) {
             write!(display, "\\u{{{:X}}}", character as u32)
@@ -168,26 +118,38 @@ fn append_escaped_url_characters(display: &mut String, raw: &str) {
             display.push(character);
         }
     }
+    display
 }
 
+/// Whitespace (never valid in a URI), C0/C1 controls, and the bidirectional,
+/// zero-width, and line-separator scalars that can reorder or conceal parts of
+/// a displayed URL.
 fn is_unsafe_url_character(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x00..=0x1F
-            | 0x7F..=0x9F
-            | 0x061C
-            | 0x200B..=0x200F
-            | 0x2028..=0x2029
-            | 0x202A..=0x202E
-            | 0x2060
-            | 0x2066..=0x2069
-            | 0xFEFF
-    )
+    character.is_whitespace()
+        || matches!(
+            character as u32,
+            0x00..=0x1F
+                | 0x7F..=0x9F
+                | 0x061C
+                | 0x200B..=0x200F
+                | 0x2028..=0x2029
+                | 0x202A..=0x202E
+                | 0x2060
+                | 0x2066..=0x2069
+                | 0xFEFF
+        )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Osc8UrlDecision, Osc8UrlDenialReason, evaluate_osc8_url};
+    use super::{Osc8UrlDecision, Osc8UrlDenial, Osc8UrlDenialReason, evaluate_osc8_url};
+
+    fn denied(display: &str, reason: Osc8UrlDenialReason) -> Osc8UrlDecision {
+        Osc8UrlDecision::Deny(Osc8UrlDenial {
+            display: display.to_string(),
+            reason,
+        })
+    }
 
     #[test]
     fn allows_supported_absolute_urls_using_their_serialized_target() {
@@ -200,7 +162,7 @@ mod tests {
 
         for (raw, expected) in cases {
             assert_eq!(
-                evaluate_osc8_url(raw.as_bytes()),
+                evaluate_osc8_url(raw),
                 Osc8UrlDecision::Allow(expected.to_string()),
                 "unexpected decision for {raw:?}"
             );
@@ -237,21 +199,21 @@ mod tests {
 
         for (raw, expected_reason) in cases {
             assert_eq!(
-                evaluate_osc8_url(raw.as_bytes()),
-                Osc8UrlDecision::Deny {
-                    display: raw.to_string(),
-                    reason: expected_reason,
-                },
+                evaluate_osc8_url(raw),
+                denied(raw, expected_reason),
                 "unexpected decision for {raw:?}"
             );
         }
     }
 
     #[test]
-    fn rejects_and_escapes_surrounding_whitespace() {
+    fn rejects_and_escapes_whitespace_wherever_it_appears() {
+        // The WHATWG parser would silently trim the outer cases and
+        // percent-encode the inner one; a URI with raw whitespace is malformed.
         let cases = [
             (" https://example.com/", "\\u{20}https://example.com/"),
             ("https://example.com/ ", "https://example.com/\\u{20}"),
+            ("https://example.com/a b", "https://example.com/a\\u{20}b"),
             (
                 "\u{2003}mailto:user@example.com\u{A0}",
                 "\\u{2003}mailto:user@example.com\\u{A0}",
@@ -260,11 +222,8 @@ mod tests {
 
         for (raw, expected_display) in cases {
             assert_eq!(
-                evaluate_osc8_url(raw.as_bytes()),
-                Osc8UrlDecision::Deny {
-                    display: expected_display.to_string(),
-                    reason: Osc8UrlDenialReason::SurroundingWhitespace,
-                },
+                evaluate_osc8_url(raw),
+                denied(expected_display, Osc8UrlDenialReason::UnsafeCharacters),
                 "unexpected decision for {raw:?}"
             );
         }
@@ -282,26 +241,10 @@ mod tests {
             let raw = format!("https://example.com/a{character}b");
             let expected_display = format!("https://example.com/a\\u{{{scalar:X}}}b");
             assert_eq!(
-                evaluate_osc8_url(raw.as_bytes()),
-                Osc8UrlDecision::Deny {
-                    display: expected_display,
-                    reason: Osc8UrlDenialReason::UnsafeCharacters,
-                },
+                evaluate_osc8_url(&raw),
+                denied(&expected_display, Osc8UrlDenialReason::UnsafeCharacters),
                 "unexpected decision for {raw:?}"
             );
         }
-    }
-
-    #[test]
-    fn rejects_and_escapes_invalid_utf8_before_parsing() {
-        let raw = b"https://example.com/a\xF0\x28\x8C\x28b\xFF";
-
-        assert_eq!(
-            evaluate_osc8_url(raw),
-            Osc8UrlDecision::Deny {
-                display: "https://example.com/a\\x{F0}(\\x{8C}(b\\x{FF}".to_string(),
-                reason: Osc8UrlDenialReason::InvalidEncoding,
-            }
-        );
     }
 }
