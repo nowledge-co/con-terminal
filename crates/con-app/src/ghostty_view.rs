@@ -167,6 +167,26 @@ struct BlockedOsc8Url {
     copy_control_id: SharedString,
 }
 
+/// Surface color for the OSC 8 hover and blocked cards.
+///
+/// The cards float over live terminal output (the Ghostty view sits below the
+/// GPUI layer), so a bare tint such as `warning.opacity(0.12)` lets the
+/// terminal text bleed straight through the card. Start from the same
+/// near-opaque popover base the find overlay uses and blend the warning tint
+/// onto it, so the card reads as an elevated surface rather than a color wash.
+fn osc8_card_surface(theme: &gpui_component::Theme, warning: bool) -> Hsla {
+    let base = theme.popover.opacity(0.96);
+    if warning {
+        base.blend(
+            theme
+                .warning
+                .opacity(if theme.is_dark() { 0.18 } else { 0.12 }),
+        )
+    } else {
+        base
+    }
+}
+
 /// Hover card for an OSC 8 link: icon, the canonical target, and a status word.
 ///
 /// The card is sized by flex layout from its children and never from a
@@ -188,15 +208,7 @@ fn osc8_link_preview_card(
     } else {
         theme.warning
     };
-    let surface = if preview.will_open {
-        theme
-            .background
-            .opacity(if theme.is_dark() { 0.92 } else { 0.96 })
-    } else {
-        theme
-            .warning
-            .opacity(if theme.is_dark() { 0.18 } else { 0.12 })
-    };
+    let surface = osc8_card_surface(theme, !preview.will_open);
     let status = if preview.will_open {
         "Opens"
     } else {
@@ -607,7 +619,7 @@ impl GhosttyView {
                         .gap(px(8.0))
                         .p(px(10.0))
                         .rounded(px(8.0))
-                        .bg(warning.opacity(if theme.is_dark() { 0.18 } else { 0.12 }))
+                        .bg(osc8_card_surface(theme, true))
                         .on_mouse_down(
                             gpui::MouseButton::Left,
                             cx.listener(|_this, _event, _window, cx| {
