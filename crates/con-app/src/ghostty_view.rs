@@ -153,6 +153,9 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+/// Distance between the OSC 8 hover card and the pane edges.
+const OSC8_LINK_PREVIEW_INSET_PX: f32 = 10.0;
+
 struct Osc8LinkPreview {
     display: SharedString,
     will_open: bool,
@@ -162,6 +165,88 @@ struct BlockedOsc8Url {
     display: SharedString,
     reason: Osc8UrlDenialReason,
     copy_control_id: SharedString,
+}
+
+/// Hover card for an OSC 8 link: icon, the canonical target, and a status word.
+///
+/// The card is sized by flex layout from its children and never from a
+/// hand-measured text width. GPUI rounds every text element's measured width
+/// up to a whole pixel (`TextLayout::layout` → `.ceil()`), so any fixed width
+/// derived from unrounded shaping is short by up to 1px per text child, and
+/// `truncate()` turns even a 0.2px deficit into a dropped character plus an
+/// ellipsis. Letting the target keep its own content width as its flex basis
+/// guarantees it receives at least the width it measured; it only shrinks
+/// (and truncates) once the whole card reaches `max_width`, because the icon
+/// and status are `flex_none`.
+fn osc8_link_preview_card(
+    preview: &Osc8LinkPreview,
+    theme: &gpui_component::Theme,
+    max_width: Pixels,
+) -> Div {
+    let accent = if preview.will_open {
+        theme.foreground.opacity(0.72)
+    } else {
+        theme.warning
+    };
+    let surface = if preview.will_open {
+        theme
+            .background
+            .opacity(if theme.is_dark() { 0.92 } else { 0.96 })
+    } else {
+        theme
+            .warning
+            .opacity(if theme.is_dark() { 0.18 } else { 0.12 })
+    };
+    let status = if preview.will_open {
+        "Opens"
+    } else {
+        "Blocked"
+    };
+
+    div()
+        .debug_selector(|| "osc8-link-preview-card".into())
+        .max_w(max_width)
+        .min_w_0()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(8.0))
+        .py(px(5.0))
+        .rounded(px(6.0))
+        .bg(surface)
+        .child(
+            Icon::default()
+                .path(if preview.will_open {
+                    "phosphor/link.svg"
+                } else {
+                    "phosphor/shield-warning-fill.svg"
+                })
+                .size(px(12.0))
+                .text_color(accent),
+        )
+        .child(
+            // No `flex_1` here: a zero flex basis would make this child absorb
+            // every sub-pixel rounding difference in the row. With the default
+            // `flex: 0 1 auto` its basis is its own (ceil-rounded) text width.
+            div()
+                .debug_selector(|| "osc8-link-preview-target".into())
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(11.0))
+                .text_color(theme.foreground.opacity(0.86))
+                .child(preview.display.clone()),
+        )
+        .child(
+            div()
+                .debug_selector(|| "osc8-link-preview-status".into())
+                .flex_none()
+                .text_size(px(10.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(accent)
+                .child(status),
+        )
 }
 
 /// GPUI view wrapping a ghostty terminal surface.
@@ -471,30 +556,22 @@ impl GhosttyView {
         }
         let preview = self.hovered_osc8_url.as_ref()?;
         let theme = cx.theme();
-        let accent = if preview.will_open {
-            theme.foreground.opacity(0.72)
-        } else {
-            theme.warning
-        };
-        let surface = if preview.will_open {
-            theme
-                .background
-                .opacity(if theme.is_dark() { 0.92 } else { 0.96 })
-        } else {
-            theme
-                .warning
-                .opacity(if theme.is_dark() { 0.18 } else { 0.12 })
-        };
+        let bounds = self.last_bounds?;
         let align_right = self
-            .last_bounds
-            .zip(self.last_mouse_position)
-            .is_some_and(|(bounds, mouse)| mouse.x < bounds.origin.x + bounds.size.width / 2.0);
+            .last_mouse_position
+            .is_some_and(|mouse| mouse.x < bounds.origin.x + bounds.size.width / 2.0);
+
+        // The card may use the whole overlay width (pane minus the 10px side
+        // insets): the target is security-relevant text, so prefer showing it
+        // in full over truncating it to a fraction of the pane.
+        let inset = px(OSC8_LINK_PREVIEW_INSET_PX);
+        let max_width = (bounds.size.width - inset * 2.0).max(px(0.0));
 
         let mut overlay = div()
             .absolute()
-            .left(px(10.0))
-            .right(px(10.0))
-            .bottom(px(10.0))
+            .left(inset)
+            .right(inset)
+            .bottom(inset)
             .flex();
         if align_right {
             overlay = overlay.justify_end();
@@ -502,49 +579,7 @@ impl GhosttyView {
 
         Some(
             overlay
-                .child(
-                    div()
-                        .max_w(relative(0.72))
-                        .min_w_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .px(px(8.0))
-                        .py(px(5.0))
-                        .rounded(px(6.0))
-                        .bg(surface)
-                        .child(
-                            Icon::default()
-                                .path(if preview.will_open {
-                                    "phosphor/link.svg"
-                                } else {
-                                    "phosphor/shield-warning-fill.svg"
-                                })
-                                .xsmall()
-                                .text_color(accent),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(theme.mono_font_family.clone())
-                                .text_size(px(11.0))
-                                .text_color(theme.foreground.opacity(0.86))
-                                .child(preview.display.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(10.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(accent)
-                                .child(if preview.will_open {
-                                    "Opens"
-                                } else {
-                                    "Blocked"
-                                }),
-                        ),
-                )
+                .child(osc8_link_preview_card(preview, theme, max_width))
                 .into_any_element(),
         )
     }
@@ -2768,9 +2803,138 @@ impl Render for GhosttyView {
 
 #[cfg(test)]
 mod tests {
-    use super::{gpui_consumed_mods_to_ghostty, should_send_ime_insert_as_key_event};
+    use super::{
+        Osc8LinkPreview, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
+        should_send_ime_insert_as_key_event,
+    };
     use con_ghostty::ffi;
-    use gpui::Modifiers;
+    use gpui::{
+        Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
+    };
+    use gpui_component::Theme;
+
+    /// Renders the hover card inside a flex row, like the real overlay does.
+    /// (A block parent would stretch the card to the parent width and hide
+    /// content-sizing bugs.) Records the shaped width of the target text with
+    /// the same font and size the card uses so tests can check the contract
+    /// "the target element is at least as wide as its text".
+    struct Osc8LinkPreviewLayoutTestView {
+        display: SharedString,
+        max_width: Pixels,
+        shaped_target_width: Option<Pixels>,
+    }
+
+    impl Render for Osc8LinkPreviewLayoutTestView {
+        fn render(
+            &mut self,
+            window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let theme = Theme::default();
+            self.shaped_target_width = Some(
+                window
+                    .text_system()
+                    .shape_line(
+                        self.display.clone(),
+                        px(11.0),
+                        &[TextRun {
+                            len: self.display.len(),
+                            font: font(theme.mono_font_family.clone()),
+                            color: theme.foreground,
+                            ..TextRun::default()
+                        }],
+                        None,
+                    )
+                    .width(),
+            );
+            let preview = Osc8LinkPreview {
+                display: self.display.clone(),
+                will_open: true,
+            };
+            div().w(px(1_000.0)).flex().child(osc8_link_preview_card(
+                &preview,
+                &theme,
+                self.max_width,
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn osc8_link_preview_keeps_target_visible_without_filling_the_pane(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_window, _cx| Osc8LinkPreviewLayoutTestView {
+            display: "https://example.com/osc8".into(),
+            max_width: px(720.0),
+            shaped_target_width: None,
+        });
+        let card = cx
+            .debug_bounds("osc8-link-preview-card")
+            .expect("preview card bounds");
+        let target = cx
+            .debug_bounds("osc8-link-preview-target")
+            .expect("preview target bounds");
+        let status = cx
+            .debug_bounds("osc8-link-preview-status")
+            .expect("preview status bounds");
+        let shaped = view
+            .read_with(cx, |view, _| view.shaped_target_width)
+            .expect("target text was shaped during render");
+
+        // `should_truncate_line` ellipsizes as soon as the element is narrower
+        // than the text, so this is the "no ellipsis for a short link" contract.
+        // Note: the test text system uses fixed integer glyph advances, so this
+        // cannot reproduce the real-font sub-pixel case; the runtime check for
+        // that lives in the commit message of the fix.
+        assert!(
+            target.size.width >= shaped,
+            "preview target narrower than its text (would ellipsize): target={target:?} shaped={shaped:?}"
+        );
+        assert!(
+            card.size.width < px(400.0),
+            "short preview filled most of the pane: {card:?}"
+        );
+        let gap: f32 = (status.left() - target.right()).into();
+        assert!(
+            gap <= 8.0,
+            "preview target and status are separated by an empty gap: target={target:?} status={status:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn osc8_link_preview_caps_long_targets_without_clipping_status(cx: &mut gpui::TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_window, _cx| Osc8LinkPreviewLayoutTestView {
+            display: format!("https://example.com/{}", "a".repeat(300)).into(),
+            max_width: px(320.0),
+            shaped_target_width: None,
+        });
+        let card = cx
+            .debug_bounds("osc8-link-preview-card")
+            .expect("preview card bounds");
+        let target = cx
+            .debug_bounds("osc8-link-preview-target")
+            .expect("preview target bounds");
+        let status = cx
+            .debug_bounds("osc8-link-preview-status")
+            .expect("preview status bounds");
+
+        assert!(
+            card.size.width <= px(320.0),
+            "long preview exceeded its width cap: {card:?}"
+        );
+        assert!(
+            card.size.width > px(300.0),
+            "long preview did not use the available width: {card:?}"
+        );
+        assert!(
+            target.size.width > px(200.0),
+            "long target did not retain useful preview space: {target:?}"
+        );
+        assert!(
+            status.right() <= card.right(),
+            "preview status was clipped by the width cap: card={card:?} status={status:?}"
+        );
+    }
 
     #[test]
     fn direct_ascii_ime_commits_use_key_event_path() {
