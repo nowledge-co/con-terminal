@@ -30,8 +30,10 @@ use con_ghostty::{
     TerminalProgress,
 };
 use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::ActiveTheme;
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::clipboard::Clipboard;
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::{ActiveTheme, Icon, Sizable as _};
 
 use crate::mouse_sequence::MouseButtonSequence;
 use crate::terminal_find::{TerminalFind, TerminalFindDismissed};
@@ -39,6 +41,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
 use crate::terminal_restore::key_down_may_write_terminal;
+use crate::terminal_url::{Osc8UrlDecision, Osc8UrlDenial, evaluate_osc8_url};
 
 // Actions owned by the embedded terminal view.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -150,6 +153,102 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+/// Distance between the OSC 8 hover / blocked cards and the pane edges.
+const OSC8_CARD_INSET_PX: f32 = 10.0;
+
+/// Surface color for the OSC 8 hover and blocked cards.
+///
+/// The cards float over live terminal output (the Ghostty view sits below the
+/// GPUI layer), so a bare tint such as `warning.opacity(0.12)` lets the
+/// terminal text bleed straight through the card. Start from the same
+/// near-opaque popover base the find overlay uses and blend the warning tint
+/// onto it, so the card reads as an elevated surface rather than a color wash.
+fn osc8_card_surface(theme: &gpui_component::Theme, warning: bool) -> Hsla {
+    let base = theme.popover.opacity(0.96);
+    if warning {
+        base.blend(
+            theme
+                .warning
+                .opacity(if theme.is_dark() { 0.18 } else { 0.12 }),
+        )
+    } else {
+        base
+    }
+}
+
+/// Hover card for an OSC 8 link: icon, the canonical target, and a status word.
+///
+/// The card is sized by flex layout from its children and never from a
+/// hand-measured text width. GPUI rounds every text element's measured width
+/// up to a whole pixel (`TextLayout::layout` → `.ceil()`), so any fixed width
+/// derived from unrounded shaping is short by up to 1px per text child, and
+/// `truncate()` turns even a 0.2px deficit into a dropped character plus an
+/// ellipsis. Letting the target keep its own content width as its flex basis
+/// guarantees it receives at least the width it measured; it only shrinks
+/// (and truncates) once the whole card reaches `max_width`, because the icon
+/// and status are `flex_none`.
+fn osc8_link_preview_card(
+    decision: &Osc8UrlDecision,
+    theme: &gpui_component::Theme,
+    max_width: Pixels,
+) -> Div {
+    let (display, will_open) = match decision {
+        Osc8UrlDecision::Allow(url) => (url, true),
+        Osc8UrlDecision::Deny(denial) => (&denial.display, false),
+    };
+    let accent = if will_open {
+        theme.foreground.opacity(0.72)
+    } else {
+        theme.warning
+    };
+    let status = if will_open { "Opens" } else { "Blocked" };
+
+    div()
+        .debug_selector(|| "osc8-link-preview-card".into())
+        .max_w(max_width)
+        .min_w_0()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(8.0))
+        .py(px(5.0))
+        .rounded(px(6.0))
+        .bg(osc8_card_surface(theme, !will_open))
+        .child(
+            Icon::default()
+                .path(if will_open {
+                    "phosphor/link.svg"
+                } else {
+                    "phosphor/shield-warning-fill.svg"
+                })
+                .size(px(12.0))
+                .text_color(accent),
+        )
+        .child(
+            // No `flex_1` here: a zero flex basis would make this child absorb
+            // every sub-pixel rounding difference in the row. With the default
+            // `flex: 0 1 auto` its basis is its own (ceil-rounded) text width.
+            div()
+                .debug_selector(|| "osc8-link-preview-target".into())
+                .min_w_0()
+                .truncate()
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(11.0))
+                .text_color(theme.foreground.opacity(0.86))
+                .child(display.clone()),
+        )
+        .child(
+            div()
+                .debug_selector(|| "osc8-link-preview-status".into())
+                .flex_none()
+                .text_size(px(10.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(accent)
+                .child(status),
+        )
+}
+
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -205,6 +304,10 @@ pub struct GhosttyView {
     /// mouse-move event when the pointer is stationary.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
+    /// Decision for the OSC 8 target under the pointer; shown while hovering.
+    hovered_osc8_url: Option<Osc8UrlDecision>,
+    /// The last OSC 8 target denied on click; shown until dismissed.
+    blocked_osc8_url: Option<Osc8UrlDenial>,
     #[cfg(target_os = "macos")]
     scrollbar_drag: Option<ScrollbarDrag>,
     #[cfg(target_os = "macos")]
@@ -276,6 +379,8 @@ impl GhosttyView {
             next_surface_init_retry_at: None,
             #[cfg(target_os = "macos")]
             last_mouse_position: None,
+            hovered_osc8_url: None,
+            blocked_osc8_url: None,
             #[cfg(target_os = "macos")]
             scrollbar_drag: None,
             #[cfg(target_os = "macos")]
@@ -434,6 +539,164 @@ impl GhosttyView {
         )
     }
 
+    fn dismiss_blocked_osc8_url(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.blocked_osc8_url.take().is_none() {
+            return false;
+        }
+        self.hovered_osc8_url = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+        true
+    }
+
+    fn render_osc8_link_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.blocked_osc8_url.is_some() {
+            return None;
+        }
+        let decision = self.hovered_osc8_url.as_ref()?;
+        let theme = cx.theme();
+        let bounds = self.last_bounds?;
+        let align_right = self
+            .last_mouse_position
+            .is_some_and(|mouse| mouse.x < bounds.origin.x + bounds.size.width / 2.0);
+
+        // The card may use the whole overlay width (pane minus the side
+        // insets): the target is security-relevant text, so prefer showing it
+        // in full over truncating it to a fraction of the pane.
+        let inset = px(OSC8_CARD_INSET_PX);
+        let max_width = (bounds.size.width - inset * 2.0).max(px(0.0));
+
+        let mut overlay = div()
+            .absolute()
+            .left(inset)
+            .right(inset)
+            .bottom(inset)
+            .flex();
+        if align_right {
+            overlay = overlay.justify_end();
+        }
+
+        Some(
+            overlay
+                .child(osc8_link_preview_card(decision, theme, max_width))
+                .into_any_element(),
+        )
+    }
+
+    fn render_blocked_osc8_url(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let denial = self.blocked_osc8_url.as_ref()?;
+        let theme = cx.theme();
+        let warning = theme.warning;
+        let display: SharedString = denial.display.clone().into();
+        let inset = px(OSC8_CARD_INSET_PX);
+
+        Some(
+            div()
+                .absolute()
+                .left(inset)
+                .right(inset)
+                .bottom(inset)
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .occlude()
+                        .w_full()
+                        .max_w(px(620.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .p(px(10.0))
+                        .rounded(px(8.0))
+                        .bg(osc8_card_surface(theme, true))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|_this, _event, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(|_this, _event, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        .on_scroll_wheel(cx.listener(|_this, _event, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    Icon::default()
+                                        .path("phosphor/shield-warning-fill.svg")
+                                        .small()
+                                        .text_color(warning),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .text_size(px(11.0))
+                                        .line_height(px(15.0))
+                                        .text_color(theme.foreground.opacity(0.78))
+                                        .child(denial.reason.message()),
+                                )
+                                .child(
+                                    Button::new("dismiss-blocked-osc8-url")
+                                        .icon(
+                                            Icon::default()
+                                                .path("phosphor/x.svg")
+                                                .text_color(theme.muted_foreground),
+                                        )
+                                        .ghost()
+                                        .xsmall()
+                                        .tooltip("Dismiss")
+                                        .on_click(cx.listener(|this, _event, window, cx| {
+                                            cx.stop_propagation();
+                                            this.dismiss_blocked_osc8_url(window, cx);
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(px(6.0))
+                                .bg(theme.foreground.opacity(0.06))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .truncate()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .text_size(px(11.0))
+                                        .text_color(theme.foreground.opacity(0.84))
+                                        .child(display.clone()),
+                                )
+                                .child(
+                                    // Keyed by the displayed text so the
+                                    // "copied" state cannot carry over to a
+                                    // different blocked target.
+                                    Clipboard::new(display.clone())
+                                        .value(display)
+                                        .tooltip("Copy displayed target"),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn show_terminal_find(
         &mut self,
         needle: String,
@@ -512,8 +775,13 @@ impl GhosttyView {
                 GhosttySurfaceEvent::SplitRequest(direction) => {
                     cx.emit(GhosttySplitRequested(direction));
                 }
-                GhosttySurfaceEvent::OpenUrl(url) => {
-                    cx.open_url(&url);
+                GhosttySurfaceEvent::OpenUrl(url) => cx.open_url(&url),
+                GhosttySurfaceEvent::OpenOsc8Url(url) => match evaluate_osc8_url(&url) {
+                    Osc8UrlDecision::Allow(url) => cx.open_url(&url),
+                    Osc8UrlDecision::Deny(denial) => self.blocked_osc8_url = Some(denial),
+                },
+                GhosttySurfaceEvent::Osc8LinkHoverChanged(url) => {
+                    self.hovered_osc8_url = url.map(|url| evaluate_osc8_url(&url));
                 }
                 GhosttySurfaceEvent::PwdChanged(cwd) => {
                     self.last_cwd = Some(cwd.clone());
@@ -2451,6 +2719,11 @@ impl Render for GhosttyView {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.dismiss_blocked_osc8_url(window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
@@ -2499,6 +2772,8 @@ impl Render for GhosttyView {
                 .size_full(),
             )
             .children(self.render_terminal_scrollbar(cx))
+            .children(self.render_osc8_link_preview(cx))
+            .children(self.render_blocked_osc8_url(cx))
             .children(terminal_find)
             .context_menu(move |menu, window, cx| {
                 // An empty PopupMenu renders nothing (ContextMenu checks
@@ -2518,9 +2793,135 @@ impl Render for GhosttyView {
 
 #[cfg(test)]
 mod tests {
-    use super::{gpui_consumed_mods_to_ghostty, should_send_ime_insert_as_key_event};
+    use super::{
+        Osc8UrlDecision, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
+        should_send_ime_insert_as_key_event,
+    };
     use con_ghostty::ffi;
-    use gpui::Modifiers;
+    use gpui::{
+        Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
+    };
+    use gpui_component::Theme;
+
+    /// Renders the hover card inside a flex row, like the real overlay does.
+    /// (A block parent would stretch the card to the parent width and hide
+    /// content-sizing bugs.) Records the shaped width of the target text with
+    /// the same font and size the card uses so tests can check the contract
+    /// "the target element is at least as wide as its text".
+    struct Osc8LinkPreviewLayoutTestView {
+        display: SharedString,
+        max_width: Pixels,
+        shaped_target_width: Option<Pixels>,
+    }
+
+    impl Render for Osc8LinkPreviewLayoutTestView {
+        fn render(
+            &mut self,
+            window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let theme = Theme::default();
+            self.shaped_target_width = Some(
+                window
+                    .text_system()
+                    .shape_line(
+                        self.display.clone(),
+                        px(11.0),
+                        &[TextRun {
+                            len: self.display.len(),
+                            font: font(theme.mono_font_family.clone()),
+                            color: theme.foreground,
+                            ..TextRun::default()
+                        }],
+                        None,
+                    )
+                    .width(),
+            );
+            let decision = Osc8UrlDecision::Allow(self.display.to_string());
+            div().w(px(1_000.0)).flex().child(osc8_link_preview_card(
+                &decision,
+                &theme,
+                self.max_width,
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn osc8_link_preview_keeps_target_visible_without_filling_the_pane(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_window, _cx| Osc8LinkPreviewLayoutTestView {
+            display: "https://example.com/osc8".into(),
+            max_width: px(720.0),
+            shaped_target_width: None,
+        });
+        let card = cx
+            .debug_bounds("osc8-link-preview-card")
+            .expect("preview card bounds");
+        let target = cx
+            .debug_bounds("osc8-link-preview-target")
+            .expect("preview target bounds");
+        let status = cx
+            .debug_bounds("osc8-link-preview-status")
+            .expect("preview status bounds");
+        let shaped = view
+            .read_with(cx, |view, _| view.shaped_target_width)
+            .expect("target text was shaped during render");
+
+        // `should_truncate_line` ellipsizes as soon as the element is narrower
+        // than the text, so this is the "no ellipsis for a short link" contract.
+        // Note: the test text system uses fixed integer glyph advances, so this
+        // cannot reproduce the real-font sub-pixel case; the runtime check for
+        // that lives in the commit message of the fix.
+        assert!(
+            target.size.width >= shaped,
+            "preview target narrower than its text (would ellipsize): target={target:?} shaped={shaped:?}"
+        );
+        assert!(
+            card.size.width < px(400.0),
+            "short preview filled most of the pane: {card:?}"
+        );
+        let gap: f32 = (status.left() - target.right()).into();
+        assert!(
+            gap <= 8.0,
+            "preview target and status are separated by an empty gap: target={target:?} status={status:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn osc8_link_preview_caps_long_targets_without_clipping_status(cx: &mut gpui::TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_window, _cx| Osc8LinkPreviewLayoutTestView {
+            display: format!("https://example.com/{}", "a".repeat(300)).into(),
+            max_width: px(320.0),
+            shaped_target_width: None,
+        });
+        let card = cx
+            .debug_bounds("osc8-link-preview-card")
+            .expect("preview card bounds");
+        let target = cx
+            .debug_bounds("osc8-link-preview-target")
+            .expect("preview target bounds");
+        let status = cx
+            .debug_bounds("osc8-link-preview-status")
+            .expect("preview status bounds");
+
+        assert!(
+            card.size.width <= px(320.0),
+            "long preview exceeded its width cap: {card:?}"
+        );
+        assert!(
+            card.size.width > px(300.0),
+            "long preview did not use the available width: {card:?}"
+        );
+        assert!(
+            target.size.width > px(200.0),
+            "long target did not retain useful preview space: {target:?}"
+        );
+        assert!(
+            status.right() <= card.right(),
+            "preview status was clipped by the width cap: card={card:?} status={status:?}"
+        );
+    }
 
     #[test]
     fn direct_ascii_ime_commits_use_key_event_path() {

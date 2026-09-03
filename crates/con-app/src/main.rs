@@ -85,6 +85,11 @@ mod terminal_pane;
 mod terminal_paste;
 mod terminal_restore;
 mod terminal_shortcuts;
+// OSC 8 link policy. Only the macOS view consumes it today; Windows and
+// Linux still detect links in `terminal_links` and will adopt it when they
+// read OSC 8 URIs from libghostty-vt.
+#[cfg(target_os = "macos")]
+mod terminal_url;
 mod theme;
 mod ui_scale;
 mod updater;
