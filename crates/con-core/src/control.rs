@@ -1278,21 +1278,20 @@ fn prepare_socket_path(path: &Path) -> Result<()> {
                 parent.display()
             );
         }
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
-            // Harden only directories we created ourselves. Chmod-ing a
-            // pre-existing parent (e.g. /tmp for the default socket path)
-            // fails with EPERM for non-root owners on macOS and aborts the
-            // socket bind entirely.
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o700);
-            std::fs::set_permissions(parent, permissions).with_context(|| {
-                format!(
-                    "failed to set permissions on control socket directory {}",
-                    parent.display()
-                )
-            })?;
-        }
+
+        // Apply private permissions atomically to directories we create while
+        // leaving existing parents such as /tmp or XDG_RUNTIME_DIR untouched.
+        // A post-create chmod has both an ownership failure mode and a window
+        // where a newly created directory can be more permissive than intended.
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder.create(parent).with_context(|| {
+            format!(
+                "failed to create control socket directory {}",
+                parent.display()
+            )
+        })?;
     }
 
     if path.exists() {
@@ -1758,13 +1757,17 @@ mod tests {
 
         prepare_socket_path(&socket).expect("prepare with existing parent");
 
-        let mode = std::fs::metadata(&dir).expect("metadata").permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&dir)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o755, "existing parent permissions must be untouched");
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The Flatpak hardening this code was added for: a parent we create
-    /// ourselves still gets 0700.
+    /// The Flatpak hardening this code was added for: a parent created by Con
+    /// starts with private permissions.
     #[cfg(unix)]
     #[test]
     fn prepare_socket_path_hardens_newly_created_parent() {
