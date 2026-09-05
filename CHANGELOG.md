@@ -4,7 +4,49 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.93` - unreleased
+## `v0.1.0-beta.95` - unreleased
+
+### Fixed
+
+**macOS**
+
+- Terminal links now reject unsafe OSC 8 targets before opening a browser,
+  while preserving supported web, mail, file, and SSH links. _(PR
+  [#340](https://github.com/nowledge-co/con-terminal/pull/340) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Terminal surfaces now pause before system sleep and resume only after the
+  display topology has settled, avoiding the CoreVideo display-link hang
+  observed when waking a Mac onto an external display. _(PR
+  [#342](https://github.com/nowledge-co/con-terminal/pull/342) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
+## `v0.1.0-beta.94` - 2026-09-02
+
+### Changed
+
+**Windows and Linux**
+
+- Terminal selection now uses libghostty-vt's canonical selection model,
+  keeping drag, word, line, and scrollback selection behavior consistent with
+  terminal state. _(PR
+  [#338](https://github.com/nowledge-co/con-terminal/pull/338) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+### Fixed
+
+**Windows**
+
+- Mouse reporting now uses Ghostty's protocol encoder, improving wheel,
+  button, modifier, coordinate, and alternate-scroll handling in terminal
+  applications. _(PR
+  [#339](https://github.com/nowledge-co/con-terminal/pull/339) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.93` - 2026-09-01
 
 ### Added
 
