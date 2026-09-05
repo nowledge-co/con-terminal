@@ -10,6 +10,11 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **macOS**
 
+- Restored `con-cli` and local automation connectivity by leaving shared
+  control-socket parent directories such as `/tmp` untouched, while keeping
+  Con-created runtime directories private. _(PR
+  [#341](https://github.com/nowledge-co/con-terminal/pull/341) by
+  [@Job28703](https://github.com/Job28703))_
 - Terminal links now reject unsafe OSC 8 targets before opening a browser,
   while preserving supported web, mail, file, and SSH links. _(PR
   [#340](https://github.com/nowledge-co/con-terminal/pull/340) by

@@ -1278,12 +1278,20 @@ fn prepare_socket_path(path: &Path) -> Result<()> {
                 parent.display()
             );
         }
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)?;
-        }
-        use std::os::unix::fs::PermissionsExt;
-        let permissions = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(parent, permissions)?;
+
+        // Apply private permissions atomically to directories we create while
+        // leaving existing parents such as /tmp or XDG_RUNTIME_DIR untouched.
+        // A post-create chmod has both an ownership failure mode and a window
+        // where a newly created directory can be more permissive than intended.
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder.create(parent).with_context(|| {
+            format!(
+                "failed to create control socket directory {}",
+                parent.display()
+            )
+        })?;
     }
 
     if path.exists() {
@@ -1718,6 +1726,66 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn unique_scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "con-control-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// Regression: a pre-existing parent directory must be left untouched.
+    /// chmod-ing a foreign parent (e.g. /tmp, root-owned 1777) fails with
+    /// EPERM for non-root users and previously aborted the socket bind.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_socket_path_preserves_existing_parent_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_scratch_dir("existing-parent");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("set scratch permissions");
+        let socket = dir.join("con.sock");
+
+        prepare_socket_path(&socket).expect("prepare with existing parent");
+
+        let mode = std::fs::metadata(&dir)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755, "existing parent permissions must be untouched");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The Flatpak hardening this code was added for: a parent created by Con
+    /// starts with private permissions.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_socket_path_hardens_newly_created_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = unique_scratch_dir("new-parent");
+        let socket = base.join("fresh").join("con.sock");
+
+        prepare_socket_path(&socket).expect("prepare with new parent");
+
+        let mode = std::fs::metadata(socket.parent().expect("parent"))
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "newly created parent must be hardened");
+        std::fs::remove_dir_all(&base).ok();
+    }
 
     #[test]
     fn control_command_round_trips_from_rpc() {

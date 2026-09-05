@@ -33,9 +33,13 @@ The result in con is a hybrid:
 - CLI override: `con-cli --socket /custom/path ...`
 
 The app removes stale socket files on startup and creates the live socket with
-user-only permissions. Debug builds intentionally use a separate default
-endpoint so `cargo run -p con` can run beside an installed Con without making
-startup treat the dev process as another window for the production app.
+user-only permissions. When Con must create the socket's parent directory, it
+creates that directory with mode `0700`. Existing parents such as `/tmp`,
+`XDG_RUNTIME_DIR`, or a directory supplied through `CON_SOCKET_PATH` retain
+their ownership and permissions; the socket itself is restricted to mode
+`0600`. Debug builds intentionally use a separate default endpoint so
+`cargo run -p con` can run beside an installed Con without making startup
+treat the dev process as another window for the production app.
 
 ## Protocol
 
