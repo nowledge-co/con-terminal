@@ -196,7 +196,7 @@ impl GhosttyTerminal {
     }
     pub fn set_content_scale(&self, _scale: f64) {}
     pub fn set_focus(&self, _focused: bool) {}
-    pub fn set_occlusion(&self, _occluded: bool) {}
+    pub fn set_visible(&self, _visible: bool) {}
     pub fn set_color_scheme(&self, _dark: bool) {}
     pub fn set_clipboard_write_enabled(&self, _enabled: bool) -> Result<(), String> {
         Ok(())

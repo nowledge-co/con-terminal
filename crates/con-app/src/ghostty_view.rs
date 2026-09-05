@@ -93,6 +93,7 @@ unsafe extern "C" {
     fn objc_setAssociatedObject(object: id, key: *const c_void, value: id, policy: usize);
     fn con_ghostty_surface_install_backing_observer(view: *mut c_void, surface: *mut c_void);
     fn con_ghostty_surface_remove_backing_observer(view: *mut c_void);
+    fn con_ghostty_surface_sync_occlusion(view: *mut c_void);
     fn con_ghostty_surface_sync_backing(
         view: *mut c_void,
         surface: *mut c_void,
@@ -1126,7 +1127,7 @@ impl GhosttyView {
 
         if let Some(ref terminal) = self.terminal {
             terminal.set_focus(false);
-            terminal.set_occlusion(true);
+            terminal.set_visible(false);
         }
 
         self.detach_host_view();
@@ -1878,6 +1879,11 @@ impl GhosttyView {
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
         self.apply_native_visibility();
+        if let Some(nsview) = self.nsview {
+            unsafe {
+                con_ghostty_surface_sync_occlusion(nsview as *mut c_void);
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]

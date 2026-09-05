@@ -665,7 +665,8 @@ unsafe extern "C" {
 
     // Surface focus / state
     pub fn ghostty_surface_set_focus(surface: ghostty_surface_t, focused: bool);
-    pub fn ghostty_surface_set_occlusion(surface: ghostty_surface_t, occluded: bool);
+    // Despite the C API name, this parameter is true when the surface is visible.
+    pub fn ghostty_surface_set_occlusion(surface: ghostty_surface_t, visible: bool);
     pub fn ghostty_surface_set_color_scheme(
         surface: ghostty_surface_t,
         scheme: ghostty_color_scheme_e,
