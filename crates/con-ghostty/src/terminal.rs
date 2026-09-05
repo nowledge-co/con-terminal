@@ -874,9 +874,9 @@ impl GhosttyTerminal {
         unsafe { ffi::ghostty_surface_set_focus(self.surface, focused) }
     }
 
-    /// Set occlusion state (hidden behind other windows).
-    pub fn set_occlusion(&self, occluded: bool) {
-        unsafe { ffi::ghostty_surface_set_occlusion(self.surface, occluded) }
+    /// Tell the renderer whether the native surface is currently visible.
+    pub fn set_visible(&self, visible: bool) {
+        unsafe { ffi::ghostty_surface_set_occlusion(self.surface, visible) }
     }
 
     /// Set color scheme (light/dark).

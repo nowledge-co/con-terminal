@@ -21,6 +21,27 @@ That is not a temporary compromise. It matches Ghostty's own host-side architect
 
 That split is intentional. Terminal correctness stays in Ghostty. Product intelligence stays in con.
 
+## macOS display lifecycle
+
+Each embedded macOS surface owns a Ghostty renderer and therefore participates
+in CoreVideo frame pacing independently from the GPUI window around it. Con
+keeps those native renderers aligned with AppKit's lifecycle:
+
+- `NSWindowDidChangeOcclusionStateNotification` is mirrored to
+  `ghostty_surface_set_occlusion`, so hidden or covered windows do not keep a
+  surface display link active.
+- `NSWorkspaceWillSleepNotification` occludes every live surface before the
+  display server starts tearing down the current topology.
+- After `NSWorkspaceDidWakeNotification`, screen and backing notifications are
+  coalesced until WindowServer's display changes become quiet. Backing scale,
+  display id, and pixel size are then synchronized before only actually visible
+  surfaces are unoccluded.
+
+This ordering is deliberate. Display identity, backing scale, renderer
+visibility, and framebuffer size are one lifecycle transaction on macOS; they
+must not be updated independently while the system is rebuilding its display
+configuration.
+
 Pane zoom follows the same boundary. Zooming a pane is a Con layout state,
 not a terminal mutation: every split surface stays alive, but the active
 tab renders and shows only the focused pane until the zoom shortcut is

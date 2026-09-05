@@ -7,9 +7,12 @@
 
 extern void ghostty_surface_set_content_scale(void *surface, double x, double y);
 extern void ghostty_surface_set_display_id(void *surface, uint32_t display_id);
+// Ghostty's API name is historical; the boolean is true when the surface is visible.
+extern void ghostty_surface_set_occlusion(void *surface, bool visible);
 extern void ghostty_surface_set_size(void *surface, uint32_t width, uint32_t height);
 
 static char kConGhosttySurfaceBackingObserverKey;
+static const int64_t kConDisplayWakeQuietPeriodMilliseconds = 250;
 
 static double con_valid_scale(double scale, double fallback) {
     if (!isfinite(scale) || scale <= 0.0) {
@@ -99,9 +102,20 @@ bool con_ghostty_surface_sync_backing(
 @property(nonatomic, weak) NSWindow *window;
 @property(nonatomic, strong) id screenObserver;
 @property(nonatomic, strong) id backingObserver;
+@property(nonatomic, strong) id occlusionObserver;
+@property(nonatomic, strong) id displayObserver;
+@property(nonatomic, strong) id willSleepObserver;
+@property(nonatomic, strong) id didWakeObserver;
+@property(nonatomic, assign) BOOL suspendedForSleep;
+@property(nonatomic, assign) NSUInteger wakeGeneration;
+@property(nonatomic, assign) BOOL surfaceVisibilityKnown;
+@property(nonatomic, assign) BOOL lastSurfaceVisible;
 - (void)installForView:(NSView *)view surface:(void *)surface;
 - (void)invalidate;
+- (void)scheduleWakeSettle;
+- (void)setSurfaceVisible:(BOOL)visible;
 - (void)sync;
+- (void)syncOcclusion;
 @end
 
 @implementation ConGhosttySurfaceBackingObserver
@@ -112,7 +126,10 @@ bool con_ghostty_surface_sync_backing(
 
 - (void)installForView:(NSView *)view surface:(void *)surface {
     NSWindow *window = view.window;
-    if (_window == window && _surface == surface && _screenObserver != nil && _backingObserver != nil) {
+    if (_window == window && _surface == surface && _screenObserver != nil &&
+        _backingObserver != nil && _occlusionObserver != nil &&
+        _displayObserver != nil && _willSleepObserver != nil &&
+        _didWakeObserver != nil) {
         return;
     }
 
@@ -120,6 +137,9 @@ bool con_ghostty_surface_sync_backing(
     _view = view;
     _surface = surface;
     _window = window;
+    _suspendedForSleep = NO;
+    _wakeGeneration += 1;
+    _surfaceVisibilityKnown = NO;
 
     if (window == nil || surface == NULL) {
         return;
@@ -132,6 +152,10 @@ bool con_ghostty_surface_sync_backing(
                                            queue:NSOperationQueue.mainQueue
                                       usingBlock:^(__unused NSNotification *notification) {
         ConGhosttySurfaceBackingObserver *observer = weakSelf;
+        if (observer.suspendedForSleep) {
+            [observer scheduleWakeSettle];
+            return;
+        }
         [observer sync];
         dispatch_async(dispatch_get_main_queue(), ^{
             [observer sync];
@@ -141,9 +165,56 @@ bool con_ghostty_surface_sync_backing(
                                            object:window
                                             queue:NSOperationQueue.mainQueue
                                        usingBlock:^(__unused NSNotification *notification) {
-        [weakSelf sync];
+        ConGhosttySurfaceBackingObserver *observer = weakSelf;
+        if (observer.suspendedForSleep) {
+            [observer scheduleWakeSettle];
+        } else {
+            [observer sync];
+        }
+    }];
+    _occlusionObserver = [center addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                                             object:window
+                                              queue:NSOperationQueue.mainQueue
+                                         usingBlock:^(__unused NSNotification *notification) {
+        [weakSelf syncOcclusion];
+    }];
+    _displayObserver = [center addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                                           object:nil
+                                            queue:NSOperationQueue.mainQueue
+                                       usingBlock:^(__unused NSNotification *notification) {
+        ConGhosttySurfaceBackingObserver *observer = weakSelf;
+        if (observer.suspendedForSleep) {
+            [observer scheduleWakeSettle];
+        }
     }];
 
+    NSNotificationCenter *workspaceCenter = NSWorkspace.sharedWorkspace.notificationCenter;
+    _willSleepObserver = [workspaceCenter addObserverForName:NSWorkspaceWillSleepNotification
+                                                       object:nil
+                                                        queue:NSOperationQueue.mainQueue
+                                                   usingBlock:^(__unused NSNotification *notification) {
+        ConGhosttySurfaceBackingObserver *observer = weakSelf;
+        if (observer == nil || observer->_surface == NULL) {
+            return;
+        }
+
+        observer.suspendedForSleep = YES;
+        observer.wakeGeneration += 1;
+        [observer setSurfaceVisible:NO];
+    }];
+    _didWakeObserver = [workspaceCenter addObserverForName:NSWorkspaceDidWakeNotification
+                                                     object:nil
+                                                      queue:NSOperationQueue.mainQueue
+                                                 usingBlock:^(__unused NSNotification *notification) {
+        ConGhosttySurfaceBackingObserver *observer = weakSelf;
+        if (observer == nil) {
+            return;
+        }
+
+        [observer scheduleWakeSettle];
+    }];
+
+    [self syncOcclusion];
 }
 
 - (void)invalidate {
@@ -156,13 +227,64 @@ bool con_ghostty_surface_sync_backing(
         [center removeObserver:_backingObserver];
         _backingObserver = nil;
     }
+    if (_occlusionObserver != nil) {
+        [center removeObserver:_occlusionObserver];
+        _occlusionObserver = nil;
+    }
+    if (_displayObserver != nil) {
+        [center removeObserver:_displayObserver];
+        _displayObserver = nil;
+    }
+
+    NSNotificationCenter *workspaceCenter = NSWorkspace.sharedWorkspace.notificationCenter;
+    if (_willSleepObserver != nil) {
+        [workspaceCenter removeObserver:_willSleepObserver];
+        _willSleepObserver = nil;
+    }
+    if (_didWakeObserver != nil) {
+        [workspaceCenter removeObserver:_didWakeObserver];
+        _didWakeObserver = nil;
+    }
+    _wakeGeneration += 1;
+    _suspendedForSleep = NO;
+    _surfaceVisibilityKnown = NO;
     _window = nil;
     _surface = NULL;
 }
 
+- (void)scheduleWakeSettle {
+    if (!_suspendedForSleep || _surface == NULL) {
+        return;
+    }
+
+    NSUInteger generation = ++_wakeGeneration;
+    __weak ConGhosttySurfaceBackingObserver *weakSelf = self;
+    // Screen and backing notifications can arrive in bursts while WindowServer
+    // rebuilds the topology. Resume only after a quiet interval; every newer
+    // notification invalidates this block through wakeGeneration.
+    dispatch_after(
+        dispatch_time(
+            DISPATCH_TIME_NOW,
+            kConDisplayWakeQuietPeriodMilliseconds * NSEC_PER_MSEC
+        ),
+        dispatch_get_main_queue(),
+        ^{
+            ConGhosttySurfaceBackingObserver *observer = weakSelf;
+            if (observer == nil || observer.wakeGeneration != generation ||
+                observer->_surface == NULL) {
+                return;
+            }
+
+            observer.suspendedForSleep = NO;
+            [observer sync];
+            [observer syncOcclusion];
+        }
+    );
+}
+
 - (void)sync {
     NSView *view = _view;
-    if (view == nil || _surface == NULL) {
+    if (view == nil || _surface == NULL || _suspendedForSleep) {
         return;
     }
 
@@ -179,6 +301,28 @@ bool con_ghostty_surface_sync_backing(
         NULL,
         NULL
     );
+}
+
+- (void)setSurfaceVisible:(BOOL)visible {
+    if (_surface == NULL || (_surfaceVisibilityKnown && _lastSurfaceVisible == visible)) {
+        return;
+    }
+
+    _surfaceVisibilityKnown = YES;
+    _lastSurfaceVisible = visible;
+    ghostty_surface_set_occlusion(_surface, visible);
+}
+
+- (void)syncOcclusion {
+    NSView *view = _view;
+    NSWindow *window = _window;
+    if (view == nil || window == nil || _surface == NULL) {
+        return;
+    }
+
+    BOOL visible = !_suspendedForSleep && !view.isHiddenOrHasHiddenAncestor &&
+        (window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+    [self setSurfaceVisible:visible];
 }
 
 @end
@@ -202,6 +346,17 @@ void con_ghostty_surface_install_backing_observer(void *view_ptr, void *surface_
     }
 
     [observer installForView:view surface:surface_ptr];
+}
+
+void con_ghostty_surface_sync_occlusion(void *view_ptr) {
+    NSView *view = (__bridge NSView *)view_ptr;
+    if (view == nil) {
+        return;
+    }
+
+    ConGhosttySurfaceBackingObserver *observer =
+        objc_getAssociatedObject(view, &kConGhosttySurfaceBackingObserverKey);
+    [observer syncOcclusion];
 }
 
 void con_ghostty_surface_remove_backing_observer(void *view_ptr) {
