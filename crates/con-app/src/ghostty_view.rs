@@ -984,7 +984,7 @@ impl GhosttyView {
         let Some(position) = self.last_mouse_position else {
             return;
         };
-        if self.finish_mouse_sequence(MouseButton::Left, position, None) {
+        if self.release_left_mouse_sequence(position, None, cx) {
             self.drain_surface_state(true, cx);
             cx.notify();
         }
@@ -1990,6 +1990,39 @@ impl GhosttyView {
         true
     }
 
+    /// Deliver a left-button release and run Con's copy-on-select. Returns
+    /// whether a release was actually delivered so callers can drain the
+    /// surface state afterwards.
+    ///
+    /// Con owns copy-on-select for the macOS Ghostty backend. Ghostty's own
+    /// variant is disabled in the runtime config (`copy-on-select = none`)
+    /// because Ghostty would route it through the same `write_clipboard`
+    /// callback as OSC 52 application writes, and con-ghostty deliberately
+    /// gates that callback by the user's clipboard-write setting. A user
+    /// gesture must not depend on that setting, so the copy happens here, on
+    /// the GPUI clipboard path that Cmd+C already uses. Mirroring Ghostty,
+    /// only a left-button release copies: Ghostty clears the selection on a
+    /// plain left press, so a click to focus never republishes stale text.
+    fn release_left_mouse_sequence(
+        &mut self,
+        position: Point<Pixels>,
+        mods: Option<i32>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.finish_mouse_sequence(MouseButton::Left, position, mods) {
+            return false;
+        }
+        if let Some(selection) = self
+            .terminal
+            .as_ref()
+            .filter(|terminal| terminal.has_selection())
+            .and_then(|terminal| terminal.selection_text())
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(selection));
+        }
+        true
+    }
+
     fn finish_active_mouse_sequences(&mut self) {
         if let Some(position) = self.last_mouse_position {
             self.finish_mouse_sequence(MouseButton::Left, position, None);
@@ -2630,7 +2663,7 @@ impl Render for GhosttyView {
                     this.scrollbar_drag = None;
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    if this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods))
+                    if this.release_left_mouse_sequence(event.position, Some(mods), cx)
                         && this.drain_surface_state(true, cx)
                     {
                         cx.notify();
@@ -2646,7 +2679,7 @@ impl Render for GhosttyView {
                     }
                     this.last_mouse_position = Some(event.position);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
-                    if this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods))
+                    if this.release_left_mouse_sequence(event.position, Some(mods), cx)
                         && this.drain_surface_state(true, cx)
                     {
                         cx.notify();
@@ -2688,7 +2721,7 @@ impl Render for GhosttyView {
                 let mods = gpui_mods_to_ghostty(&event.modifiers);
                 if event.pressed_button.is_none() {
                     let released_left =
-                        this.finish_mouse_sequence(MouseButton::Left, event.position, Some(mods));
+                        this.release_left_mouse_sequence(event.position, Some(mods), cx);
                     this.finish_mouse_sequence(MouseButton::Right, event.position, Some(mods));
                     if released_left && this.drain_surface_state(true, cx) {
                         cx.notify();
