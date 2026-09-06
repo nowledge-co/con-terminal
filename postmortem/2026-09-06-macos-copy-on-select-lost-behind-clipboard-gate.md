@@ -35,9 +35,10 @@ to "plain text", hiding the dropped case.
 - Ghostty's own copy-on-select is now disabled explicitly
   (`copy-on-select = none` in con-ghostty's runtime config) so the clipboard
   callback receives only application-initiated writes and can keep its strict
-  gate. The same change pins `middle-click-action = clipboard-paste`, because
-  the bumped Ghostty turns the default `primary-paste` into a no-op on hosts
-  without a selection clipboard.
+  gate. The same change pins `middle-click-action = ignore`: the GPUI host
+  view never forwards middle clicks to Ghostty, so the setting is inert today,
+  and pinning it keeps a future middle-button forwarding change from pasting
+  as a side effect of an upstream default.
 - Copy-on-select is implemented in Con's GPUI layer: when a left-button
   release ends a selection gesture with text selected, the view reads the
   selection through `ghostty_surface_read_selection` and writes it with the

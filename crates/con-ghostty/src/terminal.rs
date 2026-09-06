@@ -188,15 +188,16 @@ impl GhosttyConfigPatch {
         // not depend on that setting, so selection copying is owned by the
         // GPUI layer (`ghostty_view.rs`) and Ghostty's variant stays off.
         //
-        // `middle-click-action = clipboard-paste`: Con reports
-        // `supports_selection_clipboard = false`, and since 1.4 the default
-        // `primary-paste` is a no-op on such hosts instead of falling back to
-        // the system clipboard. `clipboard-paste` only exists from that
-        // revision on; an older Ghostty (stale `CON_GHOSTTY_SOURCE_DIR`)
-        // records a config diagnostic and keeps `primary-paste`, which there
-        // still fell back to the system clipboard.
+        // `middle-click-action = ignore`: the GPUI host view only forwards
+        // left and right buttons to Ghostty (`ghostty_view.rs` registers no
+        // middle-button listeners and the Ghostty NSView sits below GPUI's),
+        // so Ghostty never sees a middle click today and no Con platform
+        // pastes on middle click. Pin `ignore` so that forwarding the middle
+        // button later, e.g. for mouse-reporting parity with Windows, cannot
+        // start pasting the system clipboard as a side effect; Ghostty's
+        // default flipped between fallback-paste and no-op across 1.3/1.4.
         s.push_str("copy-on-select = none\n");
-        s.push_str("middle-click-action = clipboard-paste\n");
+        s.push_str("middle-click-action = ignore\n");
         let clipboard_write = self.clipboard_write.unwrap_or(false);
         s.push_str(if clipboard_write {
             "clipboard-write = allow\n"
@@ -2158,14 +2159,16 @@ mod tests {
         // Selection copying is owned by the GPUI layer, so Ghostty's own
         // copy-on-select must stay off; otherwise it would be routed through
         // `write_clipboard_callback` and silently gated by the OSC 52 setting.
-        // Middle-click must paste from the system clipboard even though Con
-        // has no selection clipboard, which Ghostty 1.4's `primary-paste`
-        // default no longer does. Both hold without any appearance patch.
+        // Middle clicks are not forwarded to Ghostty on macOS, so the
+        // middle-click action is pinned to `ignore` rather than left to an
+        // upstream default that has already flipped once. Both hold without
+        // any appearance patch.
         let config = GhosttyConfigPatch::default().to_config_string();
 
         assert!(config.contains("copy-on-select = none\n"));
-        assert!(config.contains("middle-click-action = clipboard-paste\n"));
+        assert!(config.contains("middle-click-action = ignore\n"));
         assert!(!config.contains("primary-paste"));
+        assert!(!config.contains("clipboard-paste"));
     }
 
     #[test]
