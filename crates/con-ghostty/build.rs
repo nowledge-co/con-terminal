@@ -15,11 +15,22 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// commits were audited with unchanged public C headers and revalidated
 /// against Con's private embedding patch and portable VT bindings.
 ///
+/// 2026-09-06 bump: from `5f5b988c52...` to `492300cad1...` (186 upstream
+/// commits). `include/ghostty.h` is byte-identical; `include/ghostty/vt/`
+/// only gained the search API and `GhosttySelectionBuffer`. All embedding
+/// patch anchors still match, `ffi_abi.c` compiles against the new header,
+/// and the macOS archive built and passed `cargo test -p con-ghostty`.
+/// Behavior changes that needed Con-side handling: Ghostty 1.4 redefined
+/// `copy-on-select` / `middle-click-action` defaults (see
+/// `to_config_string` in `src/terminal.rs`), and the renderer now parks its
+/// CVDisplayLink whenever a surface is idle (`6688aa072`, `97f57edcc`),
+/// which overlaps with Con's sleep/wake visibility handling from #342.
+///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "5f5b988c5236facfe8d2439203d9ee9d5b636cf8";
+const GHOSTTY_REV: &str = "492300cad104195411d12217dd22f1cd05f31376";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
@@ -283,13 +294,15 @@ fn build_vt_backend(target_os: &str) {
     // Windows, so default it on regardless of cargo profile and let
     // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
     //
-    // `-Dsimd`: the pinned Ghostty revision must build Linux libghostty-vt
-    // with libc enabled. Its non-libc Wuffs module exports hidden weak
+    // `-Dsimd`: Linux libghostty-vt must be built with libc enabled. Ghostty's
+    // non-libc Wuffs module (`pkg/wuffs/src/main.zig`) exports hidden weak
     // `calloc`/`free` fallbacks; when that archive is linked into a Rust
     // executable, the hidden fallbacks capture the process-wide symbols and
     // make every zeroed Rust allocation fail. Enabling SIMD also enables libc
-    // on Ghostty's root module, suppressing those fallbacks, and the current
-    // Linux archive contains the required simdutf/highway objects.
+    // on Ghostty's root module (`src/build/GhosttyZig.zig`), suppressing
+    // those fallbacks, and the Linux archive contains the required
+    // simdutf/highway objects. Re-check both files on every GHOSTTY_REV bump;
+    // the coupling is an upstream implementation detail, not a contract.
     //
     // Windows keeps the conservative non-SIMD default because its static
     // archive has a different C++ link surface. The override remains useful

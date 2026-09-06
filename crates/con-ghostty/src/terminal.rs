@@ -178,6 +178,25 @@ impl GhosttyConfigPatch {
         // host-side previews to OSC 8, whose visible label can differ from the
         // producer-controlled URI and therefore needs an explicit preview.
         s.push_str("link-previews = osc8\n");
+        // Pin clipboard routing instead of inheriting Ghostty's platform
+        // defaults; Ghostty 1.4 (ghostty-org/ghostty#12604) redefined both.
+        //
+        // `copy-on-select = none`: Ghostty delivers its own copy-on-select
+        // through the same `write_clipboard` callback as OSC 52 application
+        // writes, and `write_clipboard_callback` below deliberately gates that
+        // callback by the user's clipboard-write setting. User gestures must
+        // not depend on that setting, so selection copying is owned by the
+        // GPUI layer (`ghostty_view.rs`) and Ghostty's variant stays off.
+        //
+        // `middle-click-action = clipboard-paste`: Con reports
+        // `supports_selection_clipboard = false`, and since 1.4 the default
+        // `primary-paste` is a no-op on such hosts instead of falling back to
+        // the system clipboard. `clipboard-paste` only exists from that
+        // revision on; an older Ghostty (stale `CON_GHOSTTY_SOURCE_DIR`)
+        // records a config diagnostic and keeps `primary-paste`, which there
+        // still fell back to the system clipboard.
+        s.push_str("copy-on-select = none\n");
+        s.push_str("middle-click-action = clipboard-paste\n");
         let clipboard_write = self.clipboard_write.unwrap_or(false);
         s.push_str(if clipboard_write {
             "clipboard-write = allow\n"
@@ -1908,6 +1927,13 @@ unsafe extern "C" fn confirm_read_clipboard_callback(
 }
 
 /// Clipboard write — ghostty wants to copy plain text to the macOS pasteboard.
+///
+/// Ghostty routes every clipboard write through this callback: OSC 52 and
+/// Kitty application writes, but also its own copy-on-select and
+/// `copy_to_clipboard` keybinds, which arrive as multi-item
+/// (`text/plain` + `text/html`) payloads. The gate below treats everything as
+/// an application write, so Con's runtime config keeps Ghostty's
+/// copy-on-select off and copies user selections from the GPUI layer instead.
 unsafe extern "C" fn write_clipboard_callback(
     userdata: *mut c_void,
     clipboard: ffi::ghostty_clipboard_e,
@@ -2125,6 +2151,21 @@ mod tests {
         let config = GhosttyConfigPatch::default().to_config_string();
 
         assert!(config.contains("link-previews = osc8\n"));
+    }
+
+    #[test]
+    fn ghostty_config_pins_clipboard_routing_independent_of_ghostty_defaults() {
+        // Selection copying is owned by the GPUI layer, so Ghostty's own
+        // copy-on-select must stay off; otherwise it would be routed through
+        // `write_clipboard_callback` and silently gated by the OSC 52 setting.
+        // Middle-click must paste from the system clipboard even though Con
+        // has no selection clipboard, which Ghostty 1.4's `primary-paste`
+        // default no longer does. Both hold without any appearance patch.
+        let config = GhosttyConfigPatch::default().to_config_string();
+
+        assert!(config.contains("copy-on-select = none\n"));
+        assert!(config.contains("middle-click-action = clipboard-paste\n"));
+        assert!(!config.contains("primary-paste"));
     }
 
     #[test]
