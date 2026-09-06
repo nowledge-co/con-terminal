@@ -49,7 +49,10 @@ pub struct RenderSession {
     conpty: Arc<ConPty>,
     shell_cwd: Option<PathBuf>,
     config: Mutex<RendererConfig>,
-    base_font_size_px: f32,
+    /// Logical (96-DPI) font size. Settings can update it while the pane is
+    /// alive; DPI changes use the latest value rather than the construction
+    /// time value.
+    base_font_size_px: Mutex<f32>,
     dpi: AtomicU32,
     /// When a local user action mutates terminal state (typing, paste,
     /// mouse selection), the next render should prefer the freshest
@@ -270,7 +273,7 @@ impl RenderSession {
             conpty,
             shell_cwd,
             config: Mutex::new(renderer_config),
-            base_font_size_px,
+            base_font_size_px: Mutex::new(base_font_size_px),
             dpi: AtomicU32::new(current_dpi),
             low_latency_requested: AtomicBool::new(false),
             low_latency_generation_target: AtomicU64::new(0),
@@ -414,6 +417,45 @@ impl RenderSession {
         }
     }
 
+    /// Apply a live font change, rebuild cell metrics, and resize both the VT
+    /// and ConPTY grid. The settings panel updates existing sessions, so only
+    /// changing the app-level template is not sufficient.
+    pub fn set_font(&self, font_family: &str, font_size_px: f32) -> Result<()> {
+        let logical_size = font_size_px.max(1.0);
+        let dpi = self.dpi.load(Ordering::Acquire).max(1);
+        let physical_size = scale_font_size(logical_size, dpi);
+        {
+            let config = self.config.lock();
+            if config.font_family == font_family
+                && (config.font_size_px - physical_size).abs() <= f32::EPSILON
+            {
+                return Ok(());
+            }
+        }
+
+        let (width, height) = {
+            let renderer = self.renderer.lock();
+            renderer
+                .rebuild_atlas(font_family, physical_size)
+                .context("rebuild_atlas on font change failed")?;
+            renderer.dimensions_px()
+        };
+        *self.base_font_size_px.lock() = logical_size;
+        {
+            let mut config = self.config.lock();
+            config.font_family = font_family.to_string();
+            config.font_size_px = physical_size;
+        }
+        // Renderer::resize is idempotent for unchanged pixel dimensions, but
+        // this method still re-derives the grid from the new atlas metrics.
+        self.resize(width, height)?;
+        self.vt.bump_generation();
+        log::info!(
+            "RenderSession::set_font family={font_family:?} logical_px={logical_size:.2} physical_px={physical_size:.2}"
+        );
+        Ok(())
+    }
+
     /// Notify of a DPI change. Rebuilds the glyph atlas at the new
     /// physical font size and re-derives the cell grid. Follow with a
     /// `resize` to match the new physical dimensions.
@@ -424,9 +466,10 @@ impl RenderSession {
         if prev == new_dpi {
             return Ok(());
         }
-        let new_font = scale_font_size(self.base_font_size_px, new_dpi);
+        let new_font = scale_font_size(*self.base_font_size_px.lock(), new_dpi);
+        let family = self.config.lock().font_family.clone();
         renderer
-            .rebuild_atlas(new_font)
+            .rebuild_atlas(&family, new_font)
             .context("rebuild_atlas on DPI change failed")?;
         let mut config = self.config.lock();
         config.font_size_px = new_font;

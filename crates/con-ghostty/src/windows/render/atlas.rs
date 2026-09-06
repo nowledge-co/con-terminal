@@ -130,9 +130,13 @@ pub struct GlyphCache {
     device: ID3D11Device,
     _context: ID3D11DeviceContext,
     dwrite: IDWriteFactory,
-    /// Font collection that owns `font_family`. `Some` only for our
-    /// bundled IoskeleyMono collection; `None` means DirectWrite should
-    /// resolve the family from the system collection.
+    /// The bundled collection remains available even when the currently
+    /// selected family comes from the system collection, so a live settings
+    /// change can switch back to IoskeleyMono without recreating the renderer.
+    bundled_font_collection: Option<IDWriteFontCollection>,
+    /// Font collection that owns `font_family`. `Some` only when the resolved
+    /// family comes from our bundled collection; `None` means DirectWrite
+    /// resolves it from the system collection.
     font_collection: Option<IDWriteFontCollection>,
     /// System font-fallback cascade. Attached to each
     /// `IDWriteTextFormat1` so DirectWrite transparently swaps in
@@ -445,6 +449,7 @@ impl GlyphCache {
             device: device.clone(),
             _context: context.clone(),
             dwrite: dwrite.clone(),
+            bundled_font_collection: bundled_collection,
             font_collection,
             font_fallback,
             _d2d_factory: d2d_factory,
@@ -833,70 +838,75 @@ impl GlyphCache {
         }
     }
 
-    pub fn rebuild(&mut self, font_size_px: f32) -> Result<()> {
-        // Build every fallible DirectWrite resource before replacing the live
-        // atlas state. A transient format or metrics failure must leave the old
-        // state usable so the caller can retry safely.
+    pub fn rebuild(&mut self, font_family: &str, font_size_px: f32) -> Result<()> {
+        // Resolve both values together. In particular, the collection must
+        // change when settings switch between a bundled and a system font.
+        let resolved = resolve_font_family(
+            &self.dwrite,
+            self.bundled_font_collection.as_ref(),
+            font_family,
+        )?;
+        let resolved_family = resolved.family;
+        let font_collection = resolved.collection.cloned();
+        let collection = font_collection.as_ref();
+
+        // Build every fallible DirectWrite object before mutating the cache,
+        // leaving the previous font fully usable if the requested font fails.
         let text_format_regular = make_text_format(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             false,
             false,
         )?;
         let text_format_bold = make_text_format(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             true,
             false,
         )?;
         let text_format_italic = make_text_format(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             false,
             true,
         )?;
         let text_format_bold_italic = make_text_format(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             true,
             true,
         )?;
         let text_format_cjk_regular = make_text_format_with_weight(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             DWRITE_FONT_WEIGHT_MEDIUM,
             false,
         )?;
         let text_format_cjk_italic = make_text_format_with_weight(
             &self.dwrite,
-            self.font_collection.as_ref(),
+            collection,
             self.font_fallback.as_ref(),
-            &self.font_family,
+            &resolved_family,
             font_size_px,
             DWRITE_FONT_WEIGHT_MEDIUM,
             true,
         )?;
-        let metrics = measure_cell(
-            &self.dwrite,
-            self.font_collection.as_ref(),
-            &self.font_family,
-            font_size_px,
-        )?;
+        let metrics = measure_cell(&self.dwrite, collection, &resolved_family, font_size_px)?;
         let layout_baselines = TextFormatBaselines::measure(
             &self.dwrite,
             metrics.baseline_px as f32,
@@ -909,26 +919,25 @@ impl GlyphCache {
         // works after a font-size change (the face itself doesn't
         // depend on size, but re-resolving keeps the field in lockstep
         // with the current collection / family).
-        let (primary_face, primary_upm) = match resolve_font_face(
-            &self.dwrite,
-            self.font_collection.as_ref(),
-            &self.font_family,
-        ) {
-            Ok((face, _src)) => {
-                let mut fm = DWRITE_FONT_METRICS::default();
-                // SAFETY: windows-rs writes through the out pointer.
-                unsafe { face.GetMetrics(&mut fm) };
-                (Some(face), fm.designUnitsPerEm as f32)
-            }
-            Err(err) => {
-                log::warn!(
-                    "GlyphCache::rebuild: primary face resolution failed ({err:?}); \
+        let (primary_face, primary_upm) =
+            match resolve_font_face(&self.dwrite, collection, &resolved_family) {
+                Ok((face, _src)) => {
+                    let mut fm = DWRITE_FONT_METRICS::default();
+                    // SAFETY: windows-rs writes through the out pointer.
+                    unsafe { face.GetMetrics(&mut fm) };
+                    (Some(face), fm.designUnitsPerEm as f32)
+                }
+                Err(err) => {
+                    log::warn!(
+                        "GlyphCache::rebuild: primary face resolution failed ({err:?}); \
                      wide Nerd-Font icons will render clipped at the cell edge"
-                );
-                (None, 1.0)
-            }
-        };
+                    );
+                    (None, 1.0)
+                }
+            };
 
+        self.font_family = resolved_family;
+        self.font_collection = font_collection;
         self.font_size_px = font_size_px;
         self.entries.clear();
         self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));

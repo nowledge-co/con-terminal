@@ -315,11 +315,11 @@ impl Renderer {
         (self.width_px, self.height_px)
     }
 
-    pub fn rebuild_atlas(&self, font_size_px: f32) -> Result<()> {
+    pub fn rebuild_atlas(&self, font_family: &str, font_size_px: f32) -> Result<()> {
         self.atlas
             .lock()
             .expect("atlas mutex poisoned in rebuild_atlas()")
-            .rebuild(font_size_px)?;
+            .rebuild(font_family, font_size_px)?;
         *self
             .last_generation
             .lock()
