@@ -178,6 +178,16 @@ impl GhosttyConfigPatch {
         // host-side previews to OSC 8, whose visible label can differ from the
         // producer-controlled URI and therefore needs an explicit preview.
         s.push_str("link-previews = osc8\n");
+        // Ghostty routes its own copy-on-select through the same
+        // `write_clipboard` callback as OSC 52, and `write_clipboard_callback`
+        // gates that callback by the clipboard-write setting. A user gesture
+        // must not depend on that setting, so `ghostty_view.rs` copies the
+        // selection on left release and Ghostty's variant stays off. Middle
+        // clicks are never forwarded to Ghostty (the host view only wires
+        // left/right), so pin `ignore` rather than inherit a default that
+        // Ghostty 1.4 (ghostty-org/ghostty#12604) already flipped once.
+        s.push_str("copy-on-select = none\n");
+        s.push_str("middle-click-action = ignore\n");
         let clipboard_write = self.clipboard_write.unwrap_or(false);
         s.push_str(if clipboard_write {
             "clipboard-write = allow\n"
@@ -1908,6 +1918,10 @@ unsafe extern "C" fn confirm_read_clipboard_callback(
 }
 
 /// Clipboard write — ghostty wants to copy plain text to the macOS pasteboard.
+///
+/// Ghostty also sends user-gesture copies (copy-on-select, `copy_to_clipboard`)
+/// through here as multi-item payloads; the gate below would drop them, which
+/// is why `to_config_string` keeps `copy-on-select = none`.
 unsafe extern "C" fn write_clipboard_callback(
     userdata: *mut c_void,
     clipboard: ffi::ghostty_clipboard_e,
@@ -2125,6 +2139,14 @@ mod tests {
         let config = GhosttyConfigPatch::default().to_config_string();
 
         assert!(config.contains("link-previews = osc8\n"));
+    }
+
+    #[test]
+    fn ghostty_config_pins_clipboard_routing() {
+        let config = GhosttyConfigPatch::default().to_config_string();
+
+        assert!(config.contains("copy-on-select = none\n"));
+        assert!(config.contains("middle-click-action = ignore\n"));
     }
 
     #[test]

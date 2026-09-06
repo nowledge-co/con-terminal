@@ -80,3 +80,14 @@ a platform, it must implement the complete legacy C0 control-byte layer and keep
 those semantics shared with the control-plane surface API. For anything beyond
 that layer, the long-term answer is not a larger Rust table; it is reusing
 Ghostty's VT key encoder.
+
+## Follow-Up (2026-09-06)
+
+The long-term answer above landed in `07783391` (2026-08-26): Windows and
+Linux key presses now go through libghostty-vt's `ghostty_key_encoder_*`
+(`VtScreen::send_key` in `crates/con-ghostty/src/vt.rs`). The Rust C0 table
+described here survives only for the control plane's `keys.send`, which
+writes raw bytes to the PTY. Since Ghostty `492300ca` the encoder emits xterm
+`CSI 27;mods;key~` for Ctrl chords once an application enables
+modifyOtherKeys=2; tmux only does that with `extended-keys on`, so the `C-]`
+prefix flow from #148 is unchanged.

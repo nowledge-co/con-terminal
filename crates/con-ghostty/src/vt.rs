@@ -7238,6 +7238,67 @@ mod tests {
         assert_eq!(output.lock().as_slice(), b"\x00");
     }
 
+    /// Encoder behavior that changed in Ghostty `492300ca`: modifyOtherKeys=2
+    /// now covers Ctrl chords and Alt+Escape, F13-F25/Help gained sequences,
+    /// and Alt with non-ASCII text prefixes the whole UTF-8 sequence.
+    #[test]
+    fn key_encoder_tracks_modify_other_keys_and_extended_function_keys() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes, _| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+
+        let key = |key, text, unshifted_codepoint, modifiers| VtKeyEvent {
+            key,
+            text,
+            unshifted_codepoint,
+            action: VtKeyAction::Press,
+            modifiers,
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        let ctrl = VtKeyModifiers {
+            control: true,
+            ..VtKeyModifiers::default()
+        };
+        let alt = VtKeyModifiers {
+            alt: true,
+            ..VtKeyModifiers::default()
+        };
+        let none = VtKeyModifiers::default();
+        let encode = |event: &VtKeyEvent<'_>| {
+            output.lock().clear();
+            assert!(screen.send_key(event).expect("encode key").output_accepted);
+            output.lock().clone()
+        };
+
+        let ctrl_p = key("p", "p", Some('p'), ctrl);
+        let ctrl_space = key("space", " ", Some(' '), ctrl);
+        let alt_escape = key("escape", "", None, alt);
+
+        assert_eq!(encode(&ctrl_p), b"\x10");
+        assert_eq!(encode(&alt_escape), b"\x1b\x1b");
+
+        screen.feed(b"\x1b[>4;2m");
+        assert_eq!(encode(&ctrl_p), b"\x1b[27;5;112~");
+        assert_eq!(encode(&ctrl_space), b"\x1b[27;5;32~");
+        assert_eq!(encode(&alt_escape), b"\x1b[27;3;27~");
+
+        screen.feed(b"\x1b[>4;0m");
+        assert_eq!(encode(&ctrl_p), b"\x10");
+
+        assert_eq!(encode(&key("f13", "", None, none)), b"\x1b[25~");
+        assert_eq!(encode(&key("help", "", None, none)), b"\x1b[28~");
+        assert_eq!(encode(&key("ф", "ф", Some('ф'), alt)), "\x1bф".as_bytes());
+    }
+
     #[test]
     fn key_encoder_handles_kitty_press_repeat_and_release() {
         let output = Arc::new(Mutex::new(Vec::new()));
