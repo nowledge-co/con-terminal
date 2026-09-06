@@ -16,15 +16,9 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// against Con's private embedding patch and portable VT bindings.
 ///
 /// 2026-09-06 bump: from `5f5b988c52...` to `492300cad1...` (186 upstream
-/// commits). `include/ghostty.h` is byte-identical; `include/ghostty/vt/`
-/// only gained the search API and `GhosttySelectionBuffer`. All embedding
-/// patch anchors still match, `ffi_abi.c` compiles against the new header,
-/// and the macOS archive built and passed `cargo test -p con-ghostty`.
-/// Behavior changes that needed Con-side handling: Ghostty 1.4 redefined
-/// `copy-on-select` / `middle-click-action` defaults (see
-/// `to_config_string` in `src/terminal.rs`), and the renderer now parks its
-/// CVDisplayLink whenever a surface is idle (`6688aa072`, `97f57edcc`),
-/// which overlaps with Con's sleep/wake visibility handling from #342.
+/// commits). `include/ghostty.h` unchanged, vt headers additive only, patch
+/// anchors intact. Ghostty 1.4 redefined `copy-on-select` /
+/// `middle-click-action`; Con pins both in `src/terminal.rs`.
 ///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile

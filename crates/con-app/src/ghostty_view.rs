@@ -1990,19 +1990,11 @@ impl GhosttyView {
         true
     }
 
-    /// Deliver a left-button release and run Con's copy-on-select. Returns
-    /// whether a release was actually delivered so callers can drain the
-    /// surface state afterwards.
-    ///
-    /// Con owns copy-on-select for the macOS Ghostty backend. Ghostty's own
-    /// variant is disabled in the runtime config (`copy-on-select = none`)
-    /// because Ghostty would route it through the same `write_clipboard`
-    /// callback as OSC 52 application writes, and con-ghostty deliberately
-    /// gates that callback by the user's clipboard-write setting. A user
-    /// gesture must not depend on that setting, so the copy happens here, on
-    /// the GPUI clipboard path that Cmd+C already uses. Mirroring Ghostty,
-    /// only a left-button release copies: Ghostty clears the selection on a
-    /// plain left press, so a click to focus never republishes stale text.
+    /// Left-button release plus copy-on-select: Ghostty's own copy-on-select
+    /// is disabled in con-ghostty's runtime config (see `to_config_string`),
+    /// so the selection is copied here on the same path as Cmd+C. Like
+    /// Ghostty, only a left release copies; a plain left press clears the
+    /// selection, so clicking to focus never republishes stale text.
     fn release_left_mouse_sequence(
         &mut self,
         position: Point<Pixels>,
@@ -2012,12 +2004,7 @@ impl GhosttyView {
         if !self.finish_mouse_sequence(MouseButton::Left, position, mods) {
             return false;
         }
-        if let Some(selection) = self
-            .terminal
-            .as_ref()
-            .filter(|terminal| terminal.has_selection())
-            .and_then(|terminal| terminal.selection_text())
-        {
+        if let Some(selection) = self.terminal.as_ref().and_then(|t| t.selection_text()) {
             cx.write_to_clipboard(ClipboardItem::new_string(selection));
         }
         true
