@@ -2,9 +2,9 @@
 # https://mise.jdx.dev/
 #
 # Usage:
-#   mise install    # Install pinned tool versions
-#   just build      # Build the project
-#   just run        # Run from source
+#   mise install              # Install pinned tool versions
+#   mise exec -- just build   # Build with pinned tools on PATH
+#   mise exec -- just run     # Run with pinned tools on PATH
 #
 # Note: mise manages tool versions only. Task running is delegated to
 # the justfile to keep a single source of truth for build commands.
