@@ -50,10 +50,14 @@ If you use [mise](https://mise.jdx.dev/), the repo root `mise.toml`
 pins the exact Zig version. Run:
 
 ```bash
-mise install   # installs zig 0.16.0
+mise install              # installs the pinned toolchain
+mise exec -- just build   # runs with Zig 0.16.0 on PATH
 ```
 
-Then use `just` for all build / run / test tasks (see below).
+Run the `just` commands below through `mise exec --` so the pinned tools are
+available even when mise shell activation is not configured. For example,
+`mise exec -- just test` runs the platform-appropriate test set. If your shell
+already activates mise, you can use `just` directly.
 
 ### Manual setup
 
