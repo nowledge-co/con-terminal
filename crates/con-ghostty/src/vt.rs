@@ -7238,6 +7238,118 @@ mod tests {
         assert_eq!(output.lock().as_slice(), b"\x00");
     }
 
+    /// Pins encoder behavior that Ghostty `492300ca` changed or added:
+    /// modifyOtherKeys=2 (`CSI > 4;2 m`, enabled by vim/neovim/tmux with
+    /// `extended-keys`) now covers Ctrl+letter, Ctrl+Space, and Alt+Escape,
+    /// F13-F25 and Help gained sequences, and Alt with non-ASCII text
+    /// prefixes the whole UTF-8 sequence. None of these depend on Con-side
+    /// code, so a regression here means the pinned Ghostty revision moved.
+    #[test]
+    fn key_encoder_tracks_modify_other_keys_and_extended_function_keys() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes, _| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+
+        let encode = |event: &VtKeyEvent<'_>, what: &str| {
+            output.lock().clear();
+            assert!(
+                screen
+                    .send_key(event)
+                    .unwrap_or_else(|err| panic!("encode {what}: {err}"))
+                    .output_accepted,
+                "{what} produced no output"
+            );
+            output.lock().clone()
+        };
+
+        let ctrl_p = VtKeyEvent {
+            key: "p",
+            text: "p",
+            unshifted_codepoint: Some('p'),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                control: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        let ctrl_space = VtKeyEvent {
+            key: "space",
+            text: " ",
+            unshifted_codepoint: Some(' '),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                control: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        let alt_escape = VtKeyEvent {
+            key: "escape",
+            text: "",
+            unshifted_codepoint: None,
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                alt: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+
+        // Legacy mode keeps the C0 bytes tmux relies on for its prefix.
+        assert_eq!(encode(&ctrl_p, "legacy Ctrl-P"), b"\x10");
+        assert_eq!(encode(&ctrl_space, "legacy Ctrl-Space"), b"\x00");
+        assert_eq!(encode(&alt_escape, "legacy Alt-Escape"), b"\x1b\x1b");
+
+        // modifyOtherKeys=2 switches the same chords to CSI 27 ; mods ; key ~.
+        screen.feed(b"\x1b[>4;2m");
+        assert_eq!(encode(&ctrl_p, "MOK2 Ctrl-P"), b"\x1b[27;5;112~");
+        assert_eq!(encode(&ctrl_space, "MOK2 Ctrl-Space"), b"\x1b[27;5;32~");
+        assert_eq!(encode(&alt_escape, "MOK2 Alt-Escape"), b"\x1b[27;3;27~");
+
+        // Resetting the mode restores the legacy bytes.
+        screen.feed(b"\x1b[>4;0m");
+        assert_eq!(encode(&ctrl_p, "reset Ctrl-P"), b"\x10");
+
+        // F13-F25 and Help were unmapped upstream before this revision, so
+        // Con's `ghostty_key` mappings for them produced no output at all.
+        let function_key = |key: &'static str| VtKeyEvent {
+            key,
+            text: "",
+            unshifted_codepoint: None,
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers::default(),
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert_eq!(encode(&function_key("f13"), "F13"), b"\x1b[25~");
+        assert_eq!(encode(&function_key("f25"), "F25"), b"\x1b[46~");
+        assert_eq!(encode(&function_key("help"), "Help"), b"\x1b[28~");
+
+        // Alt with a non-ASCII layout character now prefixes the complete
+        // UTF-8 text instead of dropping the key.
+        let alt_cyrillic = VtKeyEvent {
+            key: "ф",
+            text: "ф",
+            unshifted_codepoint: Some('ф'),
+            action: VtKeyAction::Press,
+            modifiers: VtKeyModifiers {
+                alt: true,
+                ..VtKeyModifiers::default()
+            },
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert_eq!(encode(&alt_cyrillic, "Alt-ф"), "\x1bф".as_bytes());
+    }
+
     #[test]
     fn key_encoder_handles_kitty_press_repeat_and_release() {
         let output = Arc::new(Mutex::new(Vec::new()));
