@@ -4,6 +4,29 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.96` - unreleased
+
+### Changed
+
+**Terminal runtime**
+
+- Updated libghostty to its September 4 revision, bringing current terminal
+  memory, keyboard encoding, and renderer improvements while keeping Con's
+  platform contracts pinned and tested. _(PR
+  [#345](https://github.com/nowledge-co/con-terminal/pull/345) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+### Fixed
+
+**macOS**
+
+- Selecting terminal text copies it to the clipboard again, without weakening
+  the permission gate for clipboard writes initiated by terminal programs.
+  _(PR [#345](https://github.com/nowledge-co/con-terminal/pull/345) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
 ## `v0.1.0-beta.95` - 2026-09-06
 
 ### Fixed
