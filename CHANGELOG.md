@@ -10,9 +10,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Terminal runtime**
 
-- Updated libghostty to its September 4 revision, bringing current terminal
-  memory, keyboard encoding, and renderer improvements while keeping Con's
-  platform contracts pinned and tested. _(PR
+- Updated libghostty to its September 4 revision, improving extended-key
+  compatibility, terminal memory use, and idle renderer efficiency. _(PR
   [#345](https://github.com/nowledge-co/con-terminal/pull/345) by
   [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
