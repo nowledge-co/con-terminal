@@ -60,6 +60,10 @@ pub struct Globals {
     /// (1/atlas_w, 1/atlas_h) — lets the VS normalize pixel-space
     /// glyph UVs into the [0,1] range the sampler expects.
     pub inv_atlas_size: [f32; 2],
+    pub gamma_ratios: [f32; 4],
+    pub grayscale_contrast: f32,
+    pub cjk_grayscale_contrast: f32,
+    pub _padding: [f32; 2],
 }
 
 pub struct Pipeline {
@@ -534,5 +538,26 @@ pub fn instance_for_cell(
         fg,
         bg,
         attrs,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Globals, compile_shader};
+
+    #[test]
+    fn globals_match_four_hlsl_constant_registers() {
+        assert_eq!(std::mem::size_of::<Globals>(), 64);
+    }
+
+    #[test]
+    fn embedded_terminal_shaders_compile() {
+        let source = include_str!("shaders.hlsl");
+        for entry in ["vs_text", "vs_cell"] {
+            compile_shader(source, entry, "vs_5_0").expect("vertex shader should compile");
+        }
+        for entry in ["ps_background", "ps_cursor", "ps_text"] {
+            compile_shader(source, entry, "ps_5_0").expect("pixel shader should compile");
+        }
     }
 }

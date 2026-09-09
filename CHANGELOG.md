@@ -4,6 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.98` - unreleased
+
+### Fixed
+
+**Windows**
+
+- Terminal text now uses foreground-aware DirectWrite grayscale correction,
+  improving edge weight on both light and dark backgrounds without restoring
+  ClearType color fringes. CJK text retains its tuned contrast profile. _(PR
+  [#349](https://github.com/nowledge-co/con-terminal/pull/349) by
+  [@batkiz](https://github.com/batkiz))_
+
+---
+
 ## `v0.1.0-beta.97` - 2026-09-09
 
 ### Added

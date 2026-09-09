@@ -17,6 +17,10 @@ cbuffer Globals : register(b0) {
     uint   gridCols;
     uint   gridRows;
     float2 invAtlasSize;
+    float4 gammaRatios;
+    float  grayscaleContrast;
+    float  cjkGrayscaleContrast;
+    float2 globalsPadding;
 };
 
 struct VSInstance {
@@ -28,6 +32,7 @@ struct VSInstance {
     // Low bits mirror Ghostty cell attrs. Con reserves:
     //   bit 8 = default background
     //   bit 9 = cursor cell
+    //   bit 10 = CJK contrast profile
     uint   attrs         : ATTRS;
 };
 
@@ -38,6 +43,7 @@ struct VSOut {
     nointerpolation float4 fg : FGCOLOR;
     nointerpolation float4 bg : BGCOLOR;
     nointerpolation uint   attrs : ATTRS;
+    nointerpolation uint hasGlyph : TEXCOORD2;
 };
 
 static const uint ATTR_UNDERLINE  = 4u;
@@ -53,6 +59,36 @@ float4 unpackRGBA(uint v) {
         float((v >>  8) & 0xFF),
         float( v        & 0xFF)
     ) / 255.0;
+}
+
+// DirectWrite-compatible grayscale gamma correction, adapted from Windows
+// Terminal's MIT-licensed AtlasEngine dwrite_helpers.hlsl. The atlas contains
+// neutral linear coverage; correction must happen here because only the pixel
+// shader knows whether the glyph is dark-on-light or light-on-dark.
+float enhanceContrast(float alpha, float contrast) {
+    return alpha * (contrast + 1.0) / (alpha * contrast + 1.0);
+}
+
+float applyAlphaCorrection(float alpha, float foregroundIntensity) {
+    return alpha + alpha * (1.0 - alpha)
+        * ((gammaRatios.x * foregroundIntensity + gammaRatios.y) * alpha
+            + (gammaRatios.z * foregroundIntensity + gammaRatios.w));
+}
+
+float correctedGrayscaleCoverage(
+    float rawCoverage,
+    float3 foreground,
+    float grayscaleEnhancedContrast
+) {
+    // DirectWrite applies its grayscale contrast adjustment primarily to dark
+    // foreground colors. This avoids over-bold white text while keeping dark
+    // text smooth and readable on Con's default light theme.
+    float contrast = grayscaleEnhancedContrast * saturate(
+        dot(foreground, float3(0.30, 0.59, 0.11) * -4.0) + 3.0
+    );
+    float contrasted = enhanceContrast(rawCoverage, contrast);
+    float intensity = dot(foreground, float3(0.25, 0.50, 0.25));
+    return saturate(applyAlphaCorrection(contrasted, intensity));
 }
 
 uint2 quadCorner(uint vid) {
@@ -77,6 +113,7 @@ VSOut vertexOut(uint vid, VSInstance inst, float2 quadSize) {
     o.fg = unpackRGBA(inst.fg);
     o.bg = unpackRGBA(inst.bg);
     o.attrs = inst.attrs;
+    o.hasGlyph = all(inst.atlasSize > 0u) ? 1u : 0u;
     return o;
 }
 
@@ -144,7 +181,8 @@ float4 ps_cursor(VSOut i) : SV_Target {
 
 float4 ps_text(VSOut i) : SV_Target {
     float3 coverageRgb = atlas.Sample(samp, i.atlasUV).rgb;
-    float coverage = max(coverageRgb.r, max(coverageRgb.g, coverageRgb.b));
+    float rawCoverage = i.hasGlyph != 0u
+        ? max(coverageRgb.r, max(coverageRgb.g, coverageRgb.b)) : 0.0;
 
     float pxUV = 1.0 / max(cellSize.y, 1.0);
     float bandCoverage = 0.0;
@@ -163,6 +201,11 @@ float4 ps_text(VSOut i) : SV_Target {
         color.a = 1.0;
     }
 
+    float coverage = correctedGrayscaleCoverage(
+        rawCoverage,
+        color.rgb,
+        (i.attrs & 1024u) != 0u ? cjkGrayscaleContrast : grayscaleContrast
+    );
     float alpha = color.a * max(coverage, bandCoverage);
     return float4(color.rgb * alpha, alpha);
 }
