@@ -217,7 +217,8 @@ impl GhosttyConfigPatch {
         // Ghostty 1.4 (ghostty-org/ghostty#12604) already flipped once.
         s.push_str("copy-on-select = none\n");
         s.push_str("middle-click-action = ignore\n");
-        let clipboard_write = self.clipboard_write.unwrap_or(false);
+        // Match TerminalConfig and Ghostty: TUI copies work unless explicitly disabled.
+        let clipboard_write = self.clipboard_write.unwrap_or(true);
         s.push_str(if clipboard_write {
             "clipboard-write = allow\n"
         } else {
@@ -2249,17 +2250,23 @@ mod tests {
 
     #[test]
     fn ghostty_config_gates_kitty_clipboard_writes() {
-        let disabled = GhosttyConfigPatch::default().to_config_string();
-        let enabled = GhosttyConfigPatch {
-            clipboard_write: Some(true),
+        let disabled = GhosttyConfigPatch {
+            clipboard_write: Some(false),
             ..Default::default()
         }
         .to_config_string();
 
-        assert!(disabled.contains("clipboard-write = deny"));
-        assert!(disabled.contains("clipboard-write-limit-bytes = 0"));
-        assert!(enabled.contains("clipboard-write = allow"));
-        assert!(enabled.contains("clipboard-write-limit-bytes = 1048576"));
+        assert!(disabled.contains("clipboard-write = deny\n"));
+        assert!(disabled.contains("clipboard-write-limit-bytes = 0\n"));
+        for clipboard_write in [None, Some(true)] {
+            let enabled = GhosttyConfigPatch {
+                clipboard_write,
+                ..Default::default()
+            }
+            .to_config_string();
+            assert!(enabled.contains("clipboard-write = allow\n"));
+            assert!(enabled.contains("clipboard-write-limit-bytes = 1048576\n"));
+        }
     }
 
     #[test]

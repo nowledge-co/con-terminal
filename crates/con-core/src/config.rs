@@ -117,6 +117,8 @@ pub struct TerminalConfig {
     pub font_size: f32,
     pub theme: String,
     pub cursor_style: String,
+    /// Allow terminal programs to copy plain text, matching Ghostty's default.
+    /// This does not grant clipboard read access.
     pub clipboard_write: bool,
 }
 
@@ -129,7 +131,7 @@ impl Default for TerminalConfig {
             font_size: default_font_size(),
             theme: default_theme(),
             cursor_style: default_cursor_style(),
-            clipboard_write: false,
+            clipboard_write: true,
         }
     }
 }
@@ -1216,6 +1218,23 @@ mod tests {
         sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     };
     use con_agent::ProviderKind;
+
+    #[test]
+    fn clipboard_writes_default_to_allowed_but_preserve_explicit_policy() {
+        assert!(Config::default().terminal.clipboard_write);
+        for source in ["", "[terminal]\nfont_size = 16.0"] {
+            let config: Config = toml::from_str(source).unwrap();
+            assert!(config.terminal.clipboard_write);
+        }
+        for enabled in [false, true] {
+            let source = format!("[terminal]\nclipboard_write = {enabled}");
+            let config: Config = toml::from_str(&source).unwrap();
+            assert_eq!(config.terminal.clipboard_write, enabled);
+            let encoded = toml::to_string(&config).unwrap();
+            let decoded: Config = toml::from_str(&encoded).unwrap();
+            assert_eq!(decoded.terminal.clipboard_write, enabled);
+        }
+    }
 
     #[test]
     fn explicit_agent_provider_choice_round_trips_with_provenance() {
