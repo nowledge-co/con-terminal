@@ -8,6 +8,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Terminal**
+
+- TUI applications can now copy plain text to the system clipboard by default,
+  matching established terminal behavior. Explicit opt-outs, clipboard read
+  protection, text validation, and payload limits remain in place. _(PR
+  [#356](https://github.com/nowledge-co/con-terminal/pull/356) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 **Windows**
 
 - Terminal text now uses foreground-aware DirectWrite grayscale correction,
