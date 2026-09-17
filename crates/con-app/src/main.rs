@@ -18,6 +18,7 @@ mod chat_markdown;
 #[cfg(target_os = "macos")]
 mod cli_shim;
 mod command_palette;
+mod file_icons;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
 #[cfg(target_os = "macos")]

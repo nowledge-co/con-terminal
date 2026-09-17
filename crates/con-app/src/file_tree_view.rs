@@ -8,12 +8,12 @@
 //! ---
 //! - Row height: 24 px.
 //! - Indent: 12 px per depth level.
-//! - Icons: phosphor/folder.svg, phosphor/folder-open.svg, phosphor/file-text.svg,
-//!   phosphor/image.svg for image files.
+//! - Icons come from `file_icons::icon_for_path`: either a Phosphor SVG or,
+//!   for languages that have a Seti glyph, a Nerd Font glyph drawn in the
+//!   mono font family.
 //! - Active (open) file row gets a subtle accent bg.
 //! - No borders — surface separation via bg opacity.
 
-use crate::editor_syntax;
 use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
     SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
@@ -22,6 +22,7 @@ use gpui_component::{ActiveTheme, tooltip::Tooltip};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::file_icons::{FileIcon, icon_for_path};
 use crate::ui_scale::ui_icon_px;
 
 const ROW_HEIGHT: f32 = 24.0;
@@ -307,17 +308,7 @@ impl Render for FileTreeView {
                         None
                     };
 
-                    let icon = if is_dir {
-                        if is_expanded {
-                            "phosphor/folder-open.svg"
-                        } else {
-                            "phosphor/folder.svg"
-                        }
-                    } else if editor_syntax::is_image_path(&path) {
-                        "phosphor/image.svg"
-                    } else {
-                        "phosphor/file-text.svg"
-                    };
+                    let icon = icon_for_path(&path, is_dir, is_expanded);
 
                     let icon_color = if is_dir {
                         list_theme.primary.opacity(0.75)
@@ -366,13 +357,27 @@ impl Render for FileTreeView {
                         } else {
                             div().w(px(10.0)).flex_shrink_0().into_any_element()
                         })
-                        .child(
-                            svg()
-                                .path(icon)
+                        .child(match icon {
+                            FileIcon::Svg(svg_path) => svg()
+                                .path(svg_path)
                                 .size(ui_icon_px(&list_theme, ICON_SIZE))
                                 .flex_shrink_0()
-                                .text_color(icon_color),
-                        )
+                                .text_color(icon_color)
+                                .into_any_element(),
+                            FileIcon::Glyph(glyph) => div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(ui_icon_px(&list_theme, ICON_SIZE))
+                                .h(ui_icon_px(&list_theme, ICON_SIZE))
+                                .flex_shrink_0()
+                                .font_family(list_theme.mono_font_family.clone())
+                                .text_size(ui_icon_px(&list_theme, ICON_SIZE))
+                                .line_height(ui_icon_px(&list_theme, ICON_SIZE))
+                                .text_color(icon_color)
+                                .child(SharedString::from(glyph.to_string()))
+                                .into_any_element(),
+                        })
                         .child(
                             div()
                                 .flex_1()

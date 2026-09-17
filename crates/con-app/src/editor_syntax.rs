@@ -31,6 +31,16 @@ pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
         "jsx" => Some("jsx"),
         "py" => Some("python"),
         "go" => Some("go"),
+        // Each name below must match a grammar bundled by gpui-component's
+        // `tree-sitter-languages` feature, otherwise the highlighter silently
+        // degrades to plain text. See `Language::name()` in gpui-component.
+        "java" => Some("java"),
+        "kt" | "kts" => Some("kotlin"),
+        "rb" => Some("ruby"),
+        "c" | "h" => Some("c"),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some("cpp"),
+        "swift" => Some("swift"),
+        "zig" => Some("zig"),
         "sh" | "bash" | "zsh" => Some("bash"),
         "html" | "htm" => Some("html"),
         "css" => Some("css"),
@@ -219,6 +229,25 @@ mod tests {
             ("script.py", "python"),
             ("README.md", "markdown"),
             ("Dockerfile", "dockerfile"),
+        ] {
+            assert_eq!(language_for_path(Path::new(path)), Some(language));
+        }
+    }
+
+    #[test]
+    fn language_for_path_recognizes_systems_and_jvm_languages() {
+        for (path, language) in [
+            ("src/Main.java", "java"),
+            ("src/App.kt", "kotlin"),
+            ("build.gradle.kts", "kotlin"),
+            ("lib/thing.rb", "ruby"),
+            ("src/main.c", "c"),
+            ("src/header.h", "c"),
+            ("src/engine.cpp", "cpp"),
+            ("src/engine.cc", "cpp"),
+            ("src/engine.hpp", "cpp"),
+            ("Sources/App.swift", "swift"),
+            ("src/main.zig", "zig"),
         ] {
             assert_eq!(language_for_path(Path::new(path)), Some(language));
         }
