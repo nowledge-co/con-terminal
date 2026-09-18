@@ -4,6 +4,27 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.99` - 2026-09-18
+
+### Added
+
+**Files**
+
+- The file tree now shows distinct, theme-aware icons for common languages,
+  configuration files, images, folders, and unknown files. The editor also
+  gains syntax highlighting for Java, Kotlin, Ruby, C, C++, and Zig files.
+  _(PR [#357](https://github.com/nowledge-co/con-terminal/pull/357) by
+  [@Aumnertic](https://github.com/Aumnertic))_
+
+**Tabs**
+
+- Tab icons now reflect activity and attention states reported through terminal
+  titles, including work happening on hidden surfaces. Custom tab names remain
+  unchanged. _(PR [#358](https://github.com/nowledge-co/con-terminal/pull/358)
+  by [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
 ## `v0.1.0-beta.98` - 2026-09-16
 
 ### Fixed
