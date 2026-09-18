@@ -2,8 +2,9 @@
 //!
 //! An icon is either one of con's bundled Phosphor SVGs (`assets/icons/`) or a
 //! Nerd Font glyph. Glyphs live in the Seti-UI + Custom private-use range, so
-//! they only render with a Nerd Font — con bundles IoskeleyMono, which covers
-//! that range.
+//! they only render with a Nerd Font. They are always drawn with con's bundled
+//! IoskeleyMono rather than the user's terminal font, so icon availability is
+//! stable across font settings.
 
 use crate::editor_syntax::{is_image_path, language_for_path};
 use std::path::Path;
@@ -16,6 +17,11 @@ pub enum FileIcon {
     /// Nerd Font glyph, e.g. `'\u{e68b}'` (seti-rust).
     Glyph(char),
 }
+
+/// File-type glyphs are product chrome, not terminal text. Keep them on the
+/// bundled font even when the user selects a terminal font without Nerd Font
+/// private-use glyphs.
+pub(crate) const FILE_ICON_FONT_FAMILY: &str = "Ioskeley Mono";
 
 /// Icon for a file tree row.
 ///
@@ -36,7 +42,7 @@ pub fn icon_for_path(path: &Path, is_dir: bool, is_expanded: bool) -> FileIcon {
             return icon;
         }
     }
-    if let Some(icon) = icon_for_unmapped_extension(path) {
+    if let Some(icon) = icon_for_icon_only_path(path) {
         return icon;
     }
     if is_image_path(path) {
@@ -63,14 +69,12 @@ fn icon_for_language(language: &str) -> Option<FileIcon> {
         "css" => FileIcon::Glyph('\u{e614}'),    // seti-css
         "scss" => FileIcon::Glyph('\u{e603}'),   // seti-sass
         "sql" => FileIcon::Glyph('\u{e64d}'),    // seti-db
-        "dockerfile" => FileIcon::Glyph('\u{e650}'), // seti-docker
         "make" => FileIcon::Glyph('\u{e673}'),   // seti-makefile
         "java" => FileIcon::Glyph('\u{e66d}'),   // seti-java
         "kotlin" => FileIcon::Glyph('\u{e634}'), // custom-kotlin
         "ruby" => FileIcon::Glyph('\u{e605}'),   // custom-ruby
         "c" => FileIcon::Glyph('\u{e649}'),      // seti-c
         "cpp" => FileIcon::Glyph('\u{e646}'),    // seti-cpp
-        "swift" => FileIcon::Glyph('\u{e699}'),  // seti-swift
         "zig" => FileIcon::Glyph('\u{e6a9}'),    // seti-zig
         "toml" | "json" | "yaml" => FileIcon::Svg("phosphor/gear.svg"),
         "bash" => FileIcon::Svg("phosphor/terminal.svg"),
@@ -78,22 +82,25 @@ fn icon_for_language(language: &str) -> Option<FileIcon> {
     })
 }
 
-/// Icon coverage for extensions [`language_for_path`] deliberately leaves
-/// unmapped, so that adding an icon here cannot change editor behaviour.
+/// Icon coverage for paths [`language_for_path`] deliberately leaves unmapped,
+/// so adding an icon cannot accidentally enable an unavailable highlighter.
 ///
-/// `.vue` is the only such case today: gpui-component bundles tree-sitter
-/// grammars for svelte and astro but not vue, so mapping `.vue` in
-/// `language_for_path` would make the editor parse every `.vue` buffer with the
-/// empty plain-text query set — no highlighting, just wasted work. The icon is
-/// still worth showing.
-fn icon_for_unmapped_extension(path: &Path) -> Option<FileIcon> {
+/// gpui-component has no Vue or Dockerfile grammar and its Swift grammar has
+/// no highlight query today. These files still deserve recognizable icons.
+fn icon_for_icon_only_path(path: &Path) -> Option<FileIcon> {
+    let file_name = path.file_name()?.to_string_lossy();
+    if file_name.eq_ignore_ascii_case("dockerfile") {
+        return Some(FileIcon::Glyph('\u{e650}')); // seti-docker
+    }
+
     match path
         .extension()?
         .to_string_lossy()
         .to_ascii_lowercase()
         .as_str()
     {
-        "vue" => Some(FileIcon::Glyph('\u{e6a0}')), // seti-vue
+        "vue" => Some(FileIcon::Glyph('\u{e6a0}')),   // seti-vue
+        "swift" => Some(FileIcon::Glyph('\u{e699}')), // seti-swift
         _ => None,
     }
 }
@@ -130,7 +137,6 @@ mod tests {
             ("styles.css", '\u{e614}'),
             ("styles.scss", '\u{e603}'),
             ("schema.sql", '\u{e64d}'),
-            ("Dockerfile", '\u{e650}'),
             ("Makefile", '\u{e673}'),
             ("src/Main.java", '\u{e66d}'),
             ("src/App.kt", '\u{e634}'),
@@ -139,13 +145,27 @@ mod tests {
             ("src/header.h", '\u{e649}'),
             ("src/engine.cpp", '\u{e646}'),
             ("src/engine.hpp", '\u{e646}'),
-            ("Sources/App.swift", '\u{e699}'),
             ("src/main.zig", '\u{e6a9}'),
         ] {
             assert_eq!(
                 icon_for_path(Path::new(path), false, false),
                 FileIcon::Glyph(glyph),
                 "unexpected icon for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn icon_only_file_types_do_not_enable_unavailable_highlighters() {
+        for (path, glyph) in [
+            ("Dockerfile", '\u{e650}'),
+            ("src/App.vue", '\u{e6a0}'),
+            ("Sources/App.swift", '\u{e699}'),
+        ] {
+            assert_eq!(language_for_path(Path::new(path)), None);
+            assert_eq!(
+                icon_for_path(Path::new(path), false, false),
+                FileIcon::Glyph(glyph)
             );
         }
     }
@@ -166,15 +186,26 @@ mod tests {
     }
 
     #[test]
-    fn vue_gets_an_icon_without_entering_language_for_path() {
-        // `.vue` has no bundled tree-sitter grammar, so the editor must keep
-        // treating it as an unknown extension while the tree still shows the
-        // Vue glyph.
-        assert_eq!(language_for_path(Path::new("src/App.vue")), None);
-        assert_eq!(
-            icon_for_path(Path::new("src/App.vue"), false, false),
-            FileIcon::Glyph('\u{e6a0}')
-        );
+    fn bundled_font_has_visible_file_icon_glyphs() {
+        let face = ttf_parser::Face::parse(
+            include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf"),
+            0,
+        )
+        .unwrap();
+        for glyph in [
+            '\u{e68b}', '\u{e606}', '\u{e627}', '\u{e628}', '\u{e60c}', '\u{e609}', '\u{e60e}',
+            '\u{e614}', '\u{e603}', '\u{e64d}', '\u{e650}', '\u{e673}', '\u{e66d}', '\u{e634}',
+            '\u{e605}', '\u{e649}', '\u{e646}', '\u{e699}', '\u{e6a9}', '\u{e6a0}',
+        ] {
+            let glyph_id = face.glyph_index(glyph).expect("file icon glyph must exist");
+            let bounds = face
+                .glyph_bounding_box(glyph_id)
+                .expect("file icon glyph must have an outline");
+            assert!(
+                bounds.width() > 0 && bounds.height() > 0,
+                "empty file icon glyph: {glyph}"
+            );
+        }
     }
 
     #[test]

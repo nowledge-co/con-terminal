@@ -9,7 +9,6 @@ pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
     match file_name.as_str() {
         "cargo.toml" | "pyproject.toml" => return Some("toml"),
         "package.json" | "tsconfig.json" => return Some("json"),
-        "dockerfile" => return Some("dockerfile"),
         "makefile" => return Some("make"),
         _ => {}
     }
@@ -28,7 +27,9 @@ pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
         "ts" => Some("typescript"),
         "tsx" => Some("tsx"),
         "js" | "mjs" | "cjs" => Some("javascript"),
-        "jsx" => Some("jsx"),
+        // gpui-component uses the JavaScript grammar for JSX. Returning the
+        // unregistered name `jsx` silently falls back to plain text.
+        "jsx" => Some("javascript"),
         "py" => Some("python"),
         "go" => Some("go"),
         // Each name below must match a grammar bundled by gpui-component's
@@ -39,7 +40,6 @@ pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
         "rb" => Some("ruby"),
         "c" | "h" => Some("c"),
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some("cpp"),
-        "swift" => Some("swift"),
         "zig" => Some("zig"),
         "sh" | "bash" | "zsh" => Some("bash"),
         "html" | "htm" => Some("html"),
@@ -228,7 +228,7 @@ mod tests {
             ("src/app.tsx", "tsx"),
             ("script.py", "python"),
             ("README.md", "markdown"),
-            ("Dockerfile", "dockerfile"),
+            ("src/component.jsx", "javascript"),
         ] {
             assert_eq!(language_for_path(Path::new(path)), Some(language));
         }
@@ -246,11 +246,19 @@ mod tests {
             ("src/engine.cpp", "cpp"),
             ("src/engine.cc", "cpp"),
             ("src/engine.hpp", "cpp"),
-            ("Sources/App.swift", "swift"),
             ("src/main.zig", "zig"),
         ] {
             assert_eq!(language_for_path(Path::new(path)), Some(language));
         }
+    }
+
+    #[test]
+    fn language_for_path_skips_registered_grammars_without_highlight_queries() {
+        // gpui-component currently has no highlight query for Swift and no
+        // Dockerfile grammar. The file tree can still show dedicated icons,
+        // but the editor must not parse these files only to produce no styles.
+        assert_eq!(language_for_path(Path::new("Sources/App.swift")), None);
+        assert_eq!(language_for_path(Path::new("Dockerfile")), None);
     }
 
     #[test]
