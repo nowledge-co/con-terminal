@@ -474,6 +474,10 @@ impl LinuxPtySession {
         Ok(())
     }
 
+    pub fn set_focus(&self, focused: bool) -> Result<()> {
+        self.shared.screen.set_focus(focused)
+    }
+
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
         let outcome = self.shared.screen.send_key(event)?;
         if outcome.output_accepted {

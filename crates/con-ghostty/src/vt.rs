@@ -611,6 +611,7 @@ pub const fn ghostty_mode(value: u16, ansi: bool) -> GhosttyMode {
 pub const MODE_NORMAL_MOUSE: GhosttyMode = ghostty_mode(1000, false);
 pub const MODE_BUTTON_MOUSE: GhosttyMode = ghostty_mode(1002, false);
 pub const MODE_ANY_MOUSE: GhosttyMode = ghostty_mode(1003, false);
+const MODE_FOCUS_EVENT: GhosttyMode = ghostty_mode(1004, false);
 pub const MODE_X10_MOUSE: GhosttyMode = ghostty_mode(9, false);
 pub const MODE_SGR_MOUSE: GhosttyMode = ghostty_mode(1006, false);
 pub const MODE_ALT_SCROLL: GhosttyMode = ghostty_mode(1007, false);
@@ -1057,6 +1058,14 @@ pub const ATTR_INVERSE: u8 = 1 << 4;
 unsafe extern "C" {
     // ABI manifest (`types.h`).
     pub fn ghostty_type_json() -> *const c_char;
+
+    // Focus (`focus.h`): gained = 0, lost = 1; both encode to three bytes.
+    fn ghostty_focus_encode(
+        event: c_int,
+        buf: *mut c_char,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 
     // Allocator + process-global optional services (`allocator.h`, `sys.h`).
     fn ghostty_alloc(allocator: *const GhosttyAllocator, len: usize) -> *mut u8;
@@ -1934,6 +1943,7 @@ impl MouseEncoderState {
 
 struct VtInner {
     terminal: GhosttyTerminal,
+    focused: bool,
     key_encoder: GhosttyKeyEncoder,
     key_event: GhosttyKeyEvent,
     mouse: Option<MouseEncoderState>,
@@ -2679,6 +2689,7 @@ impl VtScreen {
         Ok(Self {
             inner: Arc::new(Mutex::new(VtInner {
                 terminal,
+                focused: false,
                 key_encoder,
                 key_event,
                 mouse: None,
@@ -3232,6 +3243,59 @@ impl VtScreen {
     /// using the queue capacity reserved for terminal control traffic.
     pub fn write_control(&self, bytes: &[u8]) -> std::io::Result<()> {
         self.write_bytes(bytes, PtyWriteClass::ReservedControl)
+    }
+
+    /// Report actual pane/window focus transitions, not input broadcast targets.
+    pub fn set_focus(&self, focused: bool) -> anyhow::Result<()> {
+        let mut inner = self.inner.lock();
+        if inner.focused == focused {
+            return Ok(());
+        }
+        // Track transitions even when reporting is disabled. Enabling mode
+        // 1004 alone must not synthesize a focus event.
+        inner.focused = focused;
+        let mut mode = GhosttyTerminalModeConfig {
+            mode: MODE_FOCUS_EVENT,
+            value: false,
+        };
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::Mode,
+                &mut mode as *mut _ as *mut c_void,
+            )
+        };
+        anyhow::ensure!(rc == GHOSTTY_SUCCESS, "focus mode query failed: rc={rc}");
+        if !mode.value {
+            return Ok(());
+        }
+        let mut bytes = [0u8; 3];
+        let mut len = 0;
+        let rc = unsafe {
+            ghostty_focus_encode(
+                i32::from(!focused),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+                &mut len,
+            )
+        };
+        anyhow::ensure!(rc == GHOSTTY_SUCCESS, "focus encoding failed: rc={rc}");
+        let state = &inner.callback_state;
+        let write_pty = state
+            .write_pty
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("focus reporting requires a WRITE_PTY callback"))?;
+        let write_order = state.write_order.clone();
+        let write_failed = state.write_failed.clone();
+        // Reserve the write before releasing the mode snapshot, just as keys
+        // and mouse reports do, so parser replies cannot overtake this event.
+        let _write_guard = write_order.lock();
+        drop(inner);
+        let result = write_pty(&bytes[..len], PtyWriteClass::ReservedControl);
+        if let Err(err) = &result {
+            mark_control_write_failed(&write_failed, err);
+        }
+        result.map_err(Into::into)
     }
 
     fn write_bytes(&self, bytes: &[u8], class: PtyWriteClass) -> std::io::Result<()> {
@@ -7366,20 +7430,80 @@ mod tests {
     }
 
     #[test]
+    fn focus_reporting_tracks_transitions_even_while_disabled() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let captured = writes.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes, class| {
+                assert_eq!(class, PtyWriteClass::ReservedControl);
+                captured.lock().push(bytes.to_vec());
+                Ok(())
+            })),
+        )
+        .unwrap();
+        screen.set_focus(true).unwrap();
+        assert!(writes.lock().is_empty());
+        screen.feed(b"\x1b[?1004h");
+        screen.set_focus(true).unwrap();
+        assert!(
+            writes.lock().is_empty(),
+            "enabling the mode is not a focus transition"
+        );
+        screen.set_focus(false).unwrap();
+        screen.set_focus(false).unwrap();
+        screen.set_focus(true).unwrap();
+        screen.feed(b"\x1b[?1004l");
+        screen.set_focus(false).unwrap();
+        screen.feed(b"\x1b[?1004h");
+        screen.set_focus(true).unwrap();
+        assert_eq!(*writes.lock(), [b"\x1b[O", b"\x1b[I", b"\x1b[I"]);
+    }
+
+    #[test]
+    fn failed_focus_report_marks_the_session_desynchronized() {
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(|_, class| {
+                assert_eq!(class, PtyWriteClass::ReservedControl);
+                Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "full"))
+            })),
+        )
+        .unwrap();
+        screen.feed(b"\x1b[?1004h");
+        assert!(screen.set_focus(true).is_err());
+        assert!(screen.is_write_desynchronized());
+    }
+
+    #[test]
     fn raw_input_cannot_be_overtaken_by_a_terminal_reply() {
+        assert_host_write_precedes_reply(false);
+    }
+
+    #[test]
+    fn focus_report_cannot_be_overtaken_by_a_terminal_reply() {
+        assert_host_write_precedes_reply(true);
+    }
+
+    fn assert_host_write_precedes_reply(focus_report: bool) {
         let gate = Arc::new((Mutex::new(false), parking_lot::Condvar::new()));
         let callback_gate = gate.clone();
         let (entered_tx, entered_rx) = mpsc::channel();
         let writes = Arc::new(Mutex::new(Vec::new()));
         let callback_writes = writes.clone();
+        let input_bytes: &[u8] = if focus_report { b"\x1b[I" } else { b"user" };
         let screen = Arc::new(
             VtScreen::new_with_write_pty(
                 80,
                 24,
                 None,
                 Some(Arc::new(move |bytes, priority| {
-                    if bytes == b"user" {
-                        entered_tx.send(()).expect("signal raw input callback");
+                    if bytes == input_bytes {
+                        entered_tx.send(()).expect("signal host write callback");
                         let (open, ready) = &*callback_gate;
                         let mut open = open.lock();
                         while !*open {
@@ -7393,13 +7517,31 @@ mod tests {
             .expect("create vt screen"),
         );
 
+        screen.feed(b"\x1b[?1004h");
         let input_screen = screen.clone();
-        let input =
-            std::thread::spawn(move || input_screen.write_input(b"user").expect("write raw input"));
+        let input = std::thread::spawn(move || {
+            if focus_report {
+                input_screen.set_focus(true).expect("report focus");
+            } else {
+                input_screen
+                    .write_input(input_bytes)
+                    .expect("write raw input");
+            }
+        });
         entered_rx
             .recv_timeout(Duration::from_secs(2))
-            .expect("raw input callback must start");
+            .expect("host write callback must start");
 
+        assert!(
+            screen
+                .inner
+                .lock()
+                .callback_state
+                .write_order
+                .try_lock()
+                .is_none(),
+            "host callback must own the write ordering gate"
+        );
         let reply_screen = screen.clone();
         let reply = std::thread::spawn(move || reply_screen.feed(b"\x1b[5n"));
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -7418,7 +7560,13 @@ mod tests {
         reply.join().expect("terminal reply thread");
 
         let writes = writes.lock();
-        assert_eq!(writes[0], (b"user".to_vec(), PtyWriteClass::Regular));
+        let class = if focus_report {
+            PtyWriteClass::ReservedControl
+        } else {
+            PtyWriteClass::Regular
+        };
+        assert_eq!(writes[0], (input_bytes.to_vec(), class));
+        assert_eq!(writes.len(), 2);
         assert_eq!(writes[1].1, PtyWriteClass::ReservedControl);
         assert!(writes[1].0.starts_with(b"\x1b[0n"));
     }

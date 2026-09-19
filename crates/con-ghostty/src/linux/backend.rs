@@ -340,7 +340,13 @@ impl LinuxGhosttyTerminal {
     }
 
     pub fn set_content_scale(&self, _scale: f64) {}
-    pub fn set_focus(&self, _focused: bool) {}
+    pub fn set_focus(&self, focused: bool) {
+        if let Some(session) = self.inner.lock().as_ref()
+            && let Err(err) = session.set_focus(focused)
+        {
+            log::warn!("failed to report terminal focus: {err}");
+        }
+    }
     pub fn set_visible(&self, _visible: bool) {}
     pub fn set_color_scheme(&self, dark: bool) {
         if let Some(session) = self.inner.lock().as_ref() {
