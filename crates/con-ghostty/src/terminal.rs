@@ -217,6 +217,9 @@ impl GhosttyConfigPatch {
         // Ghostty 1.4 (ghostty-org/ghostty#12604) already flipped once.
         s.push_str("copy-on-select = none\n");
         s.push_str("middle-click-action = ignore\n");
+        // No clipboard-read permission UI exists yet. Reject application reads
+        // before accessing NSPasteboard; user-initiated paste is independent.
+        s.push_str("clipboard-read = deny\n");
         // Match TerminalConfig and Ghostty: TUI copies work unless explicitly disabled.
         let clipboard_write = self.clipboard_write.unwrap_or(true);
         s.push_str(if clipboard_write {
@@ -1916,12 +1919,12 @@ unsafe extern "C" fn read_clipboard_callback(
     }
 }
 
-/// Clipboard confirmation — ghostty confirmed a clipboard read (e.g. OSC 52).
+/// Ghostty needs user approval; no permission UI exists, so fail closed.
 unsafe extern "C" fn confirm_read_clipboard_callback(
     userdata: *mut c_void,
-    confirm: *const ffi::ghostty_clipboard_confirm_s,
+    _confirm: *const ffi::ghostty_clipboard_confirm_s,
     request: *mut c_void,
-    request_type: ffi::ghostty_clipboard_request_e,
+    _request_type: ffi::ghostty_clipboard_request_e,
 ) {
     unsafe {
         if userdata.is_null() || request.is_null() {
@@ -1933,29 +1936,9 @@ unsafe extern "C" fn confirm_read_clipboard_callback(
             return;
         }
 
-        if matches!(
-            request_type,
-            ffi::ghostty_clipboard_request_e::GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ
-                | ffi::ghostty_clipboard_request_e::GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE
-        ) || confirm.is_null()
-        {
-            // Kitty grants require a real user-visible permission flow. Until
-            // Con can present one, deny instead of silently granting a shell
-            // persistent access to the system clipboard.
-            ffi::ghostty_surface_deny_clipboard_request(surface, request);
-            return;
-        }
-
-        let confirm = &*confirm;
-        let complete = ffi::ghostty_clipboard_complete_s {
-            contents: confirm.contents,
-            contents_len: confirm.contents_len,
-            available: confirm.available,
-            available_len: confirm.available_len,
-            confirmed: true,
-            remember: false,
-        };
-        ffi::ghostty_surface_complete_clipboard_request(surface, &complete, request);
+        // This also rejects unsafe native pastes. Safe pastes complete without
+        // confirmation. Denial consumes the request without borrowing its data.
+        ffi::ghostty_surface_deny_clipboard_request(surface, request);
     }
 }
 
@@ -2246,6 +2229,18 @@ mod tests {
 
         assert!(config.contains("copy-on-select = none\n"));
         assert!(config.contains("middle-click-action = ignore\n"));
+    }
+
+    #[test]
+    fn ghostty_config_denies_reads_independently_of_writes() {
+        for clipboard_write in [None, Some(false), Some(true)] {
+            let config = GhosttyConfigPatch {
+                clipboard_write,
+                ..Default::default()
+            }
+            .to_config_string();
+            assert!(config.contains("clipboard-read = deny\n"));
+        }
     }
 
     #[test]
