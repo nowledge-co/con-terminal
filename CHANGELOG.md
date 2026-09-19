@@ -6,6 +6,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.100`
 
+### Added
+
+**Tabs**
+
+- Tabs now show the mark of a recognized coding agent running in the terminal,
+  making parallel agent sessions easier to scan without changing tab names or
+  SSH context. _(PR
+  [#360](https://github.com/nowledge-co/con-terminal/pull/360) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ### Fixed
 
 **macOS**
