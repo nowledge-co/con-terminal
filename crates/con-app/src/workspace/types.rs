@@ -205,11 +205,12 @@ pub(super) struct Tab {
     /// AI-suggested icon, paired with `ai_label`. When `None`, the
     /// row falls back to the heuristic icon.
     pub(super) ai_icon: Option<TabIconKind>,
-    /// Cached classification of the focused terminal's visible screen
-    /// as an interactive agent CLI (`"codex"` / `"claude"` /
-    /// `"opencode"`). `None` until detection has run or when the
-    /// screen no longer matches.
+    /// Cached classification of the focused terminal as an interactive agent
+    /// CLI. Detection combines process, title, and bounded screen signals.
     pub(super) agent_cli: Option<&'static str>,
+    /// Observation and retry budget for the comparatively expensive screen
+    /// fallback. Stable tabs perform no screen reads.
+    pub(super) agent_cli_detection: AgentCliDetectionState,
     /// Stable identifier for this tab across the lifetime of the
     /// window — used as the cache key in the `TabSummaryEngine` so
     /// reorders, closes, and re-opens don't collide. Allocated from

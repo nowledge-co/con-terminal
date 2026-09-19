@@ -143,6 +143,31 @@ pub(super) fn agent_from_process_name(name: &str) -> Option<&'static str> {
     }
 }
 
+/// A foreground shell is an authoritative negative signal: old agent banners
+/// can remain visible after the TUI exits and must not keep the tab branded.
+pub(super) fn process_name_is_shell(name: &str) -> bool {
+    let name = name.trim().trim_start_matches('-').to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "sh" | "bash"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "nu"
+            | "elvish"
+            | "xonsh"
+            | "ksh"
+            | "csh"
+            | "tcsh"
+            | "pwsh"
+            | "pwsh.exe"
+            | "powershell"
+            | "powershell.exe"
+            | "cmd"
+            | "cmd.exe"
+    )
+}
+
 /// Map an OSC-set terminal title to a known agent CLI.
 ///
 /// Some CLIs announce themselves only through the window title, and
@@ -162,13 +187,13 @@ pub(super) fn agent_from_osc_title(title: Option<&str>) -> Option<&'static str> 
     if title.contains('π') {
         return Some("pi");
     }
-    if lower.starts_with("qwen") {
+    if lower == "qwen" || lower.starts_with("qwen - ") || lower.starts_with("qwen code") {
         return Some("qwen");
     }
-    if lower.starts_with("crush") {
+    if lower == "crush" || lower.starts_with("crush ") {
         return Some("crush");
     }
-    if lower.starts_with("kilo") {
+    if lower == "kilo" || lower.starts_with("kilo cli") || lower.starts_with("kilo code") {
         return Some("kilo");
     }
     if lower.contains(" - amp - ") {
@@ -238,6 +263,61 @@ pub(super) fn next_agent_cli(
     detected: Option<&'static str>,
 ) -> Option<Option<&'static str>> {
     (previous != detected).then_some(detected)
+}
+
+const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 6;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AgentCliObservation {
+    pub(super) terminal_id: u64,
+    pub(super) foreground_process_group_id: Option<u64>,
+    pub(super) title_agent: Option<&'static str>,
+    pub(super) input_generation: u64,
+}
+
+/// Per-tab state for bounded agent detection.
+///
+/// Reading a terminal's visible screen is materially more expensive than
+/// observing its process, title, or input generation. A changed observation
+/// opens a short retry window so script-based TUIs can finish their initial
+/// paint; a stable tab performs no screen reads after that window closes.
+#[derive(Default)]
+pub(super) struct AgentCliDetectionState {
+    observation: Option<AgentCliObservation>,
+    screen_scan_attempts_remaining: u8,
+}
+
+impl AgentCliDetectionState {
+    pub(super) fn terminal_changed(&self, terminal_id: u64) -> bool {
+        self.observation
+            .as_ref()
+            .is_some_and(|previous| previous.terminal_id != terminal_id)
+    }
+
+    pub(super) fn observe(&mut self, observation: AgentCliObservation) -> bool {
+        if self.observation.as_ref() == Some(&observation) {
+            return false;
+        }
+        self.observation = Some(observation);
+        self.screen_scan_attempts_remaining = AGENT_CLI_SCREEN_SCAN_ATTEMPTS;
+        true
+    }
+
+    pub(super) fn take_screen_scan_attempt(&mut self) -> bool {
+        if self.screen_scan_attempts_remaining == 0 {
+            return false;
+        }
+        self.screen_scan_attempts_remaining -= 1;
+        true
+    }
+
+    pub(super) fn finish(&mut self) {
+        self.screen_scan_attempts_remaining = 0;
+    }
+
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.screen_scan_attempts_remaining == 0
+    }
 }
 
 /// Pump-path throttle: refresh immediately on the first call, then at
@@ -677,6 +757,24 @@ mod tests_agent_cli_icon {
     }
 
     #[test]
+    fn recognizes_shells_that_make_stale_screen_markers_non_authoritative() {
+        for shell in [
+            "zsh",
+            "-zsh",
+            "bash",
+            "fish",
+            "nu",
+            "pwsh.exe",
+            "PowerShell.EXE",
+            "cmd.exe",
+        ] {
+            assert!(process_name_is_shell(shell), "missed shell {shell}");
+        }
+        assert!(!process_name_is_shell("node"));
+        assert!(!process_name_is_shell("codex"));
+    }
+
+    #[test]
     fn osc_title_maps_known_titles() {
         assert_eq!(agent_from_osc_title(Some("grok")), Some("grok"));
         assert_eq!(agent_from_osc_title(Some("Grok")), Some("grok"));
@@ -696,6 +794,9 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_from_osc_title(Some("San3an.local: tmp")), None);
         // Partial words must not match.
         assert_eq!(agent_from_osc_title(Some("grokking")), None);
+        assert_eq!(agent_from_osc_title(Some("qwen-project — zsh")), None);
+        assert_eq!(agent_from_osc_title(Some("crushing-bugs — zsh")), None);
+        assert_eq!(agent_from_osc_title(Some("kilobytes — zsh")), None);
         assert_eq!(agent_from_osc_title(None), None);
         assert_eq!(agent_from_osc_title(Some("   ")), None);
     }
@@ -738,7 +839,9 @@ mod tests_agent_cli_icon {
             Some("gemini")
         );
         assert_eq!(
-            agent_from_screen_text(&lines(&["Droid - Factory's AI coding agent in your terminal"])),
+            agent_from_screen_text(&lines(&[
+                "Droid - Factory's AI coding agent in your terminal"
+            ])),
             Some("droid")
         );
         assert_eq!(
@@ -783,6 +886,38 @@ mod tests_agent_cli_icon {
             now + Duration::from_secs(1),
             interval
         ));
+    }
+
+    #[test]
+    fn screen_detection_is_bounded_until_terminal_context_changes() {
+        let observation = AgentCliObservation {
+            terminal_id: 7,
+            foreground_process_group_id: None,
+            title_agent: None,
+            input_generation: 2,
+        };
+        let mut state = AgentCliDetectionState::default();
+
+        assert!(state.observe(observation));
+        assert!(!state.terminal_changed(7));
+        for _ in 0..AGENT_CLI_SCREEN_SCAN_ATTEMPTS {
+            assert!(state.take_screen_scan_attempt());
+        }
+        assert!(!state.take_screen_scan_attempt());
+        assert!(!state.observe(observation));
+        assert!(!state.take_screen_scan_attempt());
+
+        let changed = AgentCliObservation {
+            input_generation: 3,
+            ..observation
+        };
+        assert!(state.observe(changed));
+        assert!(state.take_screen_scan_attempt());
+        state.finish();
+        assert!(state.is_exhausted());
+        assert!(!state.take_screen_scan_attempt());
+
+        assert!(state.terminal_changed(8));
     }
 }
 
