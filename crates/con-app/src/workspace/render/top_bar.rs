@@ -413,6 +413,7 @@ impl ConWorkspace {
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),
                     tab.ai_icon.map(|k| k.svg_path()),
+                    tab.agent_cli,
                     hostname_for_tab.as_deref(),
                     title_for_tab.as_deref(),
                     dir_for_tab.as_deref(),

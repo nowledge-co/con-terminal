@@ -397,6 +397,7 @@ impl ConWorkspace {
             user_label: tab_state.user_label.clone(),
             ai_label: None,
             ai_icon: None,
+            agent_cli: None,
             color: tab_state.color,
             summary_id,
             summary_epoch: 0,

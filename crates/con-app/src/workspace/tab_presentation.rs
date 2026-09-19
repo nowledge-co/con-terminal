@@ -84,25 +84,188 @@ pub(super) struct VerticalTabPresentation {
     pub(super) is_ssh: bool,
 }
 
+/// Map a cached agent-CLI classification to its brand logo.
+///
+/// Unknown values and `None` fall through so the existing SSH / AI /
+/// heuristic icon path can run.
+pub(super) fn agent_cli_icon(agent_cli: Option<&str>) -> Option<&'static str> {
+    match agent_cli? {
+        "codex" => Some("agents/codex.svg"),
+        "claude" => Some("agents/claude.svg"),
+        "opencode" => Some("agents/opencode.svg"),
+        "gemini" => Some("agents/gemini.svg"),
+        "herdr" => Some("agents/herdr.svg"),
+        "kimi" => Some("agents/kimi.svg"),
+        "cursor" => Some("agents/cursor.svg"),
+        "grok" => Some("agents/grok.svg"),
+        "pi" => Some("agents/pi.svg"),
+        "mimo" => Some("agents/mimo.svg"),
+        "qoder" => Some("agents/qoder.svg"),
+        "droid" => Some("agents/droid.svg"),
+        "hermes" => Some("agents/hermes.svg"),
+        "kiro" => Some("agents/kiro.svg"),
+        "cline" => Some("agents/cline.svg"),
+        "qwen" => Some("agents/qwen.svg"),
+        "amp" => Some("agents/amp.svg"),
+        "kilo" => Some("agents/kilo.svg"),
+        "goose" => Some("agents/goose.svg"),
+        _ => None,
+    }
+}
+
+/// Map a foreground process name to a known interactive agent/TUI.
+///
+/// Screen-text classification (`classify_screen_agent_cli`) cannot see
+/// these TUIs: some never print a stable brand marker, and others ship
+/// as interpreter scripts whose process name is just `node`/`python3`.
+/// A native binary's foreground process name is the most reliable
+/// signal we have.
+///
+/// `grok` is matched by prefix because its binary carries the version,
+/// e.g. `grok-1.0.34-macos-aarch64`.
+pub(super) fn agent_from_process_name(name: &str) -> Option<&'static str> {
+    let name = name.trim();
+    if name.starts_with("grok-") {
+        return Some("grok");
+    }
+    match name {
+        "herdr" => Some("herdr"),
+        "kimi" => Some("kimi"),
+        "mimo" => Some("mimo"),
+        "droid" => Some("droid"),
+        "kiro-cli" | "kiro" => Some("kiro"),
+        "crush" => Some("crush"),
+        "goose" => Some("goose"),
+        "amp" | "amp.exe" => Some("amp"),
+        _ => None,
+    }
+}
+
+/// Map an OSC-set terminal title to a known agent CLI.
+///
+/// Some CLIs announce themselves only through the window title, and
+/// their visible screen changes too much to anchor on. `grok` titles
+/// itself `grok` (or `<session> - grok`); `pi` prefixes its title with
+/// the `π` glyph; qwen/crush/kilo ship as interpreter scripts and put
+/// their product name (plus the current directory) in the title.
+pub(super) fn agent_from_osc_title(title: Option<&str>) -> Option<&'static str> {
+    let title = title?.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let lower = title.to_ascii_lowercase();
+    if lower == "grok" || lower.ends_with(" - grok") {
+        return Some("grok");
+    }
+    if title.contains('π') {
+        return Some("pi");
+    }
+    if lower.starts_with("qwen") {
+        return Some("qwen");
+    }
+    if lower.starts_with("crush") {
+        return Some("crush");
+    }
+    if lower.starts_with("kilo") {
+        return Some("kilo");
+    }
+    if lower.contains(" - amp - ") {
+        return Some("amp");
+    }
+    None
+}
+
+/// Map visible screen text to a known agent CLI.
+///
+/// Complements `classify_screen_agent_cli` (codex / claude / opencode)
+/// with CLIs that ship as interpreter scripts, where the process name
+/// carries no information. Markers are brand strings that survive
+/// version bumps; version numbers and paths stay out of the patterns.
+pub(super) fn agent_from_screen_text(lines: &[String]) -> Option<&'static str> {
+    let joined = lines.join("\n").to_ascii_lowercase();
+    if joined.contains("kimi code") {
+        return Some("kimi");
+    }
+    if joined.contains("cursor agent") {
+        return Some("cursor");
+    }
+    if joined.contains("grok build") {
+        return Some("grok");
+    }
+    // Pi's prompt footer is stable while the session runs; the banner
+    // ("pi v0.85.1") scrolls away, so anchor on the footer hints too.
+    if joined.contains("escape interrupt") && joined.contains("ctrl+o more") {
+        return Some("pi");
+    }
+    if joined.contains("mimocode") || joined.contains("mimo code") {
+        return Some("mimo");
+    }
+    if joined.contains("welcome to qoder cli") {
+        return Some("qoder");
+    }
+    if joined.contains("factory's ai coding agent") {
+        return Some("droid");
+    }
+    if joined.contains("hermes agent") {
+        return Some("hermes");
+    }
+    if joined.contains("welcome to kiro cli") {
+        return Some("kiro");
+    }
+    if joined.contains("gemini cli") {
+        return Some("gemini");
+    }
+    // Cline ships as a node script whose title carries no brand; its
+    // permission prompts and question dialogs do.
+    if joined.contains("cline needs permission")
+        || joined.contains("cline is asking a question")
+        || joined.contains("let cline use this tool")
+    {
+        return Some("cline");
+    }
+    None
+}
+
+/// Whether the cached classification should be replaced.
+pub(super) fn next_agent_cli(
+    previous: Option<&'static str>,
+    detected: Option<&'static str>,
+) -> Option<Option<&'static str>> {
+    (previous != detected).then_some(detected)
+}
+
+/// Pump-path throttle: refresh immediately on the first call, then at
+/// most once per `min_interval`.
+pub(super) fn should_refresh_agent_cli(
+    last_refresh: Option<std::time::Instant>,
+    now: std::time::Instant,
+    min_interval: std::time::Duration,
+) -> bool {
+    last_refresh.is_none_or(|last| now.saturating_duration_since(last) >= min_interval)
+}
+
+fn icon_or_agent(agent_cli: Option<&str>, fallback: &'static str) -> &'static str {
+    agent_cli_icon(agent_cli).unwrap_or(fallback)
+}
+
 /// Smart-name + smart-icon for tab metadata.
 ///
-/// Priority:
+/// Name priority:
 /// 1. **User-supplied label** (set via inline rename or context menu)
-///    — terminal-icon, no subtitle.
-/// 2. **SSH host** (e.g. `prod-1.example.com`) — globe icon, subtitle
-///    is `user@host` if available.
-/// 3. **Focused process** parsed out of the OSC-set terminal title
-///    (e.g. `vim README.md`, `htop`, `less log.txt`) — icon picked by
-///    process kind (editor / monitor / pager / shell), subtitle is the
-///    cwd basename.
-/// 4. **CWD basename** — terminal icon, no subtitle.
-/// 5. **Shell name** (`bash`, `zsh`, `fish`) — terminal icon, no
-///    subtitle.
-/// 6. Fallback `Tab N` — terminal icon, no subtitle.
+/// 2. **AI label**
+/// 3. **SSH host** (e.g. `prod-1.example.com`)
+/// 4. **Focused process** parsed out of the OSC-set terminal title
+/// 5. **CWD basename**
+/// 6. **Shell name** (`bash`, `zsh`, `fish`)
+/// 7. Fallback `Tab N`
+///
+/// Icon priority (terminal tabs only):
+/// agent CLI logo > SSH globe > AI icon > heuristic.
 pub(super) fn smart_tab_presentation(
     user_label: Option<&str>,
     ai_label: Option<&str>,
     ai_icon: Option<&'static str>,
+    agent_cli: Option<&str>,
     hostname: Option<&str>,
     title: Option<&str>,
     current_dir: Option<&str>,
@@ -152,7 +315,7 @@ pub(super) fn smart_tab_presentation(
         return VerticalTabPresentation {
             name: label.to_string(),
             subtitle: cwd_subtitle(current_dir),
-            icon,
+            icon: icon_or_agent(agent_cli, icon),
             is_ssh: is_ssh_session,
         };
     }
@@ -169,7 +332,7 @@ pub(super) fn smart_tab_presentation(
         return VerticalTabPresentation {
             name: label.to_string(),
             subtitle: cwd_subtitle(current_dir),
-            icon,
+            icon: icon_or_agent(agent_cli, icon),
             is_ssh: is_ssh_session,
         };
     }
@@ -179,7 +342,7 @@ pub(super) fn smart_tab_presentation(
         return VerticalTabPresentation {
             name: host.to_string(),
             subtitle: cwd_subtitle(current_dir),
-            icon: "phosphor/globe.svg",
+            icon: icon_or_agent(agent_cli, "phosphor/globe.svg"),
             is_ssh: true,
         };
     }
@@ -190,7 +353,7 @@ pub(super) fn smart_tab_presentation(
             return VerticalTabPresentation {
                 name: command,
                 subtitle: cwd_subtitle(current_dir),
-                icon,
+                icon: icon_or_agent(agent_cli, icon),
                 is_ssh: false,
             };
         }
@@ -210,7 +373,7 @@ pub(super) fn smart_tab_presentation(
                 return VerticalTabPresentation {
                     name: base.to_string_lossy().into_owned(),
                     subtitle: None,
-                    icon: "phosphor/terminal.svg",
+                    icon: icon_or_agent(agent_cli, "phosphor/terminal.svg"),
                     is_ssh: false,
                 };
             }
@@ -221,7 +384,7 @@ pub(super) fn smart_tab_presentation(
         return VerticalTabPresentation {
             name: raw.to_string(),
             subtitle: None,
-            icon: "phosphor/terminal.svg",
+            icon: icon_or_agent(agent_cli, "phosphor/terminal.svg"),
             is_ssh: false,
         };
     }
@@ -229,7 +392,7 @@ pub(super) fn smart_tab_presentation(
     VerticalTabPresentation {
         name: format!("Tab {}", tab_index + 1),
         subtitle: None,
-        icon: "phosphor/terminal.svg",
+        icon: icon_or_agent(agent_cli, "phosphor/terminal.svg"),
         is_ssh: false,
     }
 }
@@ -238,6 +401,7 @@ pub(super) fn tab_rename_initial_label(
     user_label: Option<&str>,
     ai_label: Option<&str>,
     ai_icon: Option<&'static str>,
+    agent_cli: Option<&str>,
     hostname: Option<&str>,
     title: Option<&str>,
     current_dir: Option<&str>,
@@ -251,6 +415,7 @@ pub(super) fn tab_rename_initial_label(
             user_label,
             ai_label,
             ai_icon,
+            agent_cli,
             hostname,
             title,
             current_dir,
@@ -402,7 +567,8 @@ mod tests_smart_tab_presentation_editor_only {
 
     #[test]
     fn editor_only_tab_uses_file_code_icon_and_title() {
-        let p = smart_tab_presentation(None, None, None, None, Some("main.rs"), None, 0, true);
+        let p =
+            smart_tab_presentation(None, None, None, None, None, Some("main.rs"), None, 0, true);
         assert_eq!(p.icon, "phosphor/file-code.svg");
         assert_eq!(p.name, "main.rs");
         assert_eq!(p.subtitle, None);
@@ -411,7 +577,7 @@ mod tests_smart_tab_presentation_editor_only {
 
     #[test]
     fn editor_only_tab_falls_back_to_editor_name() {
-        let p = smart_tab_presentation(None, None, None, None, None, None, 2, true);
+        let p = smart_tab_presentation(None, None, None, None, None, None, None, 2, true);
         assert_eq!(p.icon, "phosphor/file-code.svg");
         assert_eq!(p.name, "Editor");
     }
@@ -420,6 +586,7 @@ mod tests_smart_tab_presentation_editor_only {
     fn editor_only_tab_respects_user_label() {
         let p = smart_tab_presentation(
             Some("My Notes"),
+            None,
             None,
             None,
             None,
@@ -434,8 +601,322 @@ mod tests_smart_tab_presentation_editor_only {
 
     #[test]
     fn terminal_tab_keeps_terminal_icon_when_editor_only_flag_false() {
-        let p = smart_tab_presentation(None, None, None, None, None, None, 0, false);
+        let p = smart_tab_presentation(None, None, None, None, None, None, None, 0, false);
         assert_eq!(p.icon, "phosphor/terminal.svg");
+    }
+}
+
+#[cfg(test)]
+mod tests_agent_cli_icon {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn maps_known_agent_clis_and_falls_back() {
+        assert_eq!(agent_cli_icon(Some("codex")), Some("agents/codex.svg"));
+        assert_eq!(agent_cli_icon(Some("claude")), Some("agents/claude.svg"));
+        assert_eq!(
+            agent_cli_icon(Some("opencode")),
+            Some("agents/opencode.svg")
+        );
+        assert_eq!(agent_cli_icon(Some("gemini")), Some("agents/gemini.svg"));
+        assert_eq!(agent_cli_icon(Some("herdr")), Some("agents/herdr.svg"));
+        assert_eq!(agent_cli_icon(Some("kimi")), Some("agents/kimi.svg"));
+        assert_eq!(agent_cli_icon(Some("cursor")), Some("agents/cursor.svg"));
+        assert_eq!(agent_cli_icon(Some("grok")), Some("agents/grok.svg"));
+        assert_eq!(agent_cli_icon(Some("pi")), Some("agents/pi.svg"));
+        assert_eq!(agent_cli_icon(Some("mimo")), Some("agents/mimo.svg"));
+        assert_eq!(agent_cli_icon(Some("qoder")), Some("agents/qoder.svg"));
+        assert_eq!(agent_cli_icon(Some("droid")), Some("agents/droid.svg"));
+        assert_eq!(agent_cli_icon(Some("hermes")), Some("agents/hermes.svg"));
+        assert_eq!(agent_cli_icon(Some("kiro")), Some("agents/kiro.svg"));
+        assert_eq!(agent_cli_icon(Some("cline")), Some("agents/cline.svg"));
+        assert_eq!(agent_cli_icon(Some("qwen")), Some("agents/qwen.svg"));
+        assert_eq!(agent_cli_icon(Some("amp")), Some("agents/amp.svg"));
+        assert_eq!(agent_cli_icon(Some("kilo")), Some("agents/kilo.svg"));
+        assert_eq!(agent_cli_icon(Some("goose")), Some("agents/goose.svg"));
+        // Crush has no usable monochrome mark; the icon falls back.
+        assert_eq!(agent_cli_icon(Some("crush")), None);
+        assert_eq!(agent_cli_icon(None), None);
+        assert_eq!(agent_cli_icon(Some("unknown")), None);
+        assert_eq!(agent_cli_icon(Some("")), None);
+    }
+
+    #[test]
+    fn process_name_maps_only_known_tuis() {
+        assert_eq!(agent_from_process_name("herdr"), Some("herdr"));
+        assert_eq!(agent_from_process_name(" herdr "), Some("herdr"));
+        assert_eq!(agent_from_process_name("kimi"), Some("kimi"));
+        assert_eq!(agent_from_process_name("mimo"), Some("mimo"));
+        assert_eq!(agent_from_process_name("droid"), Some("droid"));
+        assert_eq!(agent_from_process_name("kiro-cli"), Some("kiro"));
+        assert_eq!(agent_from_process_name("kiro"), Some("kiro"));
+        // grok's binary carries its version suffix.
+        assert_eq!(
+            agent_from_process_name("grok-1.0.34-macos-aarch64"),
+            Some("grok")
+        );
+        assert_eq!(agent_from_process_name("crush"), Some("crush"));
+        assert_eq!(agent_from_process_name("goose"), Some("goose"));
+        assert_eq!(agent_from_process_name("amp"), Some("amp"));
+        // The npm amp build reports itself as `amp.exe` on macOS.
+        assert_eq!(agent_from_process_name("amp.exe"), Some("amp"));
+        assert_eq!(agent_from_process_name("zsh"), None);
+        assert_eq!(agent_from_process_name("node"), None);
+        assert_eq!(agent_from_process_name("python3"), None);
+        assert_eq!(agent_from_process_name("codex"), None);
+        assert_eq!(agent_from_process_name(""), None);
+    }
+
+    #[test]
+    fn osc_title_maps_known_titles() {
+        assert_eq!(agent_from_osc_title(Some("grok")), Some("grok"));
+        assert_eq!(agent_from_osc_title(Some("Grok")), Some("grok"));
+        assert_eq!(
+            agent_from_osc_title(Some("my-session - grok")),
+            Some("grok")
+        );
+        assert_eq!(agent_from_osc_title(Some("π - tmp")), Some("pi"));
+        assert_eq!(agent_from_osc_title(Some("Qwen - tmp")), Some("qwen"));
+        assert_eq!(agent_from_osc_title(Some("crush /tmp")), Some("crush"));
+        assert_eq!(agent_from_osc_title(Some("Kilo CLI")), Some("kilo"));
+        assert_eq!(
+            agent_from_osc_title(Some("my-repo - amp - main")),
+            Some("amp")
+        );
+        assert_eq!(agent_from_osc_title(Some("San3an.local: tmp")), None);
+        // Partial words must not match.
+        assert_eq!(agent_from_osc_title(Some("grokking")), None);
+        assert_eq!(agent_from_osc_title(None), None);
+        assert_eq!(agent_from_osc_title(Some("   ")), None);
+    }
+
+    #[test]
+    fn screen_text_maps_script_shipped_agents() {
+        let lines = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Kimi Code updated to v2.0.1"])),
+            Some("kimi")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Cursor Agent", "v2026.09.10"])),
+            Some("cursor")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Grok Build  1.0.34"])),
+            Some("grok")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&[
+                "escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more"
+            ])),
+            Some("pi")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Welcome to Qoder CLI"])),
+            Some("qoder")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Welcome to Kiro CLI V3!"])),
+            Some("kiro")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Hermes Agent", "Nous Research"])),
+            Some("hermes")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Gemini CLI v0.60.0"])),
+            Some("gemini")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Droid - Factory's AI coding agent in your terminal"])),
+            Some("droid")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["Cline needs permission", "Approve tool call?"])),
+            Some("cline")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["let cline use this tool"])),
+            Some("cline")
+        );
+        assert_eq!(
+            agent_from_screen_text(&lines(&["$ ls -la", "total 0"])),
+            None
+        );
+        assert_eq!(agent_from_screen_text(&[]), None);
+    }
+
+    #[test]
+    fn next_agent_cli_reports_only_changes() {
+        assert_eq!(next_agent_cli(None, None), None);
+        assert_eq!(next_agent_cli(Some("codex"), Some("codex")), None);
+        assert_eq!(next_agent_cli(None, Some("codex")), Some(Some("codex")));
+        assert_eq!(next_agent_cli(Some("codex"), None), Some(None));
+        assert_eq!(
+            next_agent_cli(Some("codex"), Some("claude")),
+            Some(Some("claude"))
+        );
+    }
+
+    #[test]
+    fn should_refresh_agent_cli_throttles_after_first_call() {
+        let now = Instant::now();
+        let interval = Duration::from_secs(1);
+        assert!(should_refresh_agent_cli(None, now, interval));
+        assert!(!should_refresh_agent_cli(
+            Some(now),
+            now + Duration::from_millis(500),
+            interval
+        ));
+        assert!(should_refresh_agent_cli(
+            Some(now),
+            now + Duration::from_secs(1),
+            interval
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests_smart_tab_presentation_agent_cli {
+    use super::*;
+
+    #[test]
+    fn detected_codex_uses_brand_logo_without_label() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            Some("codex"),
+            None,
+            Some("zsh"),
+            None,
+            0,
+            false,
+        );
+        assert_eq!(p.icon, "agents/codex.svg");
+        assert_eq!(p.name, "zsh");
+    }
+
+    #[test]
+    fn detected_codex_keeps_user_label_but_uses_logo() {
+        let p = smart_tab_presentation(
+            Some("My Session"),
+            None,
+            Some("phosphor/rocket.svg"),
+            Some("codex"),
+            None,
+            Some("vim README.md"),
+            None,
+            0,
+            false,
+        );
+        assert_eq!(p.name, "My Session");
+        assert_eq!(p.icon, "agents/codex.svg");
+    }
+
+    #[test]
+    fn agent_logo_wins_over_ssh_globe() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            Some("codex"),
+            Some("prod-1.example.com"),
+            Some("ssh prod-1.example.com"),
+            Some("/home/src"),
+            0,
+            false,
+        );
+        assert_eq!(p.name, "prod-1.example.com");
+        assert_eq!(p.icon, "agents/codex.svg");
+        assert!(p.is_ssh);
+    }
+
+    #[test]
+    fn editor_tab_ignores_agent_logo() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            Some("codex"),
+            None,
+            Some("main.rs"),
+            None,
+            0,
+            true,
+        );
+        assert_eq!(p.icon, "phosphor/file-code.svg");
+        assert_eq!(p.name, "main.rs");
+    }
+
+    #[test]
+    fn no_agent_keeps_ssh_globe() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            None,
+            Some("prod-1.example.com"),
+            Some("ssh prod-1.example.com"),
+            Some("/home/src"),
+            0,
+            false,
+        );
+        assert_eq!(p.icon, "phosphor/globe.svg");
+        assert_eq!(p.name, "prod-1.example.com");
+        assert!(p.is_ssh);
+    }
+
+    #[test]
+    fn no_agent_keeps_heuristic_process_icon() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("vim README.md"),
+            None,
+            0,
+            false,
+        );
+        assert_eq!(p.icon, "phosphor/code.svg");
+        assert_eq!(p.name, "vim README.md");
+    }
+
+    #[test]
+    fn no_agent_keeps_ai_icon_under_user_label() {
+        let p = smart_tab_presentation(
+            Some("Deploy"),
+            None,
+            Some("phosphor/rocket.svg"),
+            None,
+            None,
+            Some("zsh"),
+            None,
+            0,
+            false,
+        );
+        assert_eq!(p.name, "Deploy");
+        assert_eq!(p.icon, "phosphor/rocket.svg");
+    }
+
+    #[test]
+    fn unknown_agent_falls_through_to_heuristic() {
+        let p = smart_tab_presentation(
+            None,
+            None,
+            None,
+            Some("unknown"),
+            None,
+            None,
+            None,
+            0,
+            false,
+        );
+        assert_eq!(p.icon, "phosphor/terminal.svg");
+        assert_eq!(p.name, "Tab 1");
     }
 }
 
