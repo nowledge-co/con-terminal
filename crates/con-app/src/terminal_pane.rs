@@ -395,6 +395,19 @@ pub fn subscribe_terminal_pane(
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pane.entity.update(cx, |view, cx| {
+        // Input-bar broadcast targets are not keyboard focus. Report only
+        // the GPUI leaf focus in an active window, including modal blur.
+        let focus = view.focus_handle(cx);
+        cx.on_focus(&focus, window, GhosttyView::sync_terminal_focus)
+            .detach();
+        cx.on_blur(&focus, window, GhosttyView::sync_terminal_focus)
+            .detach();
+        cx.observe_window_activation(window, GhosttyView::sync_terminal_focus)
+            .detach();
+        view.sync_terminal_focus(window, cx);
+    });
     cx.subscribe_in(
         &pane.entity,
         window,
