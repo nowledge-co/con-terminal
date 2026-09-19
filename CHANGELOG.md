@@ -4,7 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.100`
+## `v0.1.0-beta.101`
+
+### Fixed
+
+**macOS**
+
+- Terminal programs can no longer read the system clipboard without approval.
+  Copy and paste initiated by the user continue to work normally. _(PR
+  [#361](https://github.com/nowledge-co/con-terminal/pull/361) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.100` - 2026-09-19
 
 ### Added
 
