@@ -347,6 +347,14 @@ GhosttyResult ghostty_key_encoder_encode(
     return 0;
 }
 
+GhosttyResult ghostty_focus_encode(
+    int event, char* out_buf, size_t out_buf_size, size_t* out_len
+) {
+    (void)event; (void)out_buf; (void)out_buf_size;
+    if (out_len) { *out_len = 0; }
+    return 0;
+}
+
 GhosttyResult ghostty_key_event_new(
     const void* allocator, GhosttyKeyEvent* out_event
 ) {

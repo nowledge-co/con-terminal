@@ -131,6 +131,7 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
+    terminal_focused: bool,
     initial_cwd: Option<String>,
     restored_screen_text: Option<Vec<String>>,
     initial_font_size: f32,
@@ -256,6 +257,7 @@ impl GhosttyView {
             app,
             terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
+            terminal_focused: false,
             initial_cwd: cwd,
             restored_screen_text,
             initial_font_size: font_size,
@@ -394,6 +396,12 @@ impl GhosttyView {
             self.release_tracked_keys();
             self.cancel_pointer_interactions();
         }
+    }
+
+    pub fn sync_terminal_focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        let focused = window.is_window_active() && self.focus_handle.is_focused(window);
+        self.terminal_focused = focused;
+        self.set_surface_focus_state(focused);
         if let Some(terminal) = &self.terminal {
             terminal.set_focus(focused);
         }
@@ -558,6 +566,7 @@ impl GhosttyView {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);
+                    terminal.set_focus(self.terminal_focused);
                 }
                 self.restored_screen_text = None;
                 self.initialized = true;
