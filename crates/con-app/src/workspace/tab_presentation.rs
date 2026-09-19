@@ -109,6 +109,7 @@ pub(super) fn agent_cli_icon(agent_cli: Option<&str>) -> Option<&'static str> {
         "amp" => Some("agents/amp.svg"),
         "kilo" => Some("agents/kilo.svg"),
         "goose" => Some("agents/goose.svg"),
+        "dim" => Some("agents/dim.svg"),
         _ => None,
     }
 }
@@ -137,6 +138,7 @@ pub(super) fn agent_from_process_name(name: &str) -> Option<&'static str> {
         "crush" => Some("crush"),
         "goose" => Some("goose"),
         "amp" | "amp.exe" => Some("amp"),
+        "dim" => Some("dim"),
         _ => None,
     }
 }
@@ -171,6 +173,10 @@ pub(super) fn agent_from_osc_title(title: Option<&str>) -> Option<&'static str> 
     }
     if lower.contains(" - amp - ") {
         return Some("amp");
+    }
+    // DimAgent's CLI sets its title to exactly `dim`.
+    if lower == "dim" {
+        return Some("dim");
     }
     None
 }
@@ -635,6 +641,7 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_cli_icon(Some("amp")), Some("agents/amp.svg"));
         assert_eq!(agent_cli_icon(Some("kilo")), Some("agents/kilo.svg"));
         assert_eq!(agent_cli_icon(Some("goose")), Some("agents/goose.svg"));
+        assert_eq!(agent_cli_icon(Some("dim")), Some("agents/dim.svg"));
         // Crush has no usable monochrome mark; the icon falls back.
         assert_eq!(agent_cli_icon(Some("crush")), None);
         assert_eq!(agent_cli_icon(None), None);
@@ -661,6 +668,7 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_from_process_name("amp"), Some("amp"));
         // The npm amp build reports itself as `amp.exe` on macOS.
         assert_eq!(agent_from_process_name("amp.exe"), Some("amp"));
+        assert_eq!(agent_from_process_name("dim"), Some("dim"));
         assert_eq!(agent_from_process_name("zsh"), None);
         assert_eq!(agent_from_process_name("node"), None);
         assert_eq!(agent_from_process_name("python3"), None);
@@ -684,6 +692,7 @@ mod tests_agent_cli_icon {
             agent_from_osc_title(Some("my-repo - amp - main")),
             Some("amp")
         );
+        assert_eq!(agent_from_osc_title(Some("dim")), Some("dim"));
         assert_eq!(agent_from_osc_title(Some("San3an.local: tmp")), None);
         // Partial words must not match.
         assert_eq!(agent_from_osc_title(Some("grokking")), None);
