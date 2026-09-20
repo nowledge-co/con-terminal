@@ -6,7 +6,7 @@ use con_agent::{
 use con_core::{
     Config,
     config::{
-        APP_ICON_GROUPS, APP_ICONS, AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY,
+        AGENT_AVATARS, APP_ICON_GROUPS, APP_ICONS, AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY,
         MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, TabsOrientation, is_bundled_terminal_font_family,
         is_gpui_pseudo_font_family, sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     },
@@ -3953,6 +3953,7 @@ impl SettingsPanel {
         };
 
         let app_icon_picker = self.render_app_icon_picker(card_opacity, cx);
+        let agent_avatar_picker = self.render_agent_avatar_picker(card_opacity, cx);
 
         // Now all mutable borrows are done — get theme for pure layout
         let theme = cx.theme();
@@ -4034,6 +4035,7 @@ impl SettingsPanel {
         );
 
         content = content.child(app_icon_picker);
+        content = content.child(agent_avatar_picker);
 
         content = content.child(
             div()
@@ -4440,6 +4442,121 @@ impl SettingsPanel {
         content = content.child(card(theme, card_opacity).child(import_section));
 
         content
+    }
+
+    fn render_agent_avatar_picker(&self, card_opacity: f32, cx: &mut Context<Self>) -> Div {
+        let selected = self.config.appearance.agent_avatar.clone();
+        let mut choices = div().flex().flex_wrap().gap(px(10.0));
+        for choice in AGENT_AVATARS {
+            choices =
+                choices.child(self.render_agent_avatar_choice(choice, selected == choice.id, cx));
+        }
+
+        let theme = cx.theme();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(group_label("Agent Avatar", &theme))
+            .child(
+                card(&theme, card_opacity)
+                    .child(
+                        div()
+                            .px(px(16.0))
+                            .pt(px(12.0))
+                            .text_size(px(11.5))
+                            .line_height(px(17.0))
+                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .child("Shown beside replies from Con's built-in agent."),
+                    )
+                    .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(choices)),
+            )
+    }
+
+    fn render_agent_avatar_choice(
+        &self,
+        choice: &con_core::config::AgentAvatarChoice,
+        is_selected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let avatar_id = choice.id.to_string();
+        let asset = SharedString::from(choice.asset);
+        let style = ButtonCustomVariant::new(cx)
+            .color(if is_selected {
+                theme.primary.opacity(0.10)
+            } else {
+                theme.muted.opacity(0.04)
+            })
+            .foreground(if is_selected {
+                theme.primary
+            } else {
+                theme.muted_foreground
+            })
+            .hover(if is_selected {
+                theme.primary.opacity(0.14)
+            } else {
+                theme.primary.opacity(0.06)
+            })
+            .active(theme.primary.opacity(0.14));
+
+        Button::new(SharedString::from(format!("agent-avatar-{avatar_id}")))
+            .custom(style)
+            .compact()
+            .w(px(108.0))
+            .h(px(84.0))
+            .p(px(0.0))
+            .rounded(px(10.0))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.config.appearance.agent_avatar = avatar_id.clone();
+                cx.emit(AppearancePreview);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h(px(58.0))
+                            .child(img(asset).size(px(42.0)).object_fit(ObjectFit::Contain)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(4.0))
+                            .h(px(26.0))
+                            .text_size(px(10.5))
+                            .font_weight(if is_selected {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::MEDIUM
+                            })
+                            .text_color(if is_selected {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .children(if is_selected {
+                                Some(
+                                    svg()
+                                        .path("phosphor/check.svg")
+                                        .size(ui_icon_px(&theme, 11.0))
+                                        .text_color(theme.primary),
+                                )
+                            } else {
+                                None
+                            })
+                            .child(choice.label),
+                    ),
+            )
     }
 
     /// Render a grid of theme preview cards.

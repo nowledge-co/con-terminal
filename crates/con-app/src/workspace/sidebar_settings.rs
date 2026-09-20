@@ -1074,8 +1074,15 @@ impl ConWorkspace {
         self.background_image_repeat = next_background_image_repeat;
 
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
-        self.agent_panel
-            .update(cx, |panel, _cx| panel.set_ui_opacity(effective_ui_opacity));
+        self.agent_panel.update(cx, |panel, cx| {
+            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_assistant_avatar_asset(
+                con_core::config::agent_avatar_asset(&appearance_config.agent_avatar),
+                cx,
+            );
+        });
+        self.config.appearance.agent_avatar =
+            con_core::config::sanitize_agent_avatar(&appearance_config.agent_avatar);
         self.input_bar
             .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
         self.sidebar

@@ -321,8 +321,12 @@ impl ConWorkspace {
             .take(80)
             .cloned()
             .collect::<Vec<_>>();
-        agent_panel.update(cx, |panel, _cx| {
+        agent_panel.update(cx, |panel, cx| {
             panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_assistant_avatar_asset(
+                con_core::config::agent_avatar_asset(&config.appearance.agent_avatar),
+                cx,
+            );
             panel.set_recent_inputs(initial_recent_inputs.clone());
         });
         input_bar.update(cx, |bar, cx| {

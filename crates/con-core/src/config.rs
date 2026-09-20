@@ -170,6 +170,8 @@ pub struct AppearanceConfig {
     /// Selectable app icon id from [`APP_ICONS`]. Unknown values fall back to
     /// [`DEFAULT_APP_ICON`].
     pub app_icon: String,
+    /// Avatar shown beside replies from Con's built-in agent.
+    pub agent_avatar: String,
 }
 
 impl Default for AppearanceConfig {
@@ -192,6 +194,7 @@ impl Default for AppearanceConfig {
             tabs_orientation: TabsOrientation::Vertical,
             close_to_quit: true,
             app_icon: default_app_icon(),
+            agent_avatar: default_agent_avatar(),
         }
     }
 }
@@ -228,7 +231,59 @@ impl AppearanceConfig {
         )
         .max(self.tab_accent_inactive_alpha);
         self.app_icon = sanitize_app_icon(&self.app_icon);
+        self.agent_avatar = sanitize_agent_avatar(&self.agent_avatar);
     }
+}
+
+pub const DEFAULT_AGENT_AVATAR: &str = "raccoon";
+pub const DEFAULT_AGENT_AVATAR_ASSET: &str = "con-agent-avatar.png";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentAvatarChoice {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub asset: &'static str,
+}
+
+pub const AGENT_AVATARS: &[AgentAvatarChoice] = &[
+    AgentAvatarChoice {
+        id: DEFAULT_AGENT_AVATAR,
+        label: "Raccoon",
+        asset: DEFAULT_AGENT_AVATAR_ASSET,
+    },
+    AgentAvatarChoice {
+        id: "raccoon-girl",
+        label: "Raccoon Girl",
+        asset: "con-agent-avatar-girl.png",
+    },
+    AgentAvatarChoice {
+        id: "raccoon-girl-longhair",
+        label: "Raccoon Girl II",
+        asset: "con-agent-avatar-girl-longhair.png",
+    },
+];
+
+fn default_agent_avatar() -> String {
+    DEFAULT_AGENT_AVATAR.to_string()
+}
+
+pub fn agent_avatar_by_id(id: &str) -> Option<&'static AgentAvatarChoice> {
+    AGENT_AVATARS.iter().find(|avatar| avatar.id == id)
+}
+
+pub fn sanitize_agent_avatar(id: &str) -> String {
+    let trimmed = id.trim();
+    if agent_avatar_by_id(trimmed).is_some() {
+        trimmed.to_string()
+    } else {
+        DEFAULT_AGENT_AVATAR.to_string()
+    }
+}
+
+pub fn agent_avatar_asset(id: &str) -> &'static str {
+    agent_avatar_by_id(id)
+        .map(|avatar| avatar.asset)
+        .unwrap_or(DEFAULT_AGENT_AVATAR_ASSET)
 }
 
 pub const DEFAULT_APP_ICON: &str = "default";
@@ -1212,8 +1267,9 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        APP_ICONS, Config, DEFAULT_APP_ICON, DEFAULT_APP_ICON_ASSET, DEFAULT_TERMINAL_FONT_FAMILY,
-        NetworkConfig, SkillsConfig, TabsOrientation, app_icon_asset,
+        AGENT_AVATARS, APP_ICONS, Config, DEFAULT_AGENT_AVATAR, DEFAULT_AGENT_AVATAR_ASSET,
+        DEFAULT_APP_ICON, DEFAULT_APP_ICON_ASSET, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig,
+        SkillsConfig, TabsOrientation, agent_avatar_asset, app_icon_asset,
         config_declares_agent_provider_provenance, migrate_agent_provider_provenance,
         sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     };
@@ -1688,6 +1744,32 @@ app_icon = "raccoon-suit-a1"
             assert_eq!(app_icon_asset(icon.id), icon.asset);
         }
         assert_eq!(app_icon_asset("missing"), DEFAULT_APP_ICON_ASSET);
+    }
+
+    #[test]
+    fn agent_avatar_defaults_and_unknown_ids_are_safe() {
+        let default = Config::default();
+        assert_eq!(default.appearance.agent_avatar, DEFAULT_AGENT_AVATAR);
+        assert_eq!(
+            agent_avatar_asset(DEFAULT_AGENT_AVATAR),
+            DEFAULT_AGENT_AVATAR_ASSET
+        );
+
+        let mut configured: Config = toml::from_str(
+            r#"
+[appearance]
+agent_avatar = "raccoon-girl"
+"#,
+        )
+        .unwrap();
+        configured.normalize();
+        assert_eq!(configured.appearance.agent_avatar, "raccoon-girl");
+
+        configured.appearance.agent_avatar = "future-avatar".into();
+        configured.normalize();
+        assert_eq!(configured.appearance.agent_avatar, DEFAULT_AGENT_AVATAR);
+        assert_eq!(agent_avatar_asset("missing"), DEFAULT_AGENT_AVATAR_ASSET);
+        assert_eq!(AGENT_AVATARS.len(), 3);
     }
 
     #[test]

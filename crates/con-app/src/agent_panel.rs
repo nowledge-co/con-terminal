@@ -422,6 +422,7 @@ impl PanelState {
 
 pub struct AgentPanel {
     state: PanelState,
+    assistant_avatar_asset: SharedString,
     assistant_message_views: Vec<Option<Entity<AssistantMessageView>>>,
     message_list_state: ListState,
     message_list_handler_installed: bool,
@@ -591,6 +592,7 @@ fn next_panel_message_id() -> u64 {
 
 struct AssistantMessageView {
     panel: WeakEntity<AgentPanel>,
+    avatar_asset: SharedString,
     msg_idx: usize,
     message: PanelMessage,
     state_key: AssistantMessageStateKey,
@@ -613,6 +615,7 @@ struct AssistantMessageStateKey {
 impl AssistantMessageView {
     fn new(
         panel: WeakEntity<AgentPanel>,
+        avatar_asset: SharedString,
         msg_idx: usize,
         message: PanelMessage,
         state_key: AssistantMessageStateKey,
@@ -622,6 +625,7 @@ impl AssistantMessageView {
             Self::initial_markdown_block_limit(state_key.content_markdown_blocks);
         Self {
             panel,
+            avatar_asset,
             msg_idx,
             message,
             state_key,
@@ -945,6 +949,7 @@ impl AgentPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
             state: PanelState::new(),
+            assistant_avatar_asset: con_core::config::DEFAULT_AGENT_AVATAR_ASSET.into(),
             assistant_message_views: Vec::new(),
             message_list_state: ListState::new(0, ListAlignment::Top, px(2048.0)),
             message_list_handler_installed: false,
@@ -1024,10 +1029,26 @@ impl AgentPanel {
         self.ui_opacity = opacity.clamp(0.35, 1.0);
     }
 
+    pub fn set_assistant_avatar_asset(&mut self, asset: &'static str, cx: &mut Context<Self>) {
+        let asset = SharedString::from(asset);
+        if self.assistant_avatar_asset == asset {
+            return;
+        }
+        self.assistant_avatar_asset = asset.clone();
+        for view in self.assistant_message_views.iter().flatten() {
+            view.update(cx, |view, cx| {
+                view.avatar_asset = asset.clone();
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
     /// Create with a pre-populated panel state (e.g. restored from session).
     pub fn with_state(state: PanelState, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut panel = Self {
             state,
+            assistant_avatar_asset: con_core::config::DEFAULT_AGENT_AVATAR_ASSET.into(),
             assistant_message_views: Vec::new(),
             message_list_state: ListState::new(0, ListAlignment::Top, px(2048.0)),
             message_list_handler_installed: false,
@@ -1882,6 +1903,7 @@ impl AgentPanel {
             let view = cx.new(|_| {
                 AssistantMessageView::new(
                     panel,
+                    self.assistant_avatar_asset.clone(),
                     msg_idx,
                     snapshot,
                     state_key,
@@ -3136,6 +3158,7 @@ fn unparsed_markdown_suffix(message: &PanelMessage) -> Option<&str> {
 
 fn render_assistant_message(
     msg: &PanelMessage,
+    avatar_asset: SharedString,
     panel: WeakEntity<AgentPanel>,
     view: WeakEntity<AssistantMessageView>,
     msg_idx: usize,
@@ -3149,10 +3172,10 @@ fn render_assistant_message(
     let msg_duration_ms = msg.duration_ms;
     let mut msg_el = div().flex().flex_col().gap(px(4.0));
     let mut header_row = div().flex().items_center().gap(px(6.0)).pb(px(3.0)).child(
-        svg()
-            .path("phosphor/oven-duotone.svg")
-            .size(ui_icon_px(theme, 13.0))
-            .text_color(theme.primary.opacity(0.65)),
+        img(avatar_asset)
+            .size(ui_icon_px(theme, 22.0))
+            .object_fit(ObjectFit::Contain)
+            .flex_none(),
     );
     header_row = header_row.child(render_model_chips(msg_model, msg_duration_ms, theme));
     msg_el = msg_el.child(header_row);
@@ -3807,6 +3830,7 @@ impl Render for AssistantMessageView {
 
         render_assistant_message(
             &self.message,
+            self.avatar_asset.clone(),
             panel,
             view,
             msg_idx,
