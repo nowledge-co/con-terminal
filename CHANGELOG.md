@@ -4,7 +4,27 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.101`
+## `v0.1.0-beta.102`
+
+### Fixed
+
+**Windows, Linux**
+
+- Cursor shape and blinking now follow requests from shells, editors, and other
+  terminal apps, including steady, blinking, bar, block, and underline cursors.
+  _(PR [#364](https://github.com/nowledge-co/con-terminal/pull/364) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Windows**
+
+- Terminal contents now stay aligned with ConPTY when panes grow or reflow,
+  avoiding stale scrollback being pulled into the visible screen during a
+  resize. _(PR [#365](https://github.com/nowledge-co/con-terminal/pull/365) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.101` - 2026-09-20
 
 ### Fixed
 
