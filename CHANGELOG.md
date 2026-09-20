@@ -4,7 +4,26 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.102`
+## `v0.1.0-beta.103`
+
+### Added
+
+**Windows, Linux**
+
+- Links embedded by terminal apps now show their real destination while Ctrl is
+  held and open with Ctrl-click. Unsafe destinations are blocked using the same
+  policy as macOS, while ordinary visible URLs continue to work as before.
+  _(PR [#366](https://github.com/nowledge-co/con-terminal/pull/366) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- **Find in Terminal** is now available with Ctrl+F, including scrollback
+  search, match counts, next and previous navigation, and in-terminal
+  highlights. The command palette and configurable shortcut use the same
+  search. _(PR [#367](https://github.com/nowledge-co/con-terminal/pull/367) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.102` - 2026-09-20
 
 ### Fixed
 
