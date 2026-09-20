@@ -172,6 +172,38 @@ pub struct ghostty_string_s {
     pub sentinel: bool,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_diagnostic_s {
+    pub message: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ghostty_config_color_s {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ghostty_config_palette_s {
+    pub colors: [ghostty_config_color_s; 256],
+}
+
+impl Default for ghostty_config_palette_s {
+    fn default() -> Self {
+        Self {
+            colors: [ghostty_config_color_s::default(); 256],
+        }
+    }
+}
+
+const _: [(); 8] = [(); std::mem::size_of::<ghostty_diagnostic_s>()];
+const _: [(); 3] = [(); std::mem::size_of::<ghostty_config_color_s>()];
+const _: [(); 768] = [(); std::mem::size_of::<ghostty_config_palette_s>()];
+
 const _: [(); 24] = [(); std::mem::size_of::<ghostty_string_s>()];
 
 // ── Text / selection types ──────────────────────────────────
@@ -384,6 +416,12 @@ pub struct ghostty_action_progress_report_s {
     pub progress: i8,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_config_change_s {
+    pub config: ghostty_config_t,
+}
+
 /// Action payload for COMMAND_FINISHED (shell integration OSC 133;D).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -465,6 +503,7 @@ pub union ghostty_action_u {
     pub pwd: ghostty_action_pwd_s,
     pub progress_report: ghostty_action_progress_report_s,
     pub command_finished: ghostty_action_command_finished_s,
+    pub config_change: ghostty_action_config_change_s,
     pub start_search: ghostty_action_start_search_s,
     pub search_total: ghostty_action_search_total_s,
     pub search_selected: ghostty_action_search_selected_s,
@@ -622,7 +661,13 @@ unsafe extern "C" {
     pub fn ghostty_config_free(config: ghostty_config_t);
     pub fn ghostty_config_load_default_files(config: ghostty_config_t);
     pub fn ghostty_config_load_file(config: ghostty_config_t, path: *const c_char);
+    pub fn ghostty_config_load_recursive_files(config: ghostty_config_t);
     pub fn ghostty_config_finalize(config: ghostty_config_t);
+    pub fn ghostty_config_diagnostics_count(config: ghostty_config_t) -> u32;
+    pub fn ghostty_config_get_diagnostic(
+        config: ghostty_config_t,
+        index: u32,
+    ) -> ghostty_diagnostic_s;
     pub fn ghostty_config_get(
         config: ghostty_config_t,
         value: *mut c_void,

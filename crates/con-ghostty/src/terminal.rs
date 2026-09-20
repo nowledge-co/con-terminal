@@ -12,7 +12,6 @@
 
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
-use std::io::Write;
 use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -51,6 +50,17 @@ pub struct TerminalColors {
     pub foreground: [u8; 3],
     pub background: [u8; 3],
     pub palette: [[u8; 3]; 16],
+}
+
+/// Effective values read back from Ghostty after parsing, includes, host
+/// policy overrides, and finalization have all run.
+#[derive(Debug, Clone)]
+pub struct NativeAppearance {
+    pub foreground: [u8; 3],
+    pub background: [u8; 3],
+    pub palette: [[u8; 3]; 256],
+    pub font_size: f32,
+    pub background_opacity: f64,
 }
 
 impl TerminalColors {
@@ -140,18 +150,32 @@ impl GhosttyConfigPatch {
         }
     }
 
-    fn to_config_string(&self) -> String {
+    fn to_config_string(&self, include_host_policy: bool) -> Result<String, String> {
+        fn quoted(value: &str, field: &str) -> Result<String, String> {
+            if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0)) {
+                return Err(format!("{field} contains a forbidden control character"));
+            }
+            // Ghostty's config lexer treats quoted values literally; unlike Rust's
+            // Debug formatter it does not interpret backslash escape sequences.
+            if value.contains('"') {
+                return Err(format!("{field} contains a quote"));
+            }
+            Ok(format!("\"{value}\""))
+        }
         let mut s = String::with_capacity(512);
         if let Some(colors) = &self.colors {
             colors.append_config(&mut s);
         }
         if let Some(shell) = &self.shell {
-            s.push_str(&format!("command = {:?}\n", shell));
+            s.push_str(&format!("command = {}\n", quoted(shell, "command")?));
         }
         if let Some(font_family) = &self.font_family {
             let font_family = sanitize_font_family_for_ghostty(font_family);
             s.push_str("font-family = \"\"\n");
-            s.push_str(&format!("font-family = {:?}\n", font_family));
+            s.push_str(&format!(
+                "font-family = {}\n",
+                quoted(font_family, "font family")?
+            ));
             let primary_is_bundled = font_family.eq_ignore_ascii_case(DEFAULT_GHOSTTY_FONT_FAMILY);
             if let Some(font_fallback) = &self.font_fallback {
                 for family in font_fallback {
@@ -160,14 +184,17 @@ impl GhosttyConfigPatch {
                         continue;
                     }
                     if !family.eq_ignore_ascii_case(font_family) {
-                        s.push_str(&format!("font-family = {:?}\n", family));
+                        s.push_str(&format!(
+                            "font-family = {}\n",
+                            quoted(family, "font fallback")?
+                        ));
                     }
                 }
             }
             if !primary_is_bundled {
                 s.push_str(&format!(
-                    "font-family = {:?}\n",
-                    DEFAULT_GHOSTTY_FONT_FAMILY
+                    "font-family = {}\n",
+                    quoted(DEFAULT_GHOSTTY_FONT_FAMILY, "bundled font")?
                 ));
             }
         }
@@ -191,52 +218,57 @@ impl GhosttyConfigPatch {
         }
         if let Some(cursor_style) = &self.cursor_style {
             s.push_str(&format!("cursor-style = {}\n", cursor_style));
-            s.push_str("cursor-color = cell-foreground\n");
-            s.push_str("cursor-text = cell-background\n");
         }
-        // Disable ghostty shell-integration cursor override so con's
-        // cursor-style setting is respected. Ghostty's integration
-        // unconditionally forces a bar cursor at prompts otherwise.
-        // Keep ssh-env compatibility. ssh-terminfo is intentionally omitted:
-        // Ghostty's shell integration would invoke a missing
-        // `ghostty +ssh-cache` helper from Con's app bundle.
-        s.push_str("shell-integration-features = ");
-        s.push_str(CON_SHELL_INTEGRATION_FEATURES);
-        s.push('\n');
-        // Plain links already display their target as terminal text. Restrict
-        // host-side previews to OSC 8, whose visible label can differ from the
-        // producer-controlled URI and therefore needs an explicit preview.
-        s.push_str("link-previews = osc8\n");
-        // Ghostty routes its own copy-on-select through the same
-        // `write_clipboard` callback as OSC 52, and `write_clipboard_callback`
-        // gates that callback by the clipboard-write setting. A user gesture
-        // must not depend on that setting, so `ghostty_view.rs` copies the
-        // selection on left release and Ghostty's variant stays off. Middle
-        // clicks are never forwarded to Ghostty (the host view only wires
-        // left/right), so pin `ignore` rather than inherit a default that
-        // Ghostty 1.4 (ghostty-org/ghostty#12604) already flipped once.
-        s.push_str("copy-on-select = none\n");
-        s.push_str("middle-click-action = ignore\n");
-        // No clipboard-read permission UI exists yet. Reject application reads
-        // before accessing NSPasteboard; user-initiated paste is independent.
-        s.push_str("clipboard-read = deny\n");
-        // Match TerminalConfig and Ghostty: TUI copies work unless explicitly disabled.
-        let clipboard_write = self.clipboard_write.unwrap_or(true);
-        s.push_str(if clipboard_write {
-            "clipboard-write = allow\n"
-        } else {
-            "clipboard-write = deny\n"
-        });
-        let clipboard_write_limit = if clipboard_write {
-            CLIPBOARD_WRITE_LIMIT_BYTES
-        } else {
-            0
-        };
-        s.push_str(&format!(
-            "clipboard-write-limit-bytes = {clipboard_write_limit}\n"
-        ));
+        if !include_host_policy && let Some(enabled) = self.clipboard_write {
+            s.push_str(if enabled {
+                "clipboard-write = allow\n"
+            } else {
+                "clipboard-write = deny\n"
+            });
+        }
+        if include_host_policy {
+            // Disable ghostty shell-integration cursor override so con's
+            // cursor-style setting is respected. Ghostty's integration
+            // unconditionally forces a bar cursor at prompts otherwise.
+            // Keep ssh-env compatibility. ssh-terminfo is intentionally omitted:
+            // Ghostty's shell integration would invoke a missing
+            // `ghostty +ssh-cache` helper from Con's app bundle.
+            s.push_str("shell-integration-features = ");
+            s.push_str(CON_SHELL_INTEGRATION_FEATURES);
+            s.push('\n');
+            // Plain links already display their target as terminal text. Restrict
+            // host-side previews to OSC 8, whose visible label can differ from the
+            // producer-controlled URI and therefore needs an explicit preview.
+            s.push_str("link-previews = osc8\n");
+            // Ghostty routes its own copy-on-select through the same
+            // `write_clipboard` callback as OSC 52, and `write_clipboard_callback`
+            // gates that callback by the clipboard-write setting. A user gesture
+            // must not depend on that setting, so `ghostty_view.rs` copies the
+            // selection on left release and Ghostty's variant stays off. Middle
+            // clicks are never forwarded to Ghostty (the host view only wires
+            // left/right), so pin `ignore` rather than inherit a default that
+            // Ghostty 1.4 (ghostty-org/ghostty#12604) already flipped once.
+            s.push_str("copy-on-select = none\n");
+            s.push_str("middle-click-action = ignore\n");
+            // No clipboard-read permission UI exists yet. Reject application reads
+            // before accessing NSPasteboard; user-initiated paste is independent.
+            s.push_str("clipboard-read = deny\n");
+            // `true` is the host default, not permission to upgrade an authored deny.
+            // Only an explicit host denial is policy and must be emitted last.
+            if self.clipboard_write == Some(false) {
+                s.push_str("clipboard-write = deny\n");
+                s.push_str("clipboard-write-limit-bytes = 0\n");
+            } else {
+                s.push_str(&format!(
+                    "clipboard-write-limit-bytes = {CLIPBOARD_WRITE_LIMIT_BYTES}\n"
+                ));
+            }
+        }
         if let Some(background_image) = &self.background_image {
-            s.push_str(&format!("background-image = {:?}\n", background_image));
+            s.push_str(&format!(
+                "background-image = {}\n",
+                quoted(background_image, "background image")?
+            ));
             if let Some(background_image_opacity) = self.background_image_opacity {
                 s.push_str(&format!(
                     "background-image-opacity = {:.2}\n",
@@ -262,36 +294,180 @@ impl GhosttyConfigPatch {
                 ));
             }
         }
-        s
-    }
-
-    fn write_config_file(&self) -> Result<std::path::PathBuf, String> {
-        let dir = std::env::temp_dir().join("con-ghostty");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {}", e))?;
-        let path = dir.join("runtime.conf");
-        let mut f = std::fs::File::create(&path).map_err(|e| format!("create: {}", e))?;
-        f.write_all(self.to_config_string().as_bytes())
-            .map_err(|e| format!("write: {}", e))?;
-        Ok(path)
+        Ok(s)
     }
 }
 
-fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_config_t, String> {
+#[derive(Debug, Clone)]
+struct NativeConfigSource {
+    text: String,
+    base_dir: PathBuf,
+}
+
+struct OwnedGhosttyConfig(ffi::ghostty_config_t);
+
+impl Drop for OwnedGhosttyConfig {
+    fn drop(&mut self) {
+        unsafe { ffi::ghostty_config_free(self.0) }
+    }
+}
+
+struct PrivateConfigFile(PathBuf);
+
+impl PrivateConfigFile {
+    fn create(base_dir: &Path, text: &str) -> Result<Self, String> {
+        if !base_dir.is_absolute() {
+            return Err("native Ghostty config base directory must be absolute".into());
+        }
+        if !base_dir.is_dir() {
+            return Err(format!(
+                "native Ghostty config base directory does not exist: {}",
+                base_dir.display()
+            ));
+        }
+        for attempt in 0..32u32 {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = base_dir.join(format!(
+                ".con-ghostty-{}-{nonce}-{attempt}.conf",
+                std::process::id()
+            ));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&path) {
+                Ok(mut file) => {
+                    use std::io::Write;
+                    if let Err(error) = file.write_all(text.as_bytes()) {
+                        let _ = std::fs::remove_file(&path);
+                        return Err(format!(
+                            "write native Ghostty config in {}: {error}",
+                            base_dir.display()
+                        ));
+                    }
+                    return Ok(Self(path));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "create private native Ghostty config in {}: {error}",
+                        base_dir.display()
+                    ));
+                }
+            }
+        }
+        Err(format!(
+            "could not allocate private native Ghostty config in {}",
+            base_dir.display()
+        ))
+    }
+}
+
+impl Drop for PrivateConfigFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn build_ghostty_config(
+    defaults: &GhosttyConfigPatch,
+    source: Option<&NativeConfigSource>,
+    overrides: &GhosttyConfigPatch,
+) -> Result<OwnedGhosttyConfig, String> {
     let config = unsafe { ffi::ghostty_config_new() };
     if config.is_null() {
         return Err("ghostty_config_new returned null".into());
     }
-
-    // Always load Con's runtime config, even when no appearance patch fields
-    // are present. Some terminal behavior is part of Con's product default
-    // rather than a user patch, most notably shell integration features.
-    let path = patch.write_config_file()?;
-    let path_str = path.to_str().ok_or("non-UTF8 path")?;
-    let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
-    unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
-
+    let owned = OwnedGhosttyConfig(config);
+    let load = |text: &str, dir: &Path, recursive: bool| -> Result<(), String> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let file = PrivateConfigFile::create(dir, text)?;
+        let path = file
+            .0
+            .to_str()
+            .ok_or("native Ghostty config path is not UTF-8")?;
+        let cpath = CString::new(path).map_err(|e| format!("native Ghostty config path: {e}"))?;
+        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
+        if recursive {
+            unsafe { ffi::ghostty_config_load_recursive_files(config) };
+        }
+        Ok(())
+    };
+    let runtime_dir = source
+        .map(|s| s.base_dir.as_path())
+        .unwrap_or_else(|| Path::new("/tmp"));
+    // Con's constructor values are fallbacks. Native source is then replayed,
+    // explicit runtime overrides follow it, and immutable host policy is last.
+    load(&defaults.to_config_string(false)?, runtime_dir, false)?;
+    if let Some(source) = source {
+        load(&source.text, &source.base_dir, true)?;
+    }
+    load(&overrides.to_config_string(false)?, runtime_dir, false)?;
+    let policy = GhosttyConfigPatch::default();
+    load(&policy.to_config_string(true)?, runtime_dir, false)?;
     unsafe { ffi::ghostty_config_finalize(config) };
-    Ok(config)
+    let count = unsafe { ffi::ghostty_config_diagnostics_count(config) };
+    if count != 0 {
+        return Err(format!(
+            "Ghostty configuration rejected with {count} diagnostic(s)"
+        ));
+    }
+    Ok(owned)
+}
+
+/// Validate native Ghostty configuration without creating an app or shell.
+/// Relative includes and theme paths are resolved from `base_dir`.
+pub fn validate_native_config(
+    text: impl Into<String>,
+    base_dir: impl AsRef<Path>,
+) -> Result<NativeAppearance, String> {
+    ensure_ghostty_init()?;
+    let source = NativeConfigSource {
+        text: text.into(),
+        base_dir: base_dir.as_ref().to_path_buf(),
+    };
+    let config = build_ghostty_config(
+        &GhosttyConfigPatch::default(),
+        Some(&source),
+        &GhosttyConfigPatch::default(),
+    )?;
+    effective_appearance(config.0)
+}
+
+fn effective_appearance(config: ffi::ghostty_config_t) -> Result<NativeAppearance, String> {
+    unsafe fn get<T: Default>(config: ffi::ghostty_config_t, key: &str) -> Result<T, String> {
+        let mut value = T::default();
+        if unsafe {
+            ffi::ghostty_config_get(
+                config,
+                (&mut value as *mut T).cast(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        } {
+            Ok(value)
+        } else {
+            Err(format!("Ghostty config does not expose {key}"))
+        }
+    }
+    let foreground: ffi::ghostty_config_color_s = unsafe { get(config, "foreground")? };
+    let background: ffi::ghostty_config_color_s = unsafe { get(config, "background")? };
+    let palette: ffi::ghostty_config_palette_s = unsafe { get(config, "palette")? };
+    Ok(NativeAppearance {
+        foreground: [foreground.r, foreground.g, foreground.b],
+        background: [background.r, background.g, background.b],
+        palette: palette.colors.map(|color| [color.r, color.g, color.b]),
+        font_size: unsafe { get(config, "font-size")? },
+        background_opacity: unsafe { get(config, "background-opacity")? },
+    })
 }
 
 fn normalize_cursor_style(style: &str) -> &'static str {
@@ -553,7 +729,10 @@ pub struct GhosttyApp {
     app: ffi::ghostty_app_t,
     // Box prevents the runtime_config from being moved while ghostty holds a pointer.
     _runtime_config: Box<ffi::ghostty_runtime_config_s>,
-    appearance: Mutex<GhosttyConfigPatch>,
+    defaults: GhosttyConfigPatch,
+    overrides: Mutex<GhosttyConfigPatch>,
+    native_source: Mutex<Option<NativeConfigSource>>,
+    effective_appearance: Arc<Mutex<Option<NativeAppearance>>>,
     wake_handle: Arc<GhosttyWakeHandle>,
 }
 
@@ -562,6 +741,7 @@ struct GhosttyWakeHandle {
     tick_scheduled: AtomicBool,
     generation: AtomicU64,
     clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    effective_appearance: Arc<Mutex<Option<NativeAppearance>>>,
 }
 
 impl Default for GhosttyWakeHandle {
@@ -571,11 +751,20 @@ impl Default for GhosttyWakeHandle {
             tick_scheduled: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
+            effective_appearance: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 impl GhosttyApp {
+    /// Validate native Ghostty configuration without creating an app or shell.
+    pub fn validate_native_config(
+        text: impl Into<String>,
+        base_dir: impl AsRef<Path>,
+    ) -> Result<NativeAppearance, String> {
+        validate_native_config(text, base_dir)
+    }
+
     /// Create a new ghostty app with the given terminal colors.
     pub fn new(
         colors: Option<&TerminalColors>,
@@ -614,10 +803,12 @@ impl GhosttyApp {
             background_image_repeat,
             clipboard_write: Some(clipboard_write_enabled),
         };
-        let config = build_ghostty_config(&appearance)?;
+        let config = build_ghostty_config(&appearance, None, &GhosttyConfigPatch::default())?;
+        let effective_appearance = Arc::new(Mutex::new(Some(effective_appearance(config.0)?)));
 
         let wake_handle = Arc::new(GhosttyWakeHandle {
             clipboard_write_policy: clipboard_write_policy(clipboard_write_enabled),
+            effective_appearance: Arc::clone(&effective_appearance),
             ..GhosttyWakeHandle::default()
         });
         let runtime_config = Box::new(ffi::ghostty_runtime_config_s {
@@ -632,10 +823,7 @@ impl GhosttyApp {
             close_surface_cb: Some(close_surface_callback),
         });
 
-        let app = unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config) };
-
-        // Ghostty clones the config — we must free the original.
-        unsafe { ffi::ghostty_config_free(config) };
+        let app = unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config.0) };
 
         if app.is_null() {
             return Err("ghostty_app_new returned null".into());
@@ -647,7 +835,10 @@ impl GhosttyApp {
         Ok(Self {
             app,
             _runtime_config: runtime_config,
-            appearance: Mutex::new(appearance),
+            defaults: appearance,
+            overrides: Mutex::new(GhosttyConfigPatch::default()),
+            native_source: Mutex::new(None),
+            effective_appearance,
             wake_handle,
         })
     }
@@ -668,18 +859,24 @@ impl GhosttyApp {
     /// Current configured terminal background, used by the embedding UI for
     /// short-lived native-view layout mattes before Ghostty has painted.
     pub fn background_rgb(&self) -> Option<[u8; 3]> {
-        self.appearance
+        self.effective_appearance
             .lock()
-            .colors
             .as_ref()
-            .map(|colors| colors.background)
+            .map(|a| a.background)
     }
 
     /// Current configured terminal background opacity. This lets the macOS
     /// embedding layer keep short-lived AppKit backing mattes visually aligned
     /// with Ghostty's own transparent terminal background.
     pub fn background_opacity(&self) -> Option<f32> {
-        self.appearance.lock().background_opacity
+        self.effective_appearance
+            .lock()
+            .as_ref()
+            .map(|a| a.background_opacity as f32)
+    }
+
+    pub fn native_appearance(&self) -> Option<NativeAppearance> {
+        self.effective_appearance.lock().clone()
     }
 
     /// Update the app's terminal colors at runtime.
@@ -738,16 +935,48 @@ impl GhosttyApp {
     }
 
     pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
-        let mut appearance = self.appearance.lock();
-        let mut merged = appearance.clone();
+        let mut overrides = self.overrides.lock();
+        let mut merged = overrides.clone();
         merged.merge(patch);
-        let config = build_ghostty_config(&merged)?;
+        let source = self.native_source.lock();
+        let config = build_ghostty_config(&self.defaults, source.as_ref(), &merged)?;
+        let effective = effective_appearance(config.0)?;
+        *self.effective_appearance.lock() = Some(effective);
         unsafe {
-            ffi::ghostty_app_update_config(self.app, config);
-            ffi::ghostty_config_free(config);
+            ffi::ghostty_app_update_config(self.app, config.0);
         }
-        *appearance = merged;
+        *overrides = merged;
         Ok(())
+    }
+
+    /// Parse and apply native Ghostty configuration text. `base_dir` must be
+    /// the original absolute source directory so relative `config-file`,
+    /// theme, font, and image paths retain native Ghostty semantics.
+    pub fn apply_native_config(
+        &self,
+        text: impl Into<String>,
+        base_dir: impl AsRef<Path>,
+    ) -> Result<NativeAppearance, String> {
+        let source = NativeConfigSource {
+            text: text.into(),
+            base_dir: base_dir.as_ref().to_path_buf(),
+        };
+        // A full native reload starts a new authored snapshot. Runtime patches
+        // belong to the prior snapshot and are deliberately reset.
+        let config = build_ghostty_config(
+            &self.defaults,
+            Some(&source),
+            &GhosttyConfigPatch::default(),
+        )?;
+        let effective = effective_appearance(config.0)?;
+        *self.effective_appearance.lock() = Some(effective.clone());
+        unsafe { ffi::ghostty_app_update_config(self.app, config.0) };
+        // Ghostty checks the effective native clipboard-write policy before
+        // invoking the callback. Do not retain a stale constructor denial.
+        self.wake_handle.clipboard_write_policy.set_enabled(true);
+        *self.overrides.lock() = GhosttyConfigPatch::default();
+        *self.native_source.lock() = Some(source);
+        Ok(self.native_appearance().unwrap_or(effective))
     }
 
     /// Set the global color scheme.
@@ -1006,10 +1235,9 @@ impl GhosttyTerminal {
     }
 
     pub fn update_config(&self, patch: &GhosttyConfigPatch) -> Result<(), String> {
-        let config = build_ghostty_config(patch)?;
+        let config = build_ghostty_config(&GhosttyConfigPatch::default(), None, patch)?;
         unsafe {
-            ffi::ghostty_surface_update_config(self.surface, config);
-            ffi::ghostty_config_free(config);
+            ffi::ghostty_surface_update_config(self.surface, config.0);
         }
         self.refresh();
         Ok(())
@@ -1623,11 +1851,25 @@ fn mark_child_exited_state(state: &Mutex<TerminalState>) {
 }
 
 unsafe extern "C" fn action_callback(
-    _app: ffi::ghostty_app_t,
+    app: ffi::ghostty_app_t,
     target: ffi::ghostty_target_s,
     action: ffi::ghostty_action_s,
 ) -> bool {
     unsafe {
+        if action.tag == ffi::ghostty_action_tag_e::GHOSTTY_ACTION_CONFIG_CHANGE
+            && target.tag == ffi::ghostty_target_tag_e::GHOSTTY_TARGET_APP
+        {
+            let userdata = ffi::ghostty_app_userdata(app).cast::<GhosttyWakeHandle>();
+            if userdata.is_null() {
+                return false;
+            }
+            let config = action.action.config_change.config;
+            let Ok(appearance) = effective_appearance(config) else {
+                return false;
+            };
+            *(*userdata).effective_appearance.lock() = Some(appearance);
+            return true;
+        }
         let state = match resolve_surface_state(&target) {
             Some(s) => s,
             None => return false,
@@ -2064,7 +2306,8 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::{
-        GhosttyConfigPatch, GhosttySurfaceEvent, TerminalColors, TerminalState,
+        GhosttyConfigPatch, GhosttySurfaceEvent, NativeConfigSource, TerminalColors, TerminalState,
+        build_ghostty_config, effective_appearance, ensure_ghostty_init,
         installed_app_ghostty_resources_dir_for_exe, mark_child_exited_state,
     };
 
@@ -2220,7 +2463,7 @@ mod tests {
             ..Default::default()
         };
 
-        let config = patch.to_config_string();
+        let config = patch.to_config_string(true).unwrap();
         assert!(config.contains("font-family = \"Ioskeley Mono\""));
         assert!(!config.contains(".ZedMono"));
     }
@@ -2234,7 +2477,8 @@ mod tests {
 
         assert!(
             patch
-                .to_config_string()
+                .to_config_string(true)
+                .unwrap()
                 .contains("command = \"/opt/homebrew/bin/fish -l\"")
         );
     }
@@ -2252,7 +2496,8 @@ mod tests {
         };
 
         let font_lines = patch
-            .to_config_string()
+            .to_config_string(true)
+            .unwrap()
             .lines()
             .filter(|line| line.starts_with("font-family ="))
             .map(str::to_string)
@@ -2284,7 +2529,9 @@ mod tests {
 
     #[test]
     fn ghostty_config_always_includes_con_shell_integration_features() {
-        let config = GhosttyConfigPatch::default().to_config_string();
+        let config = GhosttyConfigPatch::default()
+            .to_config_string(true)
+            .unwrap();
 
         assert!(config.contains("shell-integration-features = no-cursor,ssh-env\n"));
         assert!(!config.contains("ssh-terminfo"));
@@ -2292,14 +2539,18 @@ mod tests {
 
     #[test]
     fn ghostty_config_only_previews_osc8_links() {
-        let config = GhosttyConfigPatch::default().to_config_string();
+        let config = GhosttyConfigPatch::default()
+            .to_config_string(true)
+            .unwrap();
 
         assert!(config.contains("link-previews = osc8\n"));
     }
 
     #[test]
     fn ghostty_config_pins_clipboard_routing() {
-        let config = GhosttyConfigPatch::default().to_config_string();
+        let config = GhosttyConfigPatch::default()
+            .to_config_string(true)
+            .unwrap();
 
         assert!(config.contains("copy-on-select = none\n"));
         assert!(config.contains("middle-click-action = ignore\n"));
@@ -2312,7 +2563,8 @@ mod tests {
                 clipboard_write,
                 ..Default::default()
             }
-            .to_config_string();
+            .to_config_string(true)
+            .unwrap();
             assert!(config.contains("clipboard-read = deny\n"));
         }
     }
@@ -2323,7 +2575,8 @@ mod tests {
             clipboard_write: Some(false),
             ..Default::default()
         }
-        .to_config_string();
+        .to_config_string(true)
+        .unwrap();
 
         assert!(disabled.contains("clipboard-write = deny\n"));
         assert!(disabled.contains("clipboard-write-limit-bytes = 0\n"));
@@ -2332,10 +2585,129 @@ mod tests {
                 clipboard_write,
                 ..Default::default()
             }
-            .to_config_string();
-            assert!(enabled.contains("clipboard-write = allow\n"));
+            .to_config_string(true)
+            .unwrap();
+            assert!(!enabled.contains("clipboard-write = allow\n"));
             assert!(enabled.contains("clipboard-write-limit-bytes = 1048576\n"));
         }
+    }
+
+    #[test]
+    fn native_config_loads_relative_include_and_reports_effective_appearance() {
+        ensure_ghostty_init().unwrap();
+        let (_cleanup, root) = temp_test_dir("con-ghostty-native-config-test");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("colors.conf"),
+            "foreground = 123456\nbackground = abcdef\npalette = 1=010203\n",
+        )
+        .unwrap();
+        let source = NativeConfigSource {
+            text: "config-file = colors.conf\nfont-size = 17\nbackground-opacity = 0.75\n".into(),
+            base_dir: root,
+        };
+
+        let defaults = GhosttyConfigPatch {
+            colors: Some(sample_colors(0x80)),
+            font_size: Some(11.0),
+            background_opacity: Some(0.25),
+            cursor_style: Some("bar".into()),
+            ..Default::default()
+        };
+        let config =
+            build_ghostty_config(&defaults, Some(&source), &GhosttyConfigPatch::default()).unwrap();
+        let effective = effective_appearance(config.0).unwrap();
+
+        assert_eq!(effective.foreground, [0x12, 0x34, 0x56]);
+        assert_eq!(effective.background, [0xab, 0xcd, 0xef]);
+        assert_eq!(effective.palette[1], [1, 2, 3]);
+        assert_eq!(effective.font_size, 17.0);
+        assert_eq!(effective.background_opacity, 0.75);
+
+        // Runtime patches win for the current snapshot, but a subsequent full
+        // native reload receives an empty override patch and restores source.
+        let explicit = GhosttyConfigPatch {
+            font_size: Some(23.0),
+            background_opacity: Some(0.5),
+            ..Default::default()
+        };
+        let patched = build_ghostty_config(&defaults, Some(&source), &explicit).unwrap();
+        let patched = effective_appearance(patched.0).unwrap();
+        assert_eq!(patched.font_size, 23.0);
+        assert_eq!(patched.background_opacity, 0.5);
+
+        let reloaded =
+            build_ghostty_config(&defaults, Some(&source), &GhosttyConfigPatch::default()).unwrap();
+        let reloaded = effective_appearance(reloaded.0).unwrap();
+        assert_eq!(reloaded.font_size, 17.0);
+        assert_eq!(reloaded.background_opacity, 0.75);
+        assert_eq!(reloaded.foreground, [0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn native_clipboard_policy_overrides_defaults_and_runtime_patch_overrides_native() {
+        ensure_ghostty_init().unwrap();
+        let (_cleanup, root) = temp_test_dir("con-clipboard-policy-test");
+        std::fs::create_dir_all(&root).unwrap();
+        for (default, native, runtime, expected) in [
+            (false, "allow", None, "allow"),
+            (true, "deny", None, "deny"),
+            (false, "deny", Some(true), "allow"),
+        ] {
+            let source = NativeConfigSource {
+                text: format!("clipboard-write = {native}\n"),
+                base_dir: root.clone(),
+            };
+            let config = build_ghostty_config(
+                &GhosttyConfigPatch {
+                    clipboard_write: Some(default),
+                    ..Default::default()
+                },
+                Some(&source),
+                &GhosttyConfigPatch {
+                    clipboard_write: runtime,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut value: *const std::os::raw::c_char = std::ptr::null();
+            let key = "clipboard-write";
+            assert!(unsafe {
+                crate::ffi::ghostty_config_get(
+                    config.0,
+                    (&mut value as *mut *const std::os::raw::c_char).cast(),
+                    key.as_ptr().cast(),
+                    key.len(),
+                )
+            });
+            assert!(!value.is_null());
+            assert_eq!(
+                unsafe { std::ffi::CStr::from_ptr(value) }.to_str().unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn native_config_returns_parser_diagnostics() {
+        ensure_ghostty_init().unwrap();
+        let (_cleanup, root) = temp_test_dir("con-ghostty-native-diagnostic-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = NativeConfigSource {
+            text: "not-a-real-ghostty-option = true\n".into(),
+            base_dir: root,
+        };
+
+        let error = match build_ghostty_config(
+            &GhosttyConfigPatch::default(),
+            Some(&source),
+            &GhosttyConfigPatch::default(),
+        ) {
+            Ok(_) => panic!("invalid native config unexpectedly parsed"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("1 diagnostic"), "{error}");
     }
 
     #[test]
