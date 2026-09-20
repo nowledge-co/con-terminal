@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub mod ghostty;
+
 pub const MIN_UI_FONT_SIZE: f32 = 12.0;
 pub const MAX_UI_FONT_SIZE: f32 = 24.0;
 pub const DEFAULT_TERMINAL_FONT_FAMILY: &str = "Ioskeley Mono";
@@ -1018,7 +1020,7 @@ impl NetworkConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub terminal: TerminalConfig,
@@ -1027,6 +1029,28 @@ pub struct Config {
     pub keybindings: KeybindingConfig,
     pub skills: SkillsConfig,
     pub network: NetworkConfig,
+    /// Authored source/provenance used for lossless, collision-safe saves.
+    #[serde(skip)]
+    source: std::sync::Mutex<ghostty::SourceState>,
+}
+
+impl Clone for Config {
+    fn clone(&self) -> Self {
+        Self {
+            terminal: self.terminal.clone(),
+            appearance: self.appearance.clone(),
+            agent: self.agent.clone(),
+            keybindings: self.keybindings.clone(),
+            skills: self.skills.clone(),
+            network: self.network.clone(),
+            source: std::sync::Mutex::new(
+                self.source
+                    .lock()
+                    .expect("config source mutex poisoned")
+                    .clone(),
+            ),
+        }
+    }
 }
 
 /// Configuration for skill discovery paths.
@@ -1121,23 +1145,104 @@ impl Config {
     }
 
     pub fn load() -> Result<Self> {
-        let config_path = Self::config_path();
-        let mut config = if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)?;
-            let document: toml::Value = toml::from_str(&content)?;
-            let provider_provenance_is_present =
-                config_declares_agent_provider_provenance(&document);
-            let mut config: Config = document.try_into()?;
-            config.agent.migrate_legacy();
-            migrate_agent_provider_provenance(&mut config, provider_provenance_is_present);
-            config
-        } else {
-            Config::default()
-        };
-
-        config.normalize();
+        let mut config =
+            Self::load_from_paths(&Self::config_path(), &con_paths::legacy_config_file())?;
         config.apply_zero_touch_chatgpt_default();
         Ok(config)
+    }
+
+    /// Pure load/parse entry point. It never performs credential discovery.
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            let config = Self::default();
+            config
+                .source
+                .lock()
+                .expect("config source mutex poisoned")
+                .path = Some(path.to_owned());
+            return Ok(config);
+        }
+        ghostty::parse(&std::fs::read_to_string(path)?, Some(path.to_owned()))
+    }
+
+    /// Parse in-memory Ghostty syntax without resolving includes or auth state.
+    pub fn parse_ghostty(source: &str) -> Result<Self> {
+        ghostty::parse(source, None)
+    }
+
+    /// Load the native file, or atomically migrate TOML when it is absent.
+    pub fn load_from_paths(path: impl AsRef<Path>, legacy: impl AsRef<Path>) -> Result<Self> {
+        let (path, legacy) = (path.as_ref(), legacy.as_ref());
+        if path.exists() {
+            return Self::load_from_path(path);
+        }
+        if !legacy.exists() {
+            return Self::load_from_path(path);
+        }
+        let content = std::fs::read_to_string(legacy)?;
+        let document: toml::Value = toml::from_str(&content).map_err(|_| {
+            anyhow::anyhow!("invalid legacy TOML configuration; original file was not modified")
+        })?;
+        let provenance = config_declares_agent_provider_provenance(&document);
+        let mut config: Config = document.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "invalid legacy configuration value type; original file was not modified"
+            )
+        })?;
+        config.agent.migrate_legacy();
+        migrate_agent_provider_provenance(&mut config, provenance);
+        config.normalize();
+        config
+            .source
+            .lock()
+            .expect("config source mutex poisoned")
+            .path = Some(path.to_owned());
+        let rendered = ghostty::render(&config)?;
+        // Validate the exact generated representation before publishing it.
+        ghostty::parse(&rendered, Some(path.to_owned()))?;
+        write_private_atomic_no_clobber(path, rendered.as_bytes())?;
+        ghostty::parse(&rendered, Some(path.to_owned()))
+    }
+
+    pub fn native_entries(&self) -> Vec<ghostty::NativeEntry> {
+        self.source
+            .lock()
+            .expect("config source mutex poisoned")
+            .native
+            .clone()
+    }
+
+    /// Original native Ghostty text with all `con.*` settings excluded.
+    pub fn native_config_text(&self) -> Result<String> {
+        Ok(ghostty::native_text_from_str(&ghostty::render(self)?))
+    }
+
+    pub fn base_path(&self) -> Option<PathBuf> {
+        self.source
+            .lock()
+            .expect("config source mutex poisoned")
+            .path
+            .clone()
+    }
+
+    /// Explicit keys present in the authored document.
+    pub fn authored_keys(&self) -> Vec<String> {
+        let source = self.source.lock().expect("config source mutex poisoned");
+        source
+            .source
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let (key, _) = line.split_once('=')?;
+                Some(key.trim().to_owned())
+            })
+            .collect()
+    }
+
+    /// Keys whose typed values differ from the last loaded or saved snapshot.
+    pub fn changed_keys(&self) -> Result<Vec<String>> {
+        ghostty::changed_keys(self)
     }
 
     /// Zero-touch ChatGPT Subscription sign-in applied on every config load.
@@ -1167,6 +1272,18 @@ impl Config {
                 "[config] Recomputed automatic agent provider as {provider} from credential readiness"
             );
             self.agent.provider = provider;
+            if !self.agent.provider_is_explicit {
+                if let Some(authored) = self
+                    .source
+                    .lock()
+                    .expect("config source mutex poisoned")
+                    .authored
+                    .as_mut()
+                {
+                    authored["agent"]["provider"] = serde_json::to_value(&self.agent.provider)
+                        .expect("provider serialization cannot fail");
+                }
+            }
         }
     }
 
@@ -1175,10 +1292,74 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path();
-        let content = toml::to_string_pretty(self)?;
-        write_private_atomic(&path, content.as_bytes())
+        self.save_to_path(Self::config_path())
     }
+
+    pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            anyhow::bail!("TOML configuration is read-only; save as config.ghostty");
+        }
+        let rendered = ghostty::render(self)?;
+        // Validate before touching the user's file.
+        let reparsed = ghostty::parse(&rendered, Some(path.to_owned()))?;
+        {
+            let source = self.source.lock().expect("config source mutex poisoned");
+            if source.path.as_deref() == Some(path) {
+                if path.exists() {
+                    let disk = std::fs::read_to_string(path)?;
+                    if disk != source.source && disk != rendered {
+                        anyhow::bail!("configuration changed on disk; reload before saving");
+                    }
+                } else if !source.source.is_empty() {
+                    anyhow::bail!("configuration was removed on disk; reload before saving");
+                }
+            } else if path.exists() {
+                anyhow::bail!("destination already exists; load it before saving");
+            }
+        }
+        write_private_atomic(path, rendered.as_bytes())?;
+        let new_source = reparsed
+            .source
+            .lock()
+            .expect("config source mutex poisoned")
+            .clone();
+        *self.source.lock().expect("config source mutex poisoned") = new_source;
+        Ok(())
+    }
+}
+
+fn write_private_atomic_no_clobber(path: &Path, content: &[u8]) -> Result<()> {
+    if path.exists() {
+        anyhow::bail!("configuration appeared during migration");
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let tmp = path.with_extension(format!("tmp.{}.{}.migration", std::process::id(), unique));
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> Result<()> {
+        let mut f = options.open(&tmp)?;
+        f.write_all(content)?;
+        f.sync_all()?;
+        std::fs::hard_link(&tmp, path)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
 }
 
 fn config_declares_agent_provider_provenance(document: &toml::Value) -> bool {
@@ -1194,7 +1375,7 @@ fn migrate_agent_provider_provenance(config: &mut Config, provenance_is_present:
     }
 }
 
-fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+pub(crate) fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
