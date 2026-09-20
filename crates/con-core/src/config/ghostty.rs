@@ -274,6 +274,12 @@ pub(crate) fn parse(source: &str, path: Option<PathBuf>) -> Result<Config> {
             }
             continue;
         };
+        if shape.is_object() {
+            bail!(
+                "Con key `{key}` names a section, not a setting at line {}",
+                index + 1
+            );
+        }
         if !key.starts_with("con.") && raw.is_empty() {
             insert(&mut document, &field, shape.clone(), false);
             continue;
@@ -546,11 +552,15 @@ pub(crate) fn changed_keys(config: &Config) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
 
     fn temp_file(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "con-config-test-{}-{}",
+            "con-config-test-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -752,6 +762,24 @@ mod tests {
         let text = config.native_config_text().unwrap();
         assert!(text.contains("font-size = 19"));
         assert!(!text.contains("con.appearance"));
+    }
+
+    #[test]
+    fn section_assignments_are_rejected_before_leaf_insertion() {
+        for section in [
+            "agent",
+            "skills",
+            "agent.providers",
+            "agent.providers.anthropic",
+        ] {
+            let source = format!("con.{section} = invalid\ncon.agent.provider = anthropic\n");
+            assert!(
+                parse(&source, None)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("names a section")
+            );
+        }
     }
 
     #[test]

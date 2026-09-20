@@ -16,6 +16,7 @@ const MAX_BYTES: u64 = 16 * 1024 * 1024;
 struct TransferState {
     files: usize,
     bytes: u64,
+    output_bytes: u64,
     names: HashMap<PathBuf, PathBuf>,
     visiting: HashSet<PathBuf>,
     staged: Vec<(PathBuf, Vec<u8>)>,
@@ -132,6 +133,14 @@ fn account(state: &mut TransferState, bytes: u64) -> Result<()> {
     Ok(())
 }
 
+fn account_output(state: &mut TransferState, bytes: usize) -> Result<()> {
+    state.output_bytes = state.output_bytes.saturating_add(bytes as u64);
+    if state.output_bytes > MAX_BYTES {
+        bail!("rewritten configuration exceeds the {MAX_BYTES} byte transfer limit");
+    }
+    Ok(())
+}
+
 fn read_bounded(path: &Path, state: &mut TransferState) -> Result<Vec<u8>> {
     regular(path, "configuration resource")?;
     let len = fs::metadata(path)?.len();
@@ -170,6 +179,7 @@ fn copy_binary(source: &Path, state: &mut TransferState) -> Result<PathBuf> {
         .map(|s| format!(".{s}"))
         .unwrap_or_default();
     let target = reserve(state, source, &extension);
+    account_output(state, bytes.len())?;
     state.staged.push((target.clone(), bytes));
     Ok(target)
 }
@@ -183,7 +193,23 @@ fn transform_theme_value(
 ) -> Result<Option<String>> {
     let conditional = value.contains("light:") || value.contains("dark:");
     let mut changed = false;
-    let mut parts = Vec::new();
+    let mut output = String::new();
+    let mut append = |part: &str| -> Result<()> {
+        let separator = usize::from(!output.is_empty());
+        if output
+            .len()
+            .saturating_add(part.len())
+            .saturating_add(separator)
+            > MAX_BYTES as usize
+        {
+            bail!("rewritten theme exceeds the {MAX_BYTES} byte transfer limit");
+        }
+        if separator != 0 {
+            output.push(',');
+        }
+        output.push_str(part);
+        Ok(())
+    };
     for part in value.split(',') {
         let trimmed = part.trim();
         let (prefix, name) = if conditional {
@@ -194,27 +220,29 @@ fn transform_theme_value(
             ("", trimmed)
         };
         let source = resolve_theme(name, parent, state.strip_comments)?;
-        if source.is_none() && state.strip_comments {
-            if let Some(theme) = TerminalTheme::legacy_builtin(name) {
-                let text = theme.to_ghostty_format();
-                let identity = PathBuf::from(format!("con-builtin-theme:{name}"));
-                let relative = reserve(state, &identity, ".ghostty");
-                if !state.staged.iter().any(|(path, _)| path == &relative) {
-                    account(state, text.len() as u64)?;
-                    state.staged.push((relative.clone(), text.into_bytes()));
-                }
-                let mapped = resources.join(relative).to_string_lossy().into_owned();
-                parts.push(if prefix.is_empty() {
-                    mapped
-                } else {
-                    format!("{prefix}:{mapped}")
-                });
-                changed = true;
-                continue;
+        if source.is_none()
+            && state.strip_comments
+            && let Some(theme) = TerminalTheme::legacy_builtin(name)
+        {
+            let text = theme.to_ghostty_format();
+            let identity = PathBuf::from(format!("con-builtin-theme:{name}"));
+            let relative = reserve(state, &identity, ".ghostty");
+            if !state.staged.iter().any(|(path, _)| path == &relative) {
+                account(state, text.len() as u64)?;
+                account_output(state, text.len())?;
+                state.staged.push((relative.clone(), text.into_bytes()));
             }
+            let mapped = resources.join(relative).to_string_lossy().into_owned();
+            append(&if prefix.is_empty() {
+                mapped
+            } else {
+                format!("{prefix}:{mapped}")
+            })?;
+            changed = true;
+            continue;
         }
         let Some(source) = source else {
-            parts.push(trimmed.to_owned());
+            append(trimmed)?;
             continue;
         };
         let relative = reserve(state, &source, ".ghostty");
@@ -223,14 +251,14 @@ fn transform_theme_value(
             state.staged.push((relative.clone(), text.into_bytes()));
         }
         let mapped = resources.join(relative).to_string_lossy().into_owned();
-        parts.push(if prefix.is_empty() {
+        append(&if prefix.is_empty() {
             mapped
         } else {
             format!("{prefix}:{mapped}")
-        });
+        })?;
         changed = true;
     }
-    Ok(changed.then(|| parts.join(",")))
+    Ok(changed.then_some(output))
 }
 
 fn transform(
@@ -317,10 +345,15 @@ fn transform(
                 _ => None,
             };
             if let Some(value) = mapped {
-                output.push_str(&format!("{key} = {value}\n"));
+                account_output(state, key.len() + value.len() + 4)?;
+                output.push_str(key);
+                output.push_str(" = ");
+                output.push_str(&value);
+                output.push('\n');
                 continue;
             }
         }
+        account_output(state, line.len() + 1)?;
         output.push_str(line);
         output.push('\n');
     }
@@ -437,6 +470,21 @@ mod tests {
                 return p;
             }
         }
+    }
+
+    #[test]
+    fn expanded_cached_references_respect_output_budget() {
+        let d = dir();
+        let source = d.join("source");
+        fs::write(d.join("image"), b"image").unwrap();
+        fs::write(&source, "background-image = image\n".repeat(100_000)).unwrap();
+        let resources = d.join("long-destination-".repeat(20));
+        let mut state = TransferState::default();
+        let error = transform(&source, &resources, 0, false, &mut state).unwrap_err();
+        assert!(error.to_string().contains("rewritten configuration"));
+        assert!(state.bytes < MAX_BYTES);
+        assert_eq!(state.staged.len(), 1);
+        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]

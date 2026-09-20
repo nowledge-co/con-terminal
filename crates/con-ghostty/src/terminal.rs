@@ -157,9 +157,6 @@ impl GhosttyConfigPatch {
             }
             // Ghostty's config lexer treats quoted values literally; unlike Rust's
             // Debug formatter it does not interpret backslash escape sequences.
-            if value.contains('"') {
-                return Err(format!("{field} contains a quote"));
-            }
             Ok(format!("\"{value}\""))
         }
         let mut s = String::with_capacity(512);
@@ -411,8 +408,13 @@ fn build_ghostty_config(
         load(&source.text, &source.base_dir, true)?;
     }
     load(&overrides.to_config_string(false)?, runtime_dir, false)?;
-    let policy = GhosttyConfigPatch::default();
-    load(&policy.to_config_string(true)?, runtime_dir, false)?;
+    let mut policy = GhosttyConfigPatch::default().to_config_string(true)?;
+    if source.is_some() && overrides.font_family.is_none() {
+        // Native font choices do not pass through the portable patch builder,
+        // which otherwise appends Con's bundled Nerd Font itself.
+        policy.push_str(&format!("font-family = {DEFAULT_GHOSTTY_FONT_FAMILY}\n"));
+    }
+    load(&policy, runtime_dir, false)?;
     unsafe { ffi::ghostty_config_finalize(config) };
     let count = unsafe { ffi::ghostty_config_diagnostics_count(config) };
     if count != 0 {
@@ -2642,6 +2644,25 @@ mod tests {
         assert_eq!(reloaded.font_size, 17.0);
         assert_eq!(reloaded.background_opacity, 0.75);
         assert_eq!(reloaded.foreground, [0x12, 0x34, 0x56]);
+    }
+
+    #[test]
+    fn native_command_quotes_are_literal_and_newlines_are_rejected() {
+        ensure_ghostty_init().unwrap();
+        let (_cleanup, root) = temp_test_dir("con-native-quote-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let patch = GhosttyConfigPatch {
+            shell: Some(r#"/bin/sh -c "printf hello""#.into()),
+            ..Default::default()
+        };
+        let text = patch.to_config_string(false).unwrap();
+        assert!(text.contains(r#"command = "/bin/sh -c "printf hello"""#));
+        super::validate_native_config(text, &root).unwrap();
+        let patch = GhosttyConfigPatch {
+            shell: Some("/bin/sh\ncommand = injected".into()),
+            ..Default::default()
+        };
+        assert!(patch.to_config_string(false).is_err());
     }
 
     #[test]

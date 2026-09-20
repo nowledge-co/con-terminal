@@ -173,12 +173,6 @@ pub struct ghostty_string_s {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ghostty_diagnostic_s {
-    pub message: *const c_char,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ghostty_config_color_s {
     pub r: u8,
@@ -200,7 +194,6 @@ impl Default for ghostty_config_palette_s {
     }
 }
 
-const _: [(); 8] = [(); std::mem::size_of::<ghostty_diagnostic_s>()];
 const _: [(); 3] = [(); std::mem::size_of::<ghostty_config_color_s>()];
 const _: [(); 768] = [(); std::mem::size_of::<ghostty_config_palette_s>()];
 
@@ -664,10 +657,6 @@ unsafe extern "C" {
     pub fn ghostty_config_load_recursive_files(config: ghostty_config_t);
     pub fn ghostty_config_finalize(config: ghostty_config_t);
     pub fn ghostty_config_diagnostics_count(config: ghostty_config_t) -> u32;
-    pub fn ghostty_config_get_diagnostic(
-        config: ghostty_config_t,
-        index: u32,
-    ) -> ghostty_diagnostic_s;
     pub fn ghostty_config_get(
         config: ghostty_config_t,
         value: *mut c_void,
