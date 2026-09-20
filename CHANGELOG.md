@@ -16,6 +16,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#368](https://github.com/nowledge-co/con-terminal/pull/368) by
   [@zerob13](https://github.com/zerob13))_
 
+**Developer Experience**
+
+- The repository development guide now follows the standard `AGENTS.md`
+  convention, so supported coding agents can discover the same project
+  instructions without a tool-specific entry point. _(PR
+  [#369](https://github.com/nowledge-co/con-terminal/pull/369) by
+  [@zerob13](https://github.com/zerob13))_
+
 ### Fixed
 
 **macOS**
