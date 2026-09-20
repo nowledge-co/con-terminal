@@ -6,6 +6,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.104`
 
+### Added
+
+**AI**
+
+- Con's replies now use a purpose-made raccoon avatar. Two optional
+  raccoon-girl variants are available under **Settings > Appearance > Agent
+  Avatar**, with immediate preview and persistent selection. _(PR
+  [#372](https://github.com/nowledge-co/con-terminal/pull/372) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ### Changed
 
 **Settings**
