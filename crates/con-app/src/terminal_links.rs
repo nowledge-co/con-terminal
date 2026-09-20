@@ -1,10 +1,12 @@
-//! Visible-row terminal link detection for GPUI-owned terminal renderers.
+//! Terminal link interaction for GPUI-owned terminal renderers.
 //!
 //! macOS delegates this to embedded libghostty. Windows and Linux own
-//! their terminal paint/input path, so they need a small detector for
-//! modifier-clicking plain URLs in the visible grid. Keep this module
-//! off the paint path: callers should use it only on mouse gestures.
+//! their terminal paint/input path: OSC 8 targets use the shared URL policy,
+//! while plain URLs are detected in the visible row. Resolve links only on
+//! mouse gestures; painting uses the already-classified, owned hover target.
 
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+use crate::terminal_url::{Osc8UrlDecision, evaluate_osc8_url};
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use con_ghostty::vt::ScreenSnapshot;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -31,12 +33,118 @@ const URL_SCHEMES: &[&str] = &[
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalLink {
-    pub(crate) url: String,
+    target: LinkTarget,
     pub(crate) row: u16,
     /// Inclusive start column.
     pub(crate) start_col: u16,
     /// Exclusive end column.
     pub(crate) end_col: u16,
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LinkTarget {
+    Plain(String),
+    Osc8(Osc8UrlDecision),
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+impl TerminalLink {
+    pub(crate) fn osc8(raw: &str, col: u16, row: u16) -> Self {
+        Self {
+            target: LinkTarget::Osc8(evaluate_osc8_url(raw)),
+            row,
+            start_col: col,
+            end_col: col + 1,
+        }
+    }
+
+    /// A stationary pointer can outlive terminal output. If the target changed
+    /// since hover, this press only updates the preview; it must not arm the
+    /// newly substituted target. The caller still consumes the matching release.
+    pub(crate) fn for_press(self, preview: Option<&Self>) -> Option<Self> {
+        if preview.is_some_and(|preview| !self.same_link(preview)) {
+            return None;
+        }
+        Some(self)
+    }
+
+    /// OSC 8 hit rectangles cover one cell, not the whole linked label. Match
+    /// activation by target so crossing a wide cell or wrapped label is allowed;
+    /// keep structural equality for hover geometry and plain URL ranges.
+    pub(crate) fn same_link(&self, other: &Self) -> bool {
+        match (&self.target, &other.target) {
+            (LinkTarget::Osc8(target), LinkTarget::Osc8(other)) => target == other,
+            _ => self == other,
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub(crate) fn open(&self, window: &mut gpui::Window, cx: &mut gpui::App) {
+        use gpui_component::{WindowExt as _, notification::Notification};
+        match &self.target {
+            LinkTarget::Plain(url) | LinkTarget::Osc8(Osc8UrlDecision::Allow(url)) => {
+                cx.open_url(url)
+            }
+            LinkTarget::Osc8(Osc8UrlDecision::Deny(denial)) => {
+                window.push_notification(
+                    Notification::new().title("Link blocked").message(format!(
+                        "{}\n{}",
+                        denial.reason.message(),
+                        denial.display
+                    )),
+                    cx,
+                );
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    pub(crate) fn preview(
+        &self,
+        theme: &gpui_component::Theme,
+        pane_width: gpui::Pixels,
+    ) -> Option<gpui::Div> {
+        use gpui::*;
+        let LinkTarget::Osc8(decision) = &self.target else {
+            return None;
+        };
+        let (display, status, color) = match decision {
+            Osc8UrlDecision::Allow(url) => (url, "Opens", theme.foreground),
+            Osc8UrlDecision::Deny(denial) => (&denial.display, "Blocked", theme.warning),
+        };
+        Some(
+            div()
+                .absolute()
+                .left(px(10.0))
+                .bottom(px(10.0))
+                .max_w((pane_width - px(20.0)).max(px(0.0)))
+                .flex()
+                .flex_none()
+                .min_w_0()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(8.0))
+                .py(px(5.0))
+                .bg(theme.popover.opacity(0.96))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.0))
+                        .text_color(color)
+                        .child(status),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_size(px(11.0))
+                        .text_color(theme.foreground)
+                        .child(display.clone()),
+                ),
+        )
+    }
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -98,7 +206,7 @@ fn link_at_line(line: &str, hover_start: usize, hover_end: usize) -> Option<Term
             && let Ok(end_col) = u16::try_from(end)
         {
             return Some(TerminalLink {
-                url: line[scheme_start..end].to_string(),
+                target: LinkTarget::Plain(line[scheme_start..end].to_string()),
                 row: 0,
                 start_col,
                 end_col,
@@ -222,7 +330,68 @@ mod tests {
 
     fn detect(line: &str, needle: &str) -> Option<String> {
         let index = line.find(needle).expect("needle in line");
-        link_at_line(line, index, index + 1).map(|link| link.url)
+        link_at_line(line, index, index + 1).map(|link| match link.target {
+            LinkTarget::Plain(url) => url,
+            LinkTarget::Osc8(_) => panic!("plain-text detection returned an OSC 8 target"),
+        })
+    }
+
+    #[test]
+    fn osc8_targets_are_classified_before_activation() {
+        let link = TerminalLink::osc8("HTTPS://Example.COM:443/path", 3, 2);
+        assert_eq!(
+            link.target,
+            LinkTarget::Osc8(Osc8UrlDecision::Allow("https://example.com/path".into()))
+        );
+        for uri in [
+            "file:///tmp/script.sh",
+            "javascript:alert(1)",
+            "https://user:pass@example.com",
+            "https://exa\u{200b}mple.com",
+        ] {
+            assert!(matches!(
+                TerminalLink::osc8(uri, 3, 2).target,
+                LinkTarget::Osc8(Osc8UrlDecision::Deny(_))
+            ));
+        }
+        assert_ne!(
+            link,
+            TerminalLink::osc8("https://example.com/changed", 3, 2)
+        );
+        assert_ne!(link, TerminalLink::osc8("https://example.com/path", 4, 2));
+        // Plain, visible URLs retain their existing scheme support.
+        assert_eq!(
+            detect("file:///tmp/file.txt", "file"),
+            Some("file:///tmp/file.txt".into())
+        );
+    }
+
+    #[test]
+    fn press_does_not_arm_a_target_substituted_after_hover() {
+        let preview = TerminalLink::osc8("https://example.com/shown", 3, 2);
+        let changed = TerminalLink::osc8("https://example.com/substituted", 3, 2);
+        assert_eq!(changed.clone().for_press(Some(&preview)), None);
+        assert_eq!(changed.clone().for_press(Some(&changed)), Some(changed));
+        assert_eq!(preview.clone().for_press(None), Some(preview.clone()));
+        // Removing OSC 8 must not bypass the preview check via plain detection.
+        let plain = link_at_line("https://example.com/plain", 3, 4).unwrap();
+        assert_eq!(plain.for_press(Some(&preview)), None);
+    }
+
+    #[test]
+    fn osc8_activation_matches_target_across_cells_but_hover_tracks_geometry() {
+        let start = TerminalLink::osc8("https://example.com/label", 9, 2);
+        let wrapped = TerminalLink::osc8("https://example.com/label", 0, 3);
+        assert_ne!(start, wrapped);
+        assert!(start.same_link(&wrapped));
+        assert_eq!(wrapped.clone().for_press(Some(&start)), Some(wrapped));
+        assert!(!start.same_link(&TerminalLink::osc8("https://example.com/other", 9, 2)));
+
+        let plain = link_at_line("https://example.com/label", 3, 4).unwrap();
+        let mut other_row = plain.clone();
+        other_row.row = 1;
+        assert!(!plain.same_link(&other_row));
+        assert!(!start.same_link(&plain));
     }
 
     #[test]

@@ -908,6 +908,12 @@ impl GhosttyView {
 
     fn link_at_position(&self, pos: Point<Pixels>) -> Option<TerminalLink> {
         let (col, row) = self.cell_from_event_position(pos)?;
+        let inner = self.terminal.as_ref()?.inner();
+        let guard = inner.lock();
+        // An unreadable OSC 8 target must not fall back to the visible label.
+        if let Some(uri) = guard.as_ref()?.hyperlink_at(col, row).ok()? {
+            return Some(TerminalLink::osc8(&uri, col, row));
+        }
         let snapshot = self.snapshot.as_ref()?;
         terminal_links::link_at_snapshot(snapshot, col, row)
     }
@@ -2007,6 +2013,14 @@ impl Render for GhosttyView {
         if let Some(overlay) = self.render_link_cursor_overlay(cell_width_px, line_height_px) {
             terminal_children.push(overlay);
         }
+        if let Some(preview) = self
+            .hovered_link
+            .as_ref()
+            .zip(self.pane_bounds)
+            .and_then(|(link, bounds)| link.preview(cx.theme(), bounds.size.width))
+        {
+            terminal_children.push(preview.into_any_element());
+        }
         let terminal_layer = div()
             .relative()
             .size_full()
@@ -2133,11 +2147,10 @@ impl Render for GhosttyView {
                     let _ = this.ensure_session(cx);
                     this.last_mouse_position = Some(event.position);
                     this.cancel_left_pointer_interactions(event.position);
+                    let preview = this.hovered_link.take();
                     let _ = this.update_hovered_link(&event.modifiers);
-                    if terminal_links::should_open_link(&event.modifiers)
-                        && let Some(link) = this.link_at_position(event.position)
-                    {
-                        this.mouse_down_link = Some(link);
+                    if let Some(link) = this.hovered_link.clone() {
+                        this.mouse_down_link = link.for_press(preview.as_ref());
                         this.suppress_link_mouse_up = true;
                         window.prevent_default();
                         cx.stop_propagation();
@@ -2174,8 +2187,9 @@ impl Render for GhosttyView {
                     if event.pressed_button == Some(MouseButton::Left) {
                         let mut changed = this.update_hovered_link(&event.modifiers);
                         if let Some(down_link) = this.mouse_down_link.as_ref() {
-                            let still_on_same_link =
-                                this.link_at_position(event.position).as_ref() == Some(down_link);
+                            let still_on_same_link = this
+                                .link_at_position(event.position)
+                                .is_some_and(|link| link.same_link(down_link));
                             if !still_on_same_link {
                                 this.mouse_down_link = None;
                                 changed = true;
@@ -2221,9 +2235,11 @@ impl Render for GhosttyView {
                         let down_link = this.mouse_down_link.take();
                         this.suppress_link_mouse_up = false;
                         if let Some(down_link) = down_link
-                            && this.link_at_position(event.position).as_ref() == Some(&down_link)
+                            && this
+                                .link_at_position(event.position)
+                                .is_some_and(|link| link.same_link(&down_link))
                         {
-                            cx.open_url(&down_link.url);
+                            down_link.open(window, cx);
                         }
                         window.prevent_default();
                         cx.stop_propagation();

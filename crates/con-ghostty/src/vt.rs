@@ -1114,6 +1114,12 @@ unsafe extern "C" {
         point: GhosttyPoint,
         out_ref: *mut GhosttyGridRef,
     ) -> GhosttyResult;
+    fn ghostty_grid_ref_hyperlink_uri(
+        grid_ref: *const GhosttyGridRef,
+        buf: *mut u8,
+        buf_len: usize,
+        out_len: *mut usize,
+    ) -> GhosttyResult;
     pub fn ghostty_terminal_paste(
         terminal: GhosttyTerminal,
         paste: *const GhosttyPaste,
@@ -2854,6 +2860,38 @@ impl VtScreen {
 
     pub fn generation(&self) -> u64 {
         self.inner.lock().generation
+    }
+
+    /// Copy the OSC 8 target at a viewport cell. No grid reference escapes the
+    /// parser lock: feeding, scrolling, or resizing can invalidate it.
+    pub fn hyperlink_at(&self, col: u16, row: u16) -> anyhow::Result<Option<String>> {
+        let inner = self.inner.lock();
+        if col >= inner.cols || row >= inner.rows {
+            return Ok(None);
+        }
+        let grid_ref = selection_grid_ref(inner.terminal, col, row)?;
+        let mut len = 0;
+        // SAFETY: the reference belongs to this locked terminal. NULL queries
+        // the required byte count; the URI is not NUL-terminated.
+        let rc =
+            unsafe { ghostty_grid_ref_hyperlink_uri(&grid_ref, std::ptr::null_mut(), 0, &mut len) };
+        if rc == GHOSTTY_SUCCESS && len == 0 {
+            return Ok(None);
+        }
+        if rc != GHOSTTY_OUT_OF_SPACE {
+            anyhow::bail!("ghostty_grid_ref_hyperlink_uri size query failed: rc={rc}");
+        }
+        let mut bytes = vec![0; len];
+        // SAFETY: the lock still prevents mutations and bytes has the exact
+        // capacity requested by Ghostty.
+        let rc = unsafe {
+            ghostty_grid_ref_hyperlink_uri(&grid_ref, bytes.as_mut_ptr(), bytes.len(), &mut len)
+        };
+        if rc != GHOSTTY_SUCCESS {
+            anyhow::bail!("ghostty_grid_ref_hyperlink_uri failed: rc={rc}");
+        }
+        bytes.truncate(len);
+        Ok(Some(String::from_utf8(bytes)?))
     }
 
     /// Begin a local text-selection gesture at a viewport cell.
@@ -5577,6 +5615,53 @@ mod tests {
     use std::ffi::CStr;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn hyperlink_at_reads_targets_not_labels_and_respects_boundaries() {
+        let screen = VtScreen::new(20, 3, None).unwrap();
+        screen.feed(b"x\x1b]8;id=one;https://example.com/hidden\x1b\\label\x1b]8;;\x1b\\y");
+        assert_eq!(screen.hyperlink_at(0, 0).unwrap(), None);
+        for col in 1..6 {
+            assert_eq!(
+                screen.hyperlink_at(col, 0).unwrap().as_deref(),
+                Some("https://example.com/hidden")
+            );
+        }
+        assert_eq!(screen.hyperlink_at(6, 0).unwrap(), None);
+        assert_eq!(screen.hyperlink_at(20, 0).unwrap(), None);
+        assert_eq!(screen.hyperlink_at(0, 3).unwrap(), None);
+        let owned = screen.hyperlink_at(1, 0).unwrap().unwrap();
+        screen.feed(b"\r\x1b[2K");
+        assert_eq!(screen.hyperlink_at(1, 0).unwrap(), None);
+        assert_eq!(owned, "https://example.com/hidden");
+    }
+
+    #[test]
+    fn hyperlink_at_tracks_wide_cells_wrap_resize_and_scrollback() {
+        let screen = VtScreen::new(6, 3, None).unwrap();
+        screen.feed("xx\x1b]8;;https://example.com/wide\x07界abcd\x1b]8;;\x07".as_bytes());
+        for (col, row) in [(2, 0), (3, 0), (5, 0), (0, 1), (1, 1)] {
+            assert_eq!(
+                screen.hyperlink_at(col, row).unwrap().as_deref(),
+                Some("https://example.com/wide")
+            );
+        }
+        assert_eq!(screen.hyperlink_at(2, 1).unwrap(), None);
+        screen.resize(10, 3, 8, 16).unwrap();
+        assert_eq!(
+            screen.hyperlink_at(7, 0).unwrap().as_deref(),
+            Some("https://example.com/wide")
+        );
+        screen.feed(b"\r\nline2\r\nline3\r\nline4");
+        assert_eq!(screen.hyperlink_at(2, 0).unwrap(), None);
+        screen.scroll_viewport_delta(-1);
+        assert_eq!(
+            screen.hyperlink_at(2, 0).unwrap().as_deref(),
+            Some("https://example.com/wide")
+        );
+        screen.scroll_viewport_bottom();
+        assert_eq!(screen.hyperlink_at(2, 0).unwrap(), None);
+    }
 
     #[test]
     fn libghostty_vt_manifest_matches_handwritten_ffi() {

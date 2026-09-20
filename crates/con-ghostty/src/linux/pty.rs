@@ -654,6 +654,10 @@ impl LinuxPtySession {
         snapshot_to_lines(&self.shared.screen.snapshot(), max_lines)
     }
 
+    pub fn hyperlink_at(&self, col: u16, row: u16) -> anyhow::Result<Option<String>> {
+        self.shared.screen.hyperlink_at(col, row)
+    }
+
     /// Drive the libghostty-vt render-state pipeline once and return a
     /// fresh `ScreenSnapshot`.
     pub fn snapshot(&self) -> Option<ScreenSnapshot> {
