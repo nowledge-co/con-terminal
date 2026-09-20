@@ -15,6 +15,20 @@ impl Color {
     pub fn to_u32(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
+
+    /// WCAG relative luminance in the sRGB color space.
+    pub fn relative_luminance(self) -> f64 {
+        fn linear(channel: u8) -> f64 {
+            let value = channel as f64 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        }
+
+        0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
+    }
 }
 
 /// Terminal color theme used for con chrome and Ghostty palette generation.
@@ -27,6 +41,40 @@ pub struct TerminalTheme {
 }
 
 impl TerminalTheme {
+    /// Compatibility names authored by older Con versions, not Ghostty's
+    /// case-sensitive native theme catalog (for example `Dracula`).
+    pub fn legacy_builtin(name: &str) -> Option<Self> {
+        if name != name.to_lowercase() {
+            return None;
+        }
+        Self::by_name(name).filter(|theme| Self::available().contains(&theme.name.as_str()))
+    }
+
+    /// Whether the background should use dark-mode UI chrome.
+    pub fn is_dark(&self) -> bool {
+        self.background.relative_luminance() < 0.5
+    }
+
+    /// Serialize this theme as a standalone Ghostty theme resource.
+    pub fn to_ghostty_format(&self) -> String {
+        let mut output = format!(
+            "foreground = #{:02x}{:02x}{:02x}\nbackground = #{:02x}{:02x}{:02x}\n",
+            self.foreground.r,
+            self.foreground.g,
+            self.foreground.b,
+            self.background.r,
+            self.background.g,
+            self.background.b
+        );
+        for (index, color) in self.ansi.iter().enumerate() {
+            output.push_str(&format!(
+                "palette = {index}=#{:02x}{:02x}{:02x}\n",
+                color.r, color.g, color.b
+            ));
+        }
+        output
+    }
+
     pub fn flexoki_dark() -> Self {
         Self {
             name: "flexoki-dark".into(),
@@ -573,4 +621,40 @@ fn parse_hex_color(value: &str) -> Option<Color> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some(Color::rgb(r, g, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_is_based_on_background_luminance_not_name() {
+        let mut pale_theme = TerminalTheme::flexoki_dark();
+        pale_theme.name = "definitely-dark".into();
+        pale_theme.background = Color::rgb(0xFF, 0xF1, 0x9A);
+        assert!(!pale_theme.is_dark());
+
+        let mut tinted_theme = TerminalTheme::flexoki_light();
+        tinted_theme.name = "definitely-light".into();
+        tinted_theme.background = Color::rgb(0x16, 0x28, 0x36);
+        assert!(tinted_theme.is_dark());
+    }
+
+    #[test]
+    fn ghostty_format_round_trips_all_colors() {
+        let theme = TerminalTheme::flexoki_light();
+        let serialized = theme.to_ghostty_format();
+        let parsed = TerminalTheme::from_ghostty_format("round-trip", &serialized).unwrap();
+
+        assert_eq!(parsed.foreground, theme.foreground);
+        assert_eq!(parsed.background, theme.background);
+        assert_eq!(parsed.ansi, theme.ansi);
+        assert_eq!(
+            serialized
+                .lines()
+                .filter(|line| line.starts_with("palette"))
+                .count(),
+            16
+        );
+    }
 }
