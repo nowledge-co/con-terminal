@@ -165,7 +165,7 @@ Two GPUI gaps matter for con's Windows port:
    support.** Not blockers for con today but worth tracking.
 
 The workspace currently uses upstream `zed-industries/zed` gpui directly
-(see `Cargo.toml`), not the GPUI-CE community fork. CLAUDE.md previously
+(see `Cargo.toml`), not the GPUI-CE community fork. AGENTS.md previously
 described a GPUI-CE pin; that wording is being corrected as part of this
 prep work.
 

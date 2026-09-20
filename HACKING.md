@@ -4,7 +4,7 @@ Quick contributor map for `con`.
 
 Read these first:
 - `README.md` — public project overview
-- `CLAUDE.md` — development conventions
+- `AGENTS.md` — development conventions
 - `DESIGN.md` — architecture and product direction
 - `docs/README.md` — documentation index
 
