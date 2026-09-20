@@ -52,7 +52,7 @@ Use the Settings viewport width only. These breakpoints must not be reused for t
 
 | Mode | Width | Navigation | Form behavior |
 |---|---:|---|---|
-| `mobile` | `< 600px` | horizontal scrollable top tabs | all form controls stack vertically |
+| `mobile` | `< 600px` | adaptive wrapping top tabs | all form controls stack vertically |
 | `narrow` | `600–839px` | 48px icon rail | controls become flexible; stacked controls remain allowed |
 | `compact` | `840–979px` | 144px labeled rail | normal rows with flexible controls |
 | `regular` | `>= 980px` | 160px labeled rail | full desktop layout |
@@ -458,7 +458,7 @@ The responsive layout must preserve all existing behavior:
 
 Mobile-specific interaction requirements:
 
-- top tabs are horizontally scrollable but the page body remains vertically scrollable;
+- top tabs wrap adaptively; the page body remains vertically scrollable;
 - controls must not require horizontal scrolling;
 - Select popups may extend beyond the form card as normal overlays, but their trigger must remain full-width;
 - all icon-only header actions have tooltips/accessibility labels;
