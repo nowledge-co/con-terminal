@@ -16,6 +16,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#368](https://github.com/nowledge-co/con-terminal/pull/368) by
   [@zerob13](https://github.com/zerob13))_
 
+### Fixed
+
+**macOS**
+
+- Terminal apps can now change the system pointer shape, including link,
+  text, crosshair, and resize cursors. Pointer hiding requested while typing is
+  also restored safely across panes, windows, and focus changes. _(PR
+  [#370](https://github.com/nowledge-co/con-terminal/pull/370) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 ---
 
 ## `v0.1.0-beta.103` - 2026-09-20
