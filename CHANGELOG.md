@@ -4,7 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.103`
+## `v0.1.0-beta.104`
+
+### Changed
+
+**Settings**
+
+- Settings now remains usable in narrow windows, with responsive controls,
+  readable wrapping, and a compact provider picker down to phone-sized widths.
+  Desktop layouts keep their existing density. _(PR
+  [#368](https://github.com/nowledge-co/con-terminal/pull/368) by
+  [@zerob13](https://github.com/zerob13))_
+
+---
+
+## `v0.1.0-beta.103` - 2026-09-20
 
 ### Added
 
