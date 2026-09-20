@@ -228,6 +228,7 @@ pub enum GhosttyTerminalOption {
     UnknownMaxBytes = 36,
     ClipboardRead = 38,
     ClipboardWriteMaxBytes = 39,
+    ResizePullScrollback = 40,
 }
 
 #[repr(C)]
@@ -2389,6 +2390,25 @@ impl VtScreen {
         let rc = unsafe { ghostty_terminal_new(std::ptr::null(), &mut terminal, cols, rows) };
         if rc != 0 || terminal.is_null() {
             anyhow::bail!("ghostty_terminal_new failed: rc={rc}");
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // ConPTY owns an active screen but cannot pull our scrollback.
+            // Keep resize/reflow aligned with it; Unix PTYs retain the default.
+            let pull_scrollback = false;
+            // SAFETY: terminal is live and the option synchronously copies a bool.
+            let rc = unsafe {
+                ghostty_terminal_set(
+                    terminal,
+                    GhosttyTerminalOption::ResizePullScrollback,
+                    &pull_scrollback as *const bool as *const c_void,
+                )
+            };
+            if rc != 0 {
+                unsafe { ghostty_terminal_free(terminal) };
+                anyhow::bail!("ghostty_terminal_set(RESIZE_PULL_SCROLLBACK) failed: rc={rc}");
+            }
         }
 
         let max_scrollback_lines = 10_000_usize;
@@ -5615,6 +5635,10 @@ mod tests {
             Some(GhosttyTerminalOption::ScrollbackMaxLines as i64)
         );
         assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["RESIZE_PULL_SCROLLBACK"].as_i64(),
+            Some(GhosttyTerminalOption::ResizePullScrollback as i64)
+        );
+        assert_eq!(
             types["GhosttyTerminalOption"]["values"]["KITTY_IMAGE_STORAGE_LIMIT"].as_i64(),
             Some(GhosttyTerminalOption::KittyImageStorageLimit as i64)
         );
@@ -6838,6 +6862,57 @@ mod tests {
         );
         assert!(!screen.has_selection());
         assert_eq!(screen.generation(), generation);
+    }
+
+    #[test]
+    fn resize_scrollback_policy_matches_pty() {
+        // Row growth and column reflow independently pull history by default.
+        // Check after RIS too: this is PTY configuration, not terminal state.
+        for reset in [false, true] {
+            for (cols, output, new_cols, new_rows, windows_rows, unix_rows) in [
+                (
+                    7,
+                    "1ABCD\r\n2EFGH\r\n3IJKL\r\n4ABCD\r\n5EFGH",
+                    7,
+                    5,
+                    vec!["3IJKL", "4ABCD", "5EFGH", "", ""],
+                    vec!["1ABCD", "2EFGH", "3IJKL", "4ABCD", "5EFGH"],
+                ),
+                (
+                    5,
+                    "1AAAA\r\n2BBBB\r\n3CCCCDD\r\n4E",
+                    10,
+                    3,
+                    vec!["3CCCCDD", "4E", ""],
+                    vec!["2BBBB", "3CCCCDD", "4E"],
+                ),
+            ] {
+                let screen = VtScreen::new(cols, 3, None).expect("create vt screen");
+                if reset {
+                    screen.feed(b"\x1bc");
+                }
+                screen.feed(output.as_bytes());
+                screen.resize(new_cols, new_rows, 10, 20).expect("resize");
+                let snapshot = screen.try_snapshot().expect("render resized terminal");
+                let lines: Vec<String> = snapshot
+                    .cells
+                    .chunks(new_cols as usize)
+                    .map(|row| {
+                        row.iter()
+                            .map(|cell| char::from_u32(cell.codepoint).unwrap_or(' '))
+                            .collect::<String>()
+                            .trim_end_matches([' ', '\0'])
+                            .to_owned()
+                    })
+                    .collect();
+                let expected = if cfg!(target_os = "windows") {
+                    windows_rows
+                } else {
+                    unix_rows
+                };
+                assert_eq!(lines, expected, "reset={reset}, cols={cols}");
+            }
+        }
     }
 
     #[test]

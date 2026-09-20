@@ -20,11 +20,15 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// anchors intact. Ghostty 1.4 redefined `copy-on-select` /
 /// `middle-click-action`; Con pins both in `src/terminal.rs`.
 ///
+/// 2026-09-20 bump: first merged revision with RESIZE_PULL_SCROLLBACK,
+/// required to keep the Windows VT active area aligned with ConPTY.
+/// `include/ghostty.h` unchanged; VT adds option 40 and clarifies empty output.
+///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "492300cad104195411d12217dd22f1cd05f31376";
+const GHOSTTY_REV: &str = "b32f20f3e8d25bb925ec545c54498e93518e7ced";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
