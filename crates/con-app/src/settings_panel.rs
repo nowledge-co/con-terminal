@@ -6064,18 +6064,14 @@ impl Render for SettingsPanel {
         let mobile = mode.is_mobile();
         let compact = matches!(mode, ResponsiveMode::Compact);
         let narrow = matches!(mode, ResponsiveMode::Narrow | ResponsiveMode::Mobile);
-        let sidebar_w = if mobile {
-            px(0.0)
-        } else if narrow {
+        let sidebar_w = if narrow {
             px(48.0)
         } else if compact {
             px(144.0)
         } else {
             px(160.0)
         };
-        let content_pad = if mobile {
-            px(12.0)
-        } else if narrow {
+        let content_pad = if narrow {
             px(14.0)
         } else if compact {
             px(18.0)
@@ -6096,9 +6092,8 @@ impl Render for SettingsPanel {
         // Sidebar
         let mut sidebar = div()
             .flex()
-            .when(!mobile, |this| this.flex_col())
-            .when(mobile, |this| this.flex_wrap().w_full())
-            .when(!mobile, |this| this.w(sidebar_w))
+            .flex_col()
+            .w(sidebar_w)
             .pt(px(8.0))
             .pb(px(12.0))
             .px(if narrow { px(4.0) } else { px(8.0) })
@@ -6145,23 +6140,18 @@ impl Render for SettingsPanel {
                     }),
                 );
 
-            if mobile {
-                nav_item = nav_item
-                    .gap(px(6.0))
-                    .px(px(9.0))
-                    .min_h(px(32.0))
-                    .text_size(px(12.0))
-                    .child(
-                        svg()
-                            .path(section.icon())
-                            .size(ui_icon_px(theme, 16.0))
-                            .text_color(if is_active {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            }),
-                    )
-                    .child(section.label());
+            if narrow {
+                // Icon-only mode: centered icon, no label
+                nav_item = nav_item.justify_center().size(px(36.0)).mx_auto().child(
+                    svg()
+                        .path(section.icon())
+                        .size(ui_icon_px(theme, 16.0))
+                        .text_color(if is_active {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        }),
+                );
             } else {
                 nav_item = nav_item
                     .gap(px(8.0))
@@ -6571,7 +6561,6 @@ impl Render for SettingsPanel {
             .child(
                 div()
                     .flex()
-                    .when(mobile, |this| this.flex_col())
                     .flex_1()
                     .min_h_0()
                     .child(sidebar)

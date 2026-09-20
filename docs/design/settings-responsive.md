@@ -17,7 +17,7 @@ No main terminal, workspace, agent panel, or application-wide breakpoint behavio
 
 ## 2. Current Findings
 
-The Settings panel already has a compact mode below 980px and an icon-only navigation rail below 840px. That is not sufficient for phone-sized widths because the content still contains fixed horizontal controls.
+The Settings panel already has a compact mode below 980px and an icon-only navigation rail below 840px. That navigation shell is correct and must be preserved as-is. What is not sufficient for phone-sized widths is the content area, which still contains fixed horizontal controls.
 
 At approximately 360px:
 
@@ -52,10 +52,12 @@ Use the Settings viewport width only. These breakpoints must not be reused for t
 
 | Mode | Width | Navigation | Form behavior |
 |---|---:|---|---|
-| `mobile` | `< 600px` | adaptive wrapping top tabs | all form controls stack vertically |
+| `mobile` | `< 600px` | 48px icon rail (unchanged) | all form controls stack vertically |
 | `narrow` | `600–839px` | 48px icon rail | controls become flexible; stacked controls remain allowed |
 | `compact` | `840–979px` | 144px labeled rail | normal rows with flexible controls |
 | `regular` | `>= 980px` | 160px labeled rail | full desktop layout |
+
+The navigation rail is identical in `mobile` and `narrow`. Only the content area changes at `< 600px`.
 
 The design target is 360px, but the mobile mode should continue to behave well through 599px. There should be no special behavior that only works at exactly 360px.
 
@@ -81,50 +83,43 @@ If a platform window manager refuses a 360px physical minimum, the Settings cont
 +------------------+----------------------------------------------------+
 ```
 
-### Mobile layout
+### Narrow and mobile layout
 
-The outer sidebar must not consume 48px at mobile width. Replace it with an adaptive, wrapping tab strip. Do not use icon-only navigation as the only mobile label: five icon-only buttons are compact but not sufficiently discoverable.
-
-The tab strip must wrap instead of horizontally scrolling. At 360px, two rows are preferable to hiding part of the Settings information architecture behind a scroll gesture.
+The two-column shell is preserved at every width. The navigation rail never moves above the content and never becomes a horizontal tab strip. Below 840px it keeps its existing behavior: a 48px icon-only rail with the same five sections.
 
 ```text
 +--------------------------------------+
 | Settings                    [✓] [▣] [↗]
-+--------------------------------------+
-| [☷ General] [☼ Appearance] [● AI]   |
-| [🔌 Providers] [⌨ Keys]              |
-+--------------------------------------+
-|                                      |
-| General                              |
-| Terminal defaults and app behavior.  |
-|                                      |
-| ...                                  |
-|                                      |
-+--------------------------------------+
++----+---------------------------------+
+| ☷  |                                 |
+| ☼  |  General                        |
+| ●  |  Terminal defaults and shared   |
+| 🔌 |  app behavior.                  |
+| ⌨  |                                 |
+|    |  [ stacked control ]            |
+|    |  [ stacked control ]            |
++----+---------------------------------+
 ```
 
-Mobile navigation rules:
+Navigation rules:
 
-- use `flex_wrap()` with natural tab widths; do not introduce horizontal scrolling;
-- each tab has an icon and a complete text label;
-- the active tab uses the existing semantic active fill/accent;
-- each tab has a minimum 32px height and an adequate horizontal hit area;
-- the navigation container grows with its wrapped rows, normally reaching two rows at 360px;
-- at wider mobile widths, the same tabs naturally return to one row when they fit;
-- do not clip or ellipsize tab labels to force a single row;
-- the page body remains vertically scrollable, while the navigation strip itself never scrolls horizontally;
+- the rail stays in the left column at 360px and at every wider width;
+- below 840px the rail is icon-only, matching the pre-existing narrow behavior;
+- each rail icon keeps its tooltip/accessibility label;
+- the active section keeps the existing semantic active fill;
+- no horizontal scrolling is introduced anywhere in the shell;
 - no main workspace navigation or sidebar behavior changes.
 
 ### Mobile header actions
 
-At `< 600px`, remove non-essential header text but preserve affordances:
+At `< 600px`, the header wraps instead of overflowing. The title and the action group stack onto separate rows, and the action group wraps internally when needed. Button labels are preserved rather than hidden.
 
 ```text
-regular:  [Saved] [Open config] [Save]
-mobile:   [status icon] [config icon] [save icon]
+regular:  [Saved] [Open config] [Save]              (single row)
+mobile:   [Saved] [Open config] [Save]              (own wrapped row)
 ```
 
-Every icon-only action must keep a tooltip/accessibility label. Save remains disabled when there are no changes. The warning/saved state remains visible through the status icon and semantic color.
+Save remains disabled when there are no changes. The warning/saved state remains visible through the status icon and semantic color.
 
 The unsaved-changes confirmation must wrap instead of forcing a single horizontal line:
 
@@ -458,7 +453,7 @@ The responsive layout must preserve all existing behavior:
 
 Mobile-specific interaction requirements:
 
-- top tabs wrap adaptively; the page body remains vertically scrollable;
+- the navigation rail stays in the left column; the page body remains vertically scrollable;
 - controls must not require horizontal scrolling;
 - Select popups may extend beyond the form card as normal overlays, but their trigger must remain full-width;
 - all icon-only header actions have tooltips/accessibility labels;
@@ -477,7 +472,7 @@ ResponsiveMode::Regular
 
 Recommended implementation order:
 
-1. Add the Settings-only responsive mode and mobile navigation shell.
+1. Add the Settings-only responsive mode. Keep the existing navigation shell untouched.
 2. Update shared row helpers to accept the mode and remove fixed widths in mobile mode.
 3. Update header/confirmation/error wrapping behavior.
 4. Collapse the Providers nested sidebar into a provider Select on mobile.
@@ -491,9 +486,9 @@ Avoid duplicating five independent mobile implementations. The page render funct
 
 | Viewport | Expected result |
 |---:|---|
-| 360×520 | no page-level horizontal overflow; mobile tabs; stacked controls; Providers picker instead of nested sidebar |
-| 390×700 | same mobile structure with more visible tab/content width |
-| 600×700 | transition to icon rail; flexible controls; provider list may return |
+| 360×520 | no page-level horizontal overflow; 48px icon rail preserved; stacked controls; Providers picker instead of nested sidebar |
+| 390×700 | same structure with more visible content width |
+| 600×700 | 48px icon rail; flexible controls; provider list may return |
 | 840×700 | labeled 144px rail; compact rows |
 | 980×720 | labeled 160px rail; regular row widths |
 | 1200×800 | current desktop hierarchy retained |
