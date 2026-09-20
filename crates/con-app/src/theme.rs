@@ -190,11 +190,9 @@ pub fn init_theme(
     } else {
         apply_gpui_theme_by_name(terminal_theme, cx);
     }
-    let mode = if terminal_theme.contains("light") {
-        ThemeMode::Light
-    } else {
-        ThemeMode::Dark
-    };
+    let mode = TerminalTheme::by_name(terminal_theme)
+        .map(|theme| theme_mode(&theme))
+        .unwrap_or(ThemeMode::Dark);
     Theme::change(mode, None, cx);
     apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
     apply_scrollbar_overrides(cx);
@@ -226,11 +224,7 @@ pub fn sync_gpui_theme(
     cx: &mut gpui::App,
 ) {
     apply_dynamic_theme(terminal_theme, cx);
-    let mode = if terminal_theme.name.contains("light") {
-        ThemeMode::Light
-    } else {
-        ThemeMode::Dark
-    };
+    let mode = theme_mode(terminal_theme);
     Theme::change(mode, Some(window), cx);
     apply_font_overrides(terminal_font_family, ui_font_family, ui_font_size, cx);
     apply_scrollbar_overrides(cx);
@@ -294,16 +288,14 @@ fn apply_dynamic_theme(tt: &TerminalTheme, cx: &mut App) {
     let json = generate_gpui_theme_json(tt);
     // Register (or re-register) the dynamic theme
     // ThemeRegistry skips duplicates, so we directly set the theme config
-    match serde_json::from_str::<serde_json::Value>(&json) {
-        Ok(val) => {
-            if let Ok(theme_set) = serde_json::from_value::<gpui_component::ThemeSet>(val) {
-                for theme_config in theme_set.themes {
-                    let rc = std::rc::Rc::new(theme_config);
-                    if tt.name.contains("light") {
-                        Theme::global_mut(cx).light_theme = rc;
-                    } else {
-                        Theme::global_mut(cx).dark_theme = rc;
-                    }
+    match serde_json::from_str::<gpui_component::ThemeSet>(&json) {
+        Ok(theme_set) => {
+            for theme_config in theme_set.themes {
+                let rc = std::rc::Rc::new(theme_config);
+                if tt.is_dark() {
+                    Theme::global_mut(cx).dark_theme = rc;
+                } else {
+                    Theme::global_mut(cx).light_theme = rc;
                 }
             }
         }
@@ -348,23 +340,24 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
     let magenta = tt.ansi[5];
     let cyan = tt.ansi[6];
 
-    let is_dark = is_dark_color(bg);
+    let is_dark = tt.is_dark();
     let mode = if is_dark { "dark" } else { "light" };
 
     // Generate surface colors by blending bg toward fg
     let surface1 = blend(bg, fg, 0.06);
     let surface2 = blend(bg, fg, 0.12);
     let surface3 = blend(bg, fg, 0.18);
-    let muted_fg = blend(fg, bg, 0.45);
+    let fg = contrasting_text(fg, &[bg]);
+    let muted_fg = contrasting_text(blend(fg, bg, 0.45), &[surface1]);
 
     // Primary contrast — use bg as text on primary buttons for max contrast
-    let primary_fg = bg;
     let primary_hover = if is_dark {
         darken(blue, 0.15)
     } else {
         darken(blue, 0.12)
     };
     let primary_active = darken(blue, 0.25);
+    let primary_fg = contrasting_text(bg, &[blue, primary_hover, primary_active]);
 
     // Danger hover/active
     let danger_hover = if is_dark {
@@ -373,6 +366,12 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         darken(red, 0.1)
     };
     let danger_active = darken(red, 0.2);
+    let secondary_fg = contrasting_text(fg, &[surface1, surface2, surface3]);
+    let accent_fg = contrasting_text(fg, &[surface3]);
+    let success_fg = contrasting_text(fg, &[green]);
+    let danger_fg = contrasting_text(fg, &[red, danger_hover, danger_active]);
+    let warning_fg = contrasting_text(fg, &[yellow]);
+    let info_fg = contrasting_text(fg, &[cyan]);
 
     let theme_name = format!("con-gen-{}", tt.name);
 
@@ -406,7 +405,7 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "primary.active.background": "{primary_active_hex}",
 
         "secondary.background": "{surface1_hex}",
-        "secondary.foreground": "{fg_hex}",
+        "secondary.foreground": "{secondary_fg_hex}",
         "secondary.hover.background": "{surface2_hex}",
         "secondary.active.background": "{surface3_hex}",
 
@@ -414,27 +413,27 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         "muted.foreground": "{muted_fg_hex}",
 
         "accent.background": "{surface3_hex}",
-        "accent.foreground": "{fg_hex}",
+        "accent.foreground": "{accent_fg_hex}",
 
         "success.background": "{green_hex}",
-        "success.foreground": "{primary_fg_hex}",
+        "success.foreground": "{success_fg_hex}",
 
         "danger.background": "{red_hex}",
-        "danger.foreground": "{primary_fg_hex}",
+        "danger.foreground": "{danger_fg_hex}",
         "danger.hover.background": "{danger_hover_hex}",
         "danger.active.background": "{danger_active_hex}",
 
         "warning.background": "{yellow_hex}",
-        "warning.foreground": "{primary_fg_hex}",
+        "warning.foreground": "{warning_fg_hex}",
 
         "info.background": "{cyan_hex}",
-        "info.foreground": "{primary_fg_hex}",
+        "info.foreground": "{info_fg_hex}",
 
         "title_bar.background": "{surface1_hex}",
         "title_bar.border": "{border}",
 
         "sidebar.background": "{surface1_hex}",
-        "sidebar.foreground": "{fg_hex}",
+        "sidebar.foreground": "{secondary_fg_hex}",
         "sidebar.border": "{border}",
 
         "list.active.background": "{list_active}",
@@ -512,6 +511,12 @@ fn generate_gpui_theme_json(tt: &TerminalTheme) -> String {
         fg_hex = hex(fg),
         border = hex(surface2),
         primary_fg_hex = hex(primary_fg),
+        secondary_fg_hex = hex(secondary_fg),
+        accent_fg_hex = hex(accent_fg),
+        success_fg_hex = hex(success_fg),
+        danger_fg_hex = hex(danger_fg),
+        warning_fg_hex = hex(warning_fg),
+        info_fg_hex = hex(info_fg),
         primary_hover_hex = hex(primary_hover),
         primary_active_hex = hex(primary_active),
         surface1_hex = hex(surface1),
@@ -554,9 +559,42 @@ fn hex_rgb(r: u8, g: u8, b: u8) -> String {
     format!("#{:02X}{:02X}{:02X}", r, g, b)
 }
 
-fn is_dark_color(c: Color) -> bool {
-    let luma = 0.299 * c.r as f64 + 0.587 * c.g as f64 + 0.114 * c.b as f64;
-    luma < 128.0
+fn theme_mode(theme: &TerminalTheme) -> ThemeMode {
+    if theme.is_dark() {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    }
+}
+
+fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let lighter = a.relative_luminance().max(b.relative_luminance());
+    let darker = a.relative_luminance().min(b.relative_luminance());
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn contrasting_text(preferred: Color, backgrounds: &[Color]) -> Color {
+    const MIN_CONTRAST: f64 = 4.5;
+    if backgrounds
+        .iter()
+        .all(|background| contrast_ratio(preferred, *background) >= MIN_CONTRAST)
+    {
+        return preferred;
+    }
+
+    let black = Color::rgb(0, 0, 0);
+    let white = Color::rgb(255, 255, 255);
+    let minimum_contrast = |candidate| {
+        backgrounds
+            .iter()
+            .map(|background| contrast_ratio(candidate, *background))
+            .fold(f64::INFINITY, f64::min)
+    };
+    if minimum_contrast(black) >= minimum_contrast(white) {
+        black
+    } else {
+        white
+    }
 }
 
 fn blend(base: Color, target: Color, amount: f64) -> Color {
@@ -581,4 +619,61 @@ fn lighten(c: Color, amount: f64) -> Color {
         (c.g as f64 + (255.0 - c.g as f64) * amount) as u8,
         (c.b as f64 + (255.0 - c.b as f64) * amount) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generated_colors(theme: &TerminalTheme) -> serde_json::Map<String, serde_json::Value> {
+        let json: serde_json::Value =
+            serde_json::from_str(&generate_gpui_theme_json(theme)).unwrap();
+        json["themes"][0]["colors"].as_object().unwrap().clone()
+    }
+
+    fn color(value: &serde_json::Value) -> Color {
+        let hex = value.as_str().unwrap().trim_start_matches('#');
+        Color::rgb(
+            u8::from_str_radix(&hex[0..2], 16).unwrap(),
+            u8::from_str_radix(&hex[2..4], 16).unwrap(),
+            u8::from_str_radix(&hex[4..6], 16).unwrap(),
+        )
+    }
+
+    #[test]
+    fn low_contrast_normal_text_is_corrected() {
+        let mut theme = TerminalTheme::flexoki_light();
+        theme.foreground = Color::rgb(0xDD, 0xDD, 0xDD);
+        let colors = generated_colors(&theme);
+
+        assert!(contrast_ratio(color(&colors["foreground"]), theme.background) >= 4.5);
+        assert!(
+            contrast_ratio(
+                color(&colors["muted.foreground"]),
+                color(&colors["muted.background"])
+            ) >= 4.5
+        );
+    }
+
+    #[test]
+    fn pale_yellow_warning_gets_its_own_contrasting_text() {
+        let mut theme = TerminalTheme::tokyonight();
+        theme.ansi[3] = Color::rgb(0xFF, 0xF4, 0xA3);
+        let colors = generated_colors(&theme);
+
+        assert!(contrast_ratio(color(&colors["warning.foreground"]), theme.ansi[3]) >= 4.5);
+    }
+
+    #[test]
+    fn tinted_dark_background_selects_dark_mode_without_touching_palette() {
+        let mut theme = TerminalTheme::flexoki_light();
+        theme.name = "misleading-light".into();
+        theme.background = Color::rgb(0x12, 0x28, 0x35);
+        let palette = theme.ansi;
+        let json: serde_json::Value =
+            serde_json::from_str(&generate_gpui_theme_json(&theme)).unwrap();
+
+        assert_eq!(json["themes"][0]["mode"], "dark");
+        assert_eq!(theme.ansi, palette);
+    }
 }
