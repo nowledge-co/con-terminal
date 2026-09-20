@@ -422,11 +422,11 @@ fn default_search_files() -> String {
     // Matches the common editor convention: Cmd/Ctrl+Shift+F.
     "secondary-shift-f".into()
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 fn default_find_in_terminal() -> String {
     "secondary-f".into()
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn default_find_in_terminal() -> String {
     String::new()
 }
@@ -736,7 +736,7 @@ impl KeybindingConfig {
             ("Toggle Left Sidebar", self.toggle_left_panel.as_str()),
             ("Focus Files", self.focus_files.as_str()),
             ("Search Files", self.search_files.as_str()),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             ("Find in Terminal", self.find_in_terminal.as_str()),
             ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
             ("New Surface Tab", self.new_surface.as_str()),
@@ -1437,11 +1437,15 @@ restore_terminal_text = false
     }
 
     #[test]
-    fn default_keybindings_enable_terminal_find_only_on_macos() {
+    fn default_keybindings_enable_terminal_find_on_supported_platforms() {
         let config = Config::default();
         let shortcuts = config.keybindings.active_shortcuts();
 
-        if cfg!(target_os = "macos") {
+        if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
             assert_eq!(config.keybindings.find_in_terminal, "secondary-f");
             assert!(shortcuts.contains(&("Find in Terminal", "secondary-f")));
         } else {
@@ -1521,7 +1525,11 @@ command_palette = "secondary-shift-p"
         assert_eq!(config.keybindings.search_files, "secondary-shift-f");
         assert_eq!(
             config.keybindings.find_in_terminal,
-            if cfg!(target_os = "macos") {
+            if cfg!(any(
+                target_os = "macos",
+                target_os = "linux",
+                target_os = "windows"
+            )) {
                 "secondary-f"
             } else {
                 ""

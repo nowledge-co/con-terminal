@@ -650,6 +650,10 @@ impl LinuxPtySession {
         self.shared.needs_render.swap(false, Ordering::AcqRel)
     }
 
+    pub(crate) fn vt(&self) -> &Arc<VtScreen> {
+        &self.shared.screen
+    }
+
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         snapshot_to_lines(&self.shared.screen.snapshot(), max_lines)
     }

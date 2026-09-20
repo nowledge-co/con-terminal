@@ -12,9 +12,16 @@ use crate::ui_scale::mono_icon_px;
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
 
 pub struct TerminalFindDismissed;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub struct TerminalFindUpdated;
 
 pub struct TerminalFind {
+    #[cfg(target_os = "macos")]
     terminal: Arc<GhosttyTerminal>,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    commands: futures::channel::mpsc::UnboundedSender<portable::Command>,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    navigation_pending: bool,
     terminal_focus: FocusHandle,
     input: Entity<InputState>,
     query: String,
@@ -26,6 +33,8 @@ pub struct TerminalFind {
 }
 
 impl EventEmitter<TerminalFindDismissed> for TerminalFind {}
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl EventEmitter<TerminalFindUpdated> for TerminalFind {}
 
 impl TerminalFind {
     pub fn new(
@@ -58,7 +67,12 @@ impl TerminalFind {
         .detach();
 
         let mut find = Self {
+            #[cfg(target_os = "macos")]
             terminal,
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            commands: portable::spawn(terminal, window, cx),
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            navigation_pending: false,
             terminal_focus,
             input,
             query: needle.clone(),
@@ -102,11 +116,13 @@ impl TerminalFind {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub fn mark_ended(&mut self) {
         self.ended = true;
         self.query_generation = self.query_generation.wrapping_add(1);
     }
 
+    #[cfg(target_os = "macos")]
     pub fn end(&mut self) {
         self.finish_search();
     }
@@ -127,11 +143,14 @@ impl TerminalFind {
         self.selected = None;
         cx.notify();
 
-        if query.is_empty() || query.chars().nth(2).is_some() {
+        if query.is_empty() || (cfg!(target_os = "macos") && query.chars().nth(2).is_some()) {
             self.submit_query(&query);
             return;
         }
 
+        // Do not navigate or display the previous needle during debounce.
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        self.submit_query("");
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(SEARCH_DEBOUNCE).await;
             let _ = this.update(cx, |this, cx| {
@@ -144,6 +163,20 @@ impl TerminalFind {
         .detach();
     }
 
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn submit_query(&mut self, query: &str) {
+        if query.is_empty() && !self.search_active {
+            return;
+        }
+        self.search_active = !query.is_empty();
+        self.navigation_pending = false;
+        let _ = self.commands.unbounded_send(portable::Command::Query(
+            self.query_generation,
+            query.to_owned(),
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
     fn submit_query(&mut self, query: &str) {
         if query.is_empty() && !self.search_active {
             return;
@@ -171,6 +204,7 @@ impl TerminalFind {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn clear_native_search(&self) {
         if let Err(err) = self.terminal.search("") {
             log::error!("Failed to clear terminal search: {err}");
@@ -178,19 +212,37 @@ impl TerminalFind {
     }
 
     fn navigate_next(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
         if self.search_active
             && let Err(err) = self.terminal.navigate_search_next()
         {
             log::error!("Failed to select next terminal search match: {err}");
         }
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if self.search_active && !self.ended && !self.navigation_pending {
+            self.navigation_pending = true;
+            self.query_generation = self.query_generation.wrapping_add(1);
+            let _ = self
+                .commands
+                .unbounded_send(portable::Command::Navigate(self.query_generation, false));
+        }
         self.focus(window, cx);
     }
 
     fn navigate_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
         if self.search_active
             && let Err(err) = self.terminal.navigate_search_previous()
         {
             log::error!("Failed to select previous terminal search match: {err}");
+        }
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if self.search_active && !self.ended && !self.navigation_pending {
+            self.navigation_pending = true;
+            self.query_generation = self.query_generation.wrapping_add(1);
+            let _ = self
+                .commands
+                .unbounded_send(portable::Command::Navigate(self.query_generation, true));
         }
         self.focus(window, cx);
     }
@@ -198,6 +250,7 @@ impl TerminalFind {
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_search();
         window.focus(&self.terminal_focus, cx);
+        #[cfg(target_os = "macos")]
         cx.emit(TerminalFindDismissed);
     }
 
@@ -207,9 +260,12 @@ impl TerminalFind {
         }
         self.ended = true;
         self.query_generation = self.query_generation.wrapping_add(1);
+        #[cfg(target_os = "macos")]
         if let Err(err) = self.terminal.end_search() {
             log::error!("Failed to end terminal search: {err}");
         }
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        let _ = self.commands.unbounded_send(portable::Command::End);
     }
 
     fn count_label(&self) -> Option<String> {
@@ -225,6 +281,129 @@ impl TerminalFind {
 impl Drop for TerminalFind {
     fn drop(&mut self) {
         self.finish_search();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod portable {
+    use super::*;
+    use con_ghostty::vt::SearchProgress;
+    use futures::channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender, channel, unbounded};
+    use futures::{FutureExt, SinkExt, StreamExt};
+
+    pub(super) enum Command {
+        Query(u64, String),
+        Navigate(u64, bool),
+        End,
+    }
+
+    // One FIFO driver per find bar. Needle replacement, navigation and cleanup
+    // can traverse many native results, so none run on GPUI's thread. End is
+    // acknowledged before removing the bar, preventing an old driver's cleanup
+    // from clearing a newly opened search on the same terminal.
+    pub(super) fn spawn(
+        terminal: Arc<GhosttyTerminal>,
+        window: &mut Window,
+        cx: &mut Context<TerminalFind>,
+    ) -> UnboundedSender<Command> {
+        let (commands, receiver) = unbounded();
+        let (mut updates, mut results) = channel(1);
+        let executor = cx.background_executor().clone();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(err) = run(&terminal, receiver, &mut updates, &executor).await {
+                    log::error!("Terminal search failed: {err}");
+                }
+                if let Err(err) = terminal.end_search() {
+                    log::error!("Failed to end terminal search: {err}");
+                }
+                // Dropping updates acknowledges cleanup even on an error or pane drop.
+            })
+            .detach();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some((generation, progress)) = results.next().await {
+                if !cx
+                    .update(|_, cx| {
+                        this.update(cx, |this, cx| {
+                            if this.ended {
+                                return;
+                            }
+                            if this.query_generation == generation {
+                                this.navigation_pending = false;
+                                this.set_total(progress.map(|p: SearchProgress| p.total), cx);
+                                this.set_selected(progress.and_then(|p| p.selected), cx);
+                            }
+                            cx.emit(TerminalFindUpdated);
+                        })
+                    })
+                    .is_ok_and(|result| result.is_ok())
+                {
+                    return;
+                }
+            }
+            let _ = cx.update(|window, cx| {
+                this.update(cx, |this, cx| {
+                    if !this.ended && this.input.read(cx).focus_handle(cx).is_focused(window) {
+                        window.focus(&this.terminal_focus, cx);
+                    }
+                    this.ended = true;
+                    cx.emit(TerminalFindDismissed);
+                })
+            });
+        })
+        .detach();
+        commands
+    }
+
+    async fn run(
+        terminal: &GhosttyTerminal,
+        mut commands: UnboundedReceiver<Command>,
+        updates: &mut Sender<(u64, Option<SearchProgress>)>,
+        executor: &BackgroundExecutor,
+    ) -> Result<(), String> {
+        let mut active = false;
+        let mut generation = 0;
+        let mut last = None;
+        loop {
+            let command = if active {
+                let delay = if last.is_some_and(|(_, progress): (u64, Option<SearchProgress>)| {
+                    progress.is_some_and(|p| p.running)
+                }) {
+                    Duration::from_millis(16)
+                } else {
+                    Duration::from_millis(100)
+                };
+                futures::select_biased! {
+                    command = commands.next().fuse() => Some(command),
+                    _ = executor.timer(delay).fuse() => None,
+                }
+            } else {
+                Some(commands.next().await)
+            };
+            match command {
+                Some(Some(Command::Query(revision, needle))) => {
+                    generation = revision;
+                    active = terminal.search(&needle)? && !needle.is_empty();
+                }
+                Some(Some(Command::Navigate(revision, previous))) => {
+                    generation = revision;
+                    if previous {
+                        terminal.navigate_search_previous()?;
+                    } else {
+                        terminal.navigate_search_next()?;
+                    }
+                }
+                Some(Some(Command::End)) | Some(None) => return Ok(()),
+                None => {}
+            }
+            let update = (generation, terminal.search_step()?);
+            if last != Some(update) {
+                if updates.send(update).await.is_err() {
+                    return Ok(());
+                }
+                last = Some(update);
+            }
+        }
     }
 }
 

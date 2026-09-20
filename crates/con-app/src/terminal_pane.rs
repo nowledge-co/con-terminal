@@ -120,7 +120,7 @@ impl TerminalPane {
         });
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub fn show_terminal_find(&self, window: &mut Window, cx: &mut App) {
         self.entity.update(cx, |view, cx| {
             view.ensure_initialized_for_control(window, cx);

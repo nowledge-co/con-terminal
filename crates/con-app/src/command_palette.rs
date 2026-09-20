@@ -130,7 +130,7 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         shortcut: "secondary-k",
         category: "Terminal",
     },
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     PaletteAction {
         id: "find-in-terminal",
         label: "Find in Terminal",

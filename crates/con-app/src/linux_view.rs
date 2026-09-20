@@ -38,6 +38,7 @@ use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
 use crate::mouse_sequence::MouseButtonSequence;
+use crate::terminal_find::{TerminalFind, TerminalFindDismissed, TerminalFindUpdated};
 use crate::terminal_ime::{TerminalImeInputHandler, TerminalImeView};
 use crate::terminal_links::{self, TerminalLink};
 use crate::terminal_paste::{
@@ -256,6 +257,7 @@ enum LeftMouseSequence {
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
+    terminal_find: Option<Entity<TerminalFind>>,
     focus_handle: FocusHandle,
     terminal_focused: bool,
     cursor_blink: CursorBlink,
@@ -369,6 +371,7 @@ impl GhosttyView {
         Self {
             app,
             terminal: Some(terminal),
+            terminal_find: None,
             focus_handle: cx.focus_handle(),
             terminal_focused: false,
             cursor_blink: CursorBlink::default(),
@@ -416,6 +419,37 @@ impl GhosttyView {
 
     pub fn terminal(&self) -> Option<&Arc<GhosttyTerminal>> {
         self.terminal.as_ref()
+    }
+
+    pub(crate) fn show_terminal_find(
+        &mut self,
+        needle: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(find) = self.terminal_find.as_ref() {
+            find.update(cx, |find, cx| find.set_needle(needle, window, cx));
+            return;
+        }
+        let Some(terminal) = self.terminal.clone() else {
+            return;
+        };
+        let focus = self.focus_handle.clone();
+        let find = cx.new(|cx| TerminalFind::new(terminal, focus, needle, window, cx));
+        cx.subscribe(&find, |this, _, _: &TerminalFindUpdated, cx| {
+            this.refresh_snapshot();
+            cx.notify();
+        })
+        .detach();
+        cx.subscribe(&find, |this, _, _: &TerminalFindDismissed, cx| {
+            this.terminal_find = None;
+            this.refresh_snapshot();
+            cx.notify();
+        })
+        .detach();
+        find.update(cx, |find, cx| find.focus(window, cx));
+        self.terminal_find = Some(find);
+        cx.notify();
     }
 
     pub fn write_or_queue(&mut self, data: &[u8]) {
@@ -1284,6 +1318,10 @@ impl GhosttyView {
             event,
             window,
             &crate::SearchFiles,
+        ) || crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::FindInTerminal,
         ) {
             return false;
         }
@@ -2453,6 +2491,7 @@ impl Render for GhosttyView {
                         .absolute()
                         .size_full(),
                     )
+                    .children(self.terminal_find.clone())
                     .children(unsafe_paste_confirmation),
             )
             .context_menu(move |menu, window, cx| {

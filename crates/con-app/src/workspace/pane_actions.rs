@@ -491,7 +491,7 @@ impl ConWorkspace {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         if self.has_active_tab()
             && let Some(terminal) = self.try_active_terminal()
         {

@@ -25,7 +25,7 @@ mod global_hotkey;
 mod macos_windowing;
 #[cfg(target_os = "macos")]
 mod quick_terminal;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod terminal_find;
 
 // The terminal-view module is selected per platform:
@@ -1545,7 +1545,7 @@ impl BindingSpec {
 
 const GLOBAL_SCOPES: &[BindingScope] = &[BindingScope::Global];
 const EDITOR_SCOPES: &[BindingScope] = &[BindingScope::EditorView];
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 const GHOSTTY_TERMINAL_SCOPES: &[BindingScope] = &[BindingScope::GhosttyTerminal];
 #[cfg_attr(not(test), allow(dead_code))]
 const APP_OVERRIDE_SCOPES: &[BindingScope] = &[
@@ -1620,7 +1620,7 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     // app navigation, so bind them explicitly in those focused contexts too.
     push_app_override::<FocusFiles>(&mut specs, &kb.focus_files);
     push_app_override::<SearchFiles>(&mut specs, &kb.search_files);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     push_scoped::<FindInTerminal>(&mut specs, &kb.find_in_terminal, GHOSTTY_TERMINAL_SCOPES);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
 
@@ -2120,7 +2120,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
     fn terminal_find_shortcut_is_scoped_to_ghostty_terminal() {
         let specs = default_specs();
@@ -2808,9 +2808,9 @@ fn main() {
                     MenuItem::os_action("Paste", Paste, OsAction::Paste),
                     MenuItem::separator(),
                     MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                     MenuItem::separator(),
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
                     MenuItem::action("Find in Terminal", FindInTerminal),
                 ],
                 disabled: false,

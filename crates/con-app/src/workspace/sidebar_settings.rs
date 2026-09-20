@@ -769,7 +769,7 @@ impl ConWorkspace {
                     }
                 }
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             "find-in-terminal" => {
                 self.find_in_terminal(&FindInTerminal, window, cx);
             }

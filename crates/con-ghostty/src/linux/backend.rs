@@ -358,6 +358,13 @@ impl LinuxGhosttyTerminal {
         Ok(false)
     }
 
+    pub(crate) fn search_screen(&self) -> Option<Arc<crate::vt::VtScreen>> {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(|session| session.vt().clone())
+    }
+
     pub fn clear_screen_and_scrollback(&self) -> Result<(), String> {
         if let Some(session) = self.inner.lock().as_ref() {
             session.clear_screen_and_scrollback();

@@ -170,6 +170,40 @@ GhosttyResult ghostty_terminal_grid_ref(
     return -4;
 }
 
+GhosttyResult ghostty_terminal_point_from_grid_ref(
+    GhosttyTerminal terminal, const struct GhosttyGridRef* ref, int tag,
+    struct GhosttyPointCoordinate* out
+) {
+    (void)terminal; (void)ref; (void)tag; (void)out;
+    return -4;
+}
+
+GhosttyResult ghostty_grid_ref_cell(const struct GhosttyGridRef* ref, uint64_t* out) {
+    (void)ref; (void)out;
+    return -2;
+}
+
+/* Search is deliberately unsupported, not a successful empty search. */
+GhosttyResult ghostty_search_new(const void* allocator, void** out, GhosttyTerminal terminal) {
+    (void)allocator; (void)terminal;
+    if (out) { *out = NULL; }
+    return -2;
+}
+void ghostty_search_free(void* search) { (void)search; }
+GhosttyResult ghostty_search_set(void* search, int key, const void* value) {
+    (void)search; (void)key; (void)value;
+    return -2;
+}
+GhosttyResult ghostty_search_get(void* search, int key, void* value) {
+    (void)search; (void)key; (void)value;
+    return -2;
+}
+GhosttyResult ghostty_search_feed(void* search) { (void)search; return -2; }
+GhosttyResult ghostty_search_tick(void* search, int* status) {
+    (void)search; (void)status;
+    return -2;
+}
+
 /* ── Selection ─────────────────────────────────────────────────── */
 
 GhosttyResult ghostty_selection_gesture_new(

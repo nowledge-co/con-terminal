@@ -5409,7 +5409,7 @@ impl SettingsPanel {
         ];
 
         let pane_keys: &[(&str, &str)] = &[
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             ("Find in Terminal", "find_in_terminal"),
             ("Split Right", "split_right"),
             ("Split Down", "split_down"),

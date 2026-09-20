@@ -48,6 +48,9 @@ use crate::{
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
 
+mod search;
+pub use search::SearchProgress;
+
 fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -242,6 +245,7 @@ enum GhosttyFormatterFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GhosttyPointTag {
     Viewport = 1,
+    Screen = 2,
 }
 
 #[repr(C)]
@@ -1671,6 +1675,7 @@ impl SelectionRange {
 struct SnapshotMetadata {
     cols: u16,
     rows: u16,
+    search_highlights: Vec<search::Highlight>,
     kitty_placements: Arc<[KittyPlacement]>,
     dirty_rows: Vec<u16>,
     cursor: Cursor,
@@ -1682,6 +1687,7 @@ struct SnapshotMetadata {
 struct SnapshotEpoch {
     fallback_cols: u16,
     fallback_rows: u16,
+    search_highlights: Vec<search::Highlight>,
     kitty_placements: Arc<[KittyPlacement]>,
     alternate_screen: bool,
     scrollbar: Option<GhosttyScrollbar>,
@@ -1695,7 +1701,7 @@ impl SnapshotMetadata {
         cells: &[Cell],
         selection_ranges: &[Option<SelectionRange>],
     ) -> ScreenSnapshot {
-        ScreenSnapshot {
+        let mut snapshot = ScreenSnapshot {
             cols: self.cols,
             rows: self.rows,
             cells: cells.to_vec(),
@@ -1707,7 +1713,9 @@ impl SnapshotMetadata {
             scrollbar: self.scrollbar,
             title: None,
             generation: self.generation,
-        }
+        };
+        search::paint(&mut snapshot, &self.search_highlights);
+        snapshot
     }
 }
 
@@ -1716,6 +1724,7 @@ impl SnapshotMetadata {
 pub struct VtScreen {
     inner: Arc<Mutex<VtInner>>,
     render: Mutex<VtRenderState>,
+    search: Mutex<Option<search::Search>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2701,6 +2710,7 @@ impl VtScreen {
         }
 
         Ok(Self {
+            search: Mutex::new(None),
             inner: Arc::new(Mutex::new(VtInner {
                 terminal,
                 focused: false,
@@ -3761,14 +3771,26 @@ impl VtScreen {
     }
 
     pub fn snapshot(&self) -> ScreenSnapshot {
-        self.try_snapshot().unwrap_or_else(|| {
+        self.snapshot_impl(true).unwrap_or_else(|| {
             let inner = self.inner.lock();
             empty_snapshot(inner.cols, inner.rows, inner.generation)
         })
     }
 
     pub(crate) fn try_snapshot(&self) -> Option<ScreenSnapshot> {
+        self.snapshot_impl(false)
+    }
+
+    fn snapshot_impl(&self, wait_for_search: bool) -> Option<ScreenSnapshot> {
         let snapshot_started = perf_trace_enabled().then(Instant::now);
+        // Query replacement/navigation can release a large result set.
+        // Rendering keeps the previous frame; text readers wait without
+        // holding the render lock or returning an empty terminal.
+        let mut search = if wait_for_search {
+            self.search.lock()
+        } else {
+            self.search.try_lock()?
+        };
         let mut render = self.render.lock();
         if !render.ensure_render_state() {
             return None;
@@ -3809,6 +3831,16 @@ impl VtScreen {
             let epoch = SnapshotEpoch {
                 fallback_cols,
                 fallback_rows,
+                search_highlights: match search.as_mut() {
+                    Some(search) => match search.highlights(&inner) {
+                        Ok(highlights) => highlights,
+                        Err(err) => {
+                            log::warn!("{err}");
+                            return None;
+                        }
+                    },
+                    None => Vec::new(),
+                },
                 kitty_placements,
                 alternate_screen: active_screen == GhosttyTerminalScreen::Alternate,
                 scrollbar: read_scrollbar(inner.terminal),
@@ -3828,6 +3860,7 @@ impl VtScreen {
             }
             epoch
         };
+        drop(search);
 
         let rc = unsafe { ghostty_render_state_end_update(render.render_state) };
         if rc != GHOSTTY_SUCCESS {
@@ -4052,11 +4085,24 @@ impl VtScreen {
             }
             render.last_cursor = cursor;
         }
+        // Search pins can move or disappear without a style change in the
+        // underlying cells. Repaint both old and new highlight rows.
+        for highlight in epoch.search_highlights.iter().chain(
+            render
+                .snapshot_metadata
+                .iter()
+                .flat_map(|metadata| &metadata.search_highlights),
+        ) {
+            if highlight.row < rows {
+                push_unique_row(&mut dirty_rows, highlight.row);
+            }
+        }
         dirty_rows.sort_unstable();
 
         let metadata = SnapshotMetadata {
             cols,
             rows,
+            search_highlights: epoch.search_highlights,
             kitty_placements: epoch.kitty_placements,
             dirty_rows,
             cursor,
@@ -5541,6 +5587,12 @@ fn read_cell(
 
 impl Drop for VtScreen {
     fn drop(&mut self) {
+        // Free tracked search pins while terminal access is exclusive, even
+        // when a PTY callback still owns an inner Arc.
+        {
+            let _inner = self.inner.lock();
+            self.search.get_mut().take();
+        }
         if let Some(mutex) = Arc::get_mut(&mut self.inner) {
             let inner = mutex.get_mut();
             let render = self.render.get_mut();
