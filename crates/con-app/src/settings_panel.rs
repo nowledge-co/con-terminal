@@ -5689,7 +5689,9 @@ impl SettingsPanel {
                         .flex_col()
                         .gap(px(4.0))
                         .flex_1()
-                        .max_w(px(430.0))
+                        .min_w_0()
+                        .when(mobile, |this| this.w_full())
+                        .when(!mobile, |this| this.max_w(px(430.0)))
                         .child(
                             div()
                                 .text_sm()
@@ -6207,6 +6209,7 @@ impl Render for SettingsPanel {
             .h_full()
             .flex_1()
             .min_w_0()
+            .overflow_hidden()
             .pl(header_left_padding)
             .pr(px(12.0))
             .child(
@@ -6277,8 +6280,7 @@ impl Render for SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .when(mobile, |this| this.flex_wrap().h_auto().py(px(6.0)))
-                            .when(!mobile, |this| this.h(px(44.0)))
+                            .h(px(44.0))
                             .child(header_title_area)
                             .child(
                                 div()
@@ -6286,7 +6288,6 @@ impl Render for SettingsPanel {
                                     .items_center()
                                     .gap(px(10.0))
                                     .flex_shrink_0()
-                                    .when(mobile, |this| this.flex_wrap().w_full().justify_start())
                                     .pr(px(20.0))
                                     .children(self.standalone.then(|| {
                                         let (icon, label, tone) = if has_unsaved_changes {
@@ -6748,8 +6749,8 @@ fn row_input_with_hint(
 ) -> Div {
     div()
         .flex()
-        .when(mobile, |this| this.flex_col().items_start())
         .items_center()
+        .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
         .gap(px(18.0))
         .px(px(16.0))
@@ -6761,6 +6762,7 @@ fn row_input_with_hint(
                 .gap(px(3.0))
                 .flex_1()
                 .min_w_0()
+                .when(mobile, |this| this.w_full())
                 .child(
                     div()
                         .text_sm()
@@ -6777,9 +6779,8 @@ fn row_input_with_hint(
         .child(
             div()
                 .flex_1()
-                .min_w_0()
-                .when(!mobile, |this| this.max_w(px(320.0)))
-                .w_full()
+                .when(mobile, |this| this.min_w_0().w_full())
+                .when(!mobile, |this| this.min_w(px(180.0)).max_w(px(320.0)))
                 .child(Input::new(input)),
         )
 }
@@ -6794,8 +6795,8 @@ fn slider_row(
 ) -> Div {
     div()
         .flex()
-        .when(mobile, |this| this.flex_col().items_start())
         .items_center()
+        .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
         .gap(px(18.0))
         .px(px(16.0))
@@ -6807,6 +6808,7 @@ fn slider_row(
                 .gap(px(3.0))
                 .flex_1()
                 .min_w_0()
+                .when(mobile, |this| this.w_full())
                 .when(!mobile, |this| this.max_w(px(380.0)))
                 .child(
                     div()
@@ -6828,8 +6830,8 @@ fn slider_row(
                 .flex_col()
                 .gap(px(8.0))
                 .w_full()
-                .when(!mobile, |this| this.max_w(px(260.0)))
-                .min_w_0()
+                .when(mobile, |this| this.min_w_0())
+                .when(!mobile, |this| this.max_w(px(260.0)).flex_shrink_0())
                 .child(
                     div().flex().justify_end().child(
                         div()
@@ -6871,6 +6873,8 @@ fn searchable_select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
+                .min_w_0()
+                .when(mobile, |this| this.w_full())
                 .when(!mobile, |this| this.max_w(px(340.0)))
                 .child(
                     div()
@@ -6919,6 +6923,8 @@ fn select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
+                .min_w_0()
+                .when(mobile, |this| this.w_full())
                 .when(!mobile, |this| this.max_w(px(320.0)))
                 .child(
                     div()
@@ -6964,6 +6970,8 @@ fn toggle_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
+                .min_w_0()
+                .when(mobile, |this| this.w_full())
                 .when(!mobile, |this| this.max_w(px(360.0)))
                 .child(
                     div()
