@@ -5574,8 +5574,7 @@ impl SettingsPanel {
                         .hover(|s| s.bg(theme.muted.opacity(0.025)))
                         .child(
                             div()
-                                .min_w_0()
-                                .when(mobile, |this| this.w_full())
+                                .when(mobile, |this| this.min_w_0().w_full())
                                 .text_size(px(12.0))
                                 .line_height(px(16.0))
                                 .font_weight(FontWeight::MEDIUM)
@@ -5689,8 +5688,7 @@ impl SettingsPanel {
                         .flex_col()
                         .gap(px(4.0))
                         .flex_1()
-                        .min_w_0()
-                        .when(mobile, |this| this.w_full())
+                        .when(mobile, |this| this.min_w_0().w_full())
                         .when(!mobile, |this| this.max_w(px(430.0)))
                         .child(
                             div()
@@ -6737,8 +6735,8 @@ fn row_field(label: &str, input: &Entity<InputState>, mobile: bool) -> Div {
         .child(
             div()
                 .flex_1()
-                .min_w_0()
-                .when(mobile, |this| this.w_full())
+                .when(mobile, |this| this.min_w_0().w_full())
+                .when(!mobile, |this| this.min_w(px(160.0)))
                 .child(Input::new(input)),
         )
 }
@@ -6832,9 +6830,8 @@ fn slider_row(
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .w_full()
-                .when(mobile, |this| this.min_w_0())
-                .when(!mobile, |this| this.max_w(px(260.0)).flex_shrink_0())
+                .when(mobile, |this| this.w_full().min_w_0())
+                .when(!mobile, |this| this.w(px(260.0)).flex_shrink_0())
                 .child(
                     div().flex().justify_end().child(
                         div()
@@ -6876,8 +6873,7 @@ fn searchable_select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .min_w_0()
-                .when(mobile, |this| this.w_full())
+                .when(mobile, |this| this.min_w_0().w_full())
                 .when(!mobile, |this| this.max_w(px(340.0)))
                 .child(
                     div()
@@ -6895,9 +6891,8 @@ fn searchable_select_row(
         )
         .child(
             div()
+                .when(mobile, |this| this.w_full().min_w_0())
                 .when(!mobile, |this| this.w(px(236.0)).flex_shrink_0())
-                .w_full()
-                .min_w_0()
                 .child(
                     Select::new(select)
                         .placeholder(placeholder.to_string())
@@ -6926,8 +6921,7 @@ fn select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .min_w_0()
-                .when(mobile, |this| this.w_full())
+                .when(mobile, |this| this.min_w_0().w_full())
                 .when(!mobile, |this| this.max_w(px(320.0)))
                 .child(
                     div()
@@ -6945,9 +6939,8 @@ fn select_row(
         )
         .child(
             div()
+                .when(mobile, |this| this.w_full().min_w_0())
                 .when(!mobile, |this| this.w(px(188.0)).flex_shrink_0())
-                .w_full()
-                .min_w_0()
                 .child(Select::new(select).small()),
         )
 }
@@ -6973,8 +6966,7 @@ fn toggle_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .min_w_0()
-                .when(mobile, |this| this.w_full())
+                .when(mobile, |this| this.min_w_0().w_full())
                 .when(!mobile, |this| this.max_w(px(360.0)))
                 .child(
                     div()
@@ -6990,7 +6982,7 @@ fn toggle_row(
                         .child(hint.to_string()),
                 ),
         )
-        .child(div().pt(px(2.0)).min_w_0().child(toggle))
+        .child(div().pt(px(2.0)).flex_shrink_0().child(toggle))
 }
 
 fn stacked_input_field(
