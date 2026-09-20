@@ -208,6 +208,7 @@ pub struct SettingsPanel {
     overlay_motion: MotionValue,
 
     selected_provider: ProviderKind,
+    provider_navigation_select: Entity<SelectState<SearchableVec<String>>>,
     active_provider_select: Entity<SelectState<SearchableVec<String>>>,
     active_model_select: Entity<SelectState<SearchableVec<String>>>,
     model_input: Entity<InputState>,
@@ -1266,6 +1267,12 @@ impl SettingsPanel {
         let agent = &config.agent;
         let selected_provider = Self::provider_for_saved_transport(&config, &agent.provider);
         let pc = agent.providers.get_or_default(&selected_provider);
+        let provider_navigation_select = Self::make_searchable_string_select(
+            &Self::provider_options(),
+            provider_label(&Self::sidebar_provider_kind(&selected_provider)),
+            window,
+            cx,
+        );
         let active_provider_select = Self::make_searchable_string_select(
             &Self::provider_options(),
             provider_label(&Self::sidebar_provider_kind(&agent.provider)),
@@ -1593,6 +1600,26 @@ impl SettingsPanel {
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
+                    if let Some(provider) = Self::suggestion_provider_from_label(value) {
+                        let provider = Self::provider_for_saved_transport(&this.config, &provider);
+                        this.config.agent.select_provider(provider);
+                        this.active_model_select = Self::make_active_model_select(
+                            &this.config,
+                            &this.registry,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &provider_navigation_select,
+            window,
+            |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = ev {
                     let Some(provider) = SIDEBAR_PROVIDERS
                         .iter()
                         .find(|provider| provider_label(provider) == value)
@@ -1601,9 +1628,7 @@ impl SettingsPanel {
                         return;
                     };
                     let provider = Self::provider_for_saved_transport(&this.config, &provider);
-                    this.config.agent.select_provider(provider.clone());
                     this.transition_provider(provider, window, cx);
-                    cx.notify();
                 }
             },
         )
@@ -1734,6 +1759,7 @@ impl SettingsPanel {
             active_section: SettingsSection::General,
             overlay_motion: MotionValue::new(0.0),
             selected_provider,
+            provider_navigation_select,
             active_provider_select,
             active_model_select,
             model_input,
@@ -1874,6 +1900,13 @@ impl SettingsPanel {
         self.active_provider_select.update(cx, |select, cx| {
             select.set_selected_value(
                 &provider_label(&Self::sidebar_provider_kind(&agent.provider)).to_string(),
+                window,
+                cx,
+            );
+        });
+        self.provider_navigation_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &provider_label(&Self::sidebar_provider_kind(&self.selected_provider)).to_string(),
                 window,
                 cx,
             );
@@ -3006,7 +3039,14 @@ impl SettingsPanel {
         } else {
             Self::sidebar_selection_target(&provider, &self.selected_provider)
         };
-        self.transition_provider(provider, window, cx);
+        self.transition_provider(provider.clone(), window, cx);
+        self.provider_navigation_select.update(cx, |select, cx| {
+            select.set_selected_value(
+                &provider_label(&Self::sidebar_provider_kind(&provider)).to_string(),
+                window,
+                cx,
+            );
+        });
     }
 
     fn transition_provider(
@@ -5401,7 +5441,7 @@ impl SettingsPanel {
             div().w_full().min_w_0().child(
                 card(theme, card_opacity).child(
                     div().px(px(14.0)).py(px(12.0)).child(
-                        Select::new(&self.active_provider_select)
+                        Select::new(&self.provider_navigation_select)
                             .placeholder("Select a provider…")
                             .small(),
                     ),
@@ -7249,9 +7289,20 @@ fn display_theme_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderKind, ProviderOAuthState, SettingsPanel, keybinding_default, keybinding_field,
-        keybinding_field_mut, provider_connection_status,
+        ProviderKind, ProviderOAuthState, ResponsiveMode, SettingsPanel, keybinding_default,
+        keybinding_field, keybinding_field_mut, provider_connection_status,
     };
+
+    #[test]
+    fn responsive_modes_match_settings_breakpoints() {
+        assert_eq!(ResponsiveMode::from_width(359.0), ResponsiveMode::Mobile);
+        assert_eq!(ResponsiveMode::from_width(599.0), ResponsiveMode::Mobile);
+        assert_eq!(ResponsiveMode::from_width(600.0), ResponsiveMode::Narrow);
+        assert_eq!(ResponsiveMode::from_width(839.0), ResponsiveMode::Narrow);
+        assert_eq!(ResponsiveMode::from_width(840.0), ResponsiveMode::Compact);
+        assert_eq!(ResponsiveMode::from_width(979.0), ResponsiveMode::Compact);
+        assert_eq!(ResponsiveMode::from_width(980.0), ResponsiveMode::Regular);
+    }
 
     #[test]
     fn oauth_providers_are_ready_with_key_override() {

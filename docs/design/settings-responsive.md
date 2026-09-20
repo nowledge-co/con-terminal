@@ -1,8 +1,7 @@
 # Settings Responsive Design
 
-Status: Finalized — implementation in progress
+Status: Implemented
 Scope: Settings pages only
-Target branch: `zerob13/settings-responsive`
 
 ## 1. Objective
 
@@ -11,7 +10,6 @@ Make all five Settings pages usable from a minimum logical viewport of approxima
 The responsive work is scoped to:
 
 - `crates/con-app/src/settings_panel.rs`
-- the standalone Settings window sizing and behavior in `crates/con-app/src/workspace/window_actions.rs`
 
 No main terminal, workspace, agent panel, or application-wide breakpoint behavior should change.
 
@@ -112,11 +110,13 @@ Navigation rules:
 
 ### Mobile header actions
 
-At `< 600px`, the header wraps instead of overflowing. The title and the action group stack onto separate rows, and the action group wraps internally when needed. Button labels are preserved rather than hidden.
+At `< 600px`, the title and action group stay on one stable row. The action
+group never shrinks; the title area absorbs the squeeze and clips before it can
+overlap the buttons. Button labels are preserved rather than hidden.
 
 ```text
-regular:  [Saved] [Open config] [Save]              (single row)
-mobile:   [Saved] [Open config] [Save]              (own wrapped row)
+regular:  Settings                 [Saved] [Config] [Save]
+mobile:   Set…                     [Saved] [Config] [Save]
 ```
 
 Save remains disabled when there are no changes. The warning/saved state remains visible through the status icon and semantic color.
@@ -160,13 +160,17 @@ Apply the following rules below 600px:
 
 ### Toggle rows
 
-Keep the switch visible on the right while allowing the descriptive text to occupy the remaining width:
+At mobile width, stack the switch below the descriptive text so long labels and
+hints never compete with the control:
 
 ```text
-[label + wrapped hint                  ] [switch]
+[label                                  ]
+[wrapped hint                           ]
+[switch                                 ]
 ```
 
-The text container must be `min_w_0()`. For long explanatory text, the label and hint may occupy two or more lines; the switch must not be pushed outside the card.
+The text container must be `min_w_0()`. For long explanatory text, the label
+and hint may occupy two or more lines; the switch must remain inside the card.
 
 ### Slider rows
 
@@ -430,9 +434,10 @@ Keys contains many repeated shortcut rows and optional global/quick-terminal sec
 
 Specific behavior:
 
-- Ordinary key rows retain the label/keycap horizontal relationship.
-- The label container becomes `min_w_0()` and may wrap to two lines; keycaps remain non-shrinking.
-- Increase the mobile row's minimum height when a label wraps; do not clip the action name.
+- Ordinary key rows stack the label above their keycaps on mobile.
+- The label container becomes `min_w_0()` and may wrap; keycaps wrap below it
+  without shrinking.
+- Mobile rows use content-driven height; do not clip the action name.
 - Global Hotkey and Quick Terminal cards stack their description, switch, and shortcut badge below 600px.
 - Recording state (`Press shortcut…`) remains visually prominent and must not be truncated.
 - Reset buttons remain adjacent to the shortcut badge and retain their tooltip.
