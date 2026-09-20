@@ -47,7 +47,7 @@ Implemented in the first issue #111 PR:
   history-backed session instead of restoring the same saved layout again
 - the layout-only schema now has a closed import/export loop: users can export
   the current window, add a profile's tabs to an existing window, open a profile
-  in a new window, or launch `con <project-folder>` / `con <workspace.toml>`
+  in a new window, or launch `con <project-folder>` / `con <workspace.ghostty>`
   explicitly
 
 This slice is production-safe because it improves private restore fidelity and
@@ -66,7 +66,7 @@ Required qualities:
 - **Explicit when shared.** A repo file appears only after the user exports or
   opens a project/profile intentionally.
 - **Generated, not hand-authored.** Users design the workspace in Con first;
-  `.con/workspace.toml` is the reviewable artifact Con writes from that design.
+  `.con/workspace.ghostty` is the reviewable artifact Con writes from that design.
 - **Stable in git.** Exported paths are repo-relative and slash-separated on
   every OS, so Windows/macOS/Linux do not churn diffs.
 - **No trust surprise.** Layout profiles never run commands, replay history,
@@ -76,7 +76,7 @@ Required qualities:
   continuity is the default product promise. Settings exposes an opt-out and
   Command Palette exposes a clear-and-disable action.
 - **One mental model.** The same path resolver powers `con <project-folder>`,
-  `con <workspace.toml>`, Add Tabs from Layout Profile, and Open Layout Profile in
+  `con <workspace.ghostty>`, Add Tabs from Layout Profile, and Open Layout Profile in
   New Window.
 - **Scratch remains scratch.** New Tab and New Window do not silently explode
   into project layouts; profile import is a named action until project memory
@@ -198,7 +198,8 @@ con ~/dev/con
 
 Current behavior:
 
-- if `~/dev/con/.con/workspace.toml` exists, Con opens that layout profile
+- if `~/dev/con/.con/workspace.ghostty` exists, Con opens that layout profile
+- otherwise a legacy `.con/workspace.toml` remains a read-only fallback
 - otherwise, Con opens one fresh shell rooted at `~/dev/con`
 - profile import includes layout intent only; private history is shared from
   app data, and no commands run automatically
@@ -351,13 +352,13 @@ Non-purpose:
 Default path for future export:
 
 ```text
-.con/workspace.toml
+.con/workspace.ghostty
 ```
 
 Current schema constraints:
 
 - `format = "con.workspace.layout"`
-- `version = 1`
+- `version = 2` (Ghostty-style declarations and node references; TOML v1 is read-only)
 - tabs, panes, surfaces, split geometry, cwd, and optional agent defaults
 - no `run`
 - no `restore`
@@ -368,7 +369,7 @@ Current schema constraints:
 
 Future task files should be separate:
 
-- `.con/tasks.toml`: explicit named commands users pick from a menu
+- a separate task file: explicit named commands users pick from a menu
 
 Do not combine layout and command replay. It creates a trust model before the
 product needs one.
@@ -472,14 +473,14 @@ Status: after AppState.
 
 Status: layout import/export is implemented; task files remain deferred.
 
-- Save Layout Profile writes a generated `.con/workspace.toml` from the live
+- Save Layout Profile writes a generated `.con/workspace.ghostty` from the live
   window.
 - Add Tabs from Layout Profile imports a profile into the current window.
 - Open Layout Profile in New Window imports a profile into a separate window.
 - `con <project-folder>` opens the project profile when present; plain `con`
   remains private restore.
-- Start with `.con/tasks.toml` for named commands.
-- Keep `.con/workspace.toml` layout-only.
+- Keep named commands in a separate task file (still deferred).
+- Keep `.con/workspace.ghostty` layout-only.
 - Never store secrets, conversations, command history, scrollback, active focus,
   or trust decisions in repo files.
 

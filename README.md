@@ -153,6 +153,8 @@ To build from source, see `HACKING.md`.
 Start here:
 
 - [Install](docs/install.md): get con on macOS, Windows, or Linux.
+- [Configuration reference](docs/impl/configuration.md): configure Ghostty terminal
+  settings and Con-specific behavior in `config.ghostty`.
 - [Quick controls](docs/quick-controls.md): focus switching, agent panel, and command modes.
 - [Quick Terminal](docs/quick-terminal.md): set up the optional macOS drop-down terminal.
 - [Terminal workflows](docs/terminal-workflows.md): tabs, panes, broadcast, pane zoom, links, and surfaces.

@@ -161,10 +161,20 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 - **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
 - **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
 - **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
-- **Config is TOML.** User config resolved at runtime via `con-paths::config_file()` → `dirs::config_dir()`:
-  - **macOS**: `~/Library/Application Support/con/config.toml` (fallback: `~/.config/con/config.toml` if `dirs::config_dir()` returns None — effectively never on macOS)
-  - **Linux**: `$XDG_CONFIG_HOME/con/config.toml` (defaults to `~/.config/con/config.toml` when `XDG_CONFIG_HOME` is unset)
-  - **Windows**: `%APPDATA%\con-terminal\config.toml` (fallback: `~/.config/con-terminal/config.toml`)
+- **Config uses Ghostty syntax.** The primary file is `config.ghostty`: native terminal
+  keys use Ghostty's `key = value` form, while Con-owned settings use dotted
+  `con.appearance.*`, `con.agent.*`, `con.keybindings.*`, `con.skills.*`, and
+  `con.network.*` keys with Rust field names in `snake_case`. Keep `con.version = 1`.
+  Paths are `~/Library/Application Support/con/config.ghostty` on macOS,
+  `$XDG_CONFIG_HOME/con/config.ghostty` (normally `~/.config/con/config.ghostty`)
+  on Linux, and `%APPDATA%\con-terminal\config.ghostty` on Windows. See
+  `docs/impl/configuration.md` for ownership, migration, portability, and save rules.
+- **TOML is migration-only.** `config.toml` remains a read-only legacy source: migrate
+  it only when `config.ghostty` is absent, preserve the original, and never fall back
+  to it when the new file exists but is malformed. Cargo manifests are unaffected.
+- **Workspace profiles use line syntax.** New writes target
+  `.con/workspace.ghostty` format v2. `.con/workspace.toml` v1 remains readable but
+  must never be a write target. Runtime session, auth, and history JSON are separate.
 - **GPUI patterns.** Use `cx.spawn(async move |this, cx| { ... })` for async work. Use if/else for conditional UI (FluentBuilder::when() is not re-exported).
 
 ## Branching

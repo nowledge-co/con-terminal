@@ -6,7 +6,7 @@ sharing that shape with a team.
 
 ## What a layout profile is
 
-A layout profile is a con-generated `.con/workspace.toml` file.
+A layout profile is a con-generated `.con/workspace.ghostty` file.
 
 It describes workspace shape:
 
@@ -33,7 +33,7 @@ session backup. It is safe to review because it describes shape, not activity.
 1. Tune the workspace visually until it feels right.
 2. Name the tabs, panes, and surfaces so the intent is obvious.
 3. Save the layout profile.
-4. Review the generated `.con/workspace.toml`.
+4. Review the generated `.con/workspace.ghostty`.
 5. Reopen the project later with `con ~/dev/app`, or commit the file so a
    teammate can get the same starting shape.
 
@@ -49,7 +49,7 @@ never include terminal text, regardless of that setting.
 2. Arrange tabs, panes, and surfaces visually.
 3. Rename tabs, panes, and surfaces so the layout is understandable.
 4. Choose **Save Layout Profile** from Command Palette or the Workspace menu.
-5. Save as `.con/workspace.toml` under the project root.
+5. Save as `.con/workspace.ghostty` under the project root.
 6. Review the generated file.
 7. Commit it only if the layout is useful to the project.
 
@@ -71,8 +71,8 @@ to be running inside it.
 
 Path values are written as repo-relative slash paths, even on Windows:
 
-```toml
-cwd = "crates/server"
+```ini
+pane.cwd = "crates/server"
 ```
 
 That keeps the file stable in git diffs and usable across machines.
@@ -85,13 +85,14 @@ Open a project profile explicitly:
 con ~/dev/app
 ```
 
-con opens `~/dev/app/.con/workspace.toml` when it exists. If no profile exists,
-con opens a fresh shell rooted at `~/dev/app`.
+con opens `~/dev/app/.con/workspace.ghostty` when it exists. Otherwise it can
+read a legacy `.con/workspace.toml` profile without rewriting it. If neither
+exists, con opens a fresh shell rooted at `~/dev/app`.
 
 Open a profile file directly:
 
 ```sh
-con ~/dev/app/.con/workspace.toml
+con ~/dev/app/.con/workspace.ghostty
 ```
 
 If the requested profile is malformed, con opens a fresh shell and shows the
@@ -110,7 +111,7 @@ explicitly.
 
 ## Share a profile
 
-Commit `.con/workspace.toml` when the layout is useful to other people on the
+Commit `.con/workspace.ghostty` when the layout is useful to other people on the
 project.
 
 Good shared profile content:
@@ -148,7 +149,7 @@ Use these rules:
 | --- | --- |
 | Cmd+N / New Window | Open one clean scratch shell with shared history. |
 | `con ~/dev/app` | Open the project's profile if present; otherwise one shell rooted there. |
-| `con ~/dev/app/.con/workspace.toml` | Open that profile directly. |
+| `con ~/dev/app/.con/workspace.ghostty` | Open that profile directly. |
 | Add Tabs from Layout Profile | Add the selected project/profile into the current window. |
 | Open Layout Profile in New Window | Open the selected project/profile separately. |
 
