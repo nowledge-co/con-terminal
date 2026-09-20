@@ -299,11 +299,10 @@ impl ConWorkspace {
 
             let workspace_for_theme = workspace.clone();
             let main_window_for_theme = main_window;
-            cx.subscribe(&panel, move |_settings, event: &ThemePreview, cx| {
-                let theme_name = event.0.clone();
+            cx.subscribe(&panel, move |settings, event: &ThemePreview, cx| {
                 let _ = main_window_for_theme.update(cx, |_, window, cx| {
                     let _ = workspace_for_theme.update(cx, |workspace, cx| {
-                        workspace.apply_theme_preview(&theme_name, window, cx);
+                        workspace.on_theme_preview(&settings, event, window, cx);
                     });
                 });
             })
@@ -390,7 +389,9 @@ impl ConWorkspace {
                     .and_then(|terminal| terminal.current_dir(cx))
             })
             .flatten();
-        let config = con_core::Config::load().unwrap_or_default();
+        let Some(config) = crate::load_config_for_new_window() else {
+            return;
+        };
         let session = crate::fresh_window_session_with_history_for_cwd(
             cwd.as_deref().map(std::path::PathBuf::from),
         );

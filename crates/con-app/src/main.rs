@@ -915,7 +915,7 @@ fn startup_initial_terminal_directory(startup: &StartupArgs) -> Option<std::path
     }
 
     let workspace = startup.workspace.as_ref()?;
-    if workspace.is_dir() && !WorkspaceLayout::default_path_for_root(workspace).exists() {
+    if workspace.is_dir() && !WorkspaceLayout::existing_path_for_root(workspace).exists() {
         Some(workspace.clone())
     } else {
         None
@@ -1008,7 +1008,7 @@ pub(crate) fn session_from_workspace_layout_path(
     }
 
     if path.is_dir() {
-        let layout_path = WorkspaceLayout::default_path_for_root(&path);
+        let layout_path = WorkspaceLayout::existing_path_for_root(&path);
         if layout_path.exists() {
             return session_from_workspace_layout_file(layout_path);
         }
@@ -1153,10 +1153,30 @@ fn has_open_windows(cx: &App) -> bool {
 /// window. Used when the process is alive with no windows so an edited
 /// `app_icon` takes effect instead of the stale in-process saved id.
 fn open_window_from_disk(cx: &mut App) {
-    let config = con_core::Config::load().unwrap_or_default();
+    let Some(config) = load_config_for_new_window() else {
+        return;
+    };
     app_icon::apply_persisted(&config.appearance.app_icon);
     app_icon::sync_saved_file_icon(cx);
     open_con_window(config, fresh_window_session_with_history(), false, cx);
+}
+
+fn load_config_for_new_window() -> Option<con_core::Config> {
+    match con_core::Config::load() {
+        Ok(config) => {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = ConWorkspace::validate_native_config_candidate(&config) {
+                log::error!("Cannot open window: {error}");
+                return None;
+            }
+            Some(config)
+        }
+        Err(error) => {
+            log::error!("Cannot open a window because the configuration is invalid: {error}");
+            eprintln!("con: invalid configuration (file was not modified): {error}");
+            None
+        }
+    }
 }
 
 pub(crate) fn toggle_global_summon(cx: &mut App) {
@@ -2607,8 +2627,19 @@ fn main() {
         }
     };
 
-    let config = con_core::Config::load().unwrap_or_default();
+    let config = match con_core::Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("con: invalid configuration (file was not modified): {error}");
+            std::process::exit(2);
+        }
+    };
     log::info!("config loaded");
+    #[cfg(target_os = "macos")]
+    if let Err(error) = ConWorkspace::validate_native_config_candidate(&config) {
+        eprintln!("con: invalid native configuration: {error}");
+        std::process::exit(2);
+    }
     // Apply [network] proxy config — overrides any shell-inherited env vars.
     // SAFETY: single-threaded at this point in startup; no other threads spawned yet.
     unsafe { config.network.apply_to_env() };
@@ -2678,8 +2709,9 @@ fn main() {
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             if has_open_windows(cx) {
-                let config = con_core::Config::load().unwrap_or_default();
-                open_con_window(config, fresh_window_session_with_history(), false, cx);
+                if let Some(config) = load_config_for_new_window() {
+                    open_con_window(config, fresh_window_session_with_history(), false, cx);
+                }
             } else {
                 open_window_from_disk(cx);
             }
@@ -2705,8 +2737,9 @@ fn main() {
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 if has_open_windows(cx) {
-                    let config = con_core::Config::load().unwrap_or_default();
-                    open_con_window(config, fresh_window_session_with_history(), false, cx);
+                    if let Some(config) = load_config_for_new_window() {
+                        open_con_window(config, fresh_window_session_with_history(), false, cx);
+                    }
                 } else {
                     open_window_from_disk(cx);
                 }

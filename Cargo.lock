@@ -1311,7 +1311,6 @@ dependencies = [
  "smallvec",
  "socket2",
  "tokio",
- "toml 0.8.23",
  "tracing",
  "ttf-parser",
  "unicode-width",

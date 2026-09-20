@@ -1624,7 +1624,7 @@ where
 // ── Per-provider config ─────────────────────────────────────────────
 
 /// Settings specific to a single provider — model, credentials, endpoint.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
     pub model: Option<String>,

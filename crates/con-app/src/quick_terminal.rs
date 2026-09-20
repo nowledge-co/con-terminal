@@ -173,7 +173,10 @@ fn toggle_inner(pre_captured_pid: Option<i32>, cx: &mut App) {
         return;
     }
 
-    let config = con_core::Config::load().unwrap_or_default();
+    let Some(config) = crate::load_config_for_new_window() else {
+        opening_failed();
+        return;
+    };
     crate::open_quick_terminal(
         config,
         crate::fresh_window_session_with_history_for_cwd(default_quick_terminal_cwd()),

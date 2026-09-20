@@ -334,7 +334,7 @@ impl ConWorkspace {
             return;
         }
 
-        let save_path = cx.prompt_for_new_path(&export_dir, Some("workspace.toml"));
+        let save_path = cx.prompt_for_new_path(&export_dir, Some("workspace.ghostty"));
         cx.spawn_in(window, async move |this, window| {
             let path = save_path.await.ok()?.ok()??;
             window
@@ -523,10 +523,29 @@ impl ConWorkspace {
                     let _ = this.update(cx, |workspace, cx| {
                         if open_in_new_window {
                             match crate::session_from_workspace_layout_path(&path) {
-                                Ok(session) => {
-                                    let config = Config::load().unwrap_or_default();
-                                    crate::open_con_window(config, session, false, cx);
-                                }
+                                Ok(session) => match Config::load() {
+                                    Ok(config) => {
+                                        #[cfg(target_os = "macos")]
+                                        if let Err(err) =
+                                            Self::validate_native_config_candidate(&config)
+                                        {
+                                            Self::show_layout_profile_error(
+                                                window,
+                                                cx,
+                                                "Could not load native configuration",
+                                                anyhow::anyhow!(err),
+                                            );
+                                            return;
+                                        }
+                                        crate::open_con_window(config, session, false, cx);
+                                    }
+                                    Err(err) => Self::show_layout_profile_error(
+                                        window,
+                                        cx,
+                                        "Could not load configuration",
+                                        err,
+                                    ),
+                                },
                                 Err(err) => Self::show_layout_profile_error(
                                     window,
                                     cx,

@@ -1,7 +1,10 @@
 //! TerminalPane — Ghostty-backed terminal pane wrapper.
 
 use con_agent::context::{PaneObservationFrame, PaneObservationSupport, derive_screen_hints};
-use con_ghostty::{GhosttyTerminal, TerminalColors, TerminalProgress, TerminalPromptState};
+#[cfg(not(target_os = "macos"))]
+use con_ghostty::TerminalColors;
+use con_ghostty::{GhosttyTerminal, TerminalProgress, TerminalPromptState};
+#[cfg(not(target_os = "macos"))]
 use con_terminal::TerminalTheme;
 use gpui::*;
 
@@ -134,6 +137,7 @@ impl TerminalPane {
         });
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub fn set_theme(
         &self,
         theme: &TerminalTheme,
@@ -181,6 +185,7 @@ impl TerminalPane {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub fn set_clipboard_write_enabled(&self, enabled: bool, cx: &App) -> Result<(), String> {
         if let Some(terminal) = self.entity.read(cx).terminal() {
             terminal.set_clipboard_write_enabled(enabled)?;

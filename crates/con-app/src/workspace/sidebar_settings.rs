@@ -843,6 +843,11 @@ impl ConWorkspace {
         restore_focus: bool,
     ) {
         let full_config = settings.read(cx).config().clone();
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self.apply_native_config(&full_config) {
+            log::error!("Failed to apply saved native Ghostty configuration: {error}");
+            return;
+        }
         let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
         let old_keybindings = self.config.keybindings.clone();
         self.config = full_config.clone();
@@ -908,6 +913,7 @@ impl ConWorkspace {
 
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
+        #[cfg(not(target_os = "macos"))]
         match self
             .ghostty_app
             .set_clipboard_write_enabled(term_config.clipboard_write)
@@ -958,6 +964,11 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self.apply_native_config(settings.read(cx).config()) {
+            log::error!("Failed to preview native Ghostty configuration: {error}");
+            return;
+        }
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
@@ -966,12 +977,31 @@ impl ConWorkspace {
 
     pub(super) fn on_theme_preview(
         &mut self,
-        _settings: &Entity<SettingsPanel>,
-        event: &ThemePreview,
+        settings: &Entity<SettingsPanel>,
+        _event: &ThemePreview,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.apply_theme_preview(&event.0, window, cx);
+        #[cfg(target_os = "macos")]
+        {
+            self.apply_appearance_preview_from_panel(settings, window, cx);
+        }
+        #[cfg(not(target_os = "macos"))]
+        self.apply_theme_preview(&_event.0, window, cx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_native_config(&mut self, config: &Config) -> Result<(), String> {
+        let text = native_config_for_app(config)?;
+        let base_dir = native_config_base_dir(config)?;
+        let effective = self.ghostty_app.apply_native_config(text, base_dir)?;
+        self.terminal_theme = native_appearance_theme(
+            config.terminal.theme.clone(),
+            effective.foreground,
+            effective.background,
+            &effective.palette,
+        );
+        Ok(())
     }
 
     pub(super) fn apply_theme_preview(
@@ -1000,10 +1030,21 @@ impl ConWorkspace {
             sanitize_terminal_font_fallback(&term_config.font_fallback, &next_terminal_font_family);
         let next_ui_font_family = appearance_config.ui_font_family.clone();
         let next_ui_font_size = appearance_config.ui_font_size;
+        #[cfg(not(target_os = "macos"))]
         let next_font_size = term_config.font_size;
+        #[cfg(target_os = "macos")]
+        let effective = self
+            .ghostty_app
+            .native_appearance()
+            .expect("native config was applied before UI synchronization");
+        #[cfg(target_os = "macos")]
+        let next_font_size = effective.font_size;
         let next_terminal_cursor_style = term_config.cursor_style.clone();
+        #[cfg(not(target_os = "macos"))]
         let next_terminal_opacity =
             Self::effective_terminal_opacity(appearance_config.terminal_opacity);
+        #[cfg(target_os = "macos")]
+        let next_terminal_opacity = effective.background_opacity as f32;
         let next_terminal_blur = Self::effective_terminal_blur(appearance_config.terminal_blur);
         let next_background_image = appearance_config.background_image.clone();
         let next_background_image_opacity =
@@ -1098,15 +1139,19 @@ impl ConWorkspace {
             palette.set_ui_opacity(effective_ui_opacity)
         });
 
-        if let Some(new_theme) = TerminalTheme::by_name(&term_config.theme) {
+        #[cfg(target_os = "macos")]
+        let new_theme = Some(self.terminal_theme.clone());
+        #[cfg(not(target_os = "macos"))]
+        let new_theme = TerminalTheme::by_name(&term_config.theme);
+        if let Some(new_theme) = new_theme {
             let theme_changed = new_theme.name != self.terminal_theme.name;
             if theme_changed {
                 self.terminal_theme = new_theme.clone();
             }
-            if theme_changed || terminal_appearance_changed {
+            if cfg!(target_os = "macos") || theme_changed || terminal_appearance_changed {
                 self.sync_terminal_surface_appearance(&new_theme, window, cx);
             }
-            if theme_changed || ui_theme_changed {
+            if cfg!(target_os = "macos") || theme_changed || ui_theme_changed {
                 self.sync_gpui_theme_appearance(&new_theme, window, cx);
             }
         } else {
@@ -1139,16 +1184,32 @@ impl ConWorkspace {
 
     pub(super) fn sync_terminal_surface_appearance(
         &self,
-        theme: &TerminalTheme,
+        _theme: &TerminalTheme,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let colors = theme_to_ghostty_colors(theme);
+        #[cfg(target_os = "macos")]
+        {
+            for tab in &self.tabs {
+                for terminal in tab.pane_tree.all_surface_terminals() {
+                    terminal.sync_window_background_blur(cx);
+                }
+            }
+            crate::set_macos_window_glass_backdrop(
+                _window,
+                self.terminal_blur,
+                self.terminal_opacity,
+            );
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let colors = theme_to_ghostty_colors(_theme);
         // Update all terminal panes (legacy gets full theme, ghostty gets color scheme)
+        #[cfg(not(target_os = "macos"))]
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.set_theme(
-                    theme,
+                    _theme,
                     &colors,
                     &self.terminal_font_family,
                     &self.terminal_font_fallback,
@@ -1165,6 +1226,7 @@ impl ConWorkspace {
                 );
             }
         }
+        #[cfg(not(target_os = "macos"))]
         if let Err(e) = self.ghostty_app.update_appearance(
             &colors,
             &self.terminal_font_family,
@@ -1181,6 +1243,7 @@ impl ConWorkspace {
         ) {
             log::error!("Failed to update Ghostty appearance: {}", e);
         }
+        #[cfg(not(target_os = "macos"))]
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.sync_window_background_blur(cx);
@@ -1188,8 +1251,6 @@ impl ConWorkspace {
         }
         #[cfg(target_os = "windows")]
         crate::set_windows_backdrop_blur(_window, self.terminal_blur);
-        #[cfg(target_os = "macos")]
-        crate::set_macos_window_glass_backdrop(_window, self.terminal_blur, self.terminal_opacity);
         #[cfg(target_os = "linux")]
         crate::set_linux_window_blur(_window, self.terminal_blur);
     }

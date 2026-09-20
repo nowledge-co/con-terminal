@@ -2633,9 +2633,18 @@ impl SettingsPanel {
         let shell_text = self.shell_input.read(cx).value().trim().to_string();
         let ui_font_size_text = self.ui_font_size_input.read(cx).value().trim().to_string();
 
-        // Save current provider's per-provider fields into the map
+        // An untouched empty provider form must not create a new authored
+        // provider entry merely because Settings rendered its dirty indicator.
         let pc = self.read_provider_inputs(cx);
-        self.config.agent.providers.set(&self.selected_provider, pc);
+        if pc
+            != self
+                .config
+                .agent
+                .providers
+                .get_or_default(&self.selected_provider)
+        {
+            self.config.agent.providers.set(&self.selected_provider, pc);
+        }
         self.normalize_active_provider_for_saved_transport();
 
         // Update global fields
@@ -2730,7 +2739,7 @@ impl SettingsPanel {
     }
 
     fn config_matches(a: &Config, b: &Config) -> bool {
-        match (toml::to_string_pretty(a), toml::to_string_pretty(b)) {
+        match (serde_json::to_value(a), serde_json::to_value(b)) {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         }
@@ -2837,6 +2846,18 @@ impl SettingsPanel {
             self.save_error_kind = Some(SettingsSaveErrorKind::KeybindingConflict);
             cx.notify();
             return;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let validation =
+                crate::workspace::ConWorkspace::validate_native_config_candidate(&self.config);
+            if let Err(message) = validation {
+                self.save_error = Some(message);
+                self.save_error_kind = Some(SettingsSaveErrorKind::Other);
+                cx.notify();
+                return;
+            }
         }
 
         match self.persist_config(cx) {
@@ -6507,7 +6528,7 @@ impl Render for SettingsPanel {
                                             .h(px(28.0 * header_density))
                                             .w(px(28.0 * header_density))
                                             .rounded(px(7.0 * header_density))
-                                            .tooltip("Open config.toml")
+                                            .tooltip("Open config.ghostty")
                                             .child(
                                                 svg()
                                                     .path("phosphor/file-text.svg")
@@ -7484,10 +7505,8 @@ mod tests {
 
     #[test]
     fn config_matches_ignores_field_ordering_or_whitespace_diffs() {
-        // The settings form reorders some sections on write, but
-        // `toml::to_string_pretty` is canonical for our struct layout
-        // so two `Config` values that round-trip the same way should
-        // serialize identically. If this assertion ever fires, the
+        // Compare typed values, not source formatting or provenance.
+        // If this assertion ever fires, the
         // `has_unsaved_changes` prompt would start firing on every
         // open even for a clean user, which is the #181 inverse.
         use con_core::Config;
