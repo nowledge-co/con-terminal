@@ -12,6 +12,7 @@ use con_core::{
     },
 };
 use futures::{FutureExt, StreamExt};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
@@ -129,7 +130,33 @@ impl ProviderModelFetchResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponsiveMode {
+    Mobile,
+    Narrow,
+    Compact,
+    Regular,
+}
+
+impl ResponsiveMode {
+    fn from_width(width: f32) -> Self {
+        if width < 600.0 {
+            Self::Mobile
+        } else if width < 840.0 {
+            Self::Narrow
+        } else if width < 980.0 {
+            Self::Compact
+        } else {
+            Self::Regular
+        }
+    }
+
+    fn is_mobile(self) -> bool {
+        matches!(self, Self::Mobile)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsSection {
     General,
     Appearance,
@@ -1566,17 +1593,17 @@ impl SettingsPanel {
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
-                    if let Some(provider) = Self::suggestion_provider_from_label(value) {
-                        let provider = Self::provider_for_saved_transport(&this.config, &provider);
-                        this.config.agent.select_provider(provider);
-                        this.active_model_select = Self::make_active_model_select(
-                            &this.config,
-                            &this.registry,
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    }
+                    let Some(provider) = SIDEBAR_PROVIDERS
+                        .iter()
+                        .find(|provider| provider_label(provider) == value)
+                        .cloned()
+                    else {
+                        return;
+                    };
+                    let provider = Self::provider_for_saved_transport(&this.config, &provider);
+                    this.config.agent.select_provider(provider.clone());
+                    this.transition_provider(provider, window, cx);
+                    cx.notify();
                 }
             },
         )
@@ -3061,7 +3088,8 @@ impl SettingsPanel {
 
     // ── Section content ──────────────────────────────────────────
 
-    fn render_general(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_general(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
         let card_opacity = self.card_opacity();
 
         // --- Skills path chips (must render before borrowing theme) ---
@@ -3355,7 +3383,7 @@ impl SettingsPanel {
                     "Command used by new panes after restarting Con. Leave blank for automatic detection.",
                     &self.shell_input,
                     theme,
-                ))),
+                mobile))),
         )
         // Continuity
         .child(
@@ -3374,7 +3402,7 @@ impl SettingsPanel {
                             this.set_restore_terminal_text(*checked, cx);
                         })),
                     theme,
-                ))),
+                mobile))),
         )
         .child(
             div()
@@ -3393,7 +3421,7 @@ impl SettingsPanel {
                             cx.notify();
                         })),
                     theme,
-                ))),
+                mobile))),
         )
         // Skills paths
         .child(
@@ -3500,9 +3528,9 @@ impl SettingsPanel {
                 .child(group_label("Network", &theme))
                 .child(
                     card(theme, card_opacity)
-                        .child(row_field("HTTP Proxy", &self.http_proxy_input))
+                        .child(row_field("HTTP Proxy", &self.http_proxy_input, mobile))
                         .child(row_separator(theme))
-                        .child(row_field("HTTPS Proxy", &self.https_proxy_input)),
+                        .child(row_field("HTTPS Proxy", &self.https_proxy_input, mobile)),
                 ),
         )
     }
@@ -3757,7 +3785,8 @@ impl SettingsPanel {
         )
     }
 
-    fn render_appearance(&self, cx: &mut Context<Self>) -> Div {
+    fn render_appearance(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
         let current_theme = self.config.terminal.theme.clone();
         let terminal_font_select = self.terminal_font_select.clone();
         let terminal_fallback_select = self.terminal_fallback_select.clone();
@@ -3980,6 +4009,7 @@ impl SettingsPanel {
                             &terminal_font_select,
                             "Search fonts…",
                             theme,
+                            mobile,
                         ))
                         .child(row_separator(theme))
                         .child(searchable_select_row(
@@ -3988,6 +4018,7 @@ impl SettingsPanel {
                             &terminal_fallback_select,
                             "Search installed fonts…",
                             theme,
+                            mobile,
                         ))
                         .child(terminal_fallback_list)
                         .child(row_separator(theme))
@@ -3997,11 +4028,12 @@ impl SettingsPanel {
                             &ui_font_select,
                             "Search fonts…",
                             theme,
+                            mobile,
                         ))
                         .child(row_separator(theme))
-                        .child(row_field("UI Size", &ui_font_size_input))
+                        .child(row_field("UI Size", &ui_font_size_input, mobile))
                         .child(row_separator(theme))
-                        .child(row_field("Terminal Size", &font_size_input)),
+                        .child(row_field("Terminal Size", &font_size_input, mobile)),
                 ),
         );
 
@@ -4017,6 +4049,7 @@ impl SettingsPanel {
                         "Choose how the terminal insertion point is drawn.",
                         &self.cursor_style_select,
                         theme,
+                        mobile,
                     ))),
                 ),
         );
@@ -4035,7 +4068,7 @@ impl SettingsPanel {
                             &terminal_opacity_slider,
                             terminal_opacity,
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(toggle_row(
                             "Terminal Blur",
@@ -4065,7 +4098,7 @@ impl SettingsPanel {
                                 toggle
                             },
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(slider_row(
                             "Window Chrome",
@@ -4073,7 +4106,7 @@ impl SettingsPanel {
                             &ui_opacity_slider,
                             ui_opacity,
                             theme,
-                        )),
+                        mobile)),
                 ),
         );
 
@@ -4104,7 +4137,7 @@ impl SettingsPanel {
                                     cx.notify();
                                 })),
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(toggle_row(
                             "Hide Pane Title Bar",
@@ -4138,7 +4171,7 @@ impl SettingsPanel {
                                     cx.notify();
                                 })),
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(toggle_row(
                             "Quit on Last Tab Close",
@@ -4172,7 +4205,7 @@ impl SettingsPanel {
                                     cx.notify();
                                 })),
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(slider_row(
                             "Inactive Accent",
@@ -4180,7 +4213,7 @@ impl SettingsPanel {
                             &tab_accent_inactive_alpha_slider,
                             tab_accent_inactive_alpha,
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(slider_row(
                             "Hover Accent",
@@ -4188,7 +4221,7 @@ impl SettingsPanel {
                             &tab_accent_inactive_hover_alpha_slider,
                             tab_accent_inactive_hover_alpha,
                             theme,
-                        )),
+                        mobile)),
                 ),
         );
 
@@ -4256,7 +4289,7 @@ impl SettingsPanel {
                                         "Choose how the image fills the terminal.",
                                         &background_image_fit_select,
                                         theme,
-                                    ),
+                                    mobile),
                                 ),
                         )
                         .child(row_separator(theme))
@@ -4269,7 +4302,7 @@ impl SettingsPanel {
                                         "Anchor if not filling the full surface.",
                                         &background_image_position_select,
                                         theme,
-                                    ),
+                                    mobile),
                                 ),
                         )
                         .child(row_separator(theme))
@@ -4279,7 +4312,7 @@ impl SettingsPanel {
                                 "Tile if the fit leaves empty space around it.",
                                 image_repeat_toggle,
                                 theme,
-                            ),
+                            mobile),
                         )
                         .child(row_separator(theme))
                         .child(slider_row(
@@ -4288,7 +4321,7 @@ impl SettingsPanel {
                             &background_image_opacity_slider,
                             background_image_opacity,
                             theme,
-                        ))
+                        mobile))
                         .child(row_separator(theme))
                         .child(
                             div()
@@ -4660,7 +4693,8 @@ impl SettingsPanel {
             )
     }
 
-    fn render_ai(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_ai(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
         let theme = cx.theme();
         let card_opacity = self.card_opacity();
         let max_turns_input = self.max_turns_input.clone();
@@ -4698,14 +4732,14 @@ impl SettingsPanel {
                     &active_provider_select,
                     "Select a provider…",
                     theme,
-                ))
+                mobile))
             .child(searchable_select_row(
                     "Active Model",
                     "Model override for the currently active provider.",
                     &active_model_select,
                     "Select a model…",
                     theme,
-                ))
+                mobile))
             .child(toggle_row(
                     "Auto-Approve Tools",
                     "Allow the agent to run tools without per-action approval.",
@@ -4717,7 +4751,7 @@ impl SettingsPanel {
                             cx.notify();
                         })),
                     theme,
-                ))
+                mobile))
             .child(toggle_row(
                     "AI Command Suggestions",
                     "Use the suggestion provider only when local command history has no strong match.",
@@ -4729,7 +4763,7 @@ impl SettingsPanel {
                             cx.notify();
                         })),
                     theme,
-                ))
+                mobile))
             .child(
                     div()
                         .opacity(if self.suggestion_enabled { 1.0 } else { 0.55 })
@@ -4739,7 +4773,7 @@ impl SettingsPanel {
                             &suggestion_provider_select,
                             "Select a provider…",
                             theme,
-                        )),
+                        mobile)),
                 )
             .child(
                     div()
@@ -4750,7 +4784,7 @@ impl SettingsPanel {
                             &suggestion_model_select,
                             "Select a suggestion model…",
                             theme,
-                        )),
+                        mobile)),
                 );
 
         let behavior_card = card(theme, card_opacity).child(
@@ -4796,9 +4830,13 @@ impl SettingsPanel {
         let theme = cx.theme();
         let card_opacity = self.card_opacity();
         let viewport_w = window.viewport_size().width.as_f32();
-        let compact = viewport_w < 980.0;
-        let narrow = viewport_w < 840.0;
-        let settings_sidebar_w = if narrow {
+        let mode = ResponsiveMode::from_width(viewport_w);
+        let mobile = mode.is_mobile();
+        let compact = matches!(mode, ResponsiveMode::Compact);
+        let narrow = matches!(mode, ResponsiveMode::Narrow | ResponsiveMode::Mobile);
+        let settings_sidebar_w = if mobile {
+            0.0
+        } else if narrow {
             48.0
         } else if compact {
             144.0
@@ -4819,7 +4857,9 @@ impl SettingsPanel {
         };
         let provider_content_w =
             (settings_surface_w - settings_sidebar_w - settings_content_pad * 2.0).max(0.0);
-        let provider_sidebar_w = if provider_content_w < 600.0 {
+        let provider_sidebar_w = if mobile {
+            px(0.0)
+        } else if provider_content_w < 600.0 {
             px(148.0)
         } else {
             px(180.0)
@@ -5329,6 +5369,7 @@ impl SettingsPanel {
                                 "Switch region or protocol",
                                 &endpoint_preset_select,
                                 theme,
+                                mobile,
                             )))
                         }),
                 ),
@@ -5356,15 +5397,28 @@ impl SettingsPanel {
                 ),
             );
 
-        let provider_column = div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .w(provider_sidebar_w)
-            .flex_shrink_0()
-            .child(
-                card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)),
-            );
+        let provider_column = if mobile {
+            div().w_full().min_w_0().child(
+                card(theme, card_opacity).child(
+                    div().px(px(14.0)).py(px(12.0)).child(
+                        Select::new(&self.active_provider_select)
+                            .placeholder("Select a provider…")
+                            .small(),
+                    ),
+                ),
+            )
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .w(provider_sidebar_w)
+                .flex_shrink_0()
+                .child(
+                    card(theme, card_opacity)
+                        .child(div().px(px(4.0)).py(px(4.0)).child(provider_list)),
+                )
+        };
 
         section_content(
             "Providers",
@@ -5374,6 +5428,7 @@ impl SettingsPanel {
         .child(
             div()
                 .flex()
+                .when(mobile, |this| this.flex_col())
                 .flex_1()
                 .min_w_0()
                 .gap(px(16.0))
@@ -5382,7 +5437,8 @@ impl SettingsPanel {
         )
     }
 
-    fn render_keys(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_keys(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
         let recording = self.recording_key.clone();
         let card_opacity = self.card_opacity();
 
@@ -5467,35 +5523,40 @@ impl SettingsPanel {
                 } else {
                     None
                 };
-                let badge_and_reset = div().flex().items_center().gap(px(2.0)).child(
-                    div()
-                        .id(SharedString::from(format!("key-badge-{field}")))
-                        .min_h(px(23.0))
-                        .px(px(4.0))
-                        .flex()
-                        .items_center()
-                        .rounded(px(5.0))
-                        .cursor_pointer()
-                        .bg(if is_recording {
-                            theme.primary.opacity(0.12)
-                        } else {
-                            theme.transparent
-                        })
-                        .text_color(if is_recording {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .hover(|s| s.bg(theme.muted.opacity(0.055)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                this.set_recording_key(Some(field_str.clone()));
-                                cx.notify();
-                            }),
-                        )
-                        .child(badge),
-                );
+                let badge_and_reset = div()
+                    .flex()
+                    .items_center()
+                    .when(mobile, |this| this.w_full().flex_wrap().justify_start())
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("key-badge-{field}")))
+                            .min_h(px(23.0))
+                            .px(px(4.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(5.0))
+                            .cursor_pointer()
+                            .bg(if is_recording {
+                                theme.primary.opacity(0.12)
+                            } else {
+                                theme.transparent
+                            })
+                            .text_color(if is_recording {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .hover(|s| s.bg(theme.muted.opacity(0.055)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_recording_key(Some(field_str.clone()));
+                                    cx.notify();
+                                }),
+                            )
+                            .child(badge),
+                    );
                 let badge_and_reset = if let Some(reset_button) = reset_button {
                     badge_and_reset.child(reset_button)
                 } else {
@@ -5507,11 +5568,14 @@ impl SettingsPanel {
                         .flex()
                         .items_center()
                         .justify_between()
+                        .when(mobile, |this| this.flex_col().items_start().h_auto())
+                        .when(!mobile, |this| this.h(px(34.0)))
                         .px(px(16.0))
-                        .h(px(34.0))
                         .hover(|s| s.bg(theme.muted.opacity(0.025)))
                         .child(
                             div()
+                                .min_w_0()
+                                .when(mobile, |this| this.w_full())
                                 .text_size(px(12.0))
                                 .line_height(px(16.0))
                                 .font_weight(FontWeight::MEDIUM)
@@ -5617,6 +5681,7 @@ impl SettingsPanel {
                 .flex()
                 .items_start()
                 .justify_between()
+                .when(mobile, |this| this.flex_col().w_full())
                 .gap(px(16.0))
                 .child(
                     div()
@@ -5670,6 +5735,7 @@ impl SettingsPanel {
                 .flex()
                 .items_center()
                 .justify_between()
+                .when(mobile, |this| this.flex_col().items_start().w_full())
                 .gap(px(16.0))
                 .px(px(16.0))
                 .py(px(11.0))
@@ -5706,9 +5772,9 @@ impl SettingsPanel {
                 .child(
                     div()
                         .id("key-badge-global-summon")
-                        .min_w(px(112.0))
+                        .when(!mobile, |this| this.min_w(px(112.0)).justify_end())
                         .flex()
-                        .justify_end()
+                        .when(mobile, |this| this.w_full().flex_wrap().justify_start())
                         .opacity(if global_summon_enabled { 1.0 } else { 0.45 })
                         .cursor_pointer()
                         .rounded(px(7.0))
@@ -5768,6 +5834,7 @@ impl SettingsPanel {
                     .flex()
                     .items_start()
                     .justify_between()
+                    .when(mobile, |this| this.flex_col().w_full())
                     .gap(px(16.0))
                     .child(
                         div()
@@ -5818,6 +5885,7 @@ impl SettingsPanel {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .when(mobile, |this| this.flex_col().items_start().w_full())
                     .gap(px(16.0))
                     .px(px(16.0))
                     .py(px(11.0))
@@ -5848,9 +5916,9 @@ impl SettingsPanel {
                     .child(
                         div()
                             .id("key-badge-hotkey-window")
-                            .min_w(px(112.0))
+                            .when(!mobile, |this| this.min_w(px(112.0)).justify_end())
                             .flex()
-                            .justify_end()
+                            .when(mobile, |this| this.w_full().flex_wrap().justify_start())
                             .opacity(if quick_terminal_enabled { 1.0 } else { 0.45 })
                             .cursor_pointer()
                             .rounded(px(7.0))
@@ -5980,11 +6048,11 @@ impl Render for SettingsPanel {
 
         // Render content first (AI needs &mut self)
         let content = match active {
-            SettingsSection::General => self.render_general(cx),
-            SettingsSection::Appearance => self.render_appearance(cx),
-            SettingsSection::Ai => self.render_ai(cx),
+            SettingsSection::General => self.render_general(window, cx),
+            SettingsSection::Appearance => self.render_appearance(window, cx),
+            SettingsSection::Ai => self.render_ai(window, cx),
             SettingsSection::Providers => self.render_providers(window, cx),
-            SettingsSection::Keys => self.render_keys(cx),
+            SettingsSection::Keys => self.render_keys(window, cx),
         };
 
         let has_unsaved_changes = self.standalone && self.has_unsaved_changes(cx);
@@ -5992,16 +6060,22 @@ impl Render for SettingsPanel {
         let viewport = window.viewport_size();
         let viewport_w = viewport.width.as_f32();
         let viewport_h = viewport.height.as_f32();
-        let compact = viewport_w < 980.0;
-        let narrow = viewport_w < 840.0;
-        let sidebar_w = if narrow {
+        let mode = ResponsiveMode::from_width(viewport_w);
+        let mobile = mode.is_mobile();
+        let compact = matches!(mode, ResponsiveMode::Compact);
+        let narrow = matches!(mode, ResponsiveMode::Narrow | ResponsiveMode::Mobile);
+        let sidebar_w = if mobile {
+            px(0.0)
+        } else if narrow {
             px(48.0)
         } else if compact {
             px(144.0)
         } else {
             px(160.0)
         };
-        let content_pad = if narrow {
+        let content_pad = if mobile {
+            px(12.0)
+        } else if narrow {
             px(14.0)
         } else if compact {
             px(18.0)
@@ -6022,8 +6096,9 @@ impl Render for SettingsPanel {
         // Sidebar
         let mut sidebar = div()
             .flex()
-            .flex_col()
-            .w(sidebar_w)
+            .when(!mobile, |this| this.flex_col())
+            .when(mobile, |this| this.flex_wrap().w_full())
+            .when(!mobile, |this| this.w(sidebar_w))
             .pt(px(8.0))
             .pb(px(12.0))
             .px(if narrow { px(4.0) } else { px(8.0) })
@@ -6070,18 +6145,23 @@ impl Render for SettingsPanel {
                     }),
                 );
 
-            if narrow {
-                // Icon-only mode: centered icon, no label
-                nav_item = nav_item.justify_center().size(px(36.0)).mx_auto().child(
-                    svg()
-                        .path(section.icon())
-                        .size(ui_icon_px(theme, 16.0))
-                        .text_color(if is_active {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground
-                        }),
-                );
+            if mobile {
+                nav_item = nav_item
+                    .gap(px(6.0))
+                    .px(px(9.0))
+                    .min_h(px(32.0))
+                    .text_size(px(12.0))
+                    .child(
+                        svg()
+                            .path(section.icon())
+                            .size(ui_icon_px(theme, 16.0))
+                            .text_color(if is_active {
+                                theme.foreground
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    )
+                    .child(section.label());
             } else {
                 nav_item = nav_item
                     .gap(px(8.0))
@@ -6207,7 +6287,8 @@ impl Render for SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .h(px(44.0))
+                            .when(mobile, |this| this.flex_wrap().h_auto().py(px(6.0)))
+                            .when(!mobile, |this| this.h(px(44.0)))
                             .child(header_title_area)
                             .child(
                                 div()
@@ -6215,6 +6296,7 @@ impl Render for SettingsPanel {
                                     .items_center()
                                     .gap(px(10.0))
                                     .flex_shrink_0()
+                                    .when(mobile, |this| this.flex_wrap().w_full().justify_start())
                                     .pr(px(20.0))
                                     .children(self.standalone.then(|| {
                                         let (icon, label, tone) = if has_unsaved_changes {
@@ -6345,6 +6427,7 @@ impl Render for SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_between()
+                            .when(mobile, |this| this.flex_col().items_start().w_full())
                             .gap(px(12.0))
                             .min_h(px(42.0))
                             .px(px(20.0))
@@ -6379,7 +6462,6 @@ impl Render for SettingsPanel {
                                             } else {
                                                 0.76
                                             }))
-                                            .whitespace_nowrap()
                                             .child("Save changes before closing?"),
                                     ),
                             )
@@ -6387,6 +6469,7 @@ impl Render for SettingsPanel {
                                 div()
                                     .flex()
                                     .items_center()
+                                    .when(mobile, |this| this.flex_wrap().w_full().justify_start())
                                     .gap(px(6.0))
                                     .child(
                                         Button::new("settings-close-prompt-keep-editing")
@@ -6488,6 +6571,7 @@ impl Render for SettingsPanel {
             .child(
                 div()
                     .flex()
+                    .when(mobile, |this| this.flex_col())
                     .flex_1()
                     .min_h_0()
                     .child(sidebar)
@@ -6641,14 +6725,15 @@ fn row_separator(_theme: &gpui_component::Theme) -> Div {
     div().h(px(6.0))
 }
 
-fn row_field(label: &str, input: &Entity<InputState>) -> Div {
+fn row_field(label: &str, input: &Entity<InputState>, mobile: bool) -> Div {
     div()
         .flex()
         .items_center()
+        .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
         .gap(px(16.0))
         .px(px(16.0))
-        .h(px(46.0))
+        .when(!mobile, |this| this.h(px(46.0)))
         .child(
             div()
                 .text_sm()
@@ -6656,7 +6741,13 @@ fn row_field(label: &str, input: &Entity<InputState>) -> Div {
                 .flex_shrink_0()
                 .child(label.to_string()),
         )
-        .child(div().flex_1().min_w(px(160.0)).child(Input::new(input)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .when(mobile, |this| this.w_full())
+                .child(Input::new(input)),
+        )
 }
 
 fn row_input_with_hint(
@@ -6664,9 +6755,11 @@ fn row_input_with_hint(
     hint: &str,
     input: &Entity<InputState>,
     theme: &gpui_component::Theme,
+    mobile: bool,
 ) -> Div {
     div()
         .flex()
+        .when(mobile, |this| this.flex_col().items_start())
         .items_center()
         .justify_between()
         .gap(px(18.0))
@@ -6695,8 +6788,9 @@ fn row_input_with_hint(
         .child(
             div()
                 .flex_1()
-                .min_w(px(180.0))
-                .max_w(px(320.0))
+                .min_w_0()
+                .when(!mobile, |this| this.max_w(px(320.0)))
+                .w_full()
                 .child(Input::new(input)),
         )
 }
@@ -6707,9 +6801,11 @@ fn slider_row(
     slider: &Entity<SliderState>,
     value: f32,
     theme: &gpui_component::Theme,
+    mobile: bool,
 ) -> Div {
     div()
         .flex()
+        .when(mobile, |this| this.flex_col().items_start())
         .items_center()
         .justify_between()
         .gap(px(18.0))
@@ -6722,7 +6818,7 @@ fn slider_row(
                 .gap(px(3.0))
                 .flex_1()
                 .min_w_0()
-                .max_w(px(380.0))
+                .when(!mobile, |this| this.max_w(px(380.0)))
                 .child(
                     div()
                         .text_sm()
@@ -6742,8 +6838,9 @@ fn slider_row(
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .w(px(260.0))
-                .flex_shrink_0()
+                .w_full()
+                .when(!mobile, |this| this.max_w(px(260.0)))
+                .min_w_0()
                 .child(
                     div().flex().justify_end().child(
                         div()
@@ -6769,9 +6866,11 @@ fn searchable_select_row(
     select: &Entity<SelectState<SearchableVec<String>>>,
     placeholder: &str,
     theme: &gpui_component::Theme,
+    mobile: bool,
 ) -> Div {
     div()
         .flex()
+        .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
         .gap(px(16.0))
@@ -6783,7 +6882,7 @@ fn searchable_select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .max_w(px(340.0))
+                .when(!mobile, |this| this.max_w(px(340.0)))
                 .child(
                     div()
                         .text_sm()
@@ -6799,11 +6898,15 @@ fn searchable_select_row(
                 ),
         )
         .child(
-            div().w(px(236.0)).flex_shrink_0().child(
-                Select::new(select)
-                    .placeholder(placeholder.to_string())
-                    .small(),
-            ),
+            div()
+                .when(!mobile, |this| this.w(px(236.0)).flex_shrink_0())
+                .w_full()
+                .min_w_0()
+                .child(
+                    Select::new(select)
+                        .placeholder(placeholder.to_string())
+                        .small(),
+                ),
         )
 }
 
@@ -6812,9 +6915,11 @@ fn select_row(
     hint: &str,
     select: &Entity<SelectState<Vec<String>>>,
     theme: &gpui_component::Theme,
+    mobile: bool,
 ) -> Div {
     div()
         .flex()
+        .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
         .gap(px(16.0))
@@ -6825,7 +6930,7 @@ fn select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .max_w(px(320.0))
+                .when(!mobile, |this| this.max_w(px(320.0)))
                 .child(
                     div()
                         .text_sm()
@@ -6842,15 +6947,23 @@ fn select_row(
         )
         .child(
             div()
-                .w(px(188.0))
-                .flex_shrink_0()
+                .when(!mobile, |this| this.w(px(188.0)).flex_shrink_0())
+                .w_full()
+                .min_w_0()
                 .child(Select::new(select).small()),
         )
 }
 
-fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::Theme) -> Div {
+fn toggle_row(
+    label: &str,
+    hint: &str,
+    toggle: Switch,
+    theme: &gpui_component::Theme,
+    mobile: bool,
+) -> Div {
     div()
         .flex()
+        .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
         .gap(px(16.0))
@@ -6862,7 +6975,7 @@ fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::T
                 .flex_col()
                 .gap(px(3.0))
                 .flex_1()
-                .max_w(px(360.0))
+                .when(!mobile, |this| this.max_w(px(360.0)))
                 .child(
                     div()
                         .text_sm()
@@ -6877,7 +6990,7 @@ fn toggle_row(label: &str, hint: &str, toggle: Switch, theme: &gpui_component::T
                         .child(hint.to_string()),
                 ),
         )
-        .child(div().pt(px(2.0)).child(toggle))
+        .child(div().pt(px(2.0)).min_w_0().child(toggle))
 }
 
 fn stacked_input_field(
