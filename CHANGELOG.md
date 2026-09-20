@@ -15,6 +15,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#361](https://github.com/nowledge-co/con-terminal/pull/361) by
   [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
+**Windows, Linux**
+
+- Terminal apps that request focus reporting now receive accurate updates when
+  focus moves between panes, windows, dialogs, and Con's input surfaces. This
+  improves focus-aware behavior in editors and other TUIs. _(PR
+  [#362](https://github.com/nowledge-co/con-terminal/pull/362) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 ---
 
 ## `v0.1.0-beta.100` - 2026-09-19
