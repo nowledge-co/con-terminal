@@ -16,8 +16,9 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use con_ghostty::cursor::{CursorBlink, CursorStyle};
 use con_ghostty::vt::{
     SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
     VtKeyEvent, VtKeyModifiers, VtPasteResult, VtPasteSource,
@@ -257,6 +258,10 @@ pub struct GhosttyView {
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
     terminal_focused: bool,
+    cursor_blink: CursorBlink,
+    cursor_blink_task: Option<(Instant, Task<()>)>,
+    cursor_subscriptions: Vec<Subscription>,
+    display_cursor: VtCursor,
     initial_cwd: Option<std::path::PathBuf>,
     restored_screen_text: Option<Vec<String>>,
     initial_command: Option<crate::startup_args::TerminalCommand>,
@@ -366,6 +371,10 @@ impl GhosttyView {
             terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
             terminal_focused: false,
+            cursor_blink: CursorBlink::default(),
+            cursor_blink_task: None,
+            cursor_subscriptions: Vec::new(),
+            display_cursor: VtCursor::default(),
             initial_cwd: cwd,
             restored_screen_text,
             initial_command: command,
@@ -1175,6 +1184,7 @@ impl GhosttyView {
         };
         let outcome = terminal.send_key(event)?;
         if outcome.output_accepted {
+            self.cursor_blink.reset();
             self.clear_restored_screen_text();
             self.clear_selection();
             if outcome.report_releases
@@ -1597,6 +1607,13 @@ impl GhosttyView {
         };
         let shape = (snapshot.cols, snapshot.rows);
         let generation = snapshot.generation;
+        // Only a block changes text-run colors. Other shapes are overlays,
+        // so their blink frames need no row reconstruction.
+        let cursor = if self.display_cursor.style == CursorStyle::Block {
+            self.display_cursor
+        } else {
+            VtCursor::default()
+        };
         let force_full_rebuild = self.row_cache_style.as_ref() != Some(&style)
             || self.row_cache_shape != Some(shape)
             || self.row_cache.len() != usize::from(snapshot.rows);
@@ -1615,6 +1632,15 @@ impl GhosttyView {
             // Rebuilding all row elements for a changed snapshot is still
             // bounded by the visible grid and keeps TUI exits correct.
             (0..usize::from(snapshot.rows)).collect()
+        } else if self.row_cache_cursor != Some(cursor) {
+            // The cached snapshot retains its original damage; blink-only
+            // frames must not rebuild those unrelated rows again.
+            self.row_cache_cursor
+                .into_iter()
+                .chain(Some(cursor))
+                .filter(|cursor| cursor.visible && cursor.row < snapshot.rows)
+                .map(|cursor| usize::from(cursor.row))
+                .collect()
         } else {
             Vec::new()
         };
@@ -1628,7 +1654,7 @@ impl GhosttyView {
             let Some(cells) = snapshot.cells.get(row_start..row_end) else {
                 return;
             };
-            let cursor_for_row = cursor_col_for_row(snapshot.cursor, row_idx);
+            let cursor_for_row = cursor_col_for_row(cursor, row_idx);
             self.row_cache[row_idx] = build_terminal_row(
                 cells,
                 default_fg,
@@ -1641,7 +1667,7 @@ impl GhosttyView {
         }
 
         self.row_cache_generation = Some(snapshot.generation);
-        self.row_cache_cursor = Some(snapshot.cursor);
+        self.row_cache_cursor = Some(cursor);
         self.row_cache_style = Some(style);
         self.row_cache_shape = Some(shape);
         if let Some(terminal) = self.terminal.as_ref() {
@@ -1680,6 +1706,7 @@ impl TerminalImeView for GhosttyView {
     fn send_ime_text(&mut self, text: &str, cx: &mut Context<Self>) {
         let _ = self.ensure_session(cx);
         if !text.is_empty() {
+            self.cursor_blink.reset();
             self.clear_restored_screen_text();
             self.clear_selection();
         }
@@ -1702,6 +1729,42 @@ impl TerminalImeView for GhosttyView {
 
 impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cursor_subscriptions.is_empty() {
+            self.cursor_subscriptions = vec![
+                cx.on_focus(&self.focus_handle, window, |this, _, cx| {
+                    this.cursor_blink.reset();
+                    cx.notify();
+                }),
+                cx.on_blur(&self.focus_handle, window, |_, _, cx| cx.notify()),
+                cx.observe_window_activation(window, |this, _, cx| {
+                    this.cursor_blink.reset();
+                    cx.notify();
+                }),
+            ];
+        }
+        self.display_cursor = self.cursor_blink.update(
+            self.snapshot
+                .as_ref()
+                .map_or(VtCursor::default(), |snapshot| snapshot.cursor),
+            self.focus_handle.is_focused(window) && window.is_window_active(),
+            Instant::now(),
+        );
+        if self
+            .cursor_blink_task
+            .as_ref()
+            .map(|(deadline, _)| *deadline)
+            != self.cursor_blink.deadline()
+        {
+            self.cursor_blink_task = self.cursor_blink.deadline().map(|deadline| {
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(deadline.saturating_duration_since(Instant::now()))
+                        .await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                });
+                (deadline, task)
+            });
+        }
         let unsafe_paste_confirmation = self.render_unsafe_paste_confirmation(cx);
         let kitty_placements = self
             .snapshot
@@ -1830,7 +1893,7 @@ impl Render for GhosttyView {
                     let row_start = row_idx * usize::from(snapshot.cols);
                     let row_end = row_start + usize::from(snapshot.cols);
                     if let Some(cells) = snapshot.cells.get(row_start..row_end) {
-                        let cursor_for_row = cursor_col_for_row(snapshot.cursor, row_idx);
+                        let cursor_for_row = cursor_col_for_row(self.display_cursor, row_idx);
                         let row = build_terminal_row(
                             cells,
                             foreground,
@@ -1900,6 +1963,76 @@ impl Render for GhosttyView {
             );
         }
 
+        let cursor_overlay = self.snapshot.as_ref().and_then(|snapshot| {
+            let cursor = self.display_cursor;
+            if !cursor.visible || cursor.style == CursorStyle::Block {
+                return None;
+            }
+            let cell = snapshot.cells.get(
+                usize::from(cursor.row) * usize::from(snapshot.cols) + usize::from(cursor.col),
+            )?;
+            let color = RowStyle::from_cell(
+                cell,
+                foreground,
+                theme.background,
+                &mono_font,
+                false,
+                false,
+                selection_bg,
+            )
+            .fg;
+            // Match StyledText's actual shaping, not the approximate PTY
+            // grid width (e.g. 9 px estimated versus 8.4 px for 14 px mono).
+            let row = self.row_cache.get(usize::from(cursor.row))?;
+            let text_system = window.text_system();
+            let line = text_system.shape_line(row.text.clone(), px(font_size_px), &row.runs, None);
+            let space_width = text_system
+                .shape_line(
+                    " ".into(),
+                    px(font_size_px),
+                    &[TextRun {
+                        len: 1,
+                        font: mono_font.clone(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
+                .width();
+            let mut columns = row.text.char_indices();
+            let at = columns.nth(usize::from(cursor.col));
+            let start = at.map_or(row.text.len(), |(index, _)| index);
+            let end = columns.next().map_or(row.text.len(), |(index, _)| index);
+            let missing = if at.is_none() {
+                usize::from(cursor.col).saturating_sub(row.text.chars().count())
+            } else {
+                0
+            };
+            let x = line.x_for_index(start) + space_width * missing as f32;
+            let width = (line.x_for_index(end) - line.x_for_index(start)).max(space_width);
+            let inset_x = if has_kitty_images {
+                0.0
+            } else {
+                TERMINAL_PADDING_X_PX
+            };
+            let inset_y = if has_kitty_images {
+                0.0
+            } else {
+                TERMINAL_PADDING_Y_PX
+            };
+            Some(render_cursor_overlay(
+                cursor.style,
+                Bounds::new(
+                    point(
+                        x + px(inset_x),
+                        px(inset_y
+                            + (usize::from(cursor.row) + status_row_offset) as f32
+                                * line_height_px),
+                    ),
+                    size(width, px(line_height_px)),
+                ),
+                color,
+            ))
+        });
         let terminal_content = if has_kitty_images {
             let row_layer = div()
                 .absolute()
@@ -1949,6 +2082,7 @@ impl Render for GhosttyView {
                         px(line_height_px),
                     ))
                     .child(row_layer)
+                    .children(cursor_overlay)
                     .child(render_kitty_image_layer(
                         &kitty_placements,
                         &self.kitty_images,
@@ -1968,6 +2102,7 @@ impl Render for GhosttyView {
                     .bottom(px(TERMINAL_PADDING_Y_PX))
                     .overflow_hidden()
                     .child(row_layer)
+                    .children(cursor_overlay)
                     .child(render_kitty_image_layer(
                         &kitty_placements,
                         &self.kitty_images,
@@ -1989,6 +2124,7 @@ impl Render for GhosttyView {
                 .child(content_viewport)
         } else {
             div()
+                .relative()
                 .flex()
                 .flex_col()
                 .size_full()
@@ -2002,6 +2138,7 @@ impl Render for GhosttyView {
                 .items_start()
                 .justify_start()
                 .children(rows)
+                .children(cursor_overlay)
         };
         let mut terminal_children = vec![terminal_content.into_any_element()];
         if let Some(overlay) = self.render_link_cursor_overlay(cell_width_px, line_height_px) {
@@ -2584,11 +2721,58 @@ struct RowCacheStyleKey {
 }
 
 fn cursor_col_for_row(cursor: VtCursor, row_idx: usize) -> Option<usize> {
-    if cursor.visible && usize::from(cursor.row) == row_idx {
+    if cursor.visible && cursor.style == CursorStyle::Block && usize::from(cursor.row) == row_idx {
         Some(usize::from(cursor.col))
     } else {
         None
     }
+}
+
+fn render_cursor_overlay(
+    style: CursorStyle,
+    cursor_bounds: Bounds<Pixels>,
+    color: Hsla,
+) -> AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let x = bounds.left() + cursor_bounds.left();
+            let y = bounds.top() + cursor_bounds.top();
+            let cell_width = f32::from(cursor_bounds.size.width);
+            let line_height = f32::from(cursor_bounds.size.height);
+            let stroke = 1.0 / window.scale_factor();
+            let mut paint = |left, top, width, height| {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(x + px(left), y + px(top)),
+                        size(px(width), px(height)),
+                    ),
+                    color,
+                ));
+            };
+            match style {
+                CursorStyle::Bar => paint(0.0, 0.0, stroke, line_height),
+                CursorStyle::Underline => paint(0.0, line_height - stroke, cell_width, stroke),
+                CursorStyle::HollowBlock => {
+                    paint(0.0, 0.0, cell_width, stroke);
+                    paint(0.0, line_height - stroke, cell_width, stroke);
+                    paint(0.0, stroke, stroke, line_height - 2.0 * stroke);
+                    paint(
+                        cell_width - stroke,
+                        stroke,
+                        stroke,
+                        line_height - 2.0 * stroke,
+                    );
+                }
+                CursorStyle::Block => {}
+            }
+        },
+    )
+    .absolute()
+    .left_0()
+    .top_0()
+    .size_full()
+    .into_any_element()
 }
 
 fn rows_needing_refresh(
@@ -2970,10 +3154,10 @@ fn vt_color_to_hsla(packed: u32) -> Option<Hsla> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUNDLED_LINUX_FONT_FAMILY, DEFAULT_FONT_SIZE, KITTY_BELOW_BACKGROUND_LIMIT, KittyImageLayer, MIN_FONT_SIZE_PX,
-        build_terminal_row, cell_height_px, cell_width_px, effective_font_size,
-        kitty_image_to_render_image, kitty_placement_geometry, physical_cell_size,
-        rows_needing_refresh, vt_color_to_hsla,
+        BUNDLED_LINUX_FONT_FAMILY, DEFAULT_FONT_SIZE, KITTY_BELOW_BACKGROUND_LIMIT,
+        KittyImageLayer, MIN_FONT_SIZE_PX, build_terminal_row, cell_height_px, cell_width_px,
+        effective_font_size, kitty_image_to_render_image, kitty_placement_geometry,
+        physical_cell_size, rows_needing_refresh, vt_color_to_hsla,
     };
     use con_ghostty::{
         ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, KittyImage, KittyPlacement, ScreenSnapshot,
@@ -3210,6 +3394,7 @@ mod tests {
                 col: 2,
                 row: 2,
                 visible: true,
+                ..Default::default()
             },
             alternate_screen: false,
             scrollbar: None,
@@ -3223,6 +3408,7 @@ mod tests {
                 col: 1,
                 row: 0,
                 visible: true,
+                ..Default::default()
             }),
             false,
         );

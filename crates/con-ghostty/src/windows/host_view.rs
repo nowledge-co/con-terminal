@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
+use crate::cursor::CursorBlink;
 use crate::stub::GhosttyScrollbar;
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::{DesktopNotificationPolicy, clipboard_write_policy};
@@ -289,14 +290,21 @@ impl RenderSession {
 
     /// Render one frame. `Rendered` returns freshly-read BGRA bytes;
     /// `Unchanged` means "nothing moved, reuse the last image".
-    pub fn render_frame(&self) -> Result<RenderOutcome> {
+    pub fn render_frame(&self, blink: &mut CursorBlink, focused: bool) -> Result<RenderOutcome> {
         let prof_started = perf_trace_enabled().then(Instant::now);
         let renderer = self.renderer.lock();
         let config = self.config.lock().clone();
         let snapshot_started = perf_trace_enabled().then(Instant::now);
-        let Some(snapshot) = self.vt.try_snapshot() else {
+        let Some(mut snapshot) = self.vt.try_snapshot() else {
             return Ok(RenderOutcome::Pending);
         };
+        // Blink changes do not mutate VT generation. Include the cursor row
+        // in partial readbacks on both edges, including when it disappears.
+        if snapshot.cursor.visible && !snapshot.dirty_rows.contains(&snapshot.cursor.row) {
+            snapshot.dirty_rows.push(snapshot.cursor.row);
+            snapshot.dirty_rows.sort_unstable();
+        }
+        snapshot.cursor = blink.update(snapshot.cursor, focused, Instant::now());
         let snapshot_ms = snapshot_started
             .map(|started| started.elapsed().as_secs_f64() * 1000.0)
             .unwrap_or(0.0);

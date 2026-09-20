@@ -255,6 +255,9 @@ pub mod stub;
 pub mod linux;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
+pub mod cursor;
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod vt;
 
 #[cfg(target_os = "windows")]

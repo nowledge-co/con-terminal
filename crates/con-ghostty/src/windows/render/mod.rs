@@ -435,7 +435,8 @@ impl Renderer {
         let combined = snapshot
             .generation
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            .wrapping_add(geometry_hash.rotate_left(13));
+            .wrapping_add(geometry_hash.rotate_left(13))
+            .wrapping_add(u64::from(snapshot.cursor.visible));
         let needs_draw = *self
             .last_generation
             .lock()
@@ -946,7 +947,7 @@ impl Renderer {
                     0
                 }
                 | if is_cursor_cell {
-                    RENDER_ATTR_CURSOR
+                    RENDER_ATTR_CURSOR | ((snapshot.cursor.style as u32) << 11)
                 } else {
                     0
                 };
@@ -1059,9 +1060,8 @@ impl Renderer {
         instances.reserve(text_instance_count as usize);
         for index in 0..text_instance_count as usize {
             let instance = instances[index];
-            if instance.attrs & RENDER_ATTR_CURSOR == 0
-                && (instance.attrs & RENDER_ATTR_DEFAULT_BG == 0
-                    || instance.attrs & ATTR_INVERSE as u32 != 0)
+            if instance.attrs & RENDER_ATTR_DEFAULT_BG == 0
+                || instance.attrs & ATTR_INVERSE as u32 != 0
             {
                 instances.push(instance);
             }

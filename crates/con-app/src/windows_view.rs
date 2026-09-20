@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use con_ghostty::cursor::CursorBlink;
 use con_ghostty::vt::{
     SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry, SelectionPoint, VtKeyAction,
     VtKeyEvent, VtKeyModifiers, VtMouseButton, VtPasteResult, VtPasteSource,
@@ -132,6 +133,9 @@ pub struct GhosttyView {
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
     terminal_focused: bool,
+    cursor_blink: CursorBlink,
+    cursor_blink_task: Option<(Instant, Task<()>)>,
+    cursor_subscriptions: Vec<Subscription>,
     initial_cwd: Option<String>,
     restored_screen_text: Option<Vec<String>>,
     initial_font_size: f32,
@@ -258,6 +262,9 @@ impl GhosttyView {
             terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
             terminal_focused: false,
+            cursor_blink: CursorBlink::default(),
+            cursor_blink_task: None,
+            cursor_subscriptions: Vec::new(),
             initial_cwd: cwd,
             restored_screen_text,
             initial_font_size: font_size,
@@ -694,7 +701,8 @@ impl GhosttyView {
         }
 
         let render_started = perf_trace_enabled().then(Instant::now);
-        let outcome = match session.render_frame() {
+        let focused = self.focus_handle.is_focused(window) && window.is_window_active();
+        let outcome = match session.render_frame(&mut self.cursor_blink, focused) {
             Ok(RenderOutcome::Unchanged) => SyncRenderResult::Unchanged,
             Ok(RenderOutcome::Rendered {
                 frame,
@@ -1512,6 +1520,7 @@ impl GhosttyView {
         };
         let outcome = terminal.send_key(event)?;
         if outcome.output_accepted {
+            self.cursor_blink.reset();
             self.clear_restored_screen_text();
             if outcome.report_releases
                 && event.action != VtKeyAction::Release
@@ -1952,6 +1961,7 @@ impl TerminalImeView for GhosttyView {
 
     fn send_ime_text(&mut self, text: &str, _cx: &mut Context<Self>) {
         if !text.is_empty() {
+            self.cursor_blink.reset();
             self.clear_restored_screen_text();
         }
         if let Some(terminal) = &self.terminal {
@@ -1966,6 +1976,19 @@ impl TerminalImeView for GhosttyView {
 
 impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.cursor_subscriptions.is_empty() {
+            self.cursor_subscriptions = vec![
+                cx.on_focus(&self.focus_handle, window, |this, _, cx| {
+                    this.cursor_blink.reset();
+                    cx.notify();
+                }),
+                cx.on_blur(&self.focus_handle, window, |_, _, cx| cx.notify()),
+                cx.observe_window_activation(window, |this, _, cx| {
+                    this.cursor_blink.reset();
+                    cx.notify();
+                }),
+            ];
+        }
         match self.sync_render(window) {
             SyncRenderResult::Pending => cx.notify(),
             SyncRenderResult::Rendered {
@@ -1975,6 +1998,23 @@ impl Render for GhosttyView {
                 needs_followup_prepaint: false,
             }
             | SyncRenderResult::Unchanged => {}
+        }
+
+        if self
+            .cursor_blink_task
+            .as_ref()
+            .map(|(deadline, _)| *deadline)
+            != self.cursor_blink.deadline()
+        {
+            self.cursor_blink_task = self.cursor_blink.deadline().map(|deadline| {
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(deadline.saturating_duration_since(Instant::now()))
+                        .await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                });
+                (deadline, task)
+            });
         }
 
         let terminal_background = self.placeholder_background();

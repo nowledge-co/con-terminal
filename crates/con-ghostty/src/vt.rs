@@ -38,6 +38,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
+pub use crate::cursor::{Cursor, CursorStyle};
 use crate::stub::GhosttyScrollbar;
 use crate::{
     CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, DesktopNotification,
@@ -1561,13 +1562,6 @@ pub struct Cell {
     pub bg: u32,
     pub attrs: u8,
     pub _pad: [u8; 3],
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Cursor {
-    pub col: u16,
-    pub row: u16,
-    pub visible: bool,
 }
 
 /// Pointer location for a selection gesture. Grid coordinates identify the
@@ -4042,6 +4036,8 @@ impl VtScreen {
                 col: cursor_data.viewport_x,
                 row: cursor_data.viewport_y,
                 visible: cursor_data.visible,
+                style: CursorStyle::from_raw(cursor_data.visual_style),
+                blinking: cursor_data.blinking,
             }
         } else {
             Cursor::default()
@@ -5610,6 +5606,17 @@ mod tests {
         let types = &manifest["types"];
 
         assert_eq!(manifest["schema"].as_u64(), Some(1));
+        for (name, style) in [
+            ("BAR", CursorStyle::Bar),
+            ("BLOCK", CursorStyle::Block),
+            ("UNDERLINE", CursorStyle::Underline),
+            ("BLOCK_HOLLOW", CursorStyle::HollowBlock),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateCursorVisualStyle"]["values"][name].as_u64(),
+                Some(style as u64),
+            );
+        }
         assert_eq!(
             types["GhosttyCell"]["size"].as_u64(),
             Some(std::mem::size_of::<GhosttyCell>() as u64)
@@ -6941,6 +6948,41 @@ mod tests {
 
         screen.acknowledge_snapshot(combined.generation);
         assert!(screen.snapshot().dirty_rows.is_empty());
+    }
+
+    #[test]
+    fn snapshot_preserves_cursor_style_and_blink_policy() {
+        let screen = VtScreen::new(8, 3, None).expect("create vt screen");
+        screen.feed(b"\x1b[2;4H");
+        for (sequence, style, blinking) in [
+            (b"\x1b[1 q", CursorStyle::Block, true),
+            (b"\x1b[2 q", CursorStyle::Block, false),
+            (b"\x1b[3 q", CursorStyle::Underline, true),
+            (b"\x1b[4 q", CursorStyle::Underline, false),
+            (b"\x1b[5 q", CursorStyle::Bar, true),
+            (b"\x1b[6 q", CursorStyle::Bar, false),
+        ] {
+            screen.feed(sequence);
+            let snapshot = screen.snapshot();
+            assert_eq!(
+                snapshot.cursor,
+                Cursor {
+                    col: 3,
+                    row: 1,
+                    visible: true,
+                    style,
+                    blinking
+                }
+            );
+            assert!(snapshot.dirty_rows.contains(&1));
+            screen.acknowledge_snapshot(snapshot.generation);
+        }
+        screen.feed(b"\x1b[?25l");
+        assert!(!screen.snapshot().cursor.visible);
+        screen.feed(b"\x1b[?25h\x1b[?12h");
+        assert!(screen.snapshot().cursor.blinking);
+        screen.feed(b"\x1b[?12l");
+        assert!(!screen.snapshot().cursor.blinking);
     }
 
     #[test]

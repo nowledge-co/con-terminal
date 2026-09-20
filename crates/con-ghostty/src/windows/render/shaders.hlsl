@@ -33,6 +33,7 @@ struct VSInstance {
     //   bit 8 = default background
     //   bit 9 = cursor cell
     //   bit 10 = CJK contrast profile
+    //   bits 11-12 = Ghostty cursor style (bar, block, underline, hollow)
     uint   attrs         : ATTRS;
 };
 
@@ -154,8 +155,7 @@ float4 ps_background(VSOut i) : SV_Target {
     // The renderer clear already supplies the default background. Keeping
     // these pixels untouched is also what lets below-background images show
     // through empty/default cells, matching upstream Ghostty's cell-bg pass.
-    if ((i.attrs & ATTR_CURSOR) ||
-        ((i.attrs & ATTR_DEFAULT_BG) && !(i.attrs & ATTR_INVERSE))) {
+    if ((i.attrs & ATTR_DEFAULT_BG) && !(i.attrs & ATTR_INVERSE)) {
         discard;
     }
 
@@ -169,6 +169,12 @@ float4 ps_cursor(VSOut i) : SV_Target {
     if (!(i.attrs & ATTR_CURSOR)) {
         discard;
     }
+
+    uint style = (i.attrs >> 11u) & 3u;
+    float2 edge = 1.0 / max(cellSize, 1.0);
+    if (style == 0u && i.cellUV.x > edge.x) discard;
+    if (style == 2u && i.cellUV.y < 1.0 - edge.y) discard;
+    if (style == 3u && all(i.cellUV > edge) && all(i.cellUV < 1.0 - edge)) discard;
 
     float4 fg;
     float4 bg;
@@ -196,8 +202,9 @@ float4 ps_text(VSOut i) : SV_Target {
     float4 fg;
     float4 bg;
     effectiveColors(i, fg, bg);
-    float4 color = (i.attrs & ATTR_CURSOR) ? bg : fg;
-    if (i.attrs & ATTR_CURSOR) {
+    bool blockCursor = (i.attrs & ATTR_CURSOR) && ((i.attrs >> 11u) & 3u) == 1u;
+    float4 color = blockCursor ? bg : fg;
+    if (blockCursor) {
         color.a = 1.0;
     }
 
