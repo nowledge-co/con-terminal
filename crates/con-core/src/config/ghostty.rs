@@ -82,7 +82,9 @@ fn path_for_key(key: &str) -> Option<String> {
         return Some(path.into());
     }
     let con = key.strip_prefix("con.")?;
-    (!NATIVE.iter().any(|(_, path)| *path == con)).then(|| con.to_owned())
+    (!NATIVE.iter().any(|(_, path)| *path == con)
+        && !matches!(con, "terminal.font_family" | "terminal.font_fallback"))
+    .then(|| con.to_owned())
 }
 
 fn schema_value<'a>(schema: &'a Value, path: &str) -> Option<&'a Value> {
@@ -272,6 +274,10 @@ pub(crate) fn parse(source: &str, path: Option<PathBuf>) -> Result<Config> {
             }
             continue;
         };
+        if !key.starts_with("con.") && raw.is_empty() {
+            insert(&mut document, &field, shape.clone(), false);
+            continue;
+        }
         let is_list = shape.is_array();
         if key.starts_with("con.") && raw.is_empty() && !is_list {
             bail!("malformed Con setting at line {}", index + 1);
@@ -636,6 +642,8 @@ mod tests {
         assert!(parse("font-family = .SystemUIFont\n", None).is_err());
         assert!(parse("font-size = 0\n", None).is_err());
         assert!(parse("con.terminal.font_family = .ZedMono\n", None).is_err());
+        assert!(parse("con.terminal.font_family = Courier\n", None).is_err());
+        assert!(parse("font-size = 18\nfont-size =\n", None).is_ok());
     }
 
     #[test]

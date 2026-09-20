@@ -10,6 +10,7 @@ use con_core::{
 };
 use serde_json::{Value, json};
 
+mod configuration;
 mod pty_bridge;
 use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
 mod ssh;
@@ -50,6 +51,11 @@ enum Command {
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
+    },
+    /// Import or export configuration without connecting to a running Con app.
+    Config {
+        #[command(subcommand)]
+        command: configuration::ConfigurationCommand,
     },
     PtyBridge(PtyBridgeArgs),
 }
@@ -694,6 +700,7 @@ fn main() -> Result<()> {
                 print_result(&result, cli.json, render_pretty_json)?;
             }
         },
+        Command::Config { command } => configuration::run(command)?,
         Command::PtyBridge(args) => run_pty_bridge(args)?,
     }
 

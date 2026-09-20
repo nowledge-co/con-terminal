@@ -7,6 +7,7 @@ version.workspace = true
 [dependencies]
 con-agent.workspace = true
 con-paths.workspace = true
+con-terminal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
