@@ -453,6 +453,9 @@ pub struct ghostty_surface_message_childexited_s {
 /// Action union — only relevant fields are accessed based on tag.
 #[repr(C)]
 pub union ghostty_action_u {
+    // C enums, kept as integers so unknown values can fall back safely.
+    pub mouse_shape: c_int,
+    pub mouse_visibility: c_int,
     pub new_split: ghostty_action_split_direction_e,
     pub goto_split: ghostty_action_goto_split_e,
     pub resize_split: ghostty_action_resize_split_s,

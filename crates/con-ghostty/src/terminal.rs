@@ -386,6 +386,10 @@ pub struct TerminalState {
     hovered_osc8_link_url: Option<String>,
     /// Latest viewport scrollbar state emitted by Ghostty.
     pub scrollbar: Option<GhosttyScrollbar>,
+    /// Coalesced pointer updates, consumed on the UI thread. These are not
+    /// queued events: only the final shape/visibility in a tick matters.
+    pub mouse_shape: Option<i32>,
+    pub mouse_visible: Option<bool>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -412,6 +416,8 @@ impl Default for TerminalState {
             pending_events: VecDeque::new(),
             hovered_osc8_link_url: None,
             scrollbar: None,
+            mouse_shape: None,
+            mouse_visible: None,
         }
     }
 }
@@ -1608,7 +1614,7 @@ unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
     });
 }
 
-fn mark_child_exited_state(state: &StateRef) {
+fn mark_child_exited_state(state: &Mutex<TerminalState>) {
     let mut s = state.lock();
     s.child_exited = true;
     s.needs_render = true;
@@ -1627,7 +1633,31 @@ unsafe extern "C" fn action_callback(
             None => return false,
         };
 
+        handle_surface_action(&state, action)
+    }
+}
+
+/// Decode surface actions separately from target resolution. Pointer actions
+/// only update state; the host applies them on its UI thread.
+unsafe fn handle_surface_action(
+    state: &Mutex<TerminalState>,
+    action: ffi::ghostty_action_s,
+) -> bool {
+    unsafe {
         match action.tag {
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_MOUSE_SHAPE => {
+                state.lock().mouse_shape = Some(action.action.mouse_shape);
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_MOUSE_VISIBILITY => {
+                let visible = match action.action.mouse_visibility {
+                    0 => true,  // GHOSTTY_MOUSE_VISIBLE
+                    1 => false, // GHOSTTY_MOUSE_HIDDEN
+                    _ => return false,
+                };
+                state.lock().mouse_visible = Some(visible);
+                true
+            }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SET_TITLE => {
                 let title_ptr = action.action.set_title.title;
                 if !title_ptr.is_null() {
@@ -1791,7 +1821,7 @@ unsafe extern "C" fn action_callback(
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHOW_CHILD_EXITED => {
-                mark_child_exited_state(&state);
+                mark_child_exited_state(state);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_COLOR_CHANGE => {
@@ -2085,6 +2115,50 @@ mod tests {
                 GhosttySurfaceEvent::Osc8LinkHoverChanged(None),
             ]
         );
+    }
+
+    #[test]
+    fn pointer_actions_coalesce_without_crossing_surfaces_or_losing_shape() {
+        use crate::ffi::{ghostty_action_s, ghostty_action_tag_e::*, ghostty_action_u};
+        let state = Mutex::new(TerminalState::default());
+        let other = Mutex::new(TerminalState::default());
+        for (tag, value) in [
+            (GHOSTTY_ACTION_MOUSE_SHAPE, 3),
+            (GHOSTTY_ACTION_MOUSE_VISIBILITY, 1),
+            (GHOSTTY_ACTION_MOUSE_SHAPE, 8),
+            (GHOSTTY_ACTION_MOUSE_VISIBILITY, 0),
+        ] {
+            // Both payloads are C integers at offset zero in the action union.
+            assert!(unsafe {
+                super::handle_surface_action(
+                    &state,
+                    ghostty_action_s {
+                        tag,
+                        action: ghostty_action_u { mouse_shape: value },
+                    },
+                )
+            });
+            if tag == GHOSTTY_ACTION_MOUSE_VISIBILITY {
+                assert_eq!(state.lock().mouse_visible, Some(value == 0));
+            }
+        }
+        assert!(!unsafe {
+            super::handle_surface_action(
+                &state,
+                ghostty_action_s {
+                    tag: GHOSTTY_ACTION_MOUSE_VISIBILITY,
+                    action: ghostty_action_u {
+                        mouse_visibility: 2,
+                    },
+                },
+            )
+        });
+        let state = state.lock();
+        assert_eq!(state.mouse_shape, Some(8));
+        assert_eq!(state.mouse_visible, Some(true));
+        assert!(state.pending_events.is_empty());
+        assert_eq!(other.lock().mouse_shape, None);
+        assert_eq!(other.lock().mouse_visible, None);
     }
 
     #[test]

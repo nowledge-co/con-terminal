@@ -82,6 +82,13 @@ static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
 static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
+thread_local! {
+    // AppKit visibility is app-wide; an old pane must not undo a newer pane's
+    // hide. Accessed only by the GPUI main thread, never by Ghostty callbacks.
+    static HIDDEN_MOUSE_OWNER: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy)]
 struct NativeBackingSync {
     width_px: u32,
@@ -277,6 +284,10 @@ pub struct GhosttyView {
     native_underlay_color: Option<(u8, u8, u8, u8)>,
     #[cfg(target_os = "macos")]
     pending_native_layout: bool,
+    #[cfg(target_os = "macos")]
+    mouse_cursor: CursorStyle,
+    #[cfg(target_os = "macos")]
+    pending_mouse_visible: Cell<Option<bool>>,
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -367,6 +378,10 @@ impl GhosttyView {
             native_underlay_color: None,
             #[cfg(target_os = "macos")]
             pending_native_layout: false,
+            #[cfg(target_os = "macos")]
+            mouse_cursor: CursorStyle::IBeam,
+            #[cfg(target_os = "macos")]
+            pending_mouse_visible: Cell::new(None),
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
@@ -825,7 +840,23 @@ impl GhosttyView {
 
         #[cfg(target_os = "macos")]
         {
-            let scrollbar = terminal.scrollbar();
+            let (shape, visible, scrollbar) = {
+                let mut state = terminal.state().lock();
+                (
+                    state.mouse_shape.take(),
+                    state.mouse_visible.take(),
+                    state.scrollbar,
+                )
+            };
+            if let Some(shape) = shape {
+                let cursor = ghostty_mouse_cursor(shape);
+                changed |= self.mouse_cursor != cursor;
+                self.mouse_cursor = cursor;
+            }
+            if let Some(visible) = visible {
+                self.pending_mouse_visible.set(Some(visible));
+                changed = true;
+            }
             if scrollbar != self.last_scrollbar {
                 self.last_scrollbar = scrollbar;
                 changed = true;
@@ -993,6 +1024,9 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn detach_host_view(&mut self) {
+        self.set_mouse_hidden_by_typing(false);
+        self.pending_mouse_visible.set(None);
+        self.mouse_cursor = CursorStyle::IBeam;
         if let Some(underlay_view) = self.native_underlay_view {
             Self::set_transition_underlay_owner_visible(
                 underlay_view,
@@ -1153,6 +1187,11 @@ impl GhosttyView {
     pub fn set_surface_focus_state(&mut self, focused: bool) {
         if !focused {
             self.finish_active_mouse_sequences();
+            #[cfg(target_os = "macos")]
+            {
+                self.set_mouse_hidden_by_typing(false);
+                self.pending_mouse_visible.set(None);
+            }
         }
         let changed = self.surface_focused.replace(focused) != focused;
         if !changed {
@@ -1879,10 +1918,27 @@ impl GhosttyView {
     #[cfg(target_os = "macos")]
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
+        if !visible {
+            self.set_mouse_hidden_by_typing(false);
+            self.pending_mouse_visible.set(None);
+        }
         self.apply_native_visibility();
         if let Some(nsview) = self.nsview {
             unsafe {
                 con_ghostty_surface_sync_occlusion(nsview as *mut c_void);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_mouse_hidden_by_typing(&self, hidden: bool) {
+        if claim_mouse_visibility(self.native_transition_underlay_owner_id, hidden) {
+            // Same transient mechanism as Ghostty's native macOS app. Never
+            // use NSCursor hide/unhide: those mutate a process-global counter.
+            // Reapply every hide request: AppKit may have auto-shown the cursor
+            // between coalesced show/hide actions in the same tick.
+            unsafe {
+                let _: () = msg_send![class!(NSCursor), setHiddenUntilMouseMoves:if hidden { YES } else { NO }];
             }
         }
     }
@@ -2491,6 +2547,25 @@ impl Focusable for GhosttyView {
 
 impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        {
+            // Broadcast focus is not keyboard focus. Only the actual focused,
+            // visible terminal under the pointer may hide the system cursor.
+            let eligible = self.native_view_visible.get()
+                && !self.awaiting_first_layout_visibility
+                && !self.process_exit_emitted
+                && self.focus_handle.is_focused(window)
+                && window.is_window_active()
+                && window.is_window_hovered()
+                && self
+                    .last_bounds
+                    .is_some_and(|bounds| bounds.contains(&window.mouse_position()));
+            if let Some(visible) = self.pending_mouse_visible.take() {
+                self.set_mouse_hidden_by_typing(eligible && !visible);
+            } else if !eligible {
+                self.set_mouse_hidden_by_typing(false);
+            }
+        }
         if self.pending_terminal_find.is_some() {
             let entity = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
@@ -2530,6 +2605,16 @@ impl Render for GhosttyView {
         div()
             .size_full()
             .font_family(ui_font)
+            .map(|div| {
+                #[cfg(target_os = "macos")]
+                {
+                    div.cursor(self.mouse_cursor)
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    div
+                }
+            })
             .map(|div| {
                 if show_layout_fallback {
                     div.bg(layout_fallback_bg)
@@ -2818,6 +2903,52 @@ impl Render for GhosttyView {
     }
 }
 
+/// Ghostty's C mouse-shape values are checked in con-ghostty/src/ffi_abi.c.
+/// Shapes without a native GPUI equivalent fall back to the arrow, rather
+/// than leaving a stale link/resize cursor behind.
+#[cfg(target_os = "macos")]
+fn ghostty_mouse_cursor(shape: i32) -> CursorStyle {
+    match shape {
+        1 => CursorStyle::ContextualMenu,
+        3 => CursorStyle::PointingHand,
+        6 | 7 => CursorStyle::Crosshair, // cell / crosshair
+        8 => CursorStyle::IBeam,
+        9 => CursorStyle::IBeamCursorForVerticalLayout,
+        10 => CursorStyle::DragLink,
+        11 => CursorStyle::DragCopy,
+        13 | 14 => CursorStyle::OperationNotAllowed,
+        15 => CursorStyle::OpenHand,
+        16 => CursorStyle::ClosedHand,
+        18 => CursorStyle::ResizeColumn,
+        19 => CursorStyle::ResizeRow,
+        20 => CursorStyle::ResizeUp,
+        21 => CursorStyle::ResizeRight,
+        22 => CursorStyle::ResizeDown,
+        23 => CursorStyle::ResizeLeft,
+        24 | 27 | 30 => CursorStyle::ResizeUpRightDownLeft,
+        25 | 26 | 31 => CursorStyle::ResizeUpLeftDownRight,
+        28 => CursorStyle::ResizeLeftRight,
+        29 => CursorStyle::ResizeUpDown,
+        _ => CursorStyle::Arrow,
+    }
+}
+
+/// Whether this surface should apply its visibility request to AppKit.
+#[cfg(target_os = "macos")]
+fn claim_mouse_visibility(surface_id: u64, hidden: bool) -> bool {
+    HIDDEN_MOUSE_OWNER.with(|owner| {
+        if hidden {
+            owner.set(Some(surface_id));
+            true
+        } else if owner.get() == Some(surface_id) {
+            owner.set(None);
+            true
+        } else {
+            false
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2829,6 +2960,56 @@ mod tests {
         Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pointer_visibility_only_restores_its_owner_and_reapplies_typing() {
+        use super::claim_mouse_visibility as claim;
+        assert!(!claim(41, false));
+        assert!(claim(41, true));
+        // AppKit may have revealed the pointer on movement while show/hide
+        // actions coalesce. Another typing request must still reach AppKit.
+        assert!(claim(41, true));
+        assert!(claim(73, true));
+        assert!(!claim(41, false), "old pane must not unhide the new pane");
+        assert!(claim(73, false));
+        assert!(!claim(73, false), "repeated cleanup must be inert");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pointer_shapes_distinguish_links_text_and_resize_axes() {
+        use gpui::CursorStyle::*;
+        for (shape, expected) in [
+            (0, Arrow),
+            (3, PointingHand),
+            (8, IBeam),
+            (9, IBeamCursorForVerticalLayout),
+            (15, OpenHand),
+            (16, ClosedHand),
+            (20, ResizeUp),
+            (21, ResizeRight),
+            (22, ResizeDown),
+            (23, ResizeLeft),
+            (24, ResizeUpRightDownLeft),
+            (25, ResizeUpLeftDownRight),
+            (26, ResizeUpLeftDownRight),
+            (27, ResizeUpRightDownLeft),
+            (28, ResizeLeftRight),
+            (29, ResizeUpDown),
+            (30, ResizeUpRightDownLeft),
+            (31, ResizeUpLeftDownRight),
+            (5, Arrow),
+            (-1, Arrow),
+            (34, Arrow),
+        ] {
+            assert_eq!(
+                super::ghostty_mouse_cursor(shape),
+                expected,
+                "shape {shape}"
+            );
+        }
+    }
 
     /// Renders the hover card inside a flex row, like the real overlay does.
     /// (A block parent would stretch the card to the parent width and hide
