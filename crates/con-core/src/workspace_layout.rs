@@ -8,9 +8,11 @@ use crate::session::{
 };
 use con_agent::ProviderKind;
 
-pub const WORKSPACE_LAYOUT_VERSION: u32 = 1;
+mod ghostty;
+
+pub const WORKSPACE_LAYOUT_VERSION: u32 = 2;
 pub const WORKSPACE_LAYOUT_FORMAT: &str = "con.workspace.layout";
-pub const DEFAULT_WORKSPACE_LAYOUT_PATH: &str = ".con/workspace.toml";
+pub const DEFAULT_WORKSPACE_LAYOUT_PATH: &str = ".con/workspace.ghostty";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceLayout {
@@ -140,32 +142,62 @@ impl Default for WorkspaceLayout {
 
 impl WorkspaceLayout {
     pub fn from_toml_str(input: &str) -> anyhow::Result<Self> {
-        let layout: Self = toml::from_str(input)?;
+        let mut layout: Self = toml::from_str(input)?;
+        anyhow::ensure!(
+            layout.version == 1,
+            "unsupported legacy workspace layout version {}",
+            layout.version
+        );
+        layout.version = WORKSPACE_LAYOUT_VERSION;
         layout.validate()?;
         Ok(layout)
     }
 
-    pub fn to_toml_string(&self) -> anyhow::Result<String> {
-        self.validate()?;
-        Ok(toml::to_string_pretty(self)?)
+    pub fn from_ghostty_str(input: &str) -> anyhow::Result<Self> {
+        ghostty::parse(input)
+    }
+
+    pub fn to_ghostty_string(&self) -> anyhow::Result<String> {
+        ghostty::serialize(self)
     }
 
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
         let content = std::fs::read_to_string(path)?;
-        Self::from_toml_str(&content)
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            Self::from_toml_str(&content)
+        } else {
+            Self::from_ghostty_str(&content)
+        }
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "toml")
+        {
+            anyhow::bail!("TOML workspace layouts are read-only; save as workspace.ghostty");
         }
-        std::fs::write(path, self.to_toml_string()?)?;
-        Ok(())
+        crate::config::write_private_atomic(path, self.to_ghostty_string()?.as_bytes())
     }
 
     pub fn default_path_for_root(root: impl AsRef<Path>) -> PathBuf {
         root.as_ref().join(DEFAULT_WORKSPACE_LAYOUT_PATH)
+    }
+
+    /// Prefer the new document even when malformed; never silently fall back.
+    /// Old project layouts are imported in memory, without changing the repo.
+    pub fn existing_path_for_root(root: impl AsRef<Path>) -> PathBuf {
+        let current = Self::default_path_for_root(&root);
+        if current.exists() {
+            current
+        } else {
+            root.as_ref().join(".con/workspace.toml")
+        }
     }
 
     pub fn from_session(session: &Session, root: impl AsRef<Path>) -> Self {
@@ -952,7 +984,7 @@ mod tests {
     fn two_pane_layout() -> WorkspaceLayout {
         WorkspaceLayout {
             format: WORKSPACE_LAYOUT_FORMAT.to_string(),
-            version: 1,
+            version: WORKSPACE_LAYOUT_VERSION,
             name: None,
             root: ".".to_string(),
             active_tab: Some("dev".to_string()),
@@ -1006,10 +1038,10 @@ mod tests {
     }
 
     #[test]
-    fn workspace_layout_round_trips_as_toml() {
+    fn workspace_layout_round_trips_as_ghostty_config() {
         let layout = WorkspaceLayout {
             format: WORKSPACE_LAYOUT_FORMAT.to_string(),
-            version: 1,
+            version: WORKSPACE_LAYOUT_VERSION,
             name: Some("con".to_string()),
             root: ".".to_string(),
             active_tab: Some("dev".to_string()),
@@ -1065,14 +1097,54 @@ mod tests {
             }],
         };
 
-        let toml = layout.to_toml_string().unwrap();
-        assert!(toml.contains("format = \"con.workspace.layout\""));
-        assert!(toml.contains("version = 1"));
-        assert!(!toml.contains("run ="));
-        assert!(!toml.contains("restore ="));
+        let config = layout.to_ghostty_string().unwrap();
+        assert!(config.contains("format = \"con.workspace.layout\""));
+        assert!(config.contains("version = 2"));
+        assert!(!config.contains("run ="));
+        assert!(!config.contains("restore ="));
 
-        let decoded = WorkspaceLayout::from_toml_str(&toml).unwrap();
+        let decoded = WorkspaceLayout::from_ghostty_str(&config).unwrap();
         assert_eq!(decoded, layout);
+    }
+
+    #[test]
+    fn ghostty_roundtrip_preserves_asymmetric_tree_order_and_nontrivial_strings() {
+        let mut layout = two_pane_layout();
+        layout.name = Some("开发 = C:\\Users\\Zoë #1 \"quoted\"".into());
+        layout.tabs[0].panes[0].surfaces.push(WorkspaceSurface {
+            id: "日志".into(),
+            title: Some("日志 = #1".into()),
+            owner: Some("agent/windows".into()),
+            cwd: Some(r#"C:\work dir\项目"#.into()),
+            close_pane_when_last: true,
+        });
+        layout.tabs[0].panes.push(WorkspacePane {
+            id: "c".into(),
+            title: Some("Third".into()),
+            cwd: None,
+            active_surface: None,
+            surfaces: vec![],
+        });
+        layout.tabs[0].layout = Some(WorkspaceLayoutNode::Split {
+            direction: WorkspaceSplitDirection::Vertical,
+            ratio: 0.3,
+            first: Box::new(WorkspaceLayoutNode::Pane { id: "a".into() }),
+            second: Box::new(WorkspaceLayoutNode::Split {
+                direction: WorkspaceSplitDirection::Horizontal,
+                ratio: 0.7,
+                first: Box::new(WorkspaceLayoutNode::Pane { id: "b".into() }),
+                second: Box::new(WorkspaceLayoutNode::Pane { id: "c".into() }),
+            }),
+        });
+        let mut second = layout.tabs[0].clone();
+        second.id = "second".into();
+        second.title = Some("第二 tab".into());
+        layout.tabs.push(second);
+
+        let encoded = layout.to_ghostty_string().unwrap();
+        let decoded = WorkspaceLayout::from_ghostty_str(&encoded).unwrap();
+        assert_eq!(decoded, layout);
+        assert!(encoded.find("pane = \"a\"").unwrap() < encoded.find("pane = \"b\"").unwrap());
     }
 
     #[test]
@@ -1174,12 +1246,12 @@ mod tests {
         };
 
         let layout = WorkspaceLayout::from_session(&session, "/tmp/project");
-        let toml = layout.to_toml_string().unwrap();
+        let toml = layout.to_ghostty_string().unwrap();
 
-        assert!(toml.contains("active_tab = \"dev\""));
-        assert!(toml.contains("cwd = \"crates/server\""));
-        assert!(toml.contains("provider = \"openai\""));
-        assert!(toml.contains("model = \"gpt-5.2\""));
+        assert!(toml.contains("active-tab = \"dev\""));
+        assert!(toml.contains("surface.cwd = \"crates/server\""));
+        assert!(toml.contains("tab.agent-provider = \"openai\""));
+        assert!(toml.contains("tab.agent-model = \"gpt-5.2\""));
         assert!(!toml.contains("secret output"));
         assert!(!toml.contains("cargo run"));
         assert!(!toml.contains("private-conversation"));
@@ -1190,7 +1262,7 @@ mod tests {
     fn workspace_layout_import_creates_private_session_without_runtime_state() {
         let layout = WorkspaceLayout {
             format: WORKSPACE_LAYOUT_FORMAT.to_string(),
-            version: 1,
+            version: WORKSPACE_LAYOUT_VERSION,
             name: Some("Project".to_string()),
             root: ".".to_string(),
             active_tab: Some("dev".to_string()),
@@ -1366,5 +1438,37 @@ version = 1
             err.to_string()
                 .contains("unsupported workspace layout format")
         );
+    }
+
+    #[test]
+    fn legacy_toml_import_is_upgraded_without_writing() {
+        let legacy = r#"format = "con.workspace.layout"
+version = 1
+name = "旧 project"
+root = "."
+"#;
+        let layout = WorkspaceLayout::from_toml_str(legacy).unwrap();
+        assert_eq!(layout.version, WORKSPACE_LAYOUT_VERSION);
+        assert_eq!(layout.name.as_deref(), Some("旧 project"));
+    }
+
+    #[test]
+    fn native_profile_wins_and_legacy_profile_is_read_only() {
+        let root = std::env::temp_dir().join(format!("con-layout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".con")).unwrap();
+        let legacy = root.join(".con/workspace.toml");
+        let original = "format = \"con.workspace.layout\"\nversion = 1\nroot = \".\"\n";
+        std::fs::write(&legacy, original).unwrap();
+        assert_eq!(WorkspaceLayout::existing_path_for_root(&root), legacy);
+        let layout = WorkspaceLayout::load(&legacy).unwrap();
+        assert!(layout.save(&legacy).is_err());
+        assert_eq!(std::fs::read_to_string(&legacy).unwrap(), original);
+        let native = WorkspaceLayout::default_path_for_root(&root);
+        layout.save(&native).unwrap();
+        assert_eq!(WorkspaceLayout::load(&native).unwrap(), layout);
+        std::fs::write(&native, "invalid new profile").unwrap();
+        assert_eq!(WorkspaceLayout::existing_path_for_root(&root), native);
+        assert!(WorkspaceLayout::load(&native).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
