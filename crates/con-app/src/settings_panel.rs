@@ -1,7 +1,7 @@
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_agent::{
     OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
-    authorize_oauth_provider, oauth_token_dir, read_synced_chatgpt_oauth_access_token,
+    authorize_oauth_provider, oauth_token_dir,
 };
 use con_core::{
     Config,
@@ -31,6 +31,7 @@ use std::sync::Arc;
 use url::Url;
 
 mod configuration;
+mod subscription;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
 mod window_chrome;
 use window_chrome::SETTINGS_HEADER_HEIGHT;
@@ -89,8 +90,7 @@ enum ProviderModelFetchRequest {
         api_key: Option<String>,
     },
     ChatGPT {
-        access_token: String,
-        base_url: Option<String>,
+        config: ProviderConfig,
     },
 }
 
@@ -103,15 +103,8 @@ impl ProviderModelFetchRequest {
                         .await?;
                 Ok(ProviderModelFetchResult::OpenAICompatible { base_url, models })
             }
-            Self::ChatGPT {
-                access_token,
-                base_url,
-            } => {
-                let models = ModelRegistry::fetch_chatgpt_subscription_models(
-                    &access_token,
-                    base_url.as_deref(),
-                )
-                .await?;
+            Self::ChatGPT { config } => {
+                let models = ModelRegistry::fetch_chatgpt_subscription_models(&config).await?;
                 Ok(ProviderModelFetchResult::ChatGPT { models })
             }
         }
@@ -227,6 +220,7 @@ pub struct SettingsPanel {
     api_key_input: Entity<InputState>,
     base_url_input: Entity<InputState>,
     max_tokens_input: Entity<InputState>,
+    reasoning_select: Entity<SelectState<Vec<String>>>,
     max_turns_input: Entity<InputState>,
     temperature_input: Entity<InputState>,
     auto_approve: bool,
@@ -832,6 +826,9 @@ impl SettingsPanel {
                                         state.prompt = None;
                                         state.status_message = Some("Authorized and stored in Con’s auth cache.".to_string());
                                         state.error_message = None;
+                                        if provider == ProviderKind::ChatGPT && panel.selected_provider == provider {
+                                            panel.fetch_selected_provider_models(window, cx);
+                                        }
                                     }
                                     Ok(Err(err)) => {
                                         state.connected = false;
@@ -1302,14 +1299,19 @@ impl SettingsPanel {
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
-        let model_select = Self::make_model_select(
-            &selected_provider,
-            &pc.model,
-            pc.base_url.as_deref(),
-            &registry,
+        let model_select =
+            Self::make_model_select(&selected_provider, &pc.model, &pc, &registry, window, cx);
+        cx.subscribe_in(
+            &model_input,
             window,
-            cx,
-        );
+            |this, _, event: &gpui_component::input::InputEvent, window, cx| {
+                if matches!(event, gpui_component::input::InputEvent::Change) {
+                    let pc = this.read_provider_inputs(cx);
+                    this.load_reasoning_options(&pc, window, cx);
+                }
+            },
+        )
+        .detach();
         let endpoint_preset_select =
             Self::make_endpoint_preset_select(&selected_provider, &pc.base_url, window, cx);
         let api_key_input = cx.new(|cx| {
@@ -1343,6 +1345,28 @@ impl SettingsPanel {
             );
             s
         });
+        for input in [&api_key_input, &base_url_input] {
+            cx.subscribe_in(
+                input,
+                window,
+                |this, _, event: &gpui_component::input::InputEvent, window, cx| {
+                    if matches!(event, gpui_component::input::InputEvent::Change) {
+                        let pc = this.read_provider_inputs(cx);
+                        this.model_select = Self::make_model_select(
+                            &this.selected_provider,
+                            &pc.model,
+                            &pc,
+                            &this.registry,
+                            window,
+                            cx,
+                        );
+                        this.load_reasoning_options(&pc, window, cx);
+                    }
+                },
+            )
+            .detach();
+        }
+        let reasoning_select = Self::make_reasoning_select(&pc, window, cx);
         let max_turns_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("10", window, cx);
@@ -1783,6 +1807,7 @@ impl SettingsPanel {
             api_key_input,
             base_url_input,
             max_tokens_input,
+            reasoning_select,
             max_turns_input,
             temperature_input,
             auto_approve: config.agent.auto_approve_tools,
@@ -1951,7 +1976,7 @@ impl SettingsPanel {
         self.model_select = Self::make_model_select(
             &self.selected_provider,
             &pc.model,
-            pc.base_url.as_deref(),
+            &pc,
             &self.registry,
             window,
             cx,
@@ -2100,6 +2125,7 @@ impl SettingsPanel {
         self.model_input.update(cx, |s, cx| {
             s.set_value(&pc.model.clone().unwrap_or_default(), window, cx)
         });
+        self.load_reasoning_options(pc, window, cx);
         let key_val = pc
             .api_key
             .clone()
@@ -2126,23 +2152,15 @@ impl SettingsPanel {
     }
 
     /// Build a model select entity for the given provider.
-    fn provider_base_url<'a>(config: &'a Config, provider: &ProviderKind) -> Option<&'a str> {
-        config
-            .agent
-            .providers
-            .get(provider)
-            .and_then(|pc| pc.base_url.as_deref())
-    }
-
     fn make_model_select_state(
         provider: &ProviderKind,
         current_model: &Option<String>,
-        base_url: Option<&str>,
+        provider_config: &ProviderConfig,
         registry: &ModelRegistry,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
-        let mut models: Vec<String> = registry.models_for_base_url(provider, base_url);
+        let mut models: Vec<String> = registry.models_for_config(provider, provider_config);
         if let Some(model) = current_model
             .as_ref()
             .map(|model| model.trim())
@@ -2165,13 +2183,19 @@ impl SettingsPanel {
     fn make_model_select(
         provider: &ProviderKind,
         current_model: &Option<String>,
-        base_url: Option<&str>,
+        provider_config: &ProviderConfig,
         registry: &ModelRegistry,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SelectState<SearchableVec<String>>> {
-        let entity =
-            Self::make_model_select_state(provider, current_model, base_url, registry, window, cx);
+        let entity = Self::make_model_select_state(
+            provider,
+            current_model,
+            provider_config,
+            registry,
+            window,
+            cx,
+        );
         cx.subscribe_in(
             &entity,
             window,
@@ -2180,6 +2204,8 @@ impl SettingsPanel {
                     this.model_input.update(cx, |s, cx| {
                         s.set_value(value, window, cx);
                     });
+                    let pc = this.read_provider_inputs(cx);
+                    this.load_reasoning_options(&pc, window, cx);
                     cx.notify();
                 }
             },
@@ -2203,7 +2229,7 @@ impl SettingsPanel {
         let entity = Self::make_model_select_state(
             &provider,
             &current_model,
-            Self::provider_base_url(config, &provider),
+            &config.agent.providers.get_or_default(&provider),
             registry,
             window,
             cx,
@@ -2236,7 +2262,7 @@ impl SettingsPanel {
         let entity = Self::make_model_select_state(
             &provider,
             &current_model,
-            Self::provider_base_url(config, &provider),
+            &config.agent.providers.get_or_default(&provider),
             registry,
             window,
             cx,
@@ -2406,6 +2432,20 @@ impl SettingsPanel {
             } else {
                 Some(base_url_text)
             },
+            reasoning_effort: if self.selected_provider == ProviderKind::ChatGPT {
+                self.reasoning_select
+                    .read(cx)
+                    .selected_value()
+                    .and_then(|value| {
+                        con_agent::chatgpt_subscription::ReasoningEffort::parse(value)
+                    })
+            } else {
+                self.config
+                    .agent
+                    .providers
+                    .get(&self.selected_provider)
+                    .and_then(|pc| pc.reasoning_effort)
+            },
             max_tokens: if max_tokens_text.is_empty() {
                 None
             } else {
@@ -2488,44 +2528,9 @@ impl SettingsPanel {
                 };
                 ProviderModelFetchRequest::OpenAICompatible { base_url, api_key }
             }
-            ProviderKind::ChatGPT => {
-                let Some(auth_file) =
-                    oauth_token_dir(&ProviderKind::ChatGPT).map(|dir| dir.join("auth.json"))
-                else {
-                    self.provider_model_status =
-                        Some("ChatGPT OAuth token storage is unavailable.".to_string());
-                    self.provider_model_status_error = true;
-                    cx.notify();
-                    return;
-                };
-                let access_token = match read_synced_chatgpt_oauth_access_token(&auth_file) {
-                    Ok(Some(token)) => token,
-                    Ok(None) => {
-                        self.provider_model_status =
-                            Some("Sign in with ChatGPT OAuth before fetching models.".to_string());
-                        self.provider_model_status_error = true;
-                        cx.notify();
-                        return;
-                    }
-                    Err(err) => {
-                        self.provider_model_status =
-                            Some(format!("Could not refresh ChatGPT OAuth cache: {err}"));
-                        self.provider_model_status_error = true;
-                        cx.notify();
-                        return;
-                    }
-                };
-                let base_url = provider_config
-                    .base_url
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned);
-                ProviderModelFetchRequest::ChatGPT {
-                    access_token,
-                    base_url,
-                }
-            }
+            ProviderKind::ChatGPT => ProviderModelFetchRequest::ChatGPT {
+                config: provider_config,
+            },
             _ => return,
         };
 
@@ -2569,9 +2574,7 @@ impl SettingsPanel {
                                         return;
                                     }
                                 }
-                                ProviderModelFetchResult::ChatGPT { models } => {
-                                    registry.set_provider_models(ProviderKind::ChatGPT, models);
-                                }
+                                ProviderModelFetchResult::ChatGPT { .. } => {}
                             }
                             if panel.selected_provider == provider {
                                 let current_model =
@@ -2581,7 +2584,7 @@ impl SettingsPanel {
                                 panel.model_select = Self::make_model_select(
                                     &provider,
                                     &current_model,
-                                    Self::provider_base_url(&panel.config, &provider),
+                                    &panel.read_provider_inputs(cx),
                                     &registry,
                                     window,
                                     cx,
@@ -2608,6 +2611,8 @@ impl SettingsPanel {
                                 if count == 1 { "" } else { "s" }
                             ));
                             panel.provider_model_status_error = false;
+                            let pc = panel.read_provider_inputs(cx);
+                            panel.load_reasoning_options(&pc, window, cx);
                         }
                         Err(err) => {
                             panel.provider_model_status = Some(format!(
@@ -3121,14 +3126,8 @@ impl SettingsPanel {
         self.load_provider_inputs(&pc, window, cx);
         self.sync_provider_placeholders(&provider, window, cx);
 
-        self.model_select = Self::make_model_select(
-            &provider,
-            &pc.model,
-            pc.base_url.as_deref(),
-            &self.registry,
-            window,
-            cx,
-        );
+        self.model_select =
+            Self::make_model_select(&provider, &pc.model, &pc, &self.registry, window, cx);
         self.endpoint_preset_select =
             Self::make_endpoint_preset_select(&provider, &pc.base_url, window, cx);
         cx.notify();
@@ -5071,10 +5070,9 @@ impl SettingsPanel {
         let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
         let max_tokens_input = self.max_tokens_input.clone();
-        let models = self.registry.models_for_base_url(
-            &self.selected_provider,
-            Self::provider_base_url(&self.config, &self.selected_provider),
-        );
+        let models = self
+            .registry
+            .models_for_config(&self.selected_provider, &self.read_provider_inputs(cx));
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
@@ -5273,6 +5271,7 @@ impl SettingsPanel {
                                 .child(Input::new(&model_input).small()),
                         )
                 })
+                .children((self.selected_provider == ProviderKind::ChatGPT).then(|| self.subscription_controls(cx)))
                 .children(can_fetch_models.then(|| {
                     div()
                         .flex()

@@ -320,12 +320,9 @@ impl ConWorkspace {
     }
 
     pub(super) fn provider_models_for_config(&self, config: &AgentConfig) -> Vec<String> {
-        self.model_registry.models_for_base_url(
+        self.model_registry.models_for_config(
             &config.provider,
-            config
-                .providers
-                .get(&config.provider)
-                .and_then(|pc| pc.base_url.as_deref()),
+            &config.providers.get_or_default(&config.provider),
         )
     }
 

@@ -539,6 +539,7 @@ mod tests {
         config.providers.set(
             &ProviderKind::Anthropic,
             ProviderConfig {
+                reasoning_effort: None,
                 model: None,
                 api_key: Some("sk-ant-test".into()),
                 api_key_env: None,
@@ -562,6 +563,7 @@ mod tests {
         config.providers.set(
             &ProviderKind::Anthropic,
             ProviderConfig {
+                reasoning_effort: None,
                 model: None,
                 api_key: None,
                 api_key_env: Some("sk-ant-legacy-direct-key".into()),
@@ -863,6 +865,7 @@ mod tests {
         config.providers.set(
             &ProviderKind::MiniMaxAnthropic,
             ProviderConfig {
+                reasoning_effort: None,
                 model: Some("MiniMax-M2.7".into()),
                 api_key: None,
                 api_key_env: None,
@@ -873,6 +876,7 @@ mod tests {
         config.providers.set(
             &ProviderKind::ZAIAnthropic,
             ProviderConfig {
+                reasoning_effort: None,
                 model: Some("glm-4.6".into()),
                 api_key: None,
                 api_key_env: None,
@@ -1115,7 +1119,7 @@ impl ProviderKind {
     pub fn default_model(&self) -> &str {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
-            Self::ChatGPT => "gpt-5.5",
+            Self::ChatGPT => crate::chatgpt_subscription::DEFAULT_MODEL,
             Self::GitHubCopilot => "gpt-4o",
             Self::OpenAICompatible => "gpt-4o",
             Self::OpenAI => "gpt-4o",
@@ -1307,7 +1311,7 @@ fn sync_codex_chatgpt_auth_from_file(
     Ok(true)
 }
 
-fn stable_fingerprint(bytes: &[u8]) -> String {
+pub(crate) fn stable_fingerprint(bytes: &[u8]) -> String {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     for byte in bytes {
         hash ^= u64::from(*byte);
@@ -1344,7 +1348,7 @@ fn clear_codex_auth_sync_state(target_auth_file: &std::path::Path) -> Result<boo
     clear_auth_record_if_present(&codex_auth_sync_state_file(target_auth_file))
 }
 
-fn write_auth_record(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_auth_record(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
 
     if let Some(parent) = path.parent() {
@@ -1388,7 +1392,7 @@ fn write_auth_record(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn sync_codex_chatgpt_auth(target_auth_file: &std::path::Path) -> Result<bool> {
+pub(crate) fn sync_codex_chatgpt_auth(target_auth_file: &std::path::Path) -> Result<bool> {
     let Some(source_auth_file) = codex_auth_file() else {
         return Ok(false);
     };
@@ -1431,8 +1435,10 @@ fn provider_credentials_available(config: &AgentConfig, kind: &ProviderKind) -> 
 }
 
 fn configured_api_key_value(config: &AgentConfig, kind: &ProviderKind) -> Option<String> {
-    let pc = config.providers.get(kind);
+    configured_provider_api_key_value(config.providers.get(kind))
+}
 
+pub(crate) fn configured_provider_api_key_value(pc: Option<&ProviderConfig>) -> Option<String> {
     if let Some(key) = pc
         .and_then(|p| p.api_key.as_ref())
         .map(|value| value.trim())
@@ -1636,6 +1642,8 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     /// Max output tokens (provider-specific limits apply).
     pub max_tokens: Option<u64>,
+    /// ChatGPT Subscription reasoning effort; omitted uses the provider default.
+    pub reasoning_effort: Option<crate::chatgpt_subscription::ReasoningEffort>,
 }
 
 /// Map of per-provider configurations.
@@ -1955,6 +1963,7 @@ impl AgentConfig {
                     api_key_env: self.api_key_env.take(),
                     base_url: self.base_url.take(),
                     max_tokens: self.max_tokens.take(),
+                    reasoning_effort: None,
                 },
             );
         }
@@ -2169,6 +2178,15 @@ macro_rules! build_and_stream {
         }
         if let Some(temp) = $cfg.temperature {
             builder = builder.temperature(temp);
+        }
+        if *$kind == ProviderKind::ChatGPT {
+            let config = $cfg.providers.get_or_default($kind);
+            if let Some(params) = crate::chatgpt_subscription::request_parameters(
+                &config,
+                $cfg.effective_model($kind),
+            )? {
+                builder = builder.additional_params(params);
+            }
         }
         builder = builder.add_hook($hook);
 
@@ -2421,27 +2439,9 @@ impl AgentProvider {
     }
 
     fn build_chatgpt_client(&self) -> Result<chatgpt::Client> {
-        let mut builder = chatgpt::Client::builder();
-        if let Some(url) = self.config.effective_base_url(&ProviderKind::ChatGPT) {
-            builder = builder.base_url(url);
-        }
-        let builder =
-            if let Some(api_key) = self.resolve_optional_api_key(&ProviderKind::ChatGPT)? {
-                builder.api_key(api_key)
-            } else {
-                let mut builder = builder.oauth();
-                if let Some(dir) = oauth_token_dir(&ProviderKind::ChatGPT) {
-                    let auth_file = dir.join("auth.json");
-                    if let Err(err) = sync_codex_chatgpt_auth(&auth_file) {
-                        log::warn!("[provider] Failed to sync Codex ChatGPT auth cache: {err}");
-                    }
-                    builder = builder.token_dir(dir);
-                }
-                builder
-            };
-        builder
-            .build()
-            .map_err(|e| anyhow::anyhow!("ChatGPT client error: {e}"))
+        crate::chatgpt_subscription::client(
+            &self.config.providers.get_or_default(&ProviderKind::ChatGPT),
+        )
     }
 
     fn build_github_copilot_client(&self) -> Result<copilot::Client> {
@@ -2694,6 +2694,15 @@ impl AgentProvider {
                 // default to guess.
                 if let Some(temp) = self.config.temperature {
                     builder = builder.temperature(temp);
+                }
+                if *kind == ProviderKind::ChatGPT {
+                    let config = self.config.providers.get_or_default(kind);
+                    if let Some(params) = crate::chatgpt_subscription::request_parameters(
+                        &config,
+                        self.config.effective_model(kind),
+                    )? {
+                        builder = builder.additional_params(params);
+                    }
                 }
                 let agent = builder.build();
                 drive_streaming_completion(&agent, prompt).await

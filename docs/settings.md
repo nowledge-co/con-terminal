@@ -107,10 +107,21 @@ cheaper model for suggestions if you want inline help without slowing down the
 terminal.
 
 ChatGPT and GitHub Copilot can use OAuth, so you can leave the API key empty for
-those sign-in flows. After signing in to ChatGPT, use **Fetch Models** to load
-the models available to that subscription. OpenAI-compatible hosts can fetch
+those sign-in flows. ChatGPT fetches its subscription model catalog after sign-in;
+use **Fetch Models** to refresh it later. Con refreshes expired OAuth access tokens
+before discovery and retains the last successful catalog across restarts, scoped
+to the account and endpoint. OpenAI-compatible hosts can fetch
 models from `/models` when the host supports it. If the host has no models
 endpoint, type the model ID manually and save it.
+
+ChatGPT Subscription defaults to GPT-5.6 Sol. Its fallback list includes Astra,
+Sol, Terra, and Luna; actual availability depends on the account. **Reasoning
+effort** offers the levels supported by both the model catalog and Con's current
+adapter (up to `xhigh`). Leave it on **Provider default** to omit the override.
+The configuration key is `con.agent.providers.chatgpt.reasoning_effort = high`.
+Saved retired subscription models remain visible with a replacement hint;
+Con does not silently rewrite the selection. These retirement checks do not
+apply to the separate OpenAI API provider.
 
 The provider picker in the agent panel shows configured providers. If a provider
 is missing there, configure it first in Settings.
