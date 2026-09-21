@@ -39,3 +39,16 @@ versions: `0.144.0` omitted Astra while `0.155.0` included it for the same accou
 The request now uses `0.155.0`, with a sanitized response fixture validating its
 model/capability schema. No production generation or token refresh was performed
 for these checks.
+
+## CI follow-up
+
+PR #377 failed its Linux and Windows UI checks because the former unscoped
+`set_provider_models` method remained after subscription discovery moved to the
+account-scoped catalog. Its only remaining caller was a unit test. Local checks
+used `--tests`, which kept that caller alive and concealed the production
+`dead_code` warning; CI promoted the warning to an error with `-D warnings`.
+
+Removed the unused setter and its unreachable unscoped cache lookup, and updated
+the regression test to exercise the endpoint-scoped setter used by settings.
+Production binaries must also be checked with warnings denied, independently of
+test-target checks.

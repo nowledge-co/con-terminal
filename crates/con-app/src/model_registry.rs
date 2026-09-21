@@ -272,13 +272,6 @@ impl ModelRegistry {
                     }
                 }
             }
-            if let Some(models) = custom.get(&(canonical.clone(), String::new())) {
-                if !models.is_empty() {
-                    let mut models = models.clone();
-                    append_missing_models(&mut models, pinned_models(provider));
-                    return models;
-                }
-            }
         }
         let guard = self.inner.lock().unwrap();
         if let Some(entry) = guard.as_ref() {
@@ -297,15 +290,6 @@ impl ModelRegistry {
             .collect();
         append_missing_models(&mut models, pinned_models(provider));
         models
-    }
-
-    /// Stores models discovered from a provider-managed endpoint.
-    pub fn set_provider_models(&self, provider: ProviderKind, models: Vec<String>) {
-        let canonical = canonical_models_provider(&provider);
-        self.custom
-            .lock()
-            .unwrap()
-            .insert((canonical, String::new()), models);
     }
 
     /// Stores models discovered from a specific user-configured endpoint.
@@ -759,12 +743,18 @@ mod tests {
     #[test]
     fn custom_models_override_fallback_for_openai_compatible() {
         let registry = ModelRegistry::new();
-        registry.set_provider_models(
-            ProviderKind::OpenAICompatible,
-            vec!["custom-a".to_string(), "custom-b".to_string()],
-        );
+        registry
+            .set_provider_models_for_base_url(
+                ProviderKind::OpenAICompatible,
+                "https://api.example.com/v1",
+                vec!["custom-a".to_string(), "custom-b".to_string()],
+            )
+            .unwrap();
         assert_eq!(
-            registry.models_for(&ProviderKind::OpenAICompatible),
+            registry.models_for_base_url(
+                &ProviderKind::OpenAICompatible,
+                Some("https://api.example.com/v1"),
+            ),
             vec!["custom-a".to_string(), "custom-b".to_string()]
         );
     }
