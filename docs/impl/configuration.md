@@ -95,6 +95,33 @@ those with `con.keybindings.*` or Settings.
 
 ## Import and export
 
+### Settings
+
+The **Configuration** page opens the current file or directory. On macOS it also
+finds Ghostty's current and legacy filenames in Application Support and the XDG
+config directory. Select a detected source or choose another file explicitly.
+
+Import prepares and validates a private snapshot before asking for confirmation.
+It replaces native terminal settings as a unit, retains Con's `con.*` settings,
+and leaves Ghostty's files unchanged. Save or discard Settings drafts first.
+An existing Con file is backed up as `previous.ghostty` in the import directory;
+the result shows that path. Keep the import directory: the new configuration may
+reference resources inside it. Cancelled and failed preparations are removed.
+
+Restart Con after import. Existing terminal sessions are not reconfigured, and
+Settings saves are blocked until restart so stale controls cannot overwrite the
+import. Imported commands may run when a new terminal session starts. Includes
+retain the native-edit restrictions described above. Ghostty application actions
+are not necessarily implemented by Con.
+
+External edits detected before preparation or commit abort the import. Like
+ordinary Settings saves, this is optimistic conflict detection, not filesystem
+compare-and-swap against arbitrary external editors during the final replacement.
+Windows and Linux keep the configuration-file controls but do not offer GUI
+import until their backend can validate the imported native configuration.
+
+### Command line
+
 These commands operate on files without connecting to a running Con app:
 
 ```sh

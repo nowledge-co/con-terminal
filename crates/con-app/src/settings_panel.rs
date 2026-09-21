@@ -30,6 +30,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
+mod configuration;
+use configuration::{ConfigurationImport, ConfigurationImportStatus};
+
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
@@ -163,6 +166,7 @@ enum SettingsSection {
     Ai,
     Providers,
     Keys,
+    Configuration,
 }
 
 impl SettingsSection {
@@ -173,6 +177,7 @@ impl SettingsSection {
             Self::Ai => "AI",
             Self::Providers => "Providers",
             Self::Keys => "Keys",
+            Self::Configuration => "Configuration",
         }
     }
 
@@ -183,6 +188,7 @@ impl SettingsSection {
             Self::Ai => "phosphor/robot.svg",
             Self::Providers => "phosphor/plugs-connected.svg",
             Self::Keys => "phosphor/keyboard.svg",
+            Self::Configuration => "phosphor/file-text.svg",
         }
     }
 }
@@ -193,6 +199,7 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::Ai,
     SettingsSection::Providers,
     SettingsSection::Keys,
+    SettingsSection::Configuration,
 ];
 
 pub struct SettingsPanel {
@@ -254,6 +261,9 @@ pub struct SettingsPanel {
     save_error_kind: Option<SettingsSaveErrorKind>,
     last_saved_at: Option<std::time::SystemTime>,
     close_confirmation_visible: bool,
+
+    configuration_sources: Option<Vec<std::path::PathBuf>>,
+    configuration_import: ConfigurationImport,
 
     // Theme import
     custom_theme_name_input: Entity<InputState>,
@@ -1259,6 +1269,8 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.observe_global::<ConfigurationImportStatus>(|_, cx| cx.notify())
+            .detach();
         let mut config = config.clone();
         config.appearance.terminal_blur =
             Self::effective_terminal_blur(config.appearance.terminal_blur);
@@ -1805,6 +1817,8 @@ impl SettingsPanel {
                 .and_then(|m| m.modified())
                 .ok(),
             close_confirmation_visible: false,
+            configuration_sources: None,
+            configuration_import: ConfigurationImport::Idle,
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
@@ -2831,6 +2845,14 @@ impl SettingsPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if ConfigurationImportStatus::blocks_settings(cx) {
+            self.save_error = Some(
+                "Finish the configuration import or restart Con before saving settings.".into(),
+            );
+            self.save_error_kind = Some(SettingsSaveErrorKind::Other);
+            cx.notify();
+            return;
+        }
         self.set_recording_key(None);
 
         if let Err(message) = self.sync_config_from_controls(cx) {
@@ -6222,7 +6244,11 @@ impl Render for SettingsPanel {
             return div().id("settings-overlay");
         }
 
-        let active = self.active_section;
+        let active = if ConfigurationImportStatus::blocks_settings(cx) {
+            SettingsSection::Configuration
+        } else {
+            self.active_section
+        };
 
         // Render content first (AI needs &mut self)
         let content = match active {
@@ -6231,6 +6257,7 @@ impl Render for SettingsPanel {
             SettingsSection::Ai => self.render_ai(window, cx),
             SettingsSection::Providers => self.render_providers(window, cx),
             SettingsSection::Keys => self.render_keys(window, cx),
+            SettingsSection::Configuration => self.render_configuration(window, cx),
         };
 
         let has_unsaved_changes = self.standalone && self.has_unsaved_changes(cx);
@@ -6314,6 +6341,9 @@ impl Render for SettingsPanel {
                     MouseButton::Left,
                     cx.listener(move |this, _, _, cx| {
                         this.active_section = section_val;
+                        if section_val == SettingsSection::Configuration {
+                            this.discover_configuration_sources(cx);
+                        }
                         cx.notify();
                     }),
                 );
@@ -6473,17 +6503,21 @@ impl Render for SettingsPanel {
                                             (
                                                 "phosphor/warning.svg",
                                                 "Unsaved",
-                                                theme
-                                                    .warning
-                                                    .opacity(if theme.is_dark() { 0.96 } else { 0.92 }),
+                                                theme.warning.opacity(if theme.is_dark() {
+                                                    0.96
+                                                } else {
+                                                    0.92
+                                                }),
                                             )
                                         } else {
                                             (
                                                 "phosphor/check-circle-fill.svg",
                                                 "Saved",
-                                                theme
-                                                    .foreground
-                                                    .opacity(if theme.is_dark() { 0.52 } else { 0.42 }),
+                                                theme.foreground.opacity(if theme.is_dark() {
+                                                    0.52
+                                                } else {
+                                                    0.42
+                                                }),
                                             )
                                         };
                                         div()
@@ -6535,25 +6569,9 @@ impl Render for SettingsPanel {
                                                     .size(ui_icon_px(theme, 15.0))
                                                     .text_color(config_button_tone),
                                             )
-                                            .on_click(|_, _, cx| {
-                                                let path = Config::config_path();
-                                                // Ensure the file exists so the editor has something to open.
-                                                if !path.exists() {
-                                                    if let Some(parent) = path.parent() {
-                                                        let _ = std::fs::create_dir_all(parent);
-                                                    }
-                                                    let _ = std::fs::write(&path, "");
-                                                }
-                                                match Url::from_file_path(&path) {
-                                                    Ok(url) => cx.open_url(url.as_str()),
-                                                    Err(()) => {
-                                                        log::warn!(
-                                                            "settings: failed to build file URL for {}",
-                                                            path.display()
-                                                        );
-                                                    }
-                                                }
-                                            }),
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_configuration_file(cx);
+                                            })),
                                     )
                                     .children(self.standalone.then(|| {
                                         Button::new("settings-apply")
@@ -6590,142 +6608,135 @@ impl Render for SettingsPanel {
                     .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
             )
             .children(
-                (self.close_confirmation_visible && has_unsaved_changes).then(
-                    || {
-                        div()
-                            .id("settings-close-confirmation")
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .when(mobile, |this| this.flex_col().items_start().w_full())
-                            .gap(px(12.0))
-                            .min_h(px(42.0))
-                            .px(px(20.0))
-                            .bg(theme.warning.opacity(if theme.is_dark() {
-                                0.075
-                            } else {
-                                0.055
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .min_w_0()
-                                    .child(
-                                        svg()
-                                            .path("phosphor/warning.svg")
-                                            .size(ui_icon_px(theme, 14.0))
-                                            .text_color(theme.warning.opacity(if theme.is_dark() {
-                                                0.96
-                                            } else {
-                                                0.90
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .line_height(px(16.0))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.foreground.opacity(if theme.is_dark() {
-                                                0.84
-                                            } else {
-                                                0.76
-                                            }))
-                                            .child("Save changes before closing?"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .when(mobile, |this| this.flex_wrap().w_full().justify_start())
-                                    .gap(px(6.0))
-                                    .child(
-                                        Button::new("settings-close-prompt-keep-editing")
-                                            .ghost()
-                                            .small()
-                                            .compact()
-                                            .h(px(26.0 * header_density))
-                                            .px(px(8.0 * header_density))
-                                            .rounded(px(7.0 * header_density))
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0 * header_density))
-                                                    .line_height(px(15.0 * header_density))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(
-                                                        theme.muted_foreground.opacity(0.74),
-                                                    )
-                                                    .whitespace_nowrap()
-                                                    .child("Keep Editing"),
-                                            )
-                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                this.keep_editing_after_close_prompt(cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("settings-close-prompt-discard")
-                                            .ghost()
-                                            .small()
-                                            .compact()
-                                            .h(px(26.0 * header_density))
-                                            .px(px(8.0 * header_density))
-                                            .rounded(px(7.0 * header_density))
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0 * header_density))
-                                                    .line_height(px(15.0 * header_density))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(
-                                                        theme.danger.opacity(0.86),
-                                                    )
-                                                    .whitespace_nowrap()
-                                                    .child("Discard"),
-                                            )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.discard_and_close(window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("settings-close-prompt-save")
-                                            .small()
-                                            .compact()
-                                            .custom(save_button_style)
-                                            .h(px(26.0 * header_density))
-                                            .px(px(9.0 * header_density))
-                                            .rounded(px(7.0 * header_density))
-                                            .gap(px(5.0 * header_density))
-                                            .child(
-                                                svg()
-                                                    .path("phosphor/check.svg")
-                                                    .size(ui_icon_px(theme, 12.0))
-                                                    .text_color(save_button_tint),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0 * header_density))
-                                                    .line_height(px(15.0 * header_density))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(save_button_tint)
-                                                    .whitespace_nowrap()
-                                                    .child("Save and Close"),
-                                            )
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.save_and_close(window, cx);
-                                            })),
-                                    ),
-                            )
-                    },
-                ),
+                (self.close_confirmation_visible && has_unsaved_changes).then(|| {
+                    div()
+                        .id("settings-close-confirmation")
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .when(mobile, |this| this.flex_col().items_start().w_full())
+                        .gap(px(12.0))
+                        .min_h(px(42.0))
+                        .px(px(20.0))
+                        .bg(theme
+                            .warning
+                            .opacity(if theme.is_dark() { 0.075 } else { 0.055 }))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .min_w_0()
+                                .child(
+                                    svg()
+                                        .path("phosphor/warning.svg")
+                                        .size(ui_icon_px(theme, 14.0))
+                                        .text_color(theme.warning.opacity(if theme.is_dark() {
+                                            0.96
+                                        } else {
+                                            0.90
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .line_height(px(16.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.foreground.opacity(if theme.is_dark() {
+                                            0.84
+                                        } else {
+                                            0.76
+                                        }))
+                                        .child("Save changes before closing?"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .when(mobile, |this| this.flex_wrap().w_full().justify_start())
+                                .gap(px(6.0))
+                                .child(
+                                    Button::new("settings-close-prompt-keep-editing")
+                                        .ghost()
+                                        .small()
+                                        .compact()
+                                        .h(px(26.0 * header_density))
+                                        .px(px(8.0 * header_density))
+                                        .rounded(px(7.0 * header_density))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0 * header_density))
+                                                .line_height(px(15.0 * header_density))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.muted_foreground.opacity(0.74))
+                                                .whitespace_nowrap()
+                                                .child("Keep Editing"),
+                                        )
+                                        .on_click(cx.listener(|this, _, _window, cx| {
+                                            this.keep_editing_after_close_prompt(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("settings-close-prompt-discard")
+                                        .ghost()
+                                        .small()
+                                        .compact()
+                                        .h(px(26.0 * header_density))
+                                        .px(px(8.0 * header_density))
+                                        .rounded(px(7.0 * header_density))
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0 * header_density))
+                                                .line_height(px(15.0 * header_density))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.danger.opacity(0.86))
+                                                .whitespace_nowrap()
+                                                .child("Discard"),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.discard_and_close(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("settings-close-prompt-save")
+                                        .small()
+                                        .compact()
+                                        .custom(save_button_style)
+                                        .h(px(26.0 * header_density))
+                                        .px(px(9.0 * header_density))
+                                        .rounded(px(7.0 * header_density))
+                                        .gap(px(5.0 * header_density))
+                                        .child(
+                                            svg()
+                                                .path("phosphor/check.svg")
+                                                .size(ui_icon_px(theme, 12.0))
+                                                .text_color(save_button_tint),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0 * header_density))
+                                                .line_height(px(15.0 * header_density))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(save_button_tint)
+                                                .whitespace_nowrap()
+                                                .child("Save and Close"),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.save_and_close(window, cx);
+                                        })),
+                                ),
+                        )
+                }),
             )
             // Error banner
             .children(self.save_error.as_ref().map(|err| {
-                let message = if self.save_error_kind == Some(SettingsSaveErrorKind::KeybindingConflict) {
-                    err.to_string()
-                } else {
-                    format!("Save failed: {err}")
-                };
+                let message =
+                    if self.save_error_kind == Some(SettingsSaveErrorKind::KeybindingConflict) {
+                        err.to_string()
+                    } else {
+                        format!("Save failed: {err}")
+                    };
                 div()
                     .px_4()
                     .py_2()
