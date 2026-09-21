@@ -1,5 +1,7 @@
 use super::*;
-use con_core::config::transfer::{PreparedImport, ghostty_config_candidates, prepare_import};
+#[cfg(target_os = "macos")]
+use con_core::config::transfer::prepare_import;
+use con_core::config::transfer::{PreparedImport, ghostty_config_candidates};
 use std::path::PathBuf;
 
 pub(super) enum ConfigurationImport {
@@ -90,16 +92,22 @@ impl SettingsPanel {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let prepared = prepare_import(&selected, &current, &Config::config_path())?;
                     #[cfg(target_os = "macos")]
-                    crate::workspace::ConWorkspace::validate_native_config_candidate(
-                        prepared.config(),
-                    )
-                    .map_err(anyhow::Error::msg)?;
+                    {
+                        let prepared = prepare_import(&selected, &current, &Config::config_path())?;
+                        crate::workspace::ConWorkspace::validate_native_config_candidate(
+                            prepared.config(),
+                        )
+                        .map_err(anyhow::Error::msg)?;
+                        Ok::<_, anyhow::Error>(prepared)
+                    }
                     #[cfg(not(target_os = "macos"))]
-                    anyhow::bail!("Settings import requires the native Ghostty backend on macOS.");
-                    #[allow(unreachable_code)]
-                    Ok::<_, anyhow::Error>(prepared)
+                    {
+                        let _ = (selected, current);
+                        anyhow::bail!(
+                            "Settings import requires the native Ghostty backend on macOS."
+                        )
+                    }
                 })
                 .await;
             cx.update(|cx| cx.set_global(ConfigurationImportStatus::default()));

@@ -47,10 +47,9 @@ impl ConWorkspace {
             sanitize_terminal_font_fallback(&config.terminal.font_fallback, &terminal_font_family);
         let ui_font_family = config.appearance.ui_font_family.clone();
         let ui_font_size = config.appearance.ui_font_size;
-        let mut font_size = config.terminal.font_size;
+        let font_size = config.terminal.font_size;
         let terminal_cursor_style = config.terminal.cursor_style.clone();
-        let mut terminal_opacity =
-            Self::effective_terminal_opacity(config.appearance.terminal_opacity);
+        let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
         let terminal_blur = Self::effective_terminal_blur(config.appearance.terminal_blur);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
         let tab_accent_inactive_alpha = config.appearance.tab_accent_inactive_alpha;
@@ -70,14 +69,13 @@ impl ConWorkspace {
         let background_image_position = config.appearance.background_image_position.clone();
         let background_image_fit = config.appearance.background_image_fit.clone();
         let background_image_repeat = config.appearance.background_image_repeat;
-        let mut terminal_theme =
-            TerminalTheme::by_name(&config.terminal.theme).unwrap_or_else(|| {
-                log::warn!(
-                    "Configured terminal theme {:?} was not found; using fallback",
-                    config.terminal.theme
-                );
-                TerminalTheme::default()
-            });
+        let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_else(|| {
+            log::warn!(
+                "Configured terminal theme {:?} was not found; using fallback",
+                config.terminal.theme
+            );
+            TerminalTheme::default()
+        });
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
             if cfg!(target_os = "macos") {
@@ -118,7 +116,7 @@ impl ConWorkspace {
         .map(std::sync::Arc::new)
         .unwrap_or_else(|e| panic!("Fatal: failed to initialize Ghostty: {}", e));
         #[cfg(target_os = "macos")]
-        {
+        let (terminal_theme, font_size, terminal_opacity) = {
             let native_text = native_config_for_app(&config).unwrap_or_else(|error| {
                 panic!("Fatal: failed to render native Ghostty configuration: {error}")
             });
@@ -130,15 +128,18 @@ impl ConWorkspace {
                 .unwrap_or_else(|error| {
                     panic!("Fatal: invalid native Ghostty configuration: {error}")
                 });
-            terminal_theme = native_appearance_theme(
+            let terminal_theme = native_appearance_theme(
                 config.terminal.theme.clone(),
                 effective.foreground,
                 effective.background,
                 &effective.palette,
             );
-            font_size = effective.font_size;
-            terminal_opacity = effective.background_opacity as f32;
-        }
+            (
+                terminal_theme,
+                effective.font_size,
+                effective.background_opacity as f32,
+            )
+        };
         let harness = AgentHarness::new(&config).unwrap_or_else(|e| {
             log::error!(
                 "Failed to create agent harness: {}. Agent features disabled.",

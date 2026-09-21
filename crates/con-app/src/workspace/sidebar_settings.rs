@@ -977,17 +977,17 @@ impl ConWorkspace {
 
     pub(super) fn on_theme_preview(
         &mut self,
-        settings: &Entity<SettingsPanel>,
-        _event: &ThemePreview,
+        _settings: &Entity<SettingsPanel>,
+        ThemePreview(_theme_name): &ThemePreview,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "macos")]
         {
-            self.apply_appearance_preview_from_panel(settings, window, cx);
+            self.apply_appearance_preview_from_panel(_settings, window, cx);
         }
         #[cfg(not(target_os = "macos"))]
-        self.apply_theme_preview(&_event.0, window, cx);
+        self.apply_theme_preview(_theme_name, window, cx);
     }
 
     #[cfg(target_os = "macos")]
@@ -1004,6 +1004,7 @@ impl ConWorkspace {
         Ok(())
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub(super) fn apply_theme_preview(
         &mut self,
         theme_name: &str,
@@ -1171,6 +1172,7 @@ impl ConWorkspace {
     }
 
     /// Apply a new terminal theme to all panes and sync UI mode.
+    #[cfg(not(target_os = "macos"))]
     pub(super) fn apply_terminal_theme(
         &mut self,
         theme: TerminalTheme,

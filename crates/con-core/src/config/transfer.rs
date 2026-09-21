@@ -561,12 +561,14 @@ pub fn prepare_import(from: &Path, current: &Config, destination: &Path) -> Resu
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     builder.create(&directory)?;
     let mut prepared = PreparedImport {
         directory,
@@ -641,6 +643,14 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(backup.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
             assert_eq!(
                 fs::metadata(backup).unwrap().permissions().mode() & 0o777,
                 0o600
