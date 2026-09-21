@@ -4,6 +4,19 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.106`
+
+### Fixed
+
+**macOS**
+
+- The Settings window's native traffic-light buttons now align vertically with
+  the title and save controls. _(PR
+  [#376](https://github.com/nowledge-co/con-terminal/pull/376) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
 ## `v0.1.0-beta.105`
 
 ### Changed
