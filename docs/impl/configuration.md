@@ -8,15 +8,19 @@ TOML or GPUI configuration.
 
 | Platform | Primary file |
 | --- | --- |
-| macOS | `~/Library/Application Support/con/config.ghostty` |
-| Linux | `$XDG_CONFIG_HOME/con/config.ghostty`, defaulting to `~/.config/con/config.ghostty` |
-| Windows | `%APPDATA%\con-terminal\config.ghostty` |
+| macOS | `~/Library/Application Support/con/con.conf` |
+| Linux | `$XDG_CONFIG_HOME/con/con.conf`, defaulting to `~/.config/con/con.conf` |
+| Windows | `%APPDATA%\con-terminal\con-terminal.conf` |
 
-The former `config.toml` at the same location is retained indefinitely as a
-read-only migration source for now. Con migrates it only when `config.ghostty` is
-absent, writes the new file without clobbering a file that appeared concurrently,
-and leaves the TOML original unchanged. Once `config.ghostty` exists it is
-authoritative: a malformed new file is an error, not a reason to fall back to TOML.
+Windows reserves `CON` even with an extension, so it uses `con-terminal.conf`.
+The filename does not change the syntax.
+
+The primary file is authoritative. When absent, Con first copies the former
+`config.ghostty` in the same directory verbatim, preserving relative includes,
+resources, and comments. If that is also absent, it migrates `config.toml`.
+Both originals remain unchanged as read-only migration sources. Creation never
+clobbers a concurrently created primary file. A malformed higher-priority file is
+an error, not a reason to fall back to an older file.
 
 Session restoration, authentication, and history remain separate JSON data. Cargo
 manifests and `.cargo/config.toml` are unrelated to this format.
@@ -65,7 +69,7 @@ their Ghostty names rather than aliases such as `con.terminal.font_size`.
 ### Includes and provenance
 
 `config-file` includes belong to Ghostty's native configuration graph. Con-specific
-fields are read only from the root `config.ghostty`; do not put `con.*` fields in an
+fields are read only from the primary root file; do not put `con.*` fields in an
 included file. Con preserves comments, ordering, unknown native entries, and authored
 values when Settings changes an unrelated field.
 

@@ -72,7 +72,7 @@ to reorder them and the trash button to remove one. Con always keeps its bundled
 Nerd Font after your choices for prompt icons, followed by the operating system
 fallback cascade. Changes preview immediately in open terminal panes.
 
-The same ordered list can be configured in `config.ghostty`:
+The same ordered list can be configured in `con.conf` (`con-terminal.conf` on Windows):
 
 ```ini
 font-family = "JetBrains Mono"

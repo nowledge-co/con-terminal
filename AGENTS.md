@@ -161,17 +161,19 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 - **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
 - **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
 - **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
-- **Config uses Ghostty syntax.** The primary file is `config.ghostty`: native terminal
+- **Config uses Ghostty syntax.** The primary file is `con.conf`: native terminal
   keys use Ghostty's `key = value` form, while Con-owned settings use dotted
   `con.appearance.*`, `con.agent.*`, `con.keybindings.*`, `con.skills.*`, and
   `con.network.*` keys with Rust field names in `snake_case`. Keep `con.version = 1`.
-  Paths are `~/Library/Application Support/con/config.ghostty` on macOS,
-  `$XDG_CONFIG_HOME/con/config.ghostty` (normally `~/.config/con/config.ghostty`)
-  on Linux, and `%APPDATA%\con-terminal\config.ghostty` on Windows. See
+  Paths are `~/Library/Application Support/con/con.conf` on macOS,
+  `$XDG_CONFIG_HOME/con/con.conf` (normally `~/.config/con/con.conf`)
+  on Linux, and `%APPDATA%\con-terminal\con-terminal.conf` on Windows (CON is
+  reserved even with an extension). See
   `docs/impl/configuration.md` for ownership, migration, portability, and save rules.
-- **TOML is migration-only.** `config.toml` remains a read-only legacy source: migrate
-  it only when `config.ghostty` is absent, preserve the original, and never fall back
-  to it when the new file exists but is malformed. Cargo manifests are unaffected.
+- **Older config names are migration-only.** When the primary file is absent, copy
+  `config.ghostty` verbatim, or migrate `config.toml` if neither native file exists.
+  Preserve originals and never fall back from a malformed higher-priority file.
+  Cargo manifests are unaffected.
 - **Workspace profiles use line syntax.** New writes target
   `.con/workspace.ghostty` format v2. `.con/workspace.toml` v1 remains readable but
   must never be a write target. Runtime session, auth, and history JSON are separate.

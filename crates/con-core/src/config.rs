@@ -1172,10 +1172,19 @@ impl Config {
         ghostty::parse(source, None)
     }
 
-    /// Load the native file, or atomically migrate TOML when it is absent.
+    /// Load the primary file, or migrate an older sibling without modifying it.
     pub fn load_from_paths(path: impl AsRef<Path>, legacy: impl AsRef<Path>) -> Result<Self> {
         let (path, legacy) = (path.as_ref(), legacy.as_ref());
         if path.exists() {
+            return Self::load_from_path(path);
+        }
+        let previous = path.with_file_name("config.ghostty");
+        if previous != path && previous.try_exists()? {
+            let content = std::fs::read_to_string(&previous)?;
+            // The directory does not change, so relative includes and resources
+            // keep their meaning. Preserve comments and native syntax verbatim.
+            ghostty::parse(&content, Some(path.to_owned()))?;
+            write_private_atomic_no_clobber(path, content.as_bytes())?;
             return Self::load_from_path(path);
         }
         if !legacy.exists() {
@@ -1302,7 +1311,10 @@ impl Config {
             .extension()
             .is_some_and(|extension| extension == "toml")
         {
-            anyhow::bail!("TOML configuration is read-only; save as config.ghostty");
+            anyhow::bail!(
+                "TOML configuration is read-only; save as {}",
+                con_paths::CONFIG_FILE_NAME
+            );
         }
         let rendered = ghostty::render(self)?;
         // Validate before touching the user's file.
@@ -1456,6 +1468,72 @@ mod tests {
         sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     };
     use con_agent::ProviderKind;
+
+    #[test]
+    fn migration_preserves_native_bytes_and_prefers_native_over_toml() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join(con_paths::CONFIG_FILE_NAME);
+        let previous = root.join("config.ghostty");
+        let toml = root.join("config.toml");
+        let source =
+            "# keep comment\nfont-size = 19\nconfig-file = colors.conf\ncon.agent.max_turns = 7\n";
+        std::fs::write(&previous, source).unwrap();
+        std::fs::write(&toml, "[terminal]\nfont_size = 11\n").unwrap();
+        std::fs::write(root.join("colors.conf"), "background = 123456\n").unwrap();
+        let config = Config::load_from_paths(&target, &toml).unwrap();
+        assert_eq!(config.terminal.font_size, 19.0);
+        assert_eq!(config.agent.max_turns, 7);
+        assert_eq!(config.source.lock().unwrap().path.as_ref(), Some(&target));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), source);
+        assert_eq!(std::fs::read_to_string(&previous).unwrap(), source);
+        assert!(
+            config
+                .native_entries()
+                .iter()
+                .any(|entry| entry.key == "config-file" && entry.value == "colors.conf")
+        );
+        std::fs::write(&target, "font-size = 23\n").unwrap();
+        assert_eq!(
+            Config::load_from_paths(&target, &toml)
+                .unwrap()
+                .terminal
+                .font_size,
+            23.0
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_higher_priority_config_never_falls_back() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join(con_paths::CONFIG_FILE_NAME);
+        let previous = root.join("config.ghostty");
+        let toml = root.join("config.toml");
+        std::fs::write(&toml, "[terminal]\nfont_size = 11\n").unwrap();
+        std::fs::write(&previous, "con.agent.max_turns = invalid\n").unwrap();
+        assert!(Config::load_from_paths(&target, &toml).is_err());
+        assert!(!target.exists());
+        std::fs::write(&previous, "font-size = 19\n").unwrap();
+        std::fs::write(&target, "con.agent.max_turns = invalid\n").unwrap();
+        assert!(Config::load_from_paths(&target, &toml).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "con.agent.max_turns = invalid\n"
+        );
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(&previous).unwrap();
+        assert_eq!(
+            Config::load_from_paths(&target, &toml)
+                .unwrap()
+                .terminal
+                .font_size,
+            11.0
+        );
+        assert!(toml.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn clipboard_writes_default_to_allowed_but_preserve_explicit_policy() {

@@ -6563,7 +6563,7 @@ impl Render for SettingsPanel {
                                             .h(px(28.0 * header_density))
                                             .w(px(28.0 * header_density))
                                             .rounded(px(7.0 * header_density))
-                                            .tooltip("Open config.ghostty")
+                                            .tooltip(format!("Open {}", con_paths::CONFIG_FILE_NAME))
                                             .child(
                                                 svg()
                                                     .path("phosphor/file-text.svg")
