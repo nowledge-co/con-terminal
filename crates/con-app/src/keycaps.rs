@@ -188,7 +188,11 @@ mod tests {
         let stroke = Keystroke::parse("cmd-X").unwrap();
         assert_eq!(
             keycap_labels_for_stroke(&stroke),
-            vec![shift_label().to_string(), platform_label().to_string(), "X".to_string()],
+            vec![
+                shift_label().to_string(),
+                platform_label().to_string(),
+                "X".to_string()
+            ],
         );
     }
 
@@ -197,7 +201,11 @@ mod tests {
         let stroke = Keystroke::parse("cmd-shift-x").unwrap();
         assert_eq!(
             keycap_labels_for_stroke(&stroke),
-            vec![shift_label().to_string(), platform_label().to_string(), "X".to_string()],
+            vec![
+                shift_label().to_string(),
+                platform_label().to_string(),
+                "X".to_string()
+            ],
         );
     }
 

@@ -90,8 +90,8 @@ use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
 use con_core::config::{
-    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_app_icon, sanitize_terminal_font_fallback,
-    sanitize_terminal_font_family,
+    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_app_icon,
+    sanitize_terminal_font_fallback, sanitize_terminal_font_family,
 };
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
