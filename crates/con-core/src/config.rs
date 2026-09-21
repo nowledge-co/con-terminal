@@ -1403,6 +1403,20 @@ fn migrate_agent_provider_provenance(config: &mut Config, provenance_is_present:
 }
 
 pub(crate) fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
+    // Preserve dotfile-manager links. Renaming over a symlink would replace the
+    // link itself, silently disconnecting the user's managed configuration.
+    // Resolve only an existing symlink; ordinary paths keep their authored
+    // location and dangling links remain errors.
+    let destination = match path.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() => path
+            .canonicalize()
+            .with_context(|| format!("cannot resolve configuration link `{}`", path.display()))?,
+        Ok(_) => path.to_owned(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.to_owned(),
+        Err(error) => return Err(error.into()),
+    };
+    let path = destination.as_path();
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -1527,6 +1541,34 @@ mod tests {
             );
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_through_a_config_link_preserves_the_link() {
+        let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let dotfile = root.join("managed.conf");
+        let link = root.join(con_paths::CONFIG_FILE_NAME);
+        std::fs::write(&dotfile, "font-size = 12\n").unwrap();
+        std::os::unix::fs::symlink(&dotfile, &link).unwrap();
+
+        let mut config = Config::load_from_path(&link).unwrap();
+        config.terminal.font_size = 18.0;
+        config.save_to_path(&link).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(&dotfile)
+                .unwrap()
+                .contains("font-size = 18")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

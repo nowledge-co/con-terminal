@@ -50,11 +50,14 @@ fn expand_home(value: &str) -> Result<PathBuf> {
 }
 
 fn regular(path: &Path, description: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
+    // Follow valid links so configurations managed by dotfile tools import the
+    // same way they load in Ghostty. Canonicalization later gives cycle and
+    // duplicate detection a stable identity; dangling links still fail here.
+    let metadata = fs::metadata(path)
         .with_context(|| format!("cannot read {description} `{}`", path.display()))?;
-    if !metadata.file_type().is_file() {
+    if !metadata.is_file() {
         bail!(
-            "{description} `{}` must be a regular file (symlinks are not accepted)",
+            "{description} `{}` must resolve to a regular file",
             path.display()
         );
     }
@@ -279,7 +282,7 @@ fn transform(
             source.display()
         );
     }
-    regular(source, "configuration file")?; // Reject a symlink before canonicalization.
+    regular(source, "configuration file")?;
     let source = source.canonicalize()?;
     if !state.visiting.insert(source.clone()) {
         bail!("config-file include cycle involving `{}`", source.display());
@@ -775,6 +778,32 @@ mod tests {
         fs::remove_file(target).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn import_follows_dotfile_links_and_detaches_the_snapshot() {
+        let d = dir();
+        let managed = d.join("managed");
+        fs::create_dir(&managed).unwrap();
+        let real_image = managed.join("wallpaper.png");
+        let linked_image = managed.join("current-wallpaper.png");
+        let real_config = managed.join("ghostty.conf");
+        let linked_config = d.join("config");
+        fs::write(&real_image, b"image").unwrap();
+        std::os::unix::fs::symlink(&real_image, &linked_image).unwrap();
+        fs::write(&real_config, "background-image = current-wallpaper.png\n").unwrap();
+        std::os::unix::fs::symlink(&real_config, &linked_config).unwrap();
+
+        let imported = d.join("imported");
+        import_ghostty(&linked_config, &imported).unwrap();
+        fs::remove_dir_all(&managed).unwrap();
+        fs::remove_file(&linked_config).unwrap();
+
+        let output = fs::read_to_string(&imported).unwrap();
+        let image = assignment(&output).unwrap().1;
+        assert_eq!(fs::read(image).unwrap(), b"image");
+        fs::remove_dir_all(d).unwrap();
+    }
+
     #[test]
     fn missing_optional_includes_are_detached_and_native_resets_are_preserved() {
         let d = dir();
@@ -854,7 +883,12 @@ mod tests {
     fn export_stages_legacy_themes_but_preserves_native_names_and_imports() {
         let d = dir();
         let source = d.join("source");
-        fs::write(&source, "theme = light:flexoki-light,dark:Dracula\n").unwrap();
+        let native_theme = "ConNativeCatalogThemeNotPresentOnDisk";
+        fs::write(
+            &source,
+            format!("theme = light:flexoki-light,dark:{native_theme}\n"),
+        )
+        .unwrap();
 
         let exported = d.join("exported");
         export_ghostty(&source, &exported).unwrap();
@@ -864,7 +898,7 @@ mod tests {
         let light = light.strip_prefix("light:").unwrap();
         assert!(Path::new(light).is_file());
         assert!(fs::read_to_string(light).unwrap().contains("palette = 15="));
-        assert_eq!(dark, "dark:Dracula");
+        assert_eq!(dark, format!("dark:{native_theme}"));
 
         let imported = d.join("imported");
         import_ghostty(&source, &imported).unwrap();

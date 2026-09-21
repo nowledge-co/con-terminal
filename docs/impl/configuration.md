@@ -80,7 +80,9 @@ remain in the root file.
 
 Settings uses an optimistic external-edit check, then writes a private temporary file
 and atomically replaces the destination. This detects changes seen before the write,
-but it is not an atomic compare-and-swap against arbitrary editors.
+but it is not an atomic compare-and-swap against arbitrary editors. If the primary
+configuration is a valid symlink managed by a dotfile tool, Con updates its target
+atomically and preserves the link. Dangling links are treated as configuration errors.
 
 ## Themes and portability
 
@@ -164,7 +166,9 @@ con-cli config export-ghostty --to PATH [--from PATH]
 Import defaults `--to` to Con's primary config; export defaults `--from` to it. Both
 refuse to clobber an existing destination. They create self-contained snapshots by
 copying and rewriting referenced `config-file`, theme, and background-image resources.
-Custom shaders and GTK CSS files are also copied. Missing optional includes are
+Custom shaders and GTK CSS files are also copied. Valid symlinks are followed for
+dotfile-managed sources, while dangling links fail without publishing a partial
+snapshot. Missing optional includes are
 omitted so the snapshot cannot acquire future dependencies from the source directory.
 Transfers bound both input and rewritten output to 16 MiB, with at most 128 input
 resources and 16 nested includes. These are safety limits, not format restrictions.
