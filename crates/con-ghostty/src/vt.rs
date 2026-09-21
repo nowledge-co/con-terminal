@@ -1058,6 +1058,7 @@ pub const ATTR_ITALIC: u8 = 1 << 1;
 pub const ATTR_UNDERLINE: u8 = 1 << 2;
 pub const ATTR_STRIKE: u8 = 1 << 3;
 pub const ATTR_INVERSE: u8 = 1 << 4;
+pub const ATTR_INVISIBLE: u8 = 1 << 5;
 
 // ── Raw FFI ────────────────────────────────────────────────────────────
 
@@ -1572,6 +1573,21 @@ pub struct Cell {
     pub bg: u32,
     pub attrs: u8,
     pub _pad: [u8; 3],
+}
+
+impl Cell {
+    /// Hide concealed foreground content only at the paint boundary. Keep
+    /// snapshot text intact for copying, searching, and transcript extraction.
+    #[inline]
+    pub fn for_render(mut self) -> Self {
+        if self.attrs & ATTR_INVISIBLE != 0 {
+            self.codepoint = 0;
+            // Like Ghostty/xterm, conceal decorations as well as the glyph.
+            // Preserve inverse and colors for backgrounds, selection, and cursors.
+            self.attrs &= !(ATTR_UNDERLINE | ATTR_STRIKE);
+        }
+        self
+    }
 }
 
 /// Pointer location for a selection gesture. Grid coordinates identify the
@@ -5613,6 +5629,9 @@ fn read_cell(
     if style.inverse {
         attrs |= ATTR_INVERSE;
     }
+    if style.invisible {
+        attrs |= ATTR_INVISIBLE;
+    }
 
     Some(Cell {
         codepoint,
@@ -8301,6 +8320,33 @@ mod tests {
         screen.feed(b"\x1b]9;9; /tmp/con cwd \x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some(" /tmp/con cwd "));
+    }
+
+    #[test]
+    fn concealed_cells_preserve_text_but_hide_foreground_for_rendering() {
+        let screen = VtScreen::new(8, 2, None).expect("create vt screen");
+        screen.feed(b"\x1b[31;44;4;9;7;8mX\x1b[28mY\x1b[8mZ\x1b[0mW");
+        let snapshot = screen.snapshot();
+        let cells = &snapshot.cells[..4];
+        assert_eq!(
+            cells.iter().map(|c| c.codepoint).collect::<Vec<_>>(),
+            vec!['X' as u32, 'Y' as u32, 'Z' as u32, 'W' as u32]
+        );
+        for index in [0, 2] {
+            let cell = cells[index];
+            assert_ne!(cell.attrs & ATTR_INVISIBLE, 0);
+            let rendered = cell.for_render();
+            assert_eq!(rendered.codepoint, 0);
+            assert_eq!(rendered.attrs & (ATTR_UNDERLINE | ATTR_STRIKE), 0);
+            assert_ne!(rendered.attrs & ATTR_INVERSE, 0);
+            assert_eq!((rendered.fg, rendered.bg), (cell.fg, cell.bg));
+        }
+        for index in [1, 3] {
+            assert_eq!(cells[index].attrs & ATTR_INVISIBLE, 0);
+            assert_eq!(cells[index].for_render(), cells[index]);
+        }
+        assert_ne!(cells[1].attrs & ATTR_UNDERLINE, 0);
+        assert_ne!(cells[1].attrs & ATTR_STRIKE, 0);
     }
 
     #[test]
