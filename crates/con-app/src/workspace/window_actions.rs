@@ -270,13 +270,7 @@ impl ConWorkspace {
         let opened_panel_for_window = opened_panel.clone();
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(920.0), px(680.0)), cx)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Settings".into()),
-                // Match the main macOS window: the system owns the traffic
-                // lights, while Con paints the titlebar surface itself.
-                appears_transparent: cfg!(target_os = "macos"),
-                ..Default::default()
-            }),
+            titlebar: Some(crate::settings_panel::settings_titlebar_options()),
             window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         };

@@ -32,6 +32,9 @@ use url::Url;
 
 mod configuration;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
+mod window_chrome;
+use window_chrome::SETTINGS_HEADER_HEIGHT;
+pub(crate) use window_chrome::settings_titlebar_options;
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
@@ -6490,7 +6493,7 @@ impl Render for SettingsPanel {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .h(px(44.0))
+                            .h(SETTINGS_HEADER_HEIGHT)
                             .child(header_title_area)
                             .child(
                                 div()
@@ -6563,7 +6566,10 @@ impl Render for SettingsPanel {
                                             .h(px(28.0 * header_density))
                                             .w(px(28.0 * header_density))
                                             .rounded(px(7.0 * header_density))
-                                            .tooltip(format!("Open {}", con_paths::CONFIG_FILE_NAME))
+                                            .tooltip(format!(
+                                                "Open {}",
+                                                con_paths::CONFIG_FILE_NAME
+                                            ))
                                             .child(
                                                 svg()
                                                     .path("phosphor/file-text.svg")
