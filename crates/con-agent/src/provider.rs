@@ -1813,27 +1813,20 @@ pub struct ProviderProtocolPreferences {
     pub zai: Option<ProviderTransport>,
 }
 
-/// Agent configuration from config.toml
+/// Agent configuration from Con's Ghostty-style configuration file.
 ///
-/// ```toml
-/// [agent]
-/// provider = "anthropic"
-/// max_turns = 10
-/// temperature = 0.7
-///
-/// [agent.providers.anthropic]
-/// model = "claude-sonnet-4-6"
-/// api_key = "sk-ant-..."
-/// max_tokens = 8192
-///
-/// [agent.providers.groq]
-/// model = "llama-3.3-70b-versatile"
-/// api_key_env = "GROQ_API_KEY"
-/// max_tokens = 16384
-///
-/// [agent.suggestion_model]
-/// provider = "groq"
-/// model = "llama-3.1-8b-instant"
+/// ```text
+/// con.agent.provider = anthropic
+/// con.agent.max_turns = 10
+/// con.agent.temperature = 0.7
+/// con.agent.providers.anthropic.model = claude-sonnet-4-6
+/// con.agent.providers.anthropic.api_key = sk-ant-...
+/// con.agent.providers.anthropic.max_tokens = 8192
+/// con.agent.providers.groq.model = llama-3.3-70b-versatile
+/// con.agent.providers.groq.api_key_env = GROQ_API_KEY
+/// con.agent.providers.groq.max_tokens = 16384
+/// con.agent.suggestion_model.provider = groq
+/// con.agent.suggestion_model.model = llama-3.1-8b-instant
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -2263,15 +2256,20 @@ impl AgentProvider {
         );
 
         // Warn if a custom base_url is set but the model is the provider default —
-        // the user probably forgot to set [agent.providers.<name>].model and is
+        // the user probably forgot to set the provider's model and is
         // sending the default model name to a third-party API.
         if base_url.is_some() && model == kind.default_model() {
+            let config_provider = serde_json::to_value(kind)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| kind.to_string());
             log::warn!(
                 "[agent] Custom base_url is set for {:?} but model is the default '{}'. \
-                 Set [agent.providers.{:?}].model in config.toml to override.",
+                 Set con.agent.providers.{}.model in {} to override.",
                 kind,
                 model,
-                kind,
+                config_provider,
+                con_paths::CONFIG_FILE_NAME,
             );
         }
 

@@ -298,7 +298,7 @@ Important consequence:
 - [x] Application cursor keys (SS3 mode for vim/less/top)
 - [x] Text style rendering: italic, underline, strikethrough, dim, inverse
 - [x] Basic tabs (Cmd+T / Cmd+W) with tab bar and OSC title
-- [x] Font size from config (config.toml terminal.font_size)
+- [x] Font size from config (`font-size` in `con.conf`)
 - [x] CWD display in input bar from OSC 7
 - [x] Mouse text selection (click-drag, auto-copy, Cmd+C copy)
 - [x] Clipboard paste (Cmd+V) with bracketed paste mode support
@@ -368,7 +368,7 @@ Important consequence:
 - [x] Command palette expanded (clear, focus, toggle sidebar, cycle mode)
 - [x] Terminal settings in Settings UI (font size, theme)
 - [x] Cmd+A select all, Cmd+K clear scrollback
-- [x] Configurable keybindings (config.toml keybindings section)
+- [x] Configurable keybindings (`con.keybindings.*` in `con.conf`)
 - [ ] Plugin system (Lua or WASM)
 - [ ] Auto-update (Sparkle on macOS)
 - [ ] CLI tool (`con` command for scripting)
@@ -486,33 +486,33 @@ cargo test --workspace         # test everything
 
 ## Config
 
-```toml
-# ~/.config/con/config.toml
+```ini
+# ~/Library/Application Support/con/con.conf on macOS
+# ~/.config/con/con.conf on Linux
 
-[terminal]
+# Native terminal settings use Ghostty names.
 font-family = "JetBrains Mono"
 font-size = 14
-theme = "catppuccin-mocha"        # or any ghostty theme
-scrollback-lines = 10000
-cursor-style = "block"
+theme = "catppuccin-mocha"
+cursor-style = block
 
-[agent]
-provider = "anthropic"             # anthropic, openai, openai-compatible, deepseek,
-                                   # groq, gemini, ollama, openrouter, mistral,
-                                   # together, cohere, perplexity, xai
-model = "claude-sonnet-4-0"        # leave empty for provider default
-api_key_env = "ANTHROPIC_API_KEY"  # reads from env var
-base_url = ""                      # optional: custom/proxy endpoint
-max_tokens = 4096
-max_turns = 10
-auto_context = true                # inject terminal context automatically
-auto_approve_tools = false         # require approval for shell_exec, file_write
+# Con-owned settings live under the con.* namespace.
+con.agent.provider = anthropic
+con.agent.providers.anthropic.model = claude-sonnet-4-6
+con.agent.providers.anthropic.api_key_env = ANTHROPIC_API_KEY
+con.agent.providers.anthropic.max_tokens = 4096
+con.agent.max_turns = 10
+con.agent.auto_context = true
+con.agent.auto_approve_tools = false
 
-[keybindings]
-toggle-agent = "cmd+l"
-command-palette = "cmd+shift+p"
-new-tab = "cmd+t"
+con.keybindings.toggle_agent = secondary-l
+con.keybindings.command_palette = secondary-shift-p
+con.keybindings.new_tab = secondary-t
 ```
+
+Windows uses `%APPDATA%\con-terminal\con-terminal.conf`. See
+[`docs/impl/configuration.md`](docs/impl/configuration.md) for migration,
+imports, native ownership, and the portable subset.
 
 ---
 

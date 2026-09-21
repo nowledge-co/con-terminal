@@ -4,7 +4,35 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.104`
+## `v0.1.0-beta.105`
+
+### Changed
+
+**Configuration**
+
+- Con now uses a single Ghostty-style configuration file: `con.conf` on macOS
+  and Linux, and `con-terminal.conf` on Windows. Native terminal options use
+  their Ghostty names, while Con-specific settings remain clearly namespaced.
+  Existing `config.ghostty` and legacy TOML configurations migrate without
+  modifying the originals. _(PR
+  [#373](https://github.com/nowledge-co/con-terminal/pull/373) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- macOS can import an existing Ghostty setup during first launch or later from
+  Settings. Imports are validated before replacing anything, preserve Con's
+  own settings, copy referenced resources into a self-contained snapshot, and
+  keep a backup of the previous configuration. The same import and export
+  workflow is available through `con-cli`. _(PR
+  [#373](https://github.com/nowledge-co/con-terminal/pull/373) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Workspace layout profiles now use the same readable line-oriented style in
+  `.con/workspace.ghostty`. Existing `.con/workspace.toml` profiles remain
+  readable and are never overwritten. _(PR
+  [#373](https://github.com/nowledge-co/con-terminal/pull/373) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.104` - 2026-09-21
 
 ### Added
 
