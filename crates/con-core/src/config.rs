@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use con_agent::{AgentConfig, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -1155,7 +1155,7 @@ impl Config {
     /// Pure load/parse entry point. It never performs credential discovery.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        if !path.exists() {
+        if !config_path_exists(path)? {
             let config = Self::default();
             config
                 .source
@@ -1164,7 +1164,9 @@ impl Config {
                 .path = Some(path.to_owned());
             return Ok(config);
         }
-        ghostty::parse(&std::fs::read_to_string(path)?, Some(path.to_owned()))
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read configuration `{}`", path.display()))?;
+        ghostty::parse(&content, Some(path.to_owned()))
     }
 
     /// Parse in-memory Ghostty syntax without resolving includes or auth state.
@@ -1175,22 +1177,24 @@ impl Config {
     /// Load the primary file, or migrate an older sibling without modifying it.
     pub fn load_from_paths(path: impl AsRef<Path>, legacy: impl AsRef<Path>) -> Result<Self> {
         let (path, legacy) = (path.as_ref(), legacy.as_ref());
-        if path.exists() {
+        if config_path_exists(path)? {
             return Self::load_from_path(path);
         }
         let previous = path.with_file_name("config.ghostty");
-        if previous != path && previous.try_exists()? {
-            let content = std::fs::read_to_string(&previous)?;
+        if previous != path && config_path_exists(&previous)? {
+            let content = std::fs::read_to_string(&previous)
+                .with_context(|| format!("cannot read configuration `{}`", previous.display()))?;
             // The directory does not change, so relative includes and resources
             // keep their meaning. Preserve comments and native syntax verbatim.
             ghostty::parse(&content, Some(path.to_owned()))?;
             write_private_atomic_no_clobber(path, content.as_bytes())?;
             return Self::load_from_path(path);
         }
-        if !legacy.exists() {
+        if !config_path_exists(legacy)? {
             return Self::load_from_path(path);
         }
-        let content = std::fs::read_to_string(legacy)?;
+        let content = std::fs::read_to_string(legacy)
+            .with_context(|| format!("cannot read configuration `{}`", legacy.display()))?;
         let document: toml::Value = toml::from_str(&content).map_err(|_| {
             anyhow::anyhow!("invalid legacy TOML configuration; original file was not modified")
         })?;
@@ -1345,8 +1349,18 @@ impl Config {
     }
 }
 
+// A dangling dotfile symlink is an existing configuration, not permission to
+// fall back to defaults or a lower-priority file. Propagate lookup errors too.
+fn config_path_exists(path: &Path) -> std::io::Result<bool> {
+    match path.symlink_metadata() {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn write_private_atomic_no_clobber(path: &Path, content: &[u8]) -> Result<()> {
-    if path.exists() {
+    if config_path_exists(path)? {
         anyhow::bail!("configuration appeared during migration");
     }
     if let Some(parent) = path.parent() {
@@ -1468,6 +1482,52 @@ mod tests {
         sanitize_terminal_font_fallback, sanitize_terminal_font_family,
     };
     use con_agent::ProviderKind;
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_config_links_never_trigger_defaults_or_legacy_fallback() {
+        for name in ["config.ghostty", con_paths::CONFIG_FILE_NAME, "config.toml"] {
+            let root = std::env::temp_dir().join(format!("con-config-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&root).unwrap();
+            let target = root.join(con_paths::CONFIG_FILE_NAME);
+            let legacy = root.join("config.toml");
+            let link = root.join(name);
+            let dotfile = root.join("dotfile");
+            if name != "config.toml" {
+                std::fs::write(&legacy, "[terminal]\nfont_size = 11\n").unwrap();
+            }
+            std::os::unix::fs::symlink(&dotfile, &link).unwrap();
+            assert!(Config::load_from_paths(&target, &legacy).is_err(), "{name}");
+            assert!(!target.exists(), "must not publish a fallback for {name}");
+            if name == con_paths::CONFIG_FILE_NAME {
+                assert!(Config::load_from_path(&target).is_err());
+            }
+            // Valid dotfile symlinks still load and migrate normally.
+            std::fs::write(
+                &dotfile,
+                if name == "config.toml" {
+                    "[terminal]\nfont_size = 19\n"
+                } else {
+                    "font-size = 19\n"
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                Config::load_from_paths(&target, &legacy)
+                    .unwrap()
+                    .terminal
+                    .font_size,
+                19.0
+            );
+            assert!(
+                std::fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 
     #[test]
     fn migration_preserves_native_bytes_and_prefers_native_over_toml() {

@@ -35,7 +35,7 @@ fn eligible(config: &Path, session: &Path, marker: &Path) -> bool {
         marker.to_owned(),
     ]
     .iter()
-    .all(|path| matches!(path.try_exists(), Ok(false)))
+    .all(|path| matches!(path.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
 }
 
 fn remember_choice() {
@@ -139,21 +139,22 @@ impl Welcome {
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx.background_executor().spawn(async move {
-                if let Some(source) = source {
-                    // Check again: another process may have created a Con config
-                    // while this prompt was open. Never replace it on first run.
-                    if !eligible(&Config::config_path(), &Session::session_path(), &marker_path()) {
-                        anyhow::bail!("Con configuration or session state appeared while this prompt was open. Use your current configuration instead.");
-                    }
+                // App-wide keybindings and network clients already use `current`.
+                // A different on-disk profile needs a fresh app initialization,
+                // including when the user chooses not to import.
+                if !eligible(&Config::config_path(), &Session::session_path(), &marker_path()) {
+                    anyhow::bail!("Con configuration or session state changed while this prompt was open. Quit and reopen Con to load it.");
+                }
+                let config = if let Some(source) = source {
                     let prepared = prepare_import(&source, &current, &Config::config_path())?;
                     crate::workspace::ConWorkspace::validate_native_config_candidate(prepared.config())
                         .map_err(anyhow::Error::msg)?;
+                    let config = prepared.config().clone();
                     prepared.commit_new()?;
-                }
-                // Also reload when skipping, to respect a newly created config.
-                let config = Config::load()?;
-                crate::workspace::ConWorkspace::validate_native_config_candidate(&config)
-                    .map_err(anyhow::Error::msg)?;
+                    config
+                } else {
+                    current
+                };
                 remember_choice();
                 Ok::<_, anyhow::Error>(config)
             }).await;
@@ -282,6 +283,13 @@ mod tests {
         ] {
             std::fs::write(path, "").unwrap();
             assert!(!eligible(&config, &session, &marker), "{}", path.display());
+            std::fs::remove_file(path).unwrap();
+            std::os::unix::fs::symlink(root.join("missing-dotfile"), path).unwrap();
+            assert!(
+                !eligible(&config, &session, &marker),
+                "dangling {}",
+                path.display()
+            );
             std::fs::remove_file(path).unwrap();
         }
         std::fs::remove_dir(root).unwrap();

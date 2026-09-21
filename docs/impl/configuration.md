@@ -114,13 +114,23 @@ With no Ghostty source, Con starts with defaults immediately. The choice is
 remembered as `first-run-complete` in the app data directory, not in `con.conf`;
 later imports remain available in Settings. Closing the prompt quits without
 recording a choice. First-run import never replaces an existing Con file, even
-if another process creates one while the prompt is open.
+if another process creates one while the prompt is open. If the profile changes
+during the prompt, both choices require quitting and reopening Con so app-wide
+settings and terminal settings initialize from the same configuration.
 
 ### Settings
 
 The **Configuration** page opens the current file or directory. On macOS it also
 finds Ghostty's current and legacy filenames in Application Support and the XDG
 config directory. Select a detected source or choose another file explicitly.
+
+Ghostty loads only named default files, not every file in these directories:
+`config` followed by `config.ghostty`, in the XDG directory first and then macOS
+Application Support. When several exist, Ghostty layers them. Con imports one
+selected root and its `config-file` dependencies, not the merged defaults from
+all detected roots. Other filenames require an explicit selection or include;
+Con's own `con.conf` does not become a Ghostty default merely by being copied
+into Ghostty's directory.
 
 Import prepares and validates a private snapshot before asking for confirmation.
 It replaces native terminal settings as a unit, retains Con's `con.*` settings,

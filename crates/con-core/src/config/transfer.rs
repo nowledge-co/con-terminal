@@ -457,20 +457,21 @@ pub fn export_ghostty(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()
     transfer(from.as_ref(), to.as_ref(), true)
 }
 
-/// Existing default sources, in Ghostty's discovery order. Never select a
-/// source silently when several files exist.
+/// Existing default sources, in Ghostty's load order (XDG before App Support,
+/// legacy `config` before `config.ghostty`). This lists sources for explicit
+/// selection; it does not merge Ghostty's layered default configuration.
 pub fn ghostty_config_candidates() -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    if let Some(xdg) = ghostty_xdg_dir() {
+        roots.push(xdg);
+    }
     #[cfg(target_os = "macos")]
     if let Some(home) = dirs::home_dir() {
         roots.push(home.join("Library/Application Support/com.mitchellh.ghostty"));
     }
-    if let Some(xdg) = ghostty_xdg_dir() {
-        roots.push(xdg);
-    }
     roots
         .into_iter()
-        .flat_map(|root| [root.join("config.ghostty"), root.join("config")])
+        .flat_map(|root| [root.join("config"), root.join("config.ghostty")])
         .filter(|path| path.is_file())
         .collect()
 }
