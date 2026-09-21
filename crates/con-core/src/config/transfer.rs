@@ -491,6 +491,14 @@ impl PreparedImport {
         &self.candidate
     }
 
+    /// First-run import must never replace even an empty existing file.
+    pub fn commit_new(self) -> Result<()> {
+        if self.previous.is_some() {
+            bail!("Con configuration already exists; use Settings to replace it");
+        }
+        self.commit().map(|_| ())
+    }
+
     pub fn commit(mut self) -> Result<Option<PathBuf>> {
         let actual = match fs::read_to_string(&self.destination) {
             Ok(text) => Some(text),
@@ -637,6 +645,38 @@ mod tests {
                 0o600
             );
         }
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn first_run_import_never_replaces_an_existing_empty_file() {
+        let d = dir();
+        let target = d.join(con_paths::CONFIG_FILE_NAME);
+        let source = d.join("ghostty");
+        fs::write(&source, "font-size = 19\n").unwrap();
+        let config = Config::load_from_path(&target).unwrap();
+        // Even an empty file appearing between eligibility and preparation
+        // belongs to its creator, not to the first-run importer.
+        fs::write(&target, "").unwrap();
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        let staging = prepared.directory.clone();
+        assert!(prepared.commit_new().is_err());
+        assert!(!staging.exists());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "");
+        fs::remove_file(&target).unwrap();
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        fs::write(&target, "font-size = 23\n").unwrap();
+        assert!(prepared.commit_new().is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "font-size = 23\n");
+        fs::remove_file(&target).unwrap();
+        prepare_import(&source, &config, &target)
+            .unwrap()
+            .commit_new()
+            .unwrap();
+        assert_eq!(
+            Config::load_from_path(&target).unwrap().terminal.font_size,
+            19.0
+        );
         fs::remove_dir_all(d).unwrap();
     }
 

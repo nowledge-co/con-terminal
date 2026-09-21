@@ -99,6 +99,23 @@ those with `con.keybindings.*` or Settings.
 
 ## Import and export
 
+### First launch (macOS)
+
+With no Con configuration, previous session, or completed first-run choice,
+Con discovers Ghostty configurations and offers **Import and Start** or
+**Use Con Defaults** before creating any terminal. Multiple sources are shown
+separately; no source is selected silently. Import validates and copies the chosen
+file and its dependencies, then starts the terminal without a restart. Configured
+startup commands may execute only after confirmation. Invalid imports leave the
+destination absent and let the user retry or continue without importing.
+
+Existing Con users load or migrate their configuration without this prompt.
+With no Ghostty source, Con starts with defaults immediately. The choice is
+remembered as `first-run-complete` in the app data directory, not in `con.conf`;
+later imports remain available in Settings. Closing the prompt quits without
+recording a choice. First-run import never replaces an existing Con file, even
+if another process creates one while the prompt is open.
+
 ### Settings
 
 The **Configuration** page opens the current file or directory. On macOS it also
@@ -112,8 +129,9 @@ An existing Con file is backed up as `previous.ghostty` in the import directory;
 the result shows that path. Keep the import directory: the new configuration may
 reference resources inside it. Cancelled and failed preparations are removed.
 
-Restart Con after import. Existing terminal sessions are not reconfigured, and
-Settings saves are blocked until restart so stale controls cannot overwrite the
+Use **Restart Con…** after import, then confirm the restart. Running commands and
+agent tasks stop; save unsaved editor files first. Existing terminal sessions are
+not reconfigured, and Settings saves are blocked until restart so stale controls cannot overwrite the
 import. Imported commands may run when a new terminal session starts. Includes
 retain the native-edit restrictions described above. Ghostty application actions
 are not necessarily implemented by Con.

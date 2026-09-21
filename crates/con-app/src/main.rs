@@ -20,6 +20,8 @@ mod cli_shim;
 mod command_palette;
 mod file_icons;
 #[cfg(target_os = "macos")]
+mod first_run;
+#[cfg(target_os = "macos")]
 mod global_hotkey;
 #[cfg(target_os = "macos")]
 mod macos_windowing;
@@ -740,6 +742,11 @@ fn open_con_window_with_startup(
     startup: Option<StartupArgs>,
     cx: &mut App,
 ) {
+    #[cfg(target_os = "macos")]
+    if first_run::pending(cx) {
+        cx.activate(true);
+        return;
+    }
     #[cfg(target_os = "linux")]
     let mut window_options = default_window_options(&config, cx);
     #[cfg(not(target_os = "linux"))]
@@ -817,6 +824,11 @@ fn open_con_window_with_startup(
 pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx: &mut App) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+    if first_run::pending(cx) {
+        quick_terminal::opening_failed();
+        cx.activate(true);
+        return;
+    }
     let window_options = quick_terminal_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
@@ -2876,6 +2888,9 @@ fn main() {
 
         cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
 
+        #[cfg(target_os = "macos")]
+        first_run::start(config.clone(), startup.clone(), cx);
+        #[cfg(not(target_os = "macos"))]
         open_con_window_with_startup(
             config.clone(),
             startup_session(&startup),
