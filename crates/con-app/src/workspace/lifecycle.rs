@@ -541,6 +541,16 @@ impl ConWorkspace {
         )
         .detach();
 
+        // Restart must save sessions and release native surfaces in every window,
+        // just like Quit. GPUI's platform restart bypasses our Quit action.
+        let workspace_handle = cx.weak_entity();
+        App::on_app_restart(cx, move |cx| {
+            let _ = workspace_handle.update(cx, |workspace, cx| {
+                workspace.prepare_app_exit(cx);
+            });
+        })
+        .detach();
+
         let workspace_handle = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             // Two shutdown paths, two behaviours:

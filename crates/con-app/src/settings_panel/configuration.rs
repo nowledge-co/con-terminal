@@ -215,16 +215,60 @@ impl SettingsPanel {
             .and_then(|s| s.backup.clone());
         let muted = cx.theme().muted_foreground;
         let warning = cx.theme().warning;
-        let mut content = section_content("Configuration", "Your terminal settings, in one place.", cx.theme())
-            .w_full().min_w_0().whitespace_normal()
-            .child(div().flex().flex_col().w_full().min_w_0().gap_2()
-                .child(div().font_weight(FontWeight::MEDIUM).child("Current configuration"))
-                .child(div().w_full().min_w_0().text_sm().text_color(muted).child(Config::config_path().display().to_string()))
-                .child(div().flex().flex_wrap().gap_2()
-                    .child(Button::new("configuration-open").ghost().small().label("Open File")
-                        .on_click(cx.listener(|this, _, _, cx| this.open_configuration_file(cx))))
-                    .child(Button::new("configuration-folder").ghost().small().label("Open Folder")
-                        .on_click(|_, _, cx| { cx.reveal_path(&con_paths::app_config_dir()); }))))
+        let page = section_content(
+            "Configuration",
+            "Your terminal settings, in one place.",
+            cx.theme(),
+        )
+        .w_full()
+        .min_w_0()
+        .whitespace_normal()
+        .child(
+            card(cx.theme(), self.card_opacity())
+                .p(px(16.0))
+                .w_full()
+                .min_w_0()
+                .gap_3()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Current configuration"),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_size(px(12.0))
+                        .text_color(muted)
+                        .child(Config::config_path().display().to_string()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            Button::new("configuration-open")
+                                .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                                .small()
+                                .label("Open File")
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.open_configuration_file(cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("configuration-folder")
+                                .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                                .small()
+                                .label("Open Folder")
+                                .on_click(|_, _, cx| {
+                                    cx.reveal_path(&con_paths::app_config_dir());
+                                }),
+                        ),
+                ),
+        );
+        let mut content = card(cx.theme(), self.card_opacity())
+            .p(px(16.0)).w_full().min_w_0().gap_3()
             .child(div().flex().flex_col().gap_2()
                 .child(div().font_weight(FontWeight::MEDIUM).child("Import from Ghostty"))
                 .child(div().text_sm().text_color(muted).child("Replace terminal settings. Keep Con’s AI, app shortcuts, and other Con-specific settings. Ghostty files stay unchanged.")));
@@ -247,11 +291,20 @@ impl SettingsPanel {
                             .on_click(move |_, _, cx| cx.reveal_path(&backup)),
                     );
             }
-            return content;
+            content = content.child(div().flex().child(Button::new("configuration-restart").primary().small().label("Restart Con…")
+                .on_click(|_, window, cx| {
+                    let answer = window.prompt(PromptLevel::Warning, "Restart Con?", Some("Running terminal commands and agent tasks will stop. Save any unsaved editor files before restarting."), &["Cancel", "Restart Con"], cx);
+                    cx.spawn(async move |cx| {
+                        if answer.await.ok() == Some(1) {
+                            cx.update(|cx| cx.restart());
+                        }
+                    }).detach();
+                })));
+            return page.child(content);
         }
 
         if !cfg!(target_os = "macos") {
-            return content.child(div().text_sm().text_color(muted).child("Settings import is currently available on macOS. Other platforms support a portable subset of Ghostty settings."));
+            return page.child(content.child(div().text_sm().text_color(muted).child("Settings import is currently available on macOS. Other platforms support a portable subset of Ghostty settings.")));
         }
         if !matches!(self.configuration_import, ConfigurationImport::Ready { .. }) {
             if let Some(sources) = &self.configuration_sources {
@@ -277,7 +330,7 @@ impl SettingsPanel {
                             )
                             .child(
                                 Button::new(("configuration-source", index))
-                                    .ghost()
+                                    .primary()
                                     .small()
                                     .label("Import This File")
                                     .disabled(blocked)
@@ -295,7 +348,7 @@ impl SettingsPanel {
                     .gap_2()
                     .child(
                         Button::new("configuration-choose")
-                            .ghost()
+                            .with_variant(gpui_component::button::ButtonVariant::Secondary)
                             .small()
                             .label("Choose File…")
                             .disabled(blocked)
@@ -370,6 +423,6 @@ impl SettingsPanel {
                 );
             }
         }
-        content
+        page.child(content)
     }
 }

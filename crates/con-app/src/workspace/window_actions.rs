@@ -67,6 +67,11 @@ impl ConWorkspace {
     }
 
     pub(super) fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        self.prepare_app_exit(cx);
+        cx.quit();
+    }
+
+    pub(super) fn prepare_app_exit(&mut self, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.flush_session_save(cx);
         // Tear down ghostty surfaces before app exit to avoid Metal/NSView crashes.
@@ -79,7 +84,6 @@ impl ConWorkspace {
             }
         }
         self.tabs.clear();
-        cx.quit();
     }
 
     pub(super) fn focus_input(

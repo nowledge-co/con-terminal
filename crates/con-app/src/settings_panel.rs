@@ -177,7 +177,7 @@ impl SettingsSection {
             Self::Ai => "AI",
             Self::Providers => "Providers",
             Self::Keys => "Keys",
-            Self::Configuration => "Configuration",
+            Self::Configuration => "Config",
         }
     }
 
@@ -6369,13 +6369,14 @@ impl Render for SettingsPanel {
                         svg()
                             .path(section.icon())
                             .size(ui_icon_px(theme, 15.0))
+                            .flex_shrink_0()
                             .text_color(if is_active {
                                 theme.foreground
                             } else {
                                 theme.muted_foreground
                             }),
                     )
-                    .child(section.label());
+                    .child(div().min_w_0().truncate().child(section.label()));
             }
 
             sidebar = sidebar.child(nav_item);
