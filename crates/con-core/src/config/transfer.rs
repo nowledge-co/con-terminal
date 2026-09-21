@@ -95,6 +95,14 @@ fn resolve_optional(value: &str, parent: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(candidate.canonicalize()?))
 }
 
+fn ghostty_xdg_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
+        .map(|root| root.join("ghostty"))
+}
+
 fn resolve_theme(value: &str, parent: &Path, include_con: bool) -> Result<Option<PathBuf>> {
     if let Some(path) = resolve(value, parent, false)? {
         return Ok(Some(path));
@@ -103,11 +111,8 @@ fn resolve_theme(value: &str, parent: &Path, include_con: bool) -> Result<Option
     if include_con {
         roots.push(con_paths::user_themes_dir());
     }
-    if let Some(config) = dirs::config_dir() {
-        roots.push(config.join("ghostty/themes"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".config/ghostty/themes"));
+    if let Some(config) = ghostty_xdg_dir() {
+        roots.push(config.join("themes"));
     }
     for root in roots {
         let path = root.join(value);
@@ -452,6 +457,137 @@ pub fn export_ghostty(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()
     transfer(from.as_ref(), to.as_ref(), true)
 }
 
+/// Existing default sources, in Ghostty's discovery order. Never select a
+/// source silently when several files exist.
+pub fn ghostty_config_candidates() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    #[cfg(target_os = "macos")]
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Library/Application Support/com.mitchellh.ghostty"));
+    }
+    if let Some(xdg) = ghostty_xdg_dir() {
+        roots.push(xdg);
+    }
+    roots
+        .into_iter()
+        .flat_map(|root| [root.join("config.ghostty"), root.join("config")])
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// A private snapshot awaiting user confirmation. Dropping it before commit
+/// removes only the staging directory created by this operation.
+pub struct PreparedImport {
+    directory: PathBuf,
+    destination: PathBuf,
+    previous: Option<String>,
+    rendered: String,
+    candidate: Config,
+    committed: bool,
+}
+
+impl PreparedImport {
+    pub fn config(&self) -> &Config {
+        &self.candidate
+    }
+
+    pub fn commit(mut self) -> Result<Option<PathBuf>> {
+        let actual = match fs::read_to_string(&self.destination) {
+            Ok(text) => Some(text),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if actual != self.previous {
+            bail!("Con configuration changed on disk; cancel and prepare the import again");
+        }
+        let backup = if let Some(previous) = &self.previous {
+            let backup = self.directory.join("previous.ghostty");
+            private_write_new(&backup, previous.as_bytes())?;
+            Some(backup)
+        } else {
+            None
+        };
+        if self.previous.is_some() {
+            super::write_private_atomic(&self.destination, self.rendered.as_bytes())?;
+        } else {
+            private_write_new(&self.destination, self.rendered.as_bytes())?;
+        }
+        self.committed = true;
+        Ok(backup)
+    }
+}
+
+impl Drop for PreparedImport {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+}
+
+/// Prepare a detached native snapshot while retaining Con-owned settings.
+/// The caller must validate with its native backend before offering commit.
+pub fn prepare_import(from: &Path, current: &Config, destination: &Path) -> Result<PreparedImport> {
+    let previous = match fs::read_to_string(destination) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    {
+        let source = current.source.lock().expect("config source mutex poisoned");
+        if source.path.as_deref() != Some(destination)
+            || previous.as_deref().unwrap_or("") != source.source
+        {
+            bail!("Con configuration changed on disk; restart Con before importing");
+        }
+    }
+    let parent = destination
+        .parent()
+        .context("configuration has no parent directory")?;
+    fs::create_dir_all(parent)?;
+    let directory = parent.join(format!(
+        "import-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    let mut prepared = PreparedImport {
+        directory,
+        destination: destination.to_owned(),
+        previous,
+        rendered: String::new(),
+        candidate: current.clone(),
+        committed: false,
+    };
+    let snapshot = prepared.directory.join("snapshot.ghostty");
+    import_ghostty(from, &snapshot)?;
+    let mut rendered = fs::read_to_string(&snapshot)?;
+    fs::remove_file(&snapshot)?;
+    rendered.push('\n');
+    // Use the existing lossless renderer, not a second serializer. Only Con
+    // assignments survive; all old native entries are replaced as one unit.
+    for line in super::ghostty::render(current)?.lines() {
+        if assignment(line).is_some_and(|(key, _)| key.starts_with("con.")) {
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+    }
+    if rendered.len() as u64 > MAX_BYTES {
+        bail!("merged configuration exceeds the {MAX_BYTES} byte transfer limit");
+    }
+    prepared.candidate = super::ghostty::parse(&rendered, Some(destination.to_owned()))?;
+    prepared.rendered = rendered;
+    Ok(prepared)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +606,86 @@ mod tests {
                 return p;
             }
         }
+    }
+
+    #[test]
+    fn settings_import_replaces_native_preserves_con_and_backs_up_exact_bytes() {
+        let d = dir();
+        let target = d.join("config.ghostty");
+        let original = "# keep backup\nfont-size = 12\nbackground = 123456\ncon.agent.max_turns = 9\ncon.skills.project_paths = private\n";
+        fs::write(&target, original).unwrap();
+        let config = Config::load_from_path(&target).unwrap();
+        let source = d.join("ghostty");
+        let imported = "font-size = 19\nforeground = abcdef\ncon.agent.max_turns = 1\n";
+        fs::write(&source, imported).unwrap();
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        assert_eq!(prepared.config().terminal.font_size, 19.0);
+        assert_eq!(fs::read_to_string(&target).unwrap(), original);
+        let backup = prepared.commit().unwrap().unwrap();
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+        assert_eq!(fs::read_to_string(&source).unwrap(), imported);
+        let result = Config::load_from_path(&target).unwrap();
+        assert_eq!(result.agent.max_turns, 9);
+        assert_eq!(result.skills.project_paths, ["private"]);
+        assert_eq!(result.terminal.font_size, 19.0);
+        assert!(!fs::read_to_string(&target).unwrap().contains("123456"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn settings_import_detects_external_changes_before_and_after_preparation() {
+        let d = dir();
+        let target = d.join("config.ghostty");
+        let source = d.join("ghostty");
+        fs::write(&target, "font-size = 12\n").unwrap();
+        fs::write(&source, "font-size = 19\n").unwrap();
+        let config = Config::load_from_path(&target).unwrap();
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        let staging = prepared.directory.clone();
+        fs::write(&target, "font-size = 23\n").unwrap();
+        assert!(prepared.commit().is_err());
+        assert!(!staging.exists());
+        assert!(prepare_import(&source, &config, &target).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "font-size = 23\n");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn settings_import_cancel_cleans_resources_and_first_import_needs_no_backup() {
+        let d = dir();
+        let target = d.join("config.ghostty");
+        let source = d.join("ghostty");
+        fs::write(d.join("colors"), "background = 13579b\n").unwrap();
+        fs::write(&source, "config-file = colors\n").unwrap();
+        let config = Config::load_from_path(&target).unwrap();
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        let staging = prepared.directory.clone();
+        drop(prepared);
+        assert!(!staging.exists());
+        assert!(!target.exists());
+        let prepared = prepare_import(&source, &config, &target).unwrap();
+        assert!(prepared.commit().unwrap().is_none());
+        fs::remove_file(d.join("colors")).unwrap();
+        let text = fs::read_to_string(&target).unwrap();
+        let included = text
+            .lines()
+            .filter_map(assignment)
+            .find(|(key, _)| *key == "config-file")
+            .unwrap()
+            .1;
+        assert_eq!(
+            fs::read_to_string(included).unwrap(),
+            "background = 13579b\n"
+        );
+        fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
