@@ -4,6 +4,26 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.108`
+
+### Fixed
+
+**Windows, Linux**
+
+- Terminal apps that use synchronized output now update as complete frames
+  instead of briefly exposing partially drawn content. Con also recovers safely
+  when an application leaves a synchronized update open. _(PR
+  [#380](https://github.com/nowledge-co/con-terminal/pull/380) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Combining marks, variation selectors, emoji sequences, and other multi-codepoint
+  characters now remain intact across rendering, selection, search, links, and
+  transcript extraction. Wide characters also keep their correct terminal-cell
+  boundaries. _(PR
+  [#382](https://github.com/nowledge-co/con-terminal/pull/382) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
 ## `v0.1.0-beta.107`
 
 ### Changed
