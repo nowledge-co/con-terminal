@@ -908,6 +908,7 @@ impl Renderer {
             .atlas
             .lock()
             .expect("atlas mutex poisoned in draw_terminal() glyph pass");
+        atlas.retain_visible(&snapshot.cells);
         let mut instances = self
             .instances
             .lock()
@@ -964,7 +965,7 @@ impl Renderer {
                 continue;
             }
 
-            if cell.codepoint == 0 || cell.codepoint == 0x20 {
+            if cell.grapheme.is_none() && (cell.codepoint == 0 || cell.codepoint == 0x20) {
                 let instance = Instance {
                     cell_pos: [col as u32, row as u32],
                     atlas_pos: [0, 0],
@@ -977,38 +978,23 @@ impl Renderer {
                 continue;
             }
 
-            let key = GlyphKey {
-                codepoint: cell.codepoint,
-                bold: (cell.attrs & 1) != 0,
-                italic: (cell.attrs & 2) != 0,
-            };
-            let glyph = match atlas.get_or_rasterize(key) {
+            let key = GlyphKey::from(cell);
+            let glyph = match atlas.get_or_rasterize(&key) {
                 Some(g) => g,
                 None => {
                     log::debug!(
-                        "atlas overflow at cell ({col},{row}) U+{:04X}; purging and retrying",
+                        "atlas full at cell ({col},{row}) U+{:04X}; preserving current frame slots",
                         cell.codepoint
                     );
-                    atlas.purge();
-                    match atlas.get_or_rasterize(key) {
-                        Some(g) => g,
-                        None => {
-                            log::warn!(
-                                "glyph larger than atlas capacity at U+{:04X}; skipping",
-                                cell.codepoint
-                            );
-                            let instance = Instance {
-                                cell_pos: [col as u32, row as u32],
-                                atlas_pos: [0, 0],
-                                atlas_size: [0, 0],
-                                fg: cell.fg,
-                                bg: apply_opacity(cell.bg),
-                                attrs: render_attrs,
-                            };
-                            instances.push(instance);
-                            continue;
-                        }
-                    }
+                    instances.push(Instance {
+                        cell_pos: [col as u32, row as u32],
+                        atlas_pos: [0, 0],
+                        atlas_size: [0, 0],
+                        fg: cell.fg,
+                        bg: apply_opacity(cell.bg),
+                        attrs: render_attrs,
+                    });
+                    continue;
                 }
             };
 
@@ -1221,7 +1207,7 @@ fn is_default_blank_cell(
     config: &RendererConfig,
     background_opacity: f32,
 ) -> bool {
-    let is_blank = cell.codepoint == 0 || cell.codepoint == 0x20;
+    let is_blank = cell.grapheme.is_none() && (cell.codepoint == 0 || cell.codepoint == 0x20);
     if !is_blank {
         return false;
     }

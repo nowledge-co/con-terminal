@@ -9,12 +9,11 @@
 //! sharp on a physical LCD panel but becomes colored fringe in that
 //! pipeline.
 
-use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
 use etagere::{AllocId, AtlasAllocator, size2};
-use unicode_width::UnicodeWidthChar;
 use windows::Win32::Globalization::GetUserDefaultLocaleName;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
@@ -85,11 +84,25 @@ pub struct GlyphRect {
     pub offset_y: i16,
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GlyphKey {
     pub codepoint: u32,
+    pub grapheme: Option<Arc<str>>,
+    pub wide: bool,
     pub bold: bool,
     pub italic: bool,
+}
+
+impl From<&crate::vt::Cell> for GlyphKey {
+    fn from(cell: &crate::vt::Cell) -> Self {
+        Self {
+            codepoint: cell.codepoint,
+            grapheme: cell.grapheme.clone(),
+            wide: cell.width == crate::vt::CellWidth::Wide,
+            bold: cell.attrs & crate::vt::ATTR_BOLD != 0,
+            italic: cell.attrs & crate::vt::ATTR_ITALIC != 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -534,10 +547,10 @@ impl GlyphCache {
         self.rendering_params
     }
 
-    /// Return the glyph rect for a (codepoint, style) key, rasterizing
+    /// Return the glyph rect for a (cluster, width, style) key, rasterizing
     /// on first sight. Returns `None` if the atlas is full.
-    pub fn get_or_rasterize(&mut self, key: GlyphKey) -> Option<GlyphRect> {
-        if let Some((_, rect)) = self.entries.get(&key).copied() {
+    pub fn get_or_rasterize(&mut self, key: &GlyphKey) -> Option<GlyphRect> {
+        if let Some((_, rect)) = self.entries.get(key).copied() {
             return Some(rect);
         }
 
@@ -572,7 +585,7 @@ impl GlyphCache {
             codepoint,
             0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD
         ) && !matches!(codepoint, 0xE0A0..=0xE0D4);
-        let is_wide_text = is_wide_codepoint(codepoint);
+        let is_wide_text = key.wide;
         let is_cjk_text = is_cjk_codepoint(codepoint);
         let metrics = if is_scalable_pua {
             self.primary_glyph_metrics_px(codepoint)
@@ -624,7 +637,13 @@ impl GlyphCache {
 
         let ch = char::from_u32(key.codepoint).unwrap_or('\u{FFFD}');
         let mut utf16 = [0u16; 2];
-        let utf16_slice = ch.encode_utf16(&mut utf16);
+        let cluster_utf16;
+        let utf16_slice: &[u16] = if let Some(cluster) = &key.grapheme {
+            cluster_utf16 = cluster.encode_utf16().collect::<Vec<_>>();
+            &cluster_utf16
+        } else {
+            ch.encode_utf16(&mut utf16)
+        };
 
         let base_format = match (key.bold, key.italic) {
             (true, true) => &self.text_format_bold_italic,
@@ -796,7 +815,7 @@ impl GlyphCache {
             offset_x: 0,
             offset_y: 0,
         };
-        self.entries.insert(key, (alloc.id, glyph_rect));
+        self.entries.insert(key.clone(), (alloc.id, glyph_rect));
         Some(glyph_rect)
     }
 
@@ -857,27 +876,25 @@ impl GlyphCache {
         })
     }
 
-    /// Evict every cached glyph and reset the skyline allocator without
-    /// touching the text formats. Used by the renderer when a frame's
-    /// glyph set exceeds the atlas capacity: drop the old set, try
-    /// again. Re-rasterizing the live frame is O(cells) and cheap
-    /// compared to the D3D stall a texture recreate would cause.
-    pub fn purge(&mut self) {
-        self.entries.clear();
-        self.allocator = AtlasAllocator::new(size2(self.atlas_size as i32, self.atlas_size as i32));
-        // SAFETY: d2d_rt owned by self and aliases the atlas texture.
-        // Re-clear so stale glyph coverage doesn't bleed into freshly-
-        // allocated slots.
-        unsafe {
-            self.d2d_rt.BeginDraw();
-            self.d2d_rt.Clear(Some(&D2D1_COLOR_F {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
-            }));
-            let _ = self.d2d_rt.EndDraw(None, None);
-        }
+    /// Reclaim only offscreen entries, before any instances reference slots.
+    /// Never purge midway through a frame: that invalidates earlier instances.
+    pub fn retain_visible(&mut self, cells: &[crate::vt::Cell]) {
+        let visible: HashSet<_> = cells
+            .iter()
+            .filter(|cell| {
+                cell.attrs & crate::vt::ATTR_INVISIBLE == 0
+                    && (cell.grapheme.is_some() || (cell.codepoint != 0 && cell.codepoint != 0x20))
+            })
+            .map(GlyphKey::from)
+            .collect();
+        self.entries.retain(|key, (id, _)| {
+            if visible.contains(key) {
+                true
+            } else {
+                self.allocator.deallocate(*id);
+                false
+            }
+        });
     }
 
     pub fn rebuild(
@@ -1516,12 +1533,6 @@ fn family_exists_in(collection: &IDWriteFontCollection, family: &str) -> bool {
     hr.is_ok() && exists.as_bool()
 }
 
-fn is_wide_codepoint(codepoint: u32) -> bool {
-    char::from_u32(codepoint)
-        .and_then(UnicodeWidthChar::width)
-        .is_some_and(|width| width >= 2)
-}
-
 pub(super) fn is_cjk_codepoint(codepoint: u32) -> bool {
     matches!(
         codepoint,
@@ -1550,7 +1561,7 @@ pub(super) fn is_cjk_codepoint(codepoint: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{gamma_ratios, is_cjk_codepoint, is_wide_codepoint};
+    use super::{GlyphKey, gamma_ratios, is_cjk_codepoint};
 
     #[test]
     fn gamma_ratios_match_directwrite_default() {
@@ -1562,28 +1573,52 @@ mod tests {
     }
 
     #[test]
-    fn wide_codepoint_follows_unicode_width() {
-        // These ranges were easy to miss in a hand-written East Asian
-        // Width table. Keep the atlas decision delegated to
-        // unicode-width so newly covered Unicode ranges do not regress
-        // into one-cell clipped glyphs.
-        for codepoint in [
-            0x4E00,  // CJK Unified Ideograph
-            0xA960,  // Hangul Jamo Extended-A
-            0x1B000, // Kana Supplement
-            0x16FE0, // Tangut / ideographic marks
-            0x1B170, // Nushu
-            0x1FA70, // Symbols and Pictographs Extended-A
-        ] {
-            assert!(is_wide_codepoint(codepoint), "U+{codepoint:04X}");
-        }
-
-        // Ambiguous-width punctuation should stay one cell unless the
-        // terminal layer explicitly gains a CJK-ambiguous-width mode.
-        assert!(!is_wide_codepoint(0x00B7));
-        // Hangul vowel and trailing jamo combine with a preceding consonant;
-        // unicode-width therefore assigns them zero columns rather than two.
-        assert!(!is_wide_codepoint(0xD7B0));
+    fn atlas_keys_distinguish_clusters_widths_and_styles() {
+        let base = GlyphKey {
+            codepoint: 'e' as u32,
+            grapheme: None,
+            wide: false,
+            bold: false,
+            italic: false,
+        };
+        let variants = [
+            base.clone(),
+            GlyphKey {
+                grapheme: Some("e\u{301}".into()),
+                ..base.clone()
+            },
+            GlyphKey {
+                grapheme: Some("e\u{300}".into()),
+                ..base.clone()
+            },
+            GlyphKey {
+                wide: true,
+                ..base.clone()
+            },
+            GlyphKey {
+                bold: true,
+                ..base.clone()
+            },
+            GlyphKey {
+                italic: true,
+                ..base
+            },
+        ];
+        let entries: std::collections::HashMap<_, _> = variants
+            .into_iter()
+            .enumerate()
+            .map(|(index, key)| (key, index))
+            .collect();
+        assert_eq!(entries.len(), 6);
+        // Independently allocated strings must hit the same cached entry.
+        let key = GlyphKey {
+            codepoint: 'e' as u32,
+            grapheme: Some(String::from("e\u{301}").into()),
+            wide: false,
+            bold: false,
+            italic: false,
+        };
+        assert_eq!(entries.get(&key), Some(&1));
     }
 
     #[test]

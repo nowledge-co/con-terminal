@@ -11,7 +11,7 @@ con is an open-source, GPU-accelerated terminal emulator with a built-in AI agen
 ## Stack
 
 - **UI**: upstream Zed GPUI (git dependency on `zed-industries/zed`, Apache 2.0). Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
-- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS uses the full embedded libghostty; Windows and Linux consume the carved-out `libghostty-vt` parser instead and pair it with their own renderers (D3D11/DirectWrite on Windows, GPUI per-row `StyledText` on the Linux preview today / GPUI-owned glyph-atlas grid renderer in the long term).
+- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS uses the full embedded libghostty; Windows and Linux consume the carved-out `libghostty-vt` parser instead and pair it with their own renderers (D3D11/DirectWrite on Windows, cached GPUI text spans painted on a fixed cell grid on Linux / a dedicated glyph-atlas renderer in the long term). Preserve native cell/grapheme boundaries through shaping; concatenating cells can incorrectly recombine emoji when DEC 2027 is off.
 - **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API on macOS (surface lifecycle, action callbacks, clipboard, key/mouse input). On Windows + Linux it wraps `libghostty-vt` plus per-platform PTY (`ConPTY` / Unix PTY) and renderer plumbing. Per-platform code lives in `con-ghostty/src/{terminal,windows,linux}/`; the workspace consumes the same `GhosttyApp` / `GhosttyTerminal` / `TerminalColors` type names from each.
 - **Terminal support crate**: con-terminal — theme and palette helpers only
 - **AI agent**: Rig v0.40.0 (from crates.io, multi-provider clients, Tool and AgentHook traits)
@@ -59,7 +59,7 @@ cargo test --workspace # test
 The `con` UI binary builds on macOS, Linux, and Windows. macOS uses
 the embedded full libghostty + Metal renderer; Windows ships a
 ConPTY + libghostty-vt + D3D11/DirectWrite renderer; Linux ships a
-Unix PTY + libghostty-vt + GPUI-owned `StyledText` paint path. The
+Unix PTY + libghostty-vt + GPUI-owned cached text-span paint path. The
 agent panel, settings, command palette, and control socket
 (`\\.\pipe\con` on Windows, `/tmp/con.sock` on Unix) are fully
 wired on every platform. See `docs/impl/windows-port.md` and

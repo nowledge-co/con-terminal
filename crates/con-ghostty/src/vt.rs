@@ -1565,30 +1565,62 @@ unsafe fn apply_theme_to_terminal(terminal: GhosttyTerminal, theme: &ThemeColors
 
 // ── Snapshot (renderer's view) ─────────────────────────────────────────
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CellWidth {
+    #[default]
+    Narrow,
+    Wide,
+    SpacerTail,
+    SpacerHead,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Cell {
     pub codepoint: u32,
+    /// Full cluster, including the base scalar. Single-scalar cells allocate nothing.
+    pub grapheme: Option<Arc<str>>,
+    pub width: CellWidth,
     /// Foreground RGBA (0xRRGGBBAA).
     pub fg: u32,
     /// Background RGBA.
     pub bg: u32,
     pub attrs: u8,
-    pub _pad: [u8; 3],
 }
 
 impl Cell {
+    /// Text for shaping and extraction. Wide tails contribute no extra space.
+    pub fn text<'a>(&'a self, scalar: &'a mut [u8; 4]) -> &'a str {
+        if self.width == CellWidth::SpacerTail {
+            return "";
+        }
+        if let Some(text) = &self.grapheme {
+            return text;
+        }
+        if self.codepoint == 0 {
+            return if self.width == CellWidth::Wide {
+                "  "
+            } else {
+                " "
+            };
+        }
+        char::from_u32(self.codepoint)
+            .unwrap_or('\u{FFFD}')
+            .encode_utf8(scalar)
+    }
+
     /// Hide concealed foreground content only at the paint boundary. Keep
     /// snapshot text intact for copying, searching, and transcript extraction.
     #[inline]
-    pub fn for_render(mut self) -> Self {
+    pub fn for_render(&self) -> Self {
+        let mut cell = self.clone();
         if self.attrs & ATTR_INVISIBLE != 0 {
-            self.codepoint = 0;
+            cell.codepoint = 0;
+            cell.grapheme = None;
             // Like Ghostty/xterm, conceal decorations as well as the glyph.
             // Preserve inverse and colors for backgrounds, selection, and cursors.
-            self.attrs &= !(ATTR_UNDERLINE | ATTR_STRIKE);
+            cell.attrs &= !(ATTR_UNDERLINE | ATTR_STRIKE);
         }
-        self
+        cell
     }
 }
 
@@ -5706,15 +5738,18 @@ fn read_cell(
     let mut style = GhosttyStyle::new();
     let mut fg = default_fg;
     let mut bg = default_bg;
+    let mut graphemes_len = 0_u32;
     let keys = [
         GhosttyRenderStateRowCellsData::Raw,
         GhosttyRenderStateRowCellsData::Style,
+        GhosttyRenderStateRowCellsData::GraphemesLen,
         GhosttyRenderStateRowCellsData::FgColor,
         GhosttyRenderStateRowCellsData::BgColor,
     ];
     let mut values = [
         &mut raw as *mut _ as *mut c_void,
         &mut style as *mut _ as *mut c_void,
+        &mut graphemes_len as *mut _ as *mut c_void,
         &mut fg as *mut _ as *mut c_void,
         &mut bg as *mut _ as *mut c_void,
     ];
@@ -5729,8 +5764,8 @@ fn read_cell(
         )
     };
     let bg_was_default = match (rc, written) {
-        (GHOSTTY_SUCCESS, 4) => false,
-        (GHOSTTY_INVALID_VALUE, 2) => {
+        (GHOSTTY_SUCCESS, 5) => false,
+        (GHOSTTY_INVALID_VALUE, 3) => {
             let rc = unsafe {
                 ghostty_render_state_row_cells_get(
                     cells,
@@ -5744,7 +5779,7 @@ fn read_cell(
                 _ => return None,
             }
         }
-        (GHOSTTY_INVALID_VALUE, 3) => true,
+        (GHOSTTY_INVALID_VALUE, 4) => true,
         _ => return None,
     };
 
@@ -5752,10 +5787,16 @@ fn read_cell(
     // grapheme-tag codepoint we'd otherwise rasterize.
     let mut has_text: bool = false;
     let mut codepoint: u32 = 0;
-    let cell_keys = [GhosttyCellData::HasText, GhosttyCellData::Codepoint];
+    let mut wide: c_int = 0;
+    let cell_keys = [
+        GhosttyCellData::HasText,
+        GhosttyCellData::Codepoint,
+        GhosttyCellData::Wide,
+    ];
     let mut cell_values = [
         &mut has_text as *mut _ as *mut c_void,
         &mut codepoint as *mut _ as *mut c_void,
+        &mut wide as *mut _ as *mut c_void,
     ];
     let mut cell_written = 0_usize;
     let rc = unsafe {
@@ -5772,6 +5813,32 @@ fn read_cell(
     }
     if !has_text {
         codepoint = 0;
+    }
+
+    let width = match wide {
+        0 => CellWidth::Narrow,
+        1 => CellWidth::Wide,
+        2 => CellWidth::SpacerTail,
+        3 => CellWidth::SpacerHead,
+        _ => return None,
+    };
+    let mut grapheme = None;
+    if graphemes_len > 1 {
+        let mut scalars = vec![0_u32; graphemes_len as usize];
+        // GRAPHEMES_BUF writes graphemes_len u32 scalars, including the base.
+        // The render lock keeps this iterator valid throughout both reads.
+        if unsafe {
+            ghostty_render_state_row_cells_get(
+                cells,
+                GhosttyRenderStateRowCellsData::GraphemesBuf,
+                scalars.as_mut_ptr().cast(),
+            )
+        } != GHOSTTY_SUCCESS
+        {
+            return None;
+        }
+        let text: Option<String> = scalars.into_iter().map(char::from_u32).collect();
+        grapheme = Some(Arc::from(text?));
     }
 
     const STYLE_COLOR_TAG_PALETTE: u32 = 1;
@@ -5831,10 +5898,11 @@ fn read_cell(
 
     Some(Cell {
         codepoint,
+        grapheme,
+        width,
         fg: pack(fg, 0xFF),
         bg: pack(bg, bg_alpha),
         attrs,
-        _pad: [0; 3],
     })
 }
 
@@ -5893,6 +5961,52 @@ mod tests {
     use std::ffi::CStr;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn snapshot_preserves_graphemes_and_terminal_widths() {
+        let screen = VtScreen::new(24, 3, None).unwrap();
+        screen.feed(b"\x1b[?2027h");
+        let text = "Ae\u{301}👩\u{200d}🚒❤\u{fe0f}中Z";
+        screen.feed(text.as_bytes());
+        let snapshot = screen.snapshot();
+        assert_eq!(crate::transcript::snapshot_to_lines(&snapshot, 3), [text]);
+        assert!(snapshot.cells[0].grapheme.is_none());
+        assert_eq!(snapshot.cells[1].grapheme.as_deref(), Some("e\u{301}"));
+        assert_eq!(snapshot.cells[2].grapheme.as_deref(), Some("👩\u{200d}🚒"));
+        assert_eq!(snapshot.cells[2].width, CellWidth::Wide);
+        assert_eq!(snapshot.cells[3].width, CellWidth::SpacerTail);
+        assert_eq!(snapshot.cells[4].grapheme.as_deref(), Some("❤\u{fe0f}"));
+        assert_eq!(snapshot.cells[4].width, CellWidth::Wide);
+        assert_eq!(snapshot.cells[8].codepoint, 'Z' as u32);
+        assert_eq!(snapshot.cursor.col, 9);
+
+        screen.acknowledge_snapshot(snapshot.generation);
+        screen.feed(b"\r\x1b[2Kplain");
+        let replaced = screen.snapshot();
+        assert_eq!(
+            crate::transcript::snapshot_to_lines(&replaced, 3),
+            ["plain"]
+        );
+        assert!(replaced.cells.iter().all(|cell| cell.grapheme.is_none()));
+        // Old snapshots own their strings independently of the native iterator.
+        assert_eq!(crate::transcript::snapshot_to_lines(&snapshot, 3), [text]);
+    }
+
+    #[test]
+    fn concealed_graphemes_keep_grid_width_without_leaking_text() {
+        let screen = VtScreen::new(12, 2, None).unwrap();
+        screen.feed("\x1b[?2027h\x1b[8me\u{301}👩\u{200d}🚒\x1b[28mZ".as_bytes());
+        let snapshot = screen.snapshot();
+        let painted: String = snapshot.cells[..4]
+            .iter()
+            .map(|cell| cell.for_render().text(&mut [0; 4]).to_owned())
+            .collect();
+        assert_eq!(painted, "   Z");
+        assert_eq!(
+            crate::transcript::snapshot_to_lines(&snapshot, 2),
+            ["e\u{301}👩\u{200d}🚒Z"]
+        );
+    }
 
     #[test]
     fn synchronized_output_captures_same_write_boundary() {
@@ -8674,7 +8788,7 @@ mod tests {
             vec!['X' as u32, 'Y' as u32, 'Z' as u32, 'W' as u32]
         );
         for index in [0, 2] {
-            let cell = cells[index];
+            let cell = &cells[index];
             assert_ne!(cell.attrs & ATTR_INVISIBLE, 0);
             let rendered = cell.for_render();
             assert_eq!(rendered.codepoint, 0);

@@ -174,12 +174,14 @@ pub(crate) fn link_at_snapshot(
     let mut col_byte_ranges = Vec::with_capacity(cells.len());
     for cell in cells {
         let start = line.len();
-        let ch = match cell.codepoint {
-            0 => ' ',
-            codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
+        line.push_str(cell.text(&mut [0; 4]));
+        // A wide tail hits the same grapheme as its preceding column.
+        let range = if cell.width == con_ghostty::vt::CellWidth::SpacerTail {
+            col_byte_ranges.last().copied().unwrap_or((start, start))
+        } else {
+            (start, line.len())
         };
-        line.push(ch);
-        col_byte_ranges.push((start, line.len()));
+        col_byte_ranges.push(range);
     }
 
     let col = usize::from(col);
@@ -318,15 +320,30 @@ fn byte_to_col(col_byte_ranges: &[(usize, usize)], byte: usize) -> usize {
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn byte_to_col_end(col_byte_ranges: &[(usize, usize)], byte_end: usize) -> usize {
-    if byte_end == 0 {
-        return 0;
-    }
-    byte_to_col(col_byte_ranges, byte_end - 1).saturating_add(1)
+    col_byte_ranges
+        .iter()
+        .rposition(|(start, _)| *start < byte_end)
+        .map_or(0, |col| col + 1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn snapshot_links_preserve_graphemes_and_include_wide_tail() {
+        let screen = con_ghostty::vt::VtScreen::new(40, 2, None).unwrap();
+        let url = "https://x/e\u{301}👩\u{200d}🚒";
+        screen.feed(format!("\x1b[?2027h{url} !").as_bytes());
+        let snapshot = screen.snapshot();
+        for col in [10, 11, 12] {
+            let link = link_at_snapshot(&snapshot, col, 0).unwrap();
+            assert_eq!(link.target, LinkTarget::Plain(url.to_string()));
+            assert_eq!((link.start_col, link.end_col), (0, 13));
+        }
+        assert!(link_at_snapshot(&snapshot, 13, 0).is_none());
+    }
 
     fn detect(line: &str, needle: &str) -> Option<String> {
         let index = line.find(needle).expect("needle in line");

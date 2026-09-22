@@ -60,9 +60,6 @@ raw-window-handle = "0.6"
 # Skyline/shelf glyph-atlas packer. Same crate WebRender uses in
 # production; adopted by glyphon and several wgpu text renderers.
 etagere = "0.2"
-# Keep Windows glyph atlas slot width aligned with Unicode terminal
-# column width instead of maintaining a local East Asian Width table.
-unicode-width.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }

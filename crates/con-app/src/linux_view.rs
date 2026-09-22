@@ -1,21 +1,14 @@
 //! Linux terminal view backed by con's local Unix PTY + libghostty-vt
-//! parser. Phase 4 styled-cell renderer: this view consumes the parsed
-//! `ScreenSnapshot` from `con-ghostty` and paints each row as a GPUI
-//! `StyledText` element with one `TextRun` per styled span. That keeps
-//! prompt colors, ANSI palette, bold/italic/underline, and selection
-//! inverse working without bringing the full D3D11 / DirectWrite stack
-//! the Windows backend needs.
-//!
-//! Rendering trade-off: this is a CPU-side per-cell paint path, not a
-//! real glyph atlas. It's good enough for shell prompts, vim/less, and
-//! basic TUIs while the long-term GPUI-owned grid renderer matures, and
-//! it avoids the previous "trim to plain text" downgrade that hid color
-//! and layout state. The Windows D3D11 path remains the model for the
-//! eventual native renderer.
+//! parser. Each row is one GPUI canvas with cached, fixed-grid text spans.
+//! ASCII cells batch together; non-ASCII native cells shape independently
+//! so host shaping cannot recombine cells across terminal boundaries.
+//! GPUI still owns glyph rasterization; this is not a dedicated terminal
+//! atlas. Colors, decorations, selection, and cursor geometry use the same
+//! native grid, including wide-cell tails and concealed graphemes.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 use con_ghostty::cursor::{CursorBlink, CursorStyle};
@@ -1705,11 +1698,10 @@ impl GhosttyView {
         let mut rows_to_refresh = if force_full_rebuild {
             rows_needing_refresh(snapshot, self.row_cache_cursor, true)
         } else if self.row_cache_generation != Some(snapshot.generation) {
-            // Linux currently paints terminal rows through GPUI `StyledText`
-            // elements, so stale rows remain visible if the VT dirty-row set
+            // Linux caches terminal rows, so stale rows remain visible if the VT dirty-row set
             // misses rows that became blank during alternate-screen restore.
-            // Rebuilding all row elements for a changed snapshot is still
-            // bounded by the visible grid and keeps TUI exits correct.
+            // Checking all visible rows keeps TUI exits correct; unchanged
+            // spans retain their shaped layouts below.
             (0..usize::from(snapshot.rows)).collect()
         } else if self.row_cache_cursor != Some(cursor) {
             // The cached snapshot retains its original damage; blink-only
@@ -1734,7 +1726,7 @@ impl GhosttyView {
                 return;
             };
             let cursor_for_row = cursor_col_for_row(cursor, row_idx);
-            self.row_cache[row_idx] = build_terminal_row(
+            let mut row = build_terminal_row(
                 cells,
                 default_fg,
                 default_bg,
@@ -1743,6 +1735,12 @@ impl GhosttyView {
                 None,
                 default_bg,
             );
+            // Keep the existing full-row content check for alternate-screen
+            // restores, but don't discard unchanged rows' shaped layouts.
+            if !force_full_rebuild && row.spans == self.row_cache[row_idx].spans {
+                row.shaped = self.row_cache[row_idx].shaped.clone();
+            }
+            self.row_cache[row_idx] = row;
         }
 
         self.row_cache_generation = Some(snapshot.generation);
@@ -2060,34 +2058,13 @@ impl Render for GhosttyView {
                 selection_bg,
             )
             .fg;
-            // Match StyledText's actual shaping, not the approximate PTY
-            // grid width (e.g. 9 px estimated versus 8.4 px for 14 px mono).
-            let row = self.row_cache.get(usize::from(cursor.row))?;
-            let text_system = window.text_system();
-            let line = text_system.shape_line(row.text.clone(), px(font_size_px), &row.runs, None);
-            let space_width = text_system
-                .shape_line(
-                    " ".into(),
-                    px(font_size_px),
-                    &[TextRun {
-                        len: 1,
-                        font: mono_font.clone(),
-                        ..Default::default()
-                    }],
-                    None,
-                )
-                .width();
-            let mut columns = row.text.char_indices();
-            let at = columns.nth(usize::from(cursor.col));
-            let start = at.map_or(row.text.len(), |(index, _)| index);
-            let end = columns.next().map_or(row.text.len(), |(index, _)| index);
-            let missing = if at.is_none() {
-                usize::from(cursor.col).saturating_sub(row.text.chars().count())
-            } else {
-                0
-            };
-            let x = line.x_for_index(start) + space_width * missing as f32;
-            let width = (line.x_for_index(end) - line.x_for_index(start)).max(space_width);
+            let x = px(cell_width_px) * f32::from(cursor.col);
+            let width = px(cell_width_px)
+                * if cell.width == con_ghostty::vt::CellWidth::Wide {
+                    2.0
+                } else {
+                    1.0
+                };
             let inset_x = if has_kitty_images {
                 0.0
             } else {
@@ -2780,9 +2757,18 @@ fn render_kitty_image_layer(
 
 #[derive(Clone, Default)]
 struct CachedTerminalRow {
+    spans: Arc<[TerminalTextSpan]>,
+    // RowCacheStyleKey invalidates the row when font metrics change.
+    shaped: Arc<OnceLock<Vec<(usize, usize, ShapedLine)>>>,
+    backgrounds: Vec<TerminalBackgroundRun>,
+}
+
+#[derive(PartialEq)]
+struct TerminalTextSpan {
+    start_col: usize,
+    columns: usize,
     text: SharedString,
     runs: Vec<TextRun>,
-    backgrounds: Vec<TerminalBackgroundRun>,
 }
 
 #[derive(Clone, Copy)]
@@ -2899,21 +2885,7 @@ fn render_cached_terminal_row(
     font_size: Pixels,
     line_height: Pixels,
 ) -> AnyElement {
-    div()
-        .w_full()
-        .h(line_height)
-        .min_h(line_height)
-        .overflow_hidden()
-        // Terminal rows must never wrap — a sequence like "12345" that
-        // doesn't fit in the remaining width should be clipped, not
-        // reflowed onto the next line. Without this, GPUI's default
-        // word-wrap breaks continuous runs at word boundaries and pushes
-        // them down, making TUI layouts look garbled in narrow panes.
-        .whitespace_nowrap()
-        .text_size(font_size)
-        .line_height(line_height)
-        .child(StyledText::new(row.text.clone()).with_runs(row.runs.clone()))
-        .into_any_element()
+    render_terminal_row_canvas(row, font_size, line_height, true)
 }
 
 fn append_terminal_backgrounds(
@@ -2969,28 +2941,140 @@ fn render_terminal_foreground_row(
     font_size: Pixels,
     line_height: Pixels,
 ) -> AnyElement {
-    let mut runs = row.runs.clone();
-    for run in &mut runs {
-        run.background_color = None;
-    }
-
-    div()
-        .w_full()
-        .h(line_height)
-        .min_h(line_height)
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_size(font_size)
-        .line_height(line_height)
-        .child(StyledText::new(row.text.clone()).with_runs(runs))
-        .into_any_element()
+    render_terminal_row_canvas(row, font_size, line_height, false)
 }
 
-/// Build a single GPUI row element from a slice of `VtCell`s. We
-/// collapse runs of cells that share `(fg, bg, attrs)` into one
-/// `TextRun` so each row is a single `StyledText` element. That keeps
-/// allocations bounded by the number of *style changes*, not the cell
-/// count, while still preserving every SGR transition.
+fn render_terminal_row_canvas(
+    row: &CachedTerminalRow,
+    font_size: Pixels,
+    line_height: Pixels,
+    paint_backgrounds: bool,
+) -> AnyElement {
+    let spans = row.spans.clone();
+    let shaped = row.shaped.clone();
+    let backgrounds = if paint_backgrounds {
+        row.backgrounds.clone()
+    } else {
+        Vec::new()
+    };
+    let cell_width = px(cell_width_px(f32::from(font_size)));
+    canvas(
+        move |_, window, _| {
+            shaped.get_or_init(|| shape_terminal_spans(&spans, font_size, cell_width, window));
+            shaped
+        },
+        move |bounds, shaped, window, cx| {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                for background in &backgrounds {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(
+                                bounds.origin.x + cell_width * background.start_col as f32,
+                                bounds.origin.y,
+                            ),
+                            size(cell_width * background.len as f32, line_height),
+                        ),
+                        background.color,
+                    ));
+                }
+                for (column, columns, line) in shaped.get().expect("row shaped in prepaint") {
+                    let origin = point(
+                        bounds.origin.x + cell_width * *column as f32,
+                        bounds.origin.y,
+                    );
+                    let clip = Bounds::new(origin, size(cell_width * *columns as f32, line_height));
+                    window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                        if let Err(error) =
+                            line.paint(origin, line_height, TextAlign::Left, None, window, cx)
+                        {
+                            log::warn!("terminal text paint failed: {error}");
+                        }
+                    });
+                }
+            });
+        },
+    )
+    .w_full()
+    .h(line_height)
+    .min_h(line_height)
+    .into_any_element()
+}
+
+fn shape_terminal_spans(
+    spans: &[TerminalTextSpan],
+    font_size: Pixels,
+    cell_width: Pixels,
+    window: &Window,
+) -> Vec<(usize, usize, ShapedLine)> {
+    let mut shaped = Vec::with_capacity(spans.len());
+    for span in spans {
+        let mut runs = span.runs.clone();
+        for run in &mut runs {
+            run.background_color = None;
+        }
+        let mut line = window
+            .text_system()
+            .shape_line(span.text.clone(), font_size, &runs, None);
+        let ascii = span.text.is_ascii();
+        let one_glyph_per_byte = line
+            .runs
+            .iter()
+            .flat_map(|run| &run.glyphs)
+            .map(|glyph| glyph.index)
+            .eq(0..span.text.len());
+        if ascii && !one_glyph_per_byte {
+            // A configured font may form ASCII ligatures. Fall back to native
+            // cells rather than stretching a ligature or moving later columns.
+            let mut byte = 0;
+            for run in &runs {
+                for _ in 0..run.len {
+                    let text: SharedString = span.text[byte..byte + 1].to_owned().into();
+                    let run = TextRun {
+                        len: 1,
+                        ..run.clone()
+                    };
+                    let line = window
+                        .text_system()
+                        .shape_line(text, font_size, &[run], None);
+                    shaped.push((
+                        span.start_col + byte,
+                        1,
+                        terminal_grid_layout(line, cell_width, false),
+                    ));
+                    byte += 1;
+                }
+            }
+            continue;
+        }
+        line = terminal_grid_layout(line, cell_width * span.columns as f32, ascii);
+        shaped.push((span.start_col, span.columns, line));
+    }
+    shaped
+}
+
+fn terminal_grid_layout(mut line: ShapedLine, width: Pixels, ascii: bool) -> ShapedLine {
+    // Replace this row's Arc, never mutate GPUI's shared layout cache.
+    let mut runs = line.runs.clone();
+    if ascii {
+        let cell_width = width / line.text.len() as f32;
+        for glyph in runs.iter_mut().flat_map(|run| &mut run.glyphs) {
+            glyph.position.x = cell_width * glyph.index as f32;
+        }
+    }
+    let layout = LineLayout {
+        font_size: line.font_size,
+        width,
+        ascent: line.ascent,
+        descent: line.descent,
+        runs,
+        len: line.len,
+    };
+    *std::ops::DerefMut::deref_mut(&mut line) = Arc::new(layout);
+    line
+}
+
+/// Batch ASCII cells, but preserve native non-ASCII cell boundaries through
+/// shaping. Otherwise mode-2027-off emoji and Indic cells can recombine.
 fn build_terminal_row(
     cells: &[VtCell],
     default_fg: Hsla,
@@ -3000,6 +3084,29 @@ fn build_terminal_row(
     selection_cols: Option<(usize, usize)>,
     selection_bg: Hsla,
 ) -> CachedTerminalRow {
+    use con_ghostty::vt::CellWidth;
+    let head_col = |col: usize| {
+        if cells
+            .get(col)
+            .is_some_and(|cell| cell.width == CellWidth::SpacerTail)
+        {
+            col.saturating_sub(1)
+        } else {
+            col
+        }
+    };
+    let cursor_col = cursor_col.map(head_col);
+    let selection_cols = selection_cols.map(|(start, end)| {
+        let end = head_col(end);
+        (
+            head_col(start),
+            end + usize::from(
+                cells
+                    .get(end)
+                    .is_some_and(|cell| cell.width == CellWidth::Wide),
+            ),
+        )
+    });
     // First pass: find the last column we have to keep. A column
     // matters if it has a real glyph, OR if it carries a non-default
     // background / underline / strikethrough / inverse style, OR if
@@ -3013,8 +3120,9 @@ fn build_terminal_row(
         .iter()
         .enumerate()
         .rposition(|(col_idx, cell)| {
-            let glyph_present =
-                cell.codepoint != 0 && char::from_u32(cell.codepoint).is_some_and(|ch| ch != ' ');
+            let glyph_present = cell.grapheme.is_some()
+                || (cell.codepoint != 0
+                    && char::from_u32(cell.codepoint).is_some_and(|ch| ch != ' '));
             let styled_blank = (cell.bg & 0xFF) != 0
                 || (cell.attrs & (ATTR_INVERSE | ATTR_UNDERLINE | ATTR_STRIKE)) != 0;
             let cursor_here = cursor_col == Some(col_idx);
@@ -3022,15 +3130,21 @@ fn build_terminal_row(
                 selection_cols.is_some_and(|(start, end)| col_idx >= start && col_idx <= end);
             glyph_present || styled_blank || cursor_here || selected_here
         })
-        // `rposition` already returns the index relative to `cells`,
-        // not `iter().enumerate()`'s output. Map it back to a slice
-        // length via +1.
-        .map(|idx| idx + 1)
+        // Retain a final wide cell's tail in the column-to-byte map.
+        .map(|idx| {
+            (idx + if cells[idx].width == con_ghostty::vt::CellWidth::Wide {
+                2
+            } else {
+                1
+            })
+            .min(cells.len())
+        })
         .unwrap_or(0);
 
     let kept = &cells[..last_meaningful_col];
 
     let mut text = String::with_capacity(kept.len());
+    let mut column_bytes = Vec::with_capacity(kept.len() + 1);
     let mut runs: Vec<TextRun> = Vec::new();
     let mut backgrounds = Vec::new();
     let mut last_signature: Option<(u32, u32, u8, bool, bool, SharedString)> = None;
@@ -3059,8 +3173,9 @@ fn build_terminal_row(
     }
 
     for (col_idx, cell) in kept.iter().enumerate() {
+        column_bytes.push(text.len());
         let cell = &cell.for_render();
-        let is_cursor = cursor_col == Some(col_idx);
+        let is_cursor = cursor_col == Some(head_col(col_idx));
         let is_selected =
             selection_cols.is_some_and(|(start, end)| col_idx >= start && col_idx <= end);
         let glyph: char = match cell.codepoint {
@@ -3105,9 +3220,12 @@ fn build_terminal_row(
             last_signature = Some(signature);
         }
 
-        text.push(glyph);
-        active_run_len += glyph.len_utf8();
+        let mut scalar = [0; 4];
+        let cluster = cell.text(&mut scalar);
+        text.push_str(cluster);
+        active_run_len += cluster.len();
     }
+    column_bytes.push(text.len());
 
     flush_run(&mut runs, &mut active_style, &mut active_run_len);
     if let Some((start_col, color, overlay)) = active_background {
@@ -3119,25 +3237,62 @@ fn build_terminal_row(
         });
     }
 
-    let text = if text.is_empty() {
-        let mut fallback = String::with_capacity(1);
-        fallback.push('\u{00A0}');
-        runs.push(TextRun {
-            len: '\u{00A0}'.len_utf8(),
-            font: base_font.clone(),
-            color: default_fg,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        });
-        fallback
-    } else {
-        text
+    let mut spans = Vec::new();
+    let mut col = 0;
+    let mut run_index = 0;
+    let mut run_byte = 0;
+    let is_ascii_cell = |cell: &VtCell| {
+        cell.width == CellWidth::Narrow && cell.grapheme.is_none() && cell.codepoint < 0x80
     };
+    while col < kept.len() {
+        let start_col = col;
+        if is_ascii_cell(&kept[col]) {
+            col += 1;
+            while col < kept.len() && is_ascii_cell(&kept[col]) {
+                col += 1;
+            }
+        } else {
+            col = (col
+                + if kept[col].width == CellWidth::Wide {
+                    2
+                } else {
+                    1
+                })
+            .min(kept.len());
+        }
+        let start = column_bytes[start_col];
+        let end = column_bytes[col];
+        if start == end {
+            continue;
+        }
+        let mut span_runs = Vec::new();
+        while run_index < runs.len() && run_byte < end {
+            let run = &runs[run_index];
+            let run_end = run_byte + run.len;
+            let overlap = run_end.min(end).saturating_sub(run_byte.max(start));
+            if overlap > 0 {
+                span_runs.push(TextRun {
+                    len: overlap,
+                    ..run.clone()
+                });
+            }
+            if run_end > end {
+                break;
+            }
+            run_byte = run_end;
+            run_index += 1;
+        }
+        spans.push(TerminalTextSpan {
+            start_col,
+            columns: col - start_col,
+            text: text[start..end].to_owned().into(),
+            runs: span_runs,
+        });
+    }
 
     CachedTerminalRow {
-        text: text.into(),
-        runs,
+        spans: spans.into(),
+        shaped: Arc::new(OnceLock::new()),
         backgrounds,
     }
 }
@@ -3293,7 +3448,7 @@ mod tests {
             fg,
             bg,
             attrs,
-            _pad: [0; 3],
+            ..VtCell::default()
         }
     }
 
@@ -3421,6 +3576,75 @@ mod tests {
     }
 
     #[test]
+    fn grapheme_rows_preserve_text_style_bytes_and_grid_columns() {
+        use con_ghostty::vt::VtScreen;
+        let screen = VtScreen::new(20, 2, None).unwrap();
+        screen.feed("\x1b[?2027he\u{301}\x1b[1m👩\u{200d}🚒\x1b[0mZ".as_bytes());
+        let snapshot = screen.snapshot();
+        let row = build_terminal_row(
+            &snapshot.cells[..20],
+            fg(),
+            bg(),
+            &base_font(),
+            None,
+            None,
+            bg(),
+        );
+        assert_eq!(
+            row.spans
+                .iter()
+                .map(|span| (span.start_col, span.columns, span.text.as_ref()))
+                .collect::<Vec<_>>(),
+            [(0, 1, "e\u{301}"), (1, 2, "👩\u{200d}🚒"), (3, 1, "Z")]
+        );
+        assert_eq!(row.spans[1].runs[0].len, 11);
+        assert_eq!(row.spans[1].runs[0].font.weight, FontWeight::BOLD);
+
+        screen.feed(b"\x1b[?2027l\x1b[2K\r");
+        screen.feed("👩\u{200d}🚒hello".as_bytes());
+        let snapshot = screen.snapshot();
+        let row = build_terminal_row(
+            &snapshot.cells[..20],
+            fg(),
+            bg(),
+            &base_font(),
+            None,
+            None,
+            bg(),
+        );
+        assert_eq!(
+            row.spans
+                .iter()
+                .map(|span| (span.start_col, span.columns, span.text.as_ref()))
+                .collect::<Vec<_>>(),
+            [(0, 2, "👩\u{200d}"), (2, 2, "🚒"), (4, 5, "hello")]
+        );
+    }
+
+    #[test]
+    fn wide_tail_selection_and_cursor_cover_the_native_cluster() {
+        let screen = con_ghostty::vt::VtScreen::new(8, 2, None).unwrap();
+        screen.feed("中Z".as_bytes());
+        let snapshot = screen.snapshot();
+        for (cursor, selection) in [(None, Some((1, 1))), (Some(1), None)] {
+            let row = build_terminal_row(
+                &snapshot.cells[..8],
+                fg(),
+                bg(),
+                &base_font(),
+                cursor,
+                selection,
+                fg(),
+            );
+            assert_eq!(row.backgrounds[0].start_col, 0);
+            assert_eq!(row.backgrounds[0].len, 2);
+            assert!(row.backgrounds[0].overlay);
+            assert_eq!(row.spans[0].text.as_ref(), "中");
+            assert_eq!(row.spans[0].columns, 2);
+        }
+    }
+
+    #[test]
     fn concealed_row_hides_glyphs_and_decorations_with_cursor_and_selection() {
         use con_ghostty::vt::{ATTR_INVISIBLE, ATTR_STRIKE};
 
@@ -3431,12 +3655,13 @@ mod tests {
         ];
         for (cursor, selection) in [(None, None), (Some(0), None), (None, Some((0, 0)))] {
             let row = build_terminal_row(&cells, fg(), bg(), &base_font(), cursor, selection, fg());
-            assert_eq!(row.text.as_ref(), " Y");
-            assert_eq!(row.runs.len(), 2);
-            assert!(row.runs[0].underline.is_none());
-            assert!(row.runs[0].strikethrough.is_none());
-            assert!(row.runs[1].underline.is_some());
-            assert!(row.runs[1].strikethrough.is_some());
+            assert_eq!(row.spans[0].text.as_ref(), " Y");
+            let runs = &row.spans[0].runs;
+            assert_eq!(runs.len(), 2);
+            assert!(runs[0].underline.is_none());
+            assert!(runs[0].strikethrough.is_none());
+            assert!(runs[1].underline.is_some());
+            assert!(runs[1].strikethrough.is_some());
             let expected_bg = if cursor.is_some() {
                 vt_color_to_hsla(cells[0].bg).unwrap()
             } else if selection.is_some() {
@@ -3463,8 +3688,11 @@ mod tests {
         let cells = [make_cell('\u{E0B0}', 0, 0, 0)];
         let row = build_terminal_row(&cells, fg(), bg(), &font, None, None, bg());
 
-        assert_eq!(row.runs.len(), 1);
-        assert_eq!(row.runs[0].font.family.as_ref(), BUNDLED_LINUX_FONT_FAMILY);
+        assert_eq!(row.spans.len(), 1);
+        assert_eq!(
+            row.spans[0].runs[0].font.family.as_ref(),
+            BUNDLED_LINUX_FONT_FAMILY
+        );
     }
 
     #[test]

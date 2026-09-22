@@ -2,7 +2,7 @@
 
 con ships on macOS, has a working Windows beta, and now has a real
 Linux preview built around Unix PTY + `libghostty-vt` + a GPUI-owned
-per-row `StyledText` paint path. The same `con` binary that runs on
+cached text-span canvas paint path. The same `con` binary that runs on
 macOS now opens on Linux with client-side decorations (no native WM
 titlebar stacked on top of the GPUI shell), a transparent ARGB
 window with rounded corners, the same caption cluster Windows
@@ -30,7 +30,7 @@ Current platform state:
 |:-------|:---------:|:-------------:|:--------------:|:----------------------:|
 | macOS  | ✅ real   | ✅ libghostty + Metal | `/tmp/con.sock` | ✅ |
 | Windows | ✅ real  | ✅ libghostty-vt + ConPTY + D3D11/DirectWrite | `\\.\pipe\con` | ✅ |
-| Linux  | ✅ real   | ✅ Unix PTY + `libghostty-vt` + GPUI per-row `StyledText` paint (preview — long-term glyph-atlas grid renderer pending) | `/tmp/con.sock` | ✅ |
+| Linux  | ✅ real   | ✅ Unix PTY + `libghostty-vt` + GPUI cached text spans on a fixed cell grid (preview — dedicated glyph-atlas renderer pending) | `/tmp/con.sock` | ✅ |
 
 On Linux today:
 
@@ -71,8 +71,9 @@ What that gives you:
 - Unix-domain control socket at `/tmp/con.sock`
 - `con-cli` and all portable crates working
 - a real Linux terminal pane backed by Unix PTY + `libghostty-vt` and
-  rendered as one GPUI `StyledText` per VT row, with one `TextRun`
-  per styled span: SGR colors, bold (`FontWeight::BOLD`), italic
+  rendered through one GPUI canvas per VT row. ASCII cells are batched;
+  non-ASCII native cells are shaped independently with complete graphemes
+  and positioned using Ghostty's cell widths. SGR colors, bold (`FontWeight::BOLD`), italic
   (`FontStyle::Italic`), underline, strikethrough, inverse, and a
   block cursor (fg/bg swap on the cursor cell) all survive
 - terminal text selection with left-drag, `Ctrl+C` copy-and-clear
@@ -114,19 +115,18 @@ What that gives you:
   and `Vec<Cell>` deep-equality compares were removed, PTY output now
   wakes the Linux terminal view directly instead of waiting for the
   workspace's idle poll loop to discover new output, the view caches
-  per-row `StyledText` text/runs and only rebuilds rows flagged dirty
-  by the VT snapshot (plus cursor-affected rows), and the placeholder
+  per-row text spans and shaped layouts. Changed VT generations still
+  check every visible row for alternate-screen restore correctness, but
+  unchanged spans retain their shaped layouts. The placeholder
   for "Waiting for shell prompt…" only ever shows before the first
   prompt — alt-screen TUIs (htop, vim, less, fzf) no longer flash
   the placeholder during their startup gap
 
 What it still does **not** give you:
 
-- a real glyph-atlas / GPU grid renderer (today's per-row
-  `StyledText` shape covers SGR + bold/italic/underline/inverse +
-  a block cursor correctly, but per-cell metrics still come from
-  layout-time text shaping rather than a fixed cell grid the way
-  the Windows D3D11/DirectWrite path does)
+- a dedicated terminal glyph-atlas renderer (the canvas positions cached
+  GPUI-shaped spans on a fixed grid, but still delegates glyph rasterization
+  and painting to GPUI instead of owning a terminal-specific atlas)
 - mouse reporting for terminal apps that request it
 - native packaging artifacts (`.deb`, AppImage, Flatpak, …); the
   current release pipeline already ships a tarball, one-line installer,
@@ -323,16 +323,15 @@ can ship.
 
 With phase 4 landed (preview), the remaining Linux tasks are:
 
-1. Replace the per-row `StyledText` paint path with the long-term
+1. Replace the per-row cached text-span paint path with the long-term
    GPUI-owned glyph-atlas grid renderer that paints background runs
    under the text and pre-rasterizes per-cell glyphs, matching the
    D3D11/DirectWrite path used on Windows. Today's view already
    honors fg / bg / bold / italic / underline / strikethrough /
-   inverse and draws a block cursor, and the preview path now caches
-   row text/runs so steady-state updates only rebuild dirty rows.
-   The remaining cost is structural: per-cell metrics still come from
-   layout-time text shaping rather than a fixed cell grid, and the
-   shared `libghostty-vt` snapshot contract still clones the full cell
+   inverse and draws a block cursor. Native cell boundaries survive
+   shaping, and unchanged row spans retain cached layouts. The remaining
+   cost is structural: non-ASCII cells still need independent GPUI text
+   layouts, and the shared `libghostty-vt` snapshot contract clones the full cell
    buffer each changed frame. That limits how dense the renderer can
    stay on huge panes (the gap shows up first on `top -d 0.1`-class
    workloads and large command-start redraws).

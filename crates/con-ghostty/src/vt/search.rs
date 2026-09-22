@@ -642,7 +642,7 @@ mod tests {
         let mut snapshot = ScreenSnapshot {
             cols: 3,
             rows: 1,
-            cells: vec![original; 3],
+            cells: vec![original.clone(); 3],
             selection_ranges: vec![Some(SelectionRange { start: 1, end: 1 })],
             ..ScreenSnapshot::default()
         };

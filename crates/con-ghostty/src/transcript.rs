@@ -193,11 +193,7 @@ pub(crate) fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> 
 
         let mut line = String::with_capacity(cols);
         for cell in cells {
-            let ch = match cell.codepoint {
-                0 => ' ',
-                codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
-            };
-            line.push(ch);
+            line.push_str(cell.text(&mut [0; 4]));
         }
 
         lines.push(line.trim_end_matches(' ').to_string());
