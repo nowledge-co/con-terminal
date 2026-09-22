@@ -924,6 +924,7 @@ impl Renderer {
         let mut has_wide_glyph = false;
 
         for (i, cell) in snapshot.cells.iter().enumerate() {
+            let cell = &cell.for_render();
             let col = (i % snapshot.cols as usize) as u16;
             let row = (i / snapshot.cols as usize) as u16;
 

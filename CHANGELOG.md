@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.106`
+## `v0.1.0-beta.107`
 
 ### Fixed
 
@@ -17,7 +17,21 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ---
 
-## `v0.1.0-beta.105`
+## `v0.1.0-beta.106`
+
+### Fixed
+
+**Windows, Linux**
+
+- Text concealed by terminal applications now stays hidden while remaining
+  available to copy and search. Backgrounds, selections, and cursors continue
+  to render normally. _(PR
+  [#378](https://github.com/nowledge-co/con-terminal/pull/378) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
+## `v0.1.0-beta.105` - 2026-09-21
 
 ### Changed
 

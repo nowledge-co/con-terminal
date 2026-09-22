@@ -3024,6 +3024,7 @@ fn build_terminal_row(
     }
 
     for (col_idx, cell) in kept.iter().enumerate() {
+        let cell = &cell.for_render();
         let is_cursor = cursor_col == Some(col_idx);
         let is_selected =
             selection_cols.is_some_and(|(start, end)| col_idx >= start && col_idx <= end);
@@ -3382,6 +3383,35 @@ mod tests {
         let _no_cursor = build_terminal_row(&cells, fg(), bg(), &base_font(), None, None, bg());
         let _with_cursor =
             build_terminal_row(&cells, fg(), bg(), &base_font(), Some(2), None, bg());
+    }
+
+    #[test]
+    fn concealed_row_hides_glyphs_and_decorations_with_cursor_and_selection() {
+        use con_ghostty::vt::{ATTR_INVISIBLE, ATTR_STRIKE};
+
+        let attrs = ATTR_INVERSE | ATTR_UNDERLINE | ATTR_STRIKE;
+        let cells = [
+            make_cell('X', attrs | ATTR_INVISIBLE, 0xCC2211FF, 0x1133AAFF),
+            make_cell('Y', attrs, 0xCC2211FF, 0x1133AAFF),
+        ];
+        for (cursor, selection) in [(None, None), (Some(0), None), (None, Some((0, 0)))] {
+            let row = build_terminal_row(&cells, fg(), bg(), &base_font(), cursor, selection, fg());
+            assert_eq!(row.text.as_ref(), " Y");
+            assert_eq!(row.runs.len(), 2);
+            assert!(row.runs[0].underline.is_none());
+            assert!(row.runs[0].strikethrough.is_none());
+            assert!(row.runs[1].underline.is_some());
+            assert!(row.runs[1].strikethrough.is_some());
+            let expected_bg = if cursor.is_some() {
+                vt_color_to_hsla(cells[0].bg).unwrap()
+            } else if selection.is_some() {
+                fg()
+            } else {
+                vt_color_to_hsla(cells[0].fg).unwrap()
+            };
+            assert_eq!(row.backgrounds[0].color, expected_bg);
+        }
+        assert_eq!(cells[0].codepoint, 'X' as u32);
     }
 
     #[test]
