@@ -135,6 +135,14 @@ _Static_assert(offsetof(ghostty_string_s, len) == 8,
                "ghostty string length changed offset");
 _Static_assert(offsetof(ghostty_string_s, sentinel) == 16,
                "ghostty string sentinel changed offset");
+_Static_assert(sizeof(ghostty_diagnostic_s) == 8,
+               "ghostty diagnostic changed layout");
+_Static_assert(offsetof(ghostty_diagnostic_s, message) == 0,
+               "ghostty diagnostic message changed offset");
+_Static_assert(_Generic(&ghostty_config_get_diagnostic,
+                       ghostty_diagnostic_s (*)(ghostty_config_t, uint32_t): 1,
+                       default: 0),
+               "ghostty config diagnostic function changed signature");
 _Static_assert(sizeof(ghostty_surface_message_childexited_s) == 16,
                "ghostty child-exited payload changed layout");
 _Static_assert(offsetof(ghostty_surface_message_childexited_s, timetime_ms) == 8,
