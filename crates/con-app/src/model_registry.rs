@@ -41,12 +41,7 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "gpt-4.1",
             "gpt-4.1-mini",
         ],
-        ProviderKind::ChatGPT => &[
-            "gpt-6-astra",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-        ],
+        ProviderKind::ChatGPT => &[],
         ProviderKind::GitHubCopilot => &[
             "gpt-5.4",
             "gpt-5.3-codex",
@@ -260,6 +255,15 @@ impl ModelRegistry {
         provider: &ProviderKind,
         base_url: Option<&str>,
     ) -> Vec<String> {
+        // Subscription availability and capabilities come from its dedicated
+        // catalog. Keep this compatibility path on the same fallback source so
+        // older callers cannot drift from `models_for_config`.
+        if *provider == ProviderKind::ChatGPT {
+            return chatgpt_subscription::fallback_models()
+                .iter()
+                .map(|model| model.id.clone())
+                .collect();
+        }
         let canonical = canonical_models_provider(provider);
         {
             let custom = self.custom.lock().unwrap();

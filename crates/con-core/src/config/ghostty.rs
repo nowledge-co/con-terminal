@@ -174,10 +174,18 @@ fn complete_schema() -> Result<Value> {
             Value::Null,
             false,
         );
-        for field in ["api_key", "api_key_env", "base_url", "reasoning_effort"] {
+        for field in ["api_key", "api_key_env", "base_url"] {
             insert(
                 &mut schema,
                 &format!("agent.providers.{provider}.{field}"),
+                Value::Null,
+                false,
+            );
+        }
+        if provider == "chatgpt" {
+            insert(
+                &mut schema,
+                "agent.providers.chatgpt.reasoning_effort",
                 Value::Null,
                 false,
             );
@@ -696,6 +704,7 @@ mod tests {
             )
             .is_err()
         );
+        assert!(parse("con.agent.providers.openai.reasoning_effort = high\n", None).is_err());
     }
 
     #[test]

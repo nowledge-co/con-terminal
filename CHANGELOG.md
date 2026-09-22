@@ -6,6 +6,18 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.107`
 
+### Changed
+
+**AI**
+
+- ChatGPT Subscription now refreshes the current model catalog with valid OAuth
+  credentials, remembers the last successful catalog per account, and offers
+  each model's supported reasoning-effort choices. New configurations default
+  to GPT-5.6 Sol, while saved retired selections remain visible with a clear
+  replacement hint. _(PR
+  [#377](https://github.com/nowledge-co/con-terminal/pull/377) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ### Fixed
 
 **macOS**
