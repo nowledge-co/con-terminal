@@ -6386,6 +6386,7 @@ impl Render for SettingsPanel {
 
         let content_scroll = div()
             .id("settings-content-scroll")
+            .debug_selector(|| "settings-content-scroll".into())
             .flex()
             .flex_col()
             .flex_1()
@@ -6744,6 +6745,11 @@ impl Render for SettingsPanel {
                         format!("Save failed: {err}")
                     };
                 div()
+                    .id("settings-save-error")
+                    .debug_selector(|| "settings-save-error".into())
+                    .max_h(px(120.0))
+                    .flex_shrink_0()
+                    .overflow_scroll()
                     .px_4()
                     .py_2()
                     .mx_4()
@@ -7447,6 +7453,40 @@ mod tests {
         ProviderKind, ProviderOAuthState, ResponsiveMode, SettingsPanel, keybinding_default,
         keybinding_field, keybinding_field_mut, provider_connection_status,
     };
+
+    #[gpui::test]
+    fn long_save_errors_leave_settings_content_visible(cx: &mut gpui::TestAppContext) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (_panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = SettingsPanel::new(
+                &con_core::Config::default(),
+                crate::model_registry::ModelRegistry::new(),
+                runtime,
+                window,
+                cx,
+            );
+            panel.standalone = true;
+            panel.visible = true;
+            panel.save_error =
+                Some("generated native configuration:2:invalid-key: unknown field\n".repeat(40));
+            panel
+        });
+        for (width, height) in [(920.0, 680.0), (375.0, 360.0)] {
+            cx.simulate_resize(gpui::size(gpui::px(width), gpui::px(height)));
+            let error = cx
+                .debug_bounds("settings-save-error")
+                .expect("error banner");
+            let content = cx
+                .debug_bounds("settings-content-scroll")
+                .expect("settings content");
+            assert!(error.size.height > gpui::px(0.0));
+            assert!(error.size.height <= gpui::px(120.0), "{error:?}");
+            assert!(content.size.height >= gpui::px(100.0), "{content:?}");
+            assert!(content.top() >= error.bottom(), "{error:?} {content:?}");
+        }
+    }
 
     #[test]
     fn responsive_modes_match_settings_breakpoints() {

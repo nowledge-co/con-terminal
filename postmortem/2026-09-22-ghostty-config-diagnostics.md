@@ -22,3 +22,12 @@ paths, missing includes, and private-file cleanup.
 Preserve upstream diagnostics rather than reconstructing parser errors. Root
 locations describe Con's generated native input, not necessarily the original
 `con.conf` line numbers; included-file locations retain their upstream provenance.
+
+Follow-up review found that displaying randomized, already-deleted private file
+paths obscured that distinction. Diagnostic location prefixes now identify the
+generated layer explicitly; included paths and diagnostic bodies stay unchanged.
+
+The Settings save-error banner sits outside the content scroll area. Multi-line
+diagnostics therefore also require a bounded, scrollable banner so settings remain
+reachable. A visual layout regression covers long errors at desktop and narrow
+window sizes without truncating diagnostic text.
