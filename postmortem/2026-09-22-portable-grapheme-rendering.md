@@ -24,14 +24,22 @@ shaper and occupy fewer columns than the terminal assigned.
   by shared strings, independent of native iterator lifetime.
 - Shape complete Windows clusters and include their text and native width in
   atlas keys. Reclaim offscreen entries before constructing frame instances;
-  never clear slots already referenced by the current frame. If the live set
-  exceeds atlas capacity, preserve existing glyphs rather than corrupting them.
+  prepare the entire visible set and grow/repack on exhaustion before any
+  instance references a slot. A hardware or allocation limit fails the frame
+  explicitly rather than silently dropping visible glyphs.
 - Paint Linux rows with cached text spans on the native column grid. Batch
   ASCII where glyph indices permit it; shape non-ASCII cells independently.
   Preserve cluster-internal glyph offsets, and never mutate GPUI's cached layouts.
   Unchanged row spans retain their shaped layouts across terminal updates.
-- Use the same text representation for transcripts and links. Normalize wide
-  tail selection to its head, while conceal removes text only at paint time.
+- Use the same text representation for transcripts and links. On Linux,
+  normalize wide-tail selection and every cursor shape to the head, while
+  conceal removes text only at paint time.
+
+Follow-up review found two incomplete edge paths: non-block Linux cursors
+still used tail-cell coordinates, and preserving a full Windows atlas without
+growing it left later visible glyphs missing on every redraw. Both now resolve
+their geometry/storage before painting. Regression tests cover a tail cursor
+on a nonzero row and a deliberately tiny atlas containing 64 distinct clusters.
 
 ## Verification and limits
 
@@ -46,6 +54,13 @@ the unchanged baseline. Production Linux row code and link tests were compiled
 against GPUI, and the actual row canvas was rendered and inspected on macOS.
 Windows backend tests were cross-type-checked. These checks do not replace
 Windows DirectWrite or Linux font-backend runtime validation.
+
+For the follow-up, the cursor lookup regression ran on the host with production
+snapshot types. An isolated atlas harness exercised the production admission
+loop with real etagere packing and simulated GPU allocation/rasterization.
+Removing tail normalization or atlas growth made the respective tests fail.
+The Windows regression using the real D3D/DirectWrite cache was type-checked,
+not executed on macOS.
 
 On this host, a release-mode 160×50 ASCII probe measured full feed plus snapshot
 at approximately 109 µs before and 111 µs after. Cached snapshot copying rose

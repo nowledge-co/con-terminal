@@ -876,9 +876,13 @@ impl GlyphCache {
         })
     }
 
-    /// Reclaim only offscreen entries, before any instances reference slots.
-    /// Never purge midway through a frame: that invalidates earlier instances.
-    pub fn retain_visible(&mut self, cells: &[crate::vt::Cell]) {
+    /// Admit the entire visible set before any instances reference atlas slots.
+    /// On exhaustion, grow and repack here, never midway through a frame.
+    pub fn prepare_frame(
+        &mut self,
+        cells: &[crate::vt::Cell],
+        font_fallback_families: &[String],
+    ) -> Result<()> {
         let visible: HashSet<_> = cells
             .iter()
             .filter(|cell| {
@@ -895,6 +899,42 @@ impl GlyphCache {
                 false
             }
         });
+        let mut repacked = false;
+        loop {
+            if visible
+                .iter()
+                .all(|key| self.get_or_rasterize(key).is_some())
+            {
+                return Ok(());
+            }
+            if !repacked {
+                // Reclaim fragmentation before spending more GPU memory.
+                // Each rasterization clears its slot; no frame uses old UVs yet.
+                self.entries.clear();
+                self.allocator.clear();
+                repacked = true;
+                continue;
+            }
+            // The renderer requires feature level 11.0: 16384 is its maximum
+            // 2D texture dimension. Propagate resource exhaustion instead of
+            // presenting a successful frame with permanently missing text.
+            anyhow::ensure!(
+                self.atlas_size < 16384,
+                "visible glyphs exceed D3D11 atlas capacity"
+            );
+            let size = (self.atlas_size * 2).min(16384);
+            let grown = Self::new(
+                &self.device,
+                &self._context,
+                &self.dwrite,
+                self.bundled_font_collection.clone(),
+                &self.font_family,
+                font_fallback_families,
+                self.font_size_px,
+                size,
+            )?;
+            *self = grown;
+        }
     }
 
     pub fn rebuild(
@@ -1562,6 +1602,53 @@ pub(super) fn is_cjk_codepoint(codepoint: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{GlyphKey, gamma_ratios, is_cjk_codepoint};
+
+    #[test]
+    fn frame_preparation_grows_for_all_visible_clusters() {
+        use crate::vt::{Cell, CellWidth};
+        use windows::Win32::Graphics::DirectWrite::{
+            DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory,
+        };
+
+        let (device, context) = super::super::create_device().unwrap();
+        let dwrite = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }.unwrap();
+        let mut cache =
+            super::GlyphCache::new(&device, &context, &dwrite, None, "Consolas", &[], 14.0, 32)
+                .unwrap();
+        let cells: Vec<_> = (0x300..0x340)
+            .map(|suffix| Cell {
+                codepoint: 'e' as u32,
+                grapheme: Some(format!("e{}", char::from_u32(suffix).unwrap()).into()),
+                width: if suffix % 2 == 0 {
+                    CellWidth::Wide
+                } else {
+                    CellWidth::Narrow
+                },
+                ..Cell::default()
+            })
+            .collect();
+        cache.prepare_frame(&cells, &[]).unwrap();
+        assert!(
+            cache.atlas_size > 32,
+            "fixture must exhaust the initial atlas"
+        );
+        let size = cache.atlas_size;
+        let rects: Vec<_> = cells
+            .iter()
+            .map(|cell| {
+                let rect = cache.entries[&GlyphKey::from(cell)].1;
+                (rect.x, rect.y, rect.w, rect.h)
+            })
+            .collect();
+        // A redraw must keep every cluster, not repeatedly omit the same suffix.
+        cache.prepare_frame(&cells, &[]).unwrap();
+        assert_eq!(cache.atlas_size, size);
+        assert_eq!(cache.entries.len(), cells.len());
+        for (cell, expected) in cells.iter().zip(rects) {
+            let rect = cache.get_or_rasterize(&GlyphKey::from(cell)).unwrap();
+            assert_eq!((rect.x, rect.y, rect.w, rect.h), expected);
+        }
+    }
 
     #[test]
     fn gamma_ratios_match_directwrite_default() {

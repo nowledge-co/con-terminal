@@ -2045,9 +2045,7 @@ impl Render for GhosttyView {
             if !cursor.visible || cursor.style == CursorStyle::Block {
                 return None;
             }
-            let cell = snapshot.cells.get(
-                usize::from(cursor.row) * usize::from(snapshot.cols) + usize::from(cursor.col),
-            )?;
+            let (col, cell) = cursor_overlay_cell(snapshot, cursor)?;
             let color = RowStyle::from_cell(
                 cell,
                 foreground,
@@ -2058,7 +2056,7 @@ impl Render for GhosttyView {
                 selection_bg,
             )
             .fg;
-            let x = px(cell_width_px) * f32::from(cursor.col);
+            let x = px(cell_width_px) * col as f32;
             let width = px(cell_width_px)
                 * if cell.width == con_ghostty::vt::CellWidth::Wide {
                     2.0
@@ -2802,6 +2800,18 @@ fn cursor_col_for_row(cursor: VtCursor, row_idx: usize) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn cursor_overlay_cell(snapshot: &ScreenSnapshot, cursor: VtCursor) -> Option<(usize, &VtCell)> {
+    if cursor.row >= snapshot.rows || cursor.col >= snapshot.cols {
+        return None;
+    }
+    let row_start = usize::from(cursor.row) * usize::from(snapshot.cols);
+    let mut col = usize::from(cursor.col);
+    if snapshot.cells.get(row_start + col)?.width == con_ghostty::vt::CellWidth::SpacerTail {
+        col = col.saturating_sub(1);
+    }
+    Some((col, snapshot.cells.get(row_start + col)?))
 }
 
 fn render_cursor_overlay(
@@ -3619,6 +3629,60 @@ mod tests {
                 .collect::<Vec<_>>(),
             [(0, 2, "👩\u{200d}"), (2, 2, "🚒"), (4, 5, "hello")]
         );
+    }
+
+    #[test]
+    fn cursor_overlay_uses_wide_head_geometry_and_color() {
+        use con_ghostty::vt::CellWidth;
+        let mut snapshot = ScreenSnapshot {
+            cols: 8,
+            rows: 2,
+            cells: vec![VtCell::default(); 16],
+            ..ScreenSnapshot::default()
+        };
+        snapshot.cells[9] = VtCell {
+            codepoint: '中' as u32,
+            width: CellWidth::Wide,
+            fg: 0xff0000ff,
+            ..VtCell::default()
+        };
+        snapshot.cells[10].width = CellWidth::SpacerTail;
+        snapshot.cells[11] = VtCell {
+            codepoint: 'Z' as u32,
+            fg: 0x00ff00ff,
+            ..VtCell::default()
+        };
+        for style in [
+            CursorStyle::Bar,
+            CursorStyle::Underline,
+            CursorStyle::HollowBlock,
+        ] {
+            for col in [1, 2] {
+                let cursor = VtCursor {
+                    row: 1,
+                    col,
+                    visible: true,
+                    style,
+                    ..VtCursor::default()
+                };
+                let (head, cell) = cursor_overlay_cell(&snapshot, cursor).unwrap();
+                assert_eq!(head, 1);
+                assert_eq!(cell.codepoint, '中' as u32);
+                assert_eq!(cell.width, con_ghostty::vt::CellWidth::Wide);
+                assert_eq!(cell.fg, snapshot.cells[9].fg);
+            }
+        }
+        let cursor = VtCursor {
+            row: 1,
+            col: 3,
+            ..VtCursor::default()
+        };
+        let (col, cell) = cursor_overlay_cell(&snapshot, cursor).unwrap();
+        assert_eq!(col, 3);
+        assert_eq!(cell.codepoint, 'Z' as u32);
+        assert_eq!(cell.width, con_ghostty::vt::CellWidth::Narrow);
+        assert_ne!(cell.fg, snapshot.cells[9].fg);
+        assert!(cursor_overlay_cell(&snapshot, VtCursor { col: 8, ..cursor }).is_none());
     }
 
     #[test]

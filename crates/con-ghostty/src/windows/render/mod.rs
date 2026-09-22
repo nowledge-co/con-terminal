@@ -908,7 +908,7 @@ impl Renderer {
             .atlas
             .lock()
             .expect("atlas mutex poisoned in draw_terminal() glyph pass");
-        atlas.retain_visible(&snapshot.cells);
+        atlas.prepare_frame(&snapshot.cells, &config.font_fallback)?;
         let mut instances = self
             .instances
             .lock()
@@ -979,24 +979,9 @@ impl Renderer {
             }
 
             let key = GlyphKey::from(cell);
-            let glyph = match atlas.get_or_rasterize(&key) {
-                Some(g) => g,
-                None => {
-                    log::debug!(
-                        "atlas full at cell ({col},{row}) U+{:04X}; preserving current frame slots",
-                        cell.codepoint
-                    );
-                    instances.push(Instance {
-                        cell_pos: [col as u32, row as u32],
-                        atlas_pos: [0, 0],
-                        atlas_size: [0, 0],
-                        fg: cell.fg,
-                        bg: apply_opacity(cell.bg),
-                        attrs: render_attrs,
-                    });
-                    continue;
-                }
-            };
+            let glyph = atlas
+                .get_or_rasterize(&key)
+                .context("prepared glyph missing from atlas")?;
 
             let instance = instance_for_cell(
                 col,
