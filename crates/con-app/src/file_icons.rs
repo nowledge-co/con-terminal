@@ -20,8 +20,10 @@ pub enum FileIcon {
 
 /// File-type glyphs are product chrome, not terminal text. Keep them on the
 /// bundled font even when the user selects a terminal font without Nerd Font
-/// private-use glyphs.
-pub(crate) const FILE_ICON_FONT_FAMILY: &str = "Ioskeley Mono";
+/// private-use glyphs. This must be the registered TTF family (no space):
+/// GPUI does not resolve the "Ioskeley Mono" display label and falls back to
+/// a font without the private-use glyphs.
+pub(crate) const FILE_ICON_FONT_FAMILY: &str = "IoskeleyMono";
 
 /// Icon for a file tree row.
 ///
@@ -108,6 +110,22 @@ fn icon_for_icon_only_path(path: &Path) -> Option<FileIcon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_font_family_matches_bundled_ttf_name() {
+        let face = ttf_parser::Face::parse(
+            include_bytes!("../../../assets/fonts/IoskeleyMono-Regular.ttf"),
+            0,
+        )
+        .unwrap();
+        let family = face
+            .names()
+            .into_iter()
+            .filter(|name| name.name_id == ttf_parser::name_id::FAMILY)
+            .find_map(|name| name.to_string())
+            .expect("bundled font has a family name");
+        assert_eq!(family, FILE_ICON_FONT_FAMILY);
+    }
 
     #[test]
     fn directories_use_folder_icons_that_track_expansion() {

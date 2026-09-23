@@ -1995,7 +1995,7 @@ pub(crate) fn tab_status_icon(
             .flex_shrink_0()
             // Status glyphs are icons, not terminal text. Some user fonts map
             // Braille to empty outlines, which also prevents font fallback.
-            .font_family("Ioskeley Mono")
+            .font_family(crate::file_icons::FILE_ICON_FONT_FAMILY)
             .text_size(size)
             .line_height(size)
             .text_color(if matches!(indicator, TitleIndicator::Attention(_)) {
@@ -2476,7 +2476,7 @@ mod tests {
             let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
             assert_eq!(
                 text.font_family.as_ref().map(|font| font.as_ref()),
-                Some("Ioskeley Mono")
+                Some(crate::file_icons::FILE_ICON_FONT_FAMILY)
             );
         }
     }
