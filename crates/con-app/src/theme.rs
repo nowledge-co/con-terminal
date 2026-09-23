@@ -590,11 +590,20 @@ fn contrasting_text(preferred: Color, backgrounds: &[Color]) -> Color {
             .map(|background| contrast_ratio(candidate, *background))
             .fold(f64::INFINITY, f64::min)
     };
-    if minimum_contrast(black) >= minimum_contrast(white) {
+    let target = if minimum_contrast(black) >= minimum_contrast(white) {
         black
     } else {
         white
+    };
+    // Preserve the preferred tone instead of turning every low-contrast
+    // secondary label or placeholder into the strongest possible text.
+    for step in 1..=255 {
+        let candidate = blend(preferred, target, f64::from(step) / 255.0);
+        if minimum_contrast(candidate) >= MIN_CONTRAST {
+            return candidate;
+        }
     }
+    target
 }
 
 fn blend(base: Color, target: Color, amount: f64) -> Color {
@@ -638,6 +647,41 @@ mod tests {
             u8::from_str_radix(&hex[2..4], 16).unwrap(),
             u8::from_str_radix(&hex[4..6], 16).unwrap(),
         )
+    }
+
+    #[test]
+    fn flexoki_muted_text_stays_readable_without_outshining_body_text() {
+        for theme in [
+            TerminalTheme::flexoki_dark(),
+            TerminalTheme::flexoki_light(),
+        ] {
+            let colors = generated_colors(&theme);
+            let background = color(&colors["muted.background"]);
+            let muted = color(&colors["muted.foreground"]);
+            let foreground = color(&colors["foreground"]);
+
+            assert!(contrast_ratio(muted, background) >= 4.5);
+            assert!(
+                contrast_ratio(muted, background) < contrast_ratio(foreground, background),
+                "{}: muted text must remain less prominent than body text",
+                theme.name,
+            );
+        }
+    }
+
+    #[test]
+    fn contrast_correction_preserves_valid_colors_and_checks_every_background() {
+        let preferred = Color::rgb(0x78, 0x77, 0x72);
+        let black = Color::rgb(0, 0, 0);
+        let surface = Color::rgb(0x30, 0x28, 0x20);
+        assert_eq!(contrasting_text(preferred, &[black]), preferred);
+
+        let corrected = contrasting_text(preferred, &[black, surface]);
+        assert_ne!(corrected, preferred);
+        assert_ne!(corrected, Color::rgb(255, 255, 255));
+        for background in [black, surface] {
+            assert!(contrast_ratio(corrected, background) >= 4.5);
+        }
     }
 
     #[test]
