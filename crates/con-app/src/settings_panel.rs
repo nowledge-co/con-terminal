@@ -3273,8 +3273,7 @@ impl SettingsPanel {
                                                             .font_weight(FontWeight::MEDIUM)
                                                             .text_color(
                                                                 theme
-                                                                    .muted_foreground
-                                                                    .opacity(0.5),
+                                                                    .muted_foreground,
                                                             )
                                                             .child("Channel"),
                                                     )
@@ -3298,8 +3297,7 @@ impl SettingsPanel {
                                                             .font_weight(FontWeight::MEDIUM)
                                                             .text_color(
                                                                 theme
-                                                                    .muted_foreground
-                                                                    .opacity(0.5),
+                                                                    .muted_foreground,
                                                             )
                                                             .child("Version"),
                                                     )
@@ -3312,8 +3310,7 @@ impl SettingsPanel {
                                                             )
                                                             .text_color(
                                                                 theme
-                                                                    .muted_foreground
-                                                                    .opacity(0.82),
+                                                                    .muted_foreground,
                                                             )
                                                             .child(format!(
                                                                 "{} ({})",
@@ -3350,8 +3347,7 @@ impl SettingsPanel {
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .text_color(
                                                         theme
-                                                            .muted_foreground
-                                                            .opacity(0.5),
+                                                            .muted_foreground,
                                                     )
                                                     .child("Status"),
                                             )
@@ -3381,8 +3377,7 @@ impl SettingsPanel {
                                                             .line_height(ui_px(theme, 17.0))
                                                             .text_color(
                                                                 theme
-                                                                    .muted_foreground
-                                                                    .opacity(0.62),
+                                                                    .muted_foreground,
                                                             )
                                                             .child(detail),
                                                     );
@@ -3701,7 +3696,7 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = cx.theme();
-        let muted_fg = theme.muted_foreground.opacity(0.4);
+        let muted_fg = theme.muted_foreground;
         let hover_bg = theme.muted.opacity(0.08);
         let hover_fg = theme.foreground;
 
@@ -3791,7 +3786,7 @@ impl SettingsPanel {
                     .px(px(16.0))
                     .py(px(10.0))
                     .text_size(ui_px(cx.theme(), 12.0))
-                    .text_color(muted.opacity(0.55))
+                    .text_color(muted)
                     .child(
                         "No preferred fallbacks. Bundled icons and system fallback remain enabled.",
                     ),
@@ -3867,7 +3862,7 @@ impl SettingsPanel {
                 .px(px(16.0))
                 .pb(px(10.0))
                 .text_size(ui_px(cx.theme(), 12.0))
-                .text_color(muted.opacity(0.5))
+                .text_color(muted)
                 .child(
                     "Con's bundled Nerd Font and the system cascade are appended automatically.",
                 ),
@@ -4023,7 +4018,7 @@ impl SettingsPanel {
                 div()
                     .text_size(ui_px(theme, 12.0))
                     .line_height(ui_px(theme, 18.0))
-                    .text_color(theme.muted_foreground.opacity(0.6))
+                    .text_color(theme.muted_foreground)
                     .child("Browse community Ghostty themes, copy, and paste here."),
             )
             // Name input
@@ -4035,7 +4030,7 @@ impl SettingsPanel {
                     .child(
                         div()
                             .text_size(ui_px(theme, 12.0))
-                            .text_color(theme.muted_foreground.opacity(0.5))
+                            .text_color(theme.muted_foreground)
                             .child("Theme name"),
                     )
                     .child(Input::new(&custom_theme_name_input)),
@@ -4413,7 +4408,7 @@ impl SettingsPanel {
                                                         .text_size(ui_px(theme, 12.0))
                                                         .line_height(ui_px(theme, 18.0))
                                                         .text_color(
-                                                            theme.muted_foreground.opacity(0.65),
+                                                            theme.muted_foreground,
                                                         )
                                                         .child(
                                                             "Choose a PNG or JPEG. The image is applied per terminal.",
@@ -4484,7 +4479,7 @@ impl SettingsPanel {
                                 .pb(px(12.0))
                                 .text_size(ui_px(theme, 12.0))
                                 .line_height(ui_px(theme, 18.0))
-                                .text_color(theme.muted_foreground.opacity(0.65))
+                                .text_color(theme.muted_foreground)
                                 .child(
                                     "Ghostty renders the image per terminal.",
                                 ),
@@ -4521,7 +4516,7 @@ impl SettingsPanel {
                             .pt(px(12.0))
                             .text_size(ui_px(theme, 12.0))
                             .line_height(ui_px(theme, 18.0))
-                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .text_color(theme.muted_foreground)
                             .child("Shown beside replies from Con's built-in agent."),
                     )
                     .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(choices)),
@@ -4651,7 +4646,7 @@ impl SettingsPanel {
                             .pt(px(12.0))
                             .text_size(ui_px(theme, 12.0))
                             .line_height(ui_px(theme, 18.0))
-                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .text_color(theme.muted_foreground)
                             .child(hint.to_string()),
                     )
                     .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(groups)),
@@ -4933,7 +4928,7 @@ impl SettingsPanel {
                         div()
                             .text_xs()
                             .line_height(rems(1.125))
-                            .text_color(theme.muted_foreground.opacity(0.65))
+                            .text_color(theme.muted_foreground)
                             .child("Choose a default model for agent and the fast path for inline command suggestions."),
                     ),
             )
@@ -5113,7 +5108,7 @@ impl SettingsPanel {
             } else if is_configured {
                 theme.foreground.opacity(0.74)
             } else {
-                theme.muted_foreground.opacity(0.52)
+                theme.muted_foreground
             };
             let status_color = if is_configured {
                 theme.success.opacity(if is_selected { 0.92 } else { 0.74 })
@@ -5250,7 +5245,7 @@ impl SettingsPanel {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.muted_foreground.opacity(0.45))
+                                        .text_color(theme.muted_foreground)
                                         .child(connection_label),
                                 ),
                         ),
@@ -5299,7 +5294,7 @@ impl SettingsPanel {
                                 .text_color(if self.provider_model_status_error {
                                     theme.danger
                                 } else {
-                                    theme.muted_foreground.opacity(0.62)
+                                    theme.muted_foreground
                                 })
                                 .child(
                                     self.provider_model_status.clone().unwrap_or_else(|| {
@@ -5913,7 +5908,7 @@ impl SettingsPanel {
                             div()
                                 .text_xs()
                                 .line_height(rems(1.125))
-                                .text_color(theme.muted_foreground.opacity(0.68))
+                                .text_color(theme.muted_foreground)
                                 .child(
                                     "Show Con from anywhere in macOS. Press it again while Con is frontmost to hide the app.",
                                 ),
@@ -5974,7 +5969,7 @@ impl SettingsPanel {
                             div()
                                 .text_xs()
                                 .line_height(rems(1.125))
-                                .text_color(theme.muted_foreground.opacity(0.62))
+                                .text_color(theme.muted_foreground)
                                 .child(if global_summon_enabled {
                                     "Use a low-conflict system shortcut. Option-Space is familiar, but may collide with launchers."
                                 } else {
@@ -6066,7 +6061,7 @@ impl SettingsPanel {
                                 div()
                                     .text_xs()
                                     .line_height(rems(1.125))
-                                    .text_color(theme.muted_foreground.opacity(0.68))
+                                    .text_color(theme.muted_foreground)
                                     .child("Show a dedicated floating Con window that slides down from the top of the screen."),
                             ),
                     )
@@ -6122,7 +6117,7 @@ impl SettingsPanel {
                                 div()
                                     .text_xs()
                                     .line_height(rems(1.125))
-                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .text_color(theme.muted_foreground)
                                     .child("Use a low-conflict macOS shortcut. Cmd-Backslash matches the requested default."),
                             ),
                     )
@@ -6633,6 +6628,7 @@ impl Render for SettingsPanel {
                 (self.close_confirmation_visible && has_unsaved_changes).then(|| {
                     div()
                         .id("settings-close-confirmation")
+                        .debug_selector(|| "settings-close-confirmation".into())
                         .flex()
                         .items_center()
                         .justify_between()
@@ -6677,6 +6673,7 @@ impl Render for SettingsPanel {
                                 .flex()
                                 .items_center()
                                 .when(mobile, |this| this.flex_wrap().w_full().justify_start())
+                                .debug_selector(|| "settings-close-actions".into())
                                 .gap(px(6.0))
                                 .child(
                                     Button::new("settings-close-prompt-keep-editing")
@@ -6691,7 +6688,7 @@ impl Render for SettingsPanel {
                                                 .text_xs()
                                                 .line_height(rems(1.0))
                                                 .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme.muted_foreground.opacity(0.74))
+                                                .text_color(theme.muted_foreground)
                                                 .whitespace_nowrap()
                                                 .child("Keep Editing"),
                                         )
@@ -7050,6 +7047,7 @@ fn slider_row(
         )
         .child(
             div()
+                .debug_selector(|| format!("settings-control-{label}"))
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
@@ -7116,6 +7114,7 @@ fn searchable_select_row(
         )
         .child(
             div()
+                .debug_selector(|| format!("settings-control-{label}"))
                 .when(mobile, |this| this.w_full().min_w_0())
                 .when(!mobile, |this| this.w(px(236.0)).flex_shrink_0())
                 .child(
@@ -7166,6 +7165,7 @@ fn select_row(
         )
         .child(
             div()
+                .debug_selector(|| format!("settings-control-{label}"))
                 .when(mobile, |this| this.w_full().min_w_0())
                 .when(!mobile, |this| this.w(px(188.0)).flex_shrink_0())
                 .child(Select::new(select).small()),
@@ -7618,16 +7618,39 @@ mod tests {
                     "appearance sections out of order: {pair:?}"
                 );
             }
-            for (row_selector, hint_selector) in [
-                ("settings-row-Add Fallback", "settings-hint-Add Fallback"),
-                ("settings-row-Cursor Style", "settings-hint-Cursor Style"),
+            for (row_selector, hint_selector, control_selector) in [
+                (
+                    "settings-row-Add Fallback",
+                    "settings-hint-Add Fallback",
+                    "settings-control-Add Fallback",
+                ),
+                (
+                    "settings-row-Cursor Style",
+                    "settings-hint-Cursor Style",
+                    "settings-control-Cursor Style",
+                ),
                 (
                     "settings-row-Terminal Glass",
                     "settings-hint-Terminal Glass",
+                    "settings-control-Terminal Glass",
                 ),
             ] {
                 let row = view.debug_bounds(row_selector).expect("appearance row");
                 let hint = view.debug_bounds(hint_selector).expect("appearance hint");
+                let control = view
+                    .debug_bounds(control_selector)
+                    .expect("appearance control");
+                assert!(control.size.width > gpui::px(0.0));
+                assert!(
+                    control.right() <= row.right() && row.right() <= gpui::px(width),
+                    "control overflow at {font_size}px / {width}px: {control:?} {row:?}"
+                );
+                if width >= 600.0 {
+                    assert!(
+                        hint.right() <= control.left(),
+                        "hint/control overlap: {hint:?} {control:?}"
+                    );
+                }
                 assert!(hint.size.height > gpui::px(0.0));
                 // Allow one pixel of layout rounding on the 12px bottom padding.
                 assert!(
@@ -7635,6 +7658,22 @@ mod tests {
                     "{hint_selector} clipped at {font_size}px / {width}px: {hint:?} {row:?}"
                 );
             }
+            panel.update(view, |panel, cx| {
+                panel.preview_snapshot = Some(panel.config.clone());
+                panel.config.terminal.theme = "flexoki-dark".into();
+                panel.close_confirmation_visible = true;
+                cx.notify();
+            });
+            let prompt = view
+                .debug_bounds("settings-close-confirmation")
+                .expect("close prompt");
+            let actions = view
+                .debug_bounds("settings-close-actions")
+                .expect("close actions");
+            assert!(
+                actions.right() <= prompt.right() && actions.bottom() <= prompt.bottom(),
+                "close actions overflow at {font_size}px / {width}px: {actions:?} {prompt:?}"
+            );
         }
 
         for width in [920.0, 840.0, 600.0, 375.0] {

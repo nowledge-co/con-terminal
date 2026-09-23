@@ -37,6 +37,11 @@ follow terminal controls and theme import. The theme card cannot shrink vertical
 so wrapping its grid at larger UI sizes does not clip themes before the Fonts group.
 Theme helper text uses the muted role without additional opacity attenuation.
 
+Follow-up review found the same opacity attenuation on provider labels/status,
+font fallback instructions, theme import, keybinding help, and update information.
+Those readable labels now use the muted role directly. Decorative status dots,
+background fills, and disabled-state opacity remain unchanged.
+
 ## What we learned
 
 Minimum contrast alone does not preserve visual hierarchy. Test both readability
@@ -60,3 +65,10 @@ assertion also failed before using a definite column width. Removing two trial
 The order assertion failed with the old section order and exposed theme-card
 compression at large UI sizes. An explicit inner width did not fix compression
 and was removed; preventing the outer theme card from shrinking did.
+
+Follow-up layout assertions check horizontal containment and separation of
+select/slider controls, plus the unsaved-close action area at all eight sizes.
+The description columns can shrink: adding their preferred widths does not prove
+overflow. These assertions passed without changing row geometry. Native before/
+after screenshots check the auxiliary-text color correction; the layout tests
+do not assert rendered text colors.
