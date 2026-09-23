@@ -1,3 +1,4 @@
+use futures::FutureExt;
 use gpui::{
     App, Asset, AssetSource, ImageCacheError, ImageSource, RenderImage, Result, SharedString,
 };
@@ -91,7 +92,18 @@ pub fn png_bytes(asset_path: &str) -> Option<Cow<'static, [u8]>> {
 pub fn png_preview(path: &'static str, logical_size: f32) -> ImageSource {
     ImageSource::Custom(Arc::new(move |window, cx| {
         let size = (logical_size * window.scale_factor()).round().max(1.0) as u32;
-        window.use_asset::<PngPreview>(&(path, size), cx)
+        let (load, _) = cx.fetch_asset::<PngPreview>(&(path, size));
+        load.clone().now_or_never().or_else(|| {
+            // The pinned GPUI use_asset only notifies the first requesting view.
+            // Retain one waiter per displayed preview, including reopened windows.
+            window.use_keyed_state((path, size), cx, |_, cx| {
+                cx.spawn(async move |this, cx| {
+                    let _ = load.await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+            });
+            None
+        })
     }))
 }
 
@@ -148,6 +160,53 @@ fn preview_bgra(bytes: &[u8], size: u32) -> Result<image::RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{Context, IntoElement, Render, Styled, Window, img, px};
+
+    struct PreviewView {
+        loaded: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl Render for PreviewView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let ImageSource::Custom(load) = png_preview("app-icons/con-raccoon-A1.png", 48.0)
+            else {
+                unreachable!()
+            };
+            let loaded = self.loaded.clone();
+            img(move |window: &mut Window, cx: &mut App| {
+                let result = load(window, cx);
+                loaded.set(matches!(result, Some(Ok(_))));
+                result
+            })
+            .size(px(48.0))
+        }
+    }
+
+    #[gpui::test]
+    fn preview_notifies_a_view_joining_an_inflight_load(cx: &mut gpui::TestAppContext) {
+        // Start loading without a live requesting view, as when its window closed.
+        let _pending =
+            cx.update(|cx| cx.fetch_asset::<PngPreview>(&("app-icons/con-raccoon-A1.png", 48)));
+        let loaded = std::rc::Rc::new(std::cell::Cell::new(false));
+        let window = cx.add_window(|_, _| PreviewView {
+            loaded: loaded.clone(),
+        });
+        let window: gpui::AnyWindowHandle = window.into();
+        window
+            .update(cx, |_, window, cx| {
+                let _ = window.draw(cx);
+            })
+            .unwrap();
+        assert!(
+            !loaded.get(),
+            "must exercise an in-flight load, not a warm cache"
+        );
+        cx.run_until_parked();
+        assert!(
+            loaded.get(),
+            "joining view was not redrawn after the shared load completed"
+        );
+    }
 
     #[test]
     fn previews_filter_detail_without_transparent_color_bleeding() {
