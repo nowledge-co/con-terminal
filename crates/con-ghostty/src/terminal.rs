@@ -31,6 +31,7 @@ const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
 // Con does not ship Ghostty's `+ssh-cache` CLI helper. Do not advertise
 // `ssh-terminfo` until Con has an equivalent cache implementation.
 const CON_SHELL_INTEGRATION_FEATURES: &str = "no-cursor,ssh-env";
+const HOST_DEFAULTS: &str = "alpha-blending = linear-corrected\n";
 
 fn sanitize_font_family_for_ghostty(font_family: &str) -> &str {
     let trimmed = font_family.trim();
@@ -407,6 +408,9 @@ fn build_ghostty_config(
         .unwrap_or_else(|| Path::new("/tmp"));
     // Con's constructor values are fallbacks. Native source is then replayed,
     // explicit runtime overrides follow it, and immutable host policy is last.
+    // Ghostty keeps `native` blending on macOS only; linear-corrected looks the
+    // same for ordinary text without darkened edges on saturated colors.
+    load(HOST_DEFAULTS, runtime_dir, false, "generated host defaults")?;
     load(
         &defaults.to_config_string(false)?,
         runtime_dir,
@@ -2346,9 +2350,10 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::{
-        GhosttyConfigPatch, GhosttySurfaceEvent, NativeConfigSource, TerminalColors, TerminalState,
-        build_ghostty_config, effective_appearance, ensure_ghostty_init,
-        installed_app_ghostty_resources_dir_for_exe, mark_child_exited_state,
+        CStr, GhosttyConfigPatch, GhosttySurfaceEvent, NativeConfigSource, OwnedGhosttyConfig,
+        TerminalColors, TerminalState, build_ghostty_config, effective_appearance,
+        ensure_ghostty_init, ffi, installed_app_ghostty_resources_dir_for_exe,
+        mark_child_exited_state,
     };
 
     fn sample_colors(seed: u8) -> TerminalColors {
@@ -2682,6 +2687,41 @@ mod tests {
         assert_eq!(reloaded.font_size, 17.0);
         assert_eq!(reloaded.background_opacity, 0.75);
         assert_eq!(reloaded.foreground, [0x12, 0x34, 0x56]);
+    }
+
+    fn alpha_blending(config: &OwnedGhosttyConfig) -> String {
+        let key = "alpha-blending";
+        let mut value: *const std::ffi::c_char = std::ptr::null();
+        assert!(unsafe {
+            ffi::ghostty_config_get(
+                config.0,
+                (&mut value as *mut *const std::ffi::c_char).cast(),
+                key.as_ptr().cast(),
+                key.len(),
+            )
+        });
+        unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn alpha_blending_defaults_to_linear_corrected_and_native_config_wins() {
+        ensure_ghostty_init().unwrap();
+        let (_cleanup, root) = temp_test_dir("con-ghostty-alpha-blending-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let defaults = GhosttyConfigPatch::default();
+        let overrides = GhosttyConfigPatch::default();
+
+        let config = build_ghostty_config(&defaults, None, &overrides).unwrap();
+        assert_eq!(alpha_blending(&config), "linear-corrected");
+
+        let source = NativeConfigSource {
+            text: "alpha-blending = native\n".into(),
+            base_dir: root,
+        };
+        let config = build_ghostty_config(&defaults, Some(&source), &overrides).unwrap();
+        assert_eq!(alpha_blending(&config), "native");
     }
 
     #[test]
