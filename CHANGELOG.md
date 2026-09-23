@@ -4,6 +4,34 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.109`
+
+### Fixed
+
+**Settings**
+
+- Ghostty configuration errors now include actionable diagnostic details while
+  keeping long error lists contained and scrollable. Generated configuration
+  locations are labeled clearly, and real include paths retain their line
+  numbers. _(PR [#384](https://github.com/nowledge-co/con-terminal/pull/384)
+  by [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+- Settings text now scales consistently with UI Size and remains readable in
+  muted states and narrow windows. Wrapped rows no longer clip, key controls
+  stay accessible, and icon previews render more cleanly. _(PR
+  [#389](https://github.com/nowledge-co/con-terminal/pull/389) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Linux**
+
+- Terminal mouse input now follows applications' requested protocol across
+  clicks, drags, hover motion, and wheel events. Selection, terminal padding,
+  button chords, and releases outside the grid are handled without losing
+  gesture state. _(PR
+  [#387](https://github.com/nowledge-co/con-terminal/pull/387) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+---
+
 ## `v0.1.0-beta.108`
 
 ### Fixed
