@@ -143,6 +143,10 @@ pub struct TabSummaryRequest {
     /// SSH hostname if known. Pre-empts the LLM call: SSH tabs are
     /// always labelled by host with a globe icon, no model needed.
     pub ssh_host: Option<String>,
+    /// Interactive agent CLI detected in the focused terminal. Such TUIs
+    /// redraw status lines and title spinners continuously, so the cache
+    /// key ignores that volatile surface.
+    pub agent_cli: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -412,10 +416,21 @@ fn context_hash(req: &TabSummaryRequest) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
     req.cwd.hash(&mut h);
-    req.title.hash(&mut h);
     for cmd in req.recent_commands.iter().take(3) {
         cmd.hash(&mut h);
     }
+    if let Some(agent_cli) = req.agent_cli {
+        // Agent CLIs tick elapsed-time/token counters and animate a
+        // spinner prefix in the title every second. Keying on either
+        // re-labels the same session every budget window.
+        agent_cli.hash(&mut h);
+        req.title
+            .as_deref()
+            .map(|title| title.trim_start_matches(|c: char| !c.is_alphanumeric()))
+            .hash(&mut h);
+        return h.finish();
+    }
+    req.title.hash(&mut h);
     // Hash only the last few output lines — that's where new content
     // appears. Hashing the entire scrollback would re-fire every time
     // any line scrolled out, even for stable workloads (`htop`,
@@ -663,6 +678,51 @@ fn label_mentions_tab(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn summary_request(
+        agent_cli: Option<&'static str>,
+        title: &str,
+        status: &str,
+    ) -> TabSummaryRequest {
+        TabSummaryRequest {
+            tab_id: 1,
+            cwd: Some("/work/con".into()),
+            recent_commands: Vec::new(),
+            recent_output: vec!["> refactor the tab summary engine".into(), status.into()],
+            title: Some(title.into()),
+            ssh_host: None,
+            agent_cli,
+        }
+    }
+
+    #[test]
+    fn agent_cli_cache_key_ignores_ticking_status_and_title_spinner() {
+        let first = summary_request(
+            Some("claude"),
+            "◐ Tab summary cache",
+            "✻ Ideating… (3s · ↑ 111 tokens)",
+        );
+        let later = summary_request(
+            Some("claude"),
+            "◑ Tab summary cache",
+            "✻ Ideating… (4s · ↑ 148 tokens)",
+        );
+        assert_eq!(context_hash(&first), context_hash(&later));
+
+        let new_task = summary_request(
+            Some("claude"),
+            "◑ Fix login flow",
+            "✻ Ideating… (4s · ↑ 148 tokens)",
+        );
+        assert_ne!(context_hash(&first), context_hash(&new_task));
+    }
+
+    #[test]
+    fn shell_cache_key_still_tracks_recent_output() {
+        let before = summary_request(None, "zsh", "cargo test");
+        let after = summary_request(None, "zsh", "cargo build");
+        assert_ne!(context_hash(&before), context_hash(&after));
+    }
 
     #[test]
     fn parse_json_clean() {

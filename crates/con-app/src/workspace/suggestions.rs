@@ -639,6 +639,7 @@ impl ConWorkspace {
                         .collect()
                 },
                 recent_output,
+                agent_cli: tab.agent_cli,
             };
             let tx = tx.clone();
             self.tab_summary_engine.request(req, move |summary| {
