@@ -4661,7 +4661,7 @@ impl SettingsPanel {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let icon_id = choice.id.to_string();
-        let asset = SharedString::from(choice.asset);
+        let asset = crate::assets::png_preview(choice.asset, 48.0);
         let style = ButtonCustomVariant::new(cx)
             .color(if is_sel {
                 theme.primary.opacity(0.10)

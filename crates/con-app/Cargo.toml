@@ -65,6 +65,7 @@ mermaid-rs-renderer.workspace = true
 mathjax-svg-rs.workspace = true
 regex = "1"
 imagesize = "0.13"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "=0.26.0"
@@ -82,10 +83,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dwm",              # DwmSetWindowAttribute — Mica/Acrylic backdrop
     "Win32_UI_WindowsAndMessaging",     # FlashWindowEx for terminal notifications
 ] }
-# Used only by the Windows `GhosttyView` to wrap D3D11-readback BGRA into
-# a GPUI `RenderImage` (GPUI's `RenderImage::new` takes a
-# `SmallVec<[image::Frame; 1]>` and it does not re-export either crate).
-image = { version = "0.25", default-features = false }
+# Windows GhosttyView wraps D3D11-readback BGRA frames in a GPUI RenderImage.
 smallvec = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -95,7 +93,6 @@ x11rb = "0.13.2"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "notification"] }
 # Linux wraps shared libghostty-vt Kitty RGBA snapshots in GPUI
 # `RenderImage`s, whose constructor exposes these concrete crate types.
-image = { version = "0.25", default-features = false }
 smallvec = "1"
 fontdb = "0.23"
 ttf-parser = "0.25"
