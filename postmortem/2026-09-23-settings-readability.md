@@ -32,6 +32,11 @@ clipping larger text. Wrapped row descriptions use definite preferred widths so
 their measured heights include every line. Narrow headers omit the redundant
 save-status label to keep the window title and Save button visible.
 
+Appearance now starts with terminal themes and fonts; app icons and agent avatars
+follow terminal controls and theme import. The theme card cannot shrink vertically,
+so wrapping its grid at larger UI sizes does not clip themes before the Fonts group.
+Theme helper text uses the muted role without additional opacity attenuation.
+
 ## What we learned
 
 Minimum contrast alone does not preserve visual hierarchy. Test both readability
@@ -47,8 +52,11 @@ after correction. A separate test checks preservation of valid colors and
 correction against multiple backgrounds. The existing low-contrast, warning,
 and theme-mode tests continue to pass.
 
-The Settings layout test covers 16px/24px UI text at 375px/920px window widths,
-proxy alignment, heading scaling, title fit, and wrapped row descriptions.
+The Settings layout test covers 16px/24px UI text at 375/600/840/920px window widths,
+proxy alignment, heading scaling, title fit, wrapped row descriptions, and Appearance order.
 Restoring the old 10px heading makes that test fail. The wrapped-description
 assertion also failed before using a definite column width. Removing two trial
 `flex_shrink_0` rules kept it green, so those redundant rules were discarded.
+The order assertion failed with the old section order and exposed theme-card
+compression at large UI sizes. An explicit inner width did not fix compression
+and was removed; preventing the outer theme card from shrinking did.

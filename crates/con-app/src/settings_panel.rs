@@ -4077,14 +4077,78 @@ impl SettingsPanel {
             );
         }
 
+        // ── Built-in themes ──
+        let mut theme_card_inner = div()
+            .debug_selector(|| "settings-terminal-theme".into())
+            .px(px(16.0))
+            .py(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .mb(px(12.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Terminal Theme"),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_px(theme, 12.0))
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{total_count} themes")),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(ui_px(theme, 12.0))
+                    .text_color(theme.muted_foreground)
+                    .mb(px(10.0))
+                    .child("You can also import community-maintained Ghostty styles."),
+            )
+            .child(builtin_grid);
+
+        // User-installed themes
+        if let Some(user_grid) = user_grid {
+            theme_card_inner = theme_card_inner.child(
+                div()
+                    .mt(px(16.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .mb(px(10.0))
+                            .child(
+                                svg()
+                                    .path("phosphor/folder.svg")
+                                    .size(ui_icon_px(theme, 12.0))
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .text_size(ui_px(theme, 12.0))
+                                    .text_color(theme.muted_foreground)
+                                    .child("Installed"),
+                            ),
+                    )
+                    .child(user_grid),
+            );
+        }
+
         let mut content = section_content(
             "Appearance",
             "Tweak the Con's textures, tastes and feels.",
             theme,
         );
 
-        content = content.child(app_icon_picker);
-        content = content.child(agent_avatar_picker);
+        content = content.child(
+            card(theme, card_opacity)
+                .flex_shrink_0()
+                .child(theme_card_inner),
+        );
 
         content = content.child(
             div()
@@ -4428,67 +4492,9 @@ impl SettingsPanel {
                 ),
         );
 
-        // ── Built-in themes ──
-        let mut theme_card_inner = div()
-            .px(px(16.0))
-            .py(px(12.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .mb(px(12.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Terminal Theme"),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui_px(theme, 12.0))
-                            .text_color(theme.muted_foreground.opacity(0.5))
-                            .child(format!("{total_count} themes")),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(ui_px(theme, 12.0))
-                    .text_color(theme.muted_foreground.opacity(0.4))
-                    .mb(px(10.0))
-                    .child("You can also import community-maintained Ghostty styles."),
-            )
-            .child(builtin_grid);
-
-        // User-installed themes
-        if let Some(user_grid) = user_grid {
-            theme_card_inner = theme_card_inner.child(
-                div()
-                    .mt(px(16.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .mb(px(10.0))
-                            .child(
-                                svg()
-                                    .path("phosphor/folder.svg")
-                                    .size(ui_icon_px(theme, 12.0))
-                                    .text_color(theme.muted_foreground.opacity(0.5)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_px(theme, 12.0))
-                                    .text_color(theme.muted_foreground.opacity(0.6))
-                                    .child("Installed"),
-                            ),
-                    )
-                    .child(user_grid),
-            );
-        }
-        content = content.child(card(theme, card_opacity).child(theme_card_inner));
         content = content.child(card(theme, card_opacity).child(import_section));
+        content = content.child(app_icon_picker);
+        content = content.child(agent_avatar_picker);
 
         content
     }
@@ -7598,6 +7604,20 @@ mod tests {
                 panel.active_section = super::SettingsSection::Appearance;
                 cx.notify();
             });
+            let ordered_sections = [
+                "settings-terminal-theme",
+                "settings-group-Fonts",
+                "settings-group-Cursor",
+                "settings-group-App Icon",
+                "settings-group-Agent Avatar",
+            ]
+            .map(|selector| view.debug_bounds(selector).expect("appearance section"));
+            for pair in ordered_sections.windows(2) {
+                assert!(
+                    pair[0].bottom() <= pair[1].top(),
+                    "appearance sections out of order: {pair:?}"
+                );
+            }
             for (row_selector, hint_selector) in [
                 ("settings-row-Add Fallback", "settings-hint-Add Fallback"),
                 ("settings-row-Cursor Style", "settings-hint-Cursor Style"),
@@ -7609,8 +7629,9 @@ mod tests {
                 let row = view.debug_bounds(row_selector).expect("appearance row");
                 let hint = view.debug_bounds(hint_selector).expect("appearance hint");
                 assert!(hint.size.height > gpui::px(0.0));
+                // Allow one pixel of layout rounding on the 12px bottom padding.
                 assert!(
-                    hint.bottom() <= row.bottom() - gpui::px(12.0),
+                    hint.bottom() <= row.bottom() - gpui::px(11.0),
                     "{hint_selector} clipped at {font_size}px / {width}px: {hint:?} {row:?}"
                 );
             }
