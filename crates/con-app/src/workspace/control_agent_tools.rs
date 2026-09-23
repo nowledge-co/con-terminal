@@ -892,6 +892,12 @@ impl ConWorkspace {
                                 let lines = this
                                     .update(cx, |_, cx| pane.recent_lines(200, cx))
                                     .unwrap_or_default();
+                                // `!is_busy` can hold before the shell has run the probe.
+                                if !con_agent::shell_probe::shell_probe_output_complete(
+                                    &lines, &nonce,
+                                ) {
+                                    continue;
+                                }
                                 match con_agent::shell_probe::parse_shell_probe_lines(&lines, &nonce)
                                 {
                                     Ok(result) => {
