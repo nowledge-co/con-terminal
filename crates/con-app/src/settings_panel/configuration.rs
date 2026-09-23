@@ -246,7 +246,7 @@ impl SettingsPanel {
                     div()
                         .w_full()
                         .min_w_0()
-                        .text_size(px(12.0))
+                        .text_xs()
                         .text_color(muted)
                         .child(Config::config_path().display().to_string()),
                 )
