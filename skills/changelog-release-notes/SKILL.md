@@ -40,6 +40,9 @@ are touched.
   unless the user-facing behavior truly changed. Default expected behavior
   should read as polish or reliability, not marketing.
 - Add release dates only when a version is actually tagged/released.
+- After a release, check the latest shipped headings against `gh release list
+  --json tagName,publishedAt`; use the release date in Asia/Shanghai, matching
+  the existing changelog convention. Do not leave shipped headings undated.
 - If a bullet combines multiple PRs, include all relevant PR/author credits.
 
 ## Validation
