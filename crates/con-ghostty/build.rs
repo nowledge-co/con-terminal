@@ -36,6 +36,7 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 const GHOSTTY_REV: &str = "e5077949834c3291a9434f88b38a381d8f5fedfc";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
+const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
 const REQUIRED_ZIG_VERSION: &str = "0.16.0";
 const MAX_PREFETCH_PACKAGES: usize = 256;
@@ -49,6 +50,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
     println!("cargo:rerun-if-env-changed={GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV}");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_PREFETCH_DEPS_ENV}");
     println!("cargo:rerun-if-env-changed=CON_STUB_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
@@ -114,6 +116,12 @@ fn build_macos() {
         "-Demit-macos-app=false".to_string(),
         format!("-Doptimize={optimize}"),
     ];
+    if env_flag_enabled(GHOSTTY_PREFETCH_DEPS_ENV) {
+        // Zig's direct git package fetch has repeatedly failed on macOS CI
+        // with HttpConnectionClosing. Use the existing curl/git + local Zig
+        // fetch path before the release build instead of after a failed build.
+        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
+    }
     let mut cmd = Command::new(&zig_bin);
     configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
     cmd.args(&build_args).current_dir(&ghostty_dir);
@@ -1039,7 +1047,9 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
         }
     }
 
-    println!("cargo:warning=con-ghostty: prefetched {fetched} Zig package(s), {failed} failed");
+    if failed > 0 {
+        println!("cargo:warning=con-ghostty: prefetched {fetched} Zig package(s), {failed} failed");
+    }
 }
 
 fn collect_zon_files(root: &Path, out: &mut VecDeque<PathBuf>) {

@@ -20,4 +20,5 @@ jobs:
       - name: Build release binaries without signing
         env:
           CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT: "1"
+          CON_GHOSTTY_PREFETCH_DEPS: "1"
         run: cargo build --locked --release --target x86_64-apple-darwin -p con -p con-cli

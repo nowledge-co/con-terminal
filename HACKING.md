@@ -80,6 +80,11 @@ If you do not use mise, install the prerequisites yourself:
 
 CI mirrors this deliberately:
 - `release-macos.yml`, `release-linux.yml`, and `release-windows.yml` install Zig 0.16.0 before release builds.
+- macOS app packaging sets `CON_GHOSTTY_PREFETCH_DEPS=1` to populate Zig's
+  package cache through curl/git and local `zig fetch` before building. This
+  avoids a reproducible Zig direct Git-fetch failure in release CI. Ordinary
+  development builds do not prefetch; they retain the on-failure retry. Set
+  `CON_GHOSTTY_PREFETCH_DEPS=0` to opt out while diagnosing a local package issue.
 - The Linux PR smoke check in `ci-portable.yml` also installs Zig 0.16.0 because it type-checks `con-ghostty` with `libghostty-vt`.
 - The Windows and Linux PR jobs build and link the real libghostty-vt backend, then run `con-ghostty` tests. Do not replace these with `CON_SKIP_GHOSTTY_VT` or check-only coverage: removed symbols and calling-convention drift otherwise remain invisible until release.
 
