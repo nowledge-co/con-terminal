@@ -4,6 +4,35 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.110`
+
+### Fixed
+
+**Tabs**
+
+- Tabs running Claude Code and other recognized agent CLIs no longer ask the
+  suggestion model to rename them on every status tick. A changed task title
+  can still update the tab label. _(PR
+  [#391](https://github.com/nowledge-co/con-terminal/pull/391) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
+**Agent**
+
+- Shell probes now return the terminal's host, path, and environment facts
+  reliably. On zsh, repeated probes no longer leave the prompt stuck in a
+  continuation state. _(PR
+  [#392](https://github.com/nowledge-co/con-terminal/pull/392) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
+**Files**
+
+- File-type icons in the sidebar now use the bundled icon font correctly,
+  instead of showing missing-glyph boxes on macOS. _(PR
+  [#393](https://github.com/nowledge-co/con-terminal/pull/393) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
+---
+
 ## `v0.1.0-beta.109`
 
 ### Fixed
