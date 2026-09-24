@@ -155,7 +155,7 @@ impl PaneCreateLocation {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct PaneSelector {
     pub pane_index: Option<usize>,
     pub pane_id: Option<usize>,
@@ -5163,6 +5163,7 @@ pub struct WaitForOutput {
 pub struct WaitForTool {
     pane_tx: Sender<PaneRequest>,
     cancel_flag: Arc<AtomicBool>,
+    progress: std::sync::Mutex<WaitProgressTracker>,
 }
 
 impl WaitForTool {
@@ -5170,7 +5171,33 @@ impl WaitForTool {
         Self {
             pane_tx,
             cancel_flag,
+            progress: std::sync::Mutex::new(WaitProgressTracker::default()),
         }
+    }
+}
+
+/// Remembers the screen each pane showed at its last `wait_for` timeout so a
+/// repeated timeout with an identical screen can be reported as `no_progress`
+/// instead of inviting the model to poll forever (con #239).
+#[derive(Default)]
+struct WaitProgressTracker {
+    last_timeout_screen: std::collections::HashMap<PaneSelector, String>,
+}
+
+impl WaitProgressTracker {
+    fn record(&mut self, target: PaneSelector, status: &str, output: &str) -> bool {
+        if status != "timeout" {
+            self.last_timeout_screen.remove(&target);
+            return false;
+        }
+        let screen = output
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.last_timeout_screen
+            .insert(target, screen.clone())
+            .is_some_and(|previous| previous == screen)
     }
 }
 
@@ -5181,7 +5208,7 @@ impl Tool for WaitForTool {
     type Output = WaitForOutput;
 
     fn description(&self) -> String {
-        "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, or timeout. On timeout, read_pane to check progress and call wait_for again if needed.".to_string()
+        "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, timeout, or no_progress. On timeout, read_pane to check progress and call wait_for again if needed. no_progress means the pane timed out twice with an unchanged screen: stop waiting on it and report the screen or send the input it needs.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -5256,7 +5283,23 @@ impl Tool for WaitForTool {
         .map_err(|e| ToolError::CommandFailed(e.into()))?;
 
         match response {
-            PaneResponse::WaitComplete { status, output } => Ok(WaitForOutput { status, output }),
+            PaneResponse::WaitComplete { status, output } => {
+                let stalled = self
+                    .progress
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .record(target, &status, &output);
+                if stalled {
+                    log::info!("[wait_for] → no_progress: {}", target.describe());
+                    return Ok(WaitForOutput {
+                        status: "no_progress".into(),
+                        output: format!(
+                            "The pane timed out twice with an unchanged screen. Do not call wait_for on it again; report the current screen to the user or send the input it is waiting for.\n\n{output}"
+                        ),
+                    });
+                }
+                Ok(WaitForOutput { status, output })
+            }
             PaneResponse::Error(e) => Err(ToolError::CommandFailed(e)),
             _ => Err(ToolError::CommandFailed("Unexpected response".into())),
         }
@@ -6860,9 +6903,41 @@ mod tests {
     };
     use crate::tmux::{TmuxExecLocation, TmuxPaneInfo, TmuxSnapshot};
     use crate::tools::{
-        PaneSelector, preferred_tmux_shell_session, shell_quote_fragment, tmux_creation_target,
+        PaneSelector, WaitProgressTracker, preferred_tmux_shell_session, shell_quote_fragment,
+        tmux_creation_target,
     };
     use crossbeam_channel::unbounded;
+
+    #[test]
+    fn wait_progress_flags_repeated_timeout_with_unchanged_screen() {
+        let pane = PaneSelector::new(None, Some(3));
+        let mut tracker = WaitProgressTracker::default();
+
+        assert!(!tracker.record(pane, "timeout", "Password: "));
+        assert!(tracker.record(pane, "timeout", "Password:"));
+    }
+
+    #[test]
+    fn wait_progress_resets_when_screen_changes_or_wait_completes() {
+        let pane = PaneSelector::new(None, Some(3));
+        let mut tracker = WaitProgressTracker::default();
+
+        assert!(!tracker.record(pane, "timeout", "Compiling a"));
+        assert!(!tracker.record(pane, "timeout", "Compiling b"));
+        assert!(!tracker.record(pane, "idle", "$ "));
+        assert!(!tracker.record(pane, "timeout", "Compiling b"));
+    }
+
+    #[test]
+    fn wait_progress_tracks_panes_independently() {
+        let first = PaneSelector::new(None, Some(1));
+        let second = PaneSelector::new(None, Some(2));
+        let mut tracker = WaitProgressTracker::default();
+
+        assert!(!tracker.record(first, "timeout", "[y/N]"));
+        assert!(!tracker.record(second, "timeout", "[y/N]"));
+        assert!(tracker.record(first, "timeout", "[y/N]"));
+    }
 
     #[test]
     fn terminal_exec_response_distinguishes_unconfirmed_completion() {
