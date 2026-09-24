@@ -8,6 +8,13 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Agent**
+
+- Repeated terminal waits now report when the visible screen has not changed,
+  instead of inviting the agent to keep polling without a next step. _(PR
+  [#399](https://github.com/nowledge-co/con-terminal/pull/399) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
 **Updates and Releases**
 
 - macOS release builds now prepare Ghostty's dependencies before compilation,

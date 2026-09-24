@@ -5208,7 +5208,7 @@ impl Tool for WaitForTool {
     type Output = WaitForOutput;
 
     fn description(&self) -> String {
-        "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, timeout, or no_progress. On timeout, read_pane to check progress and call wait_for again if needed. no_progress means the pane timed out twice with an unchanged screen: stop waiting on it and report the screen or send the input it needs.".to_string()
+        "Wait for a terminal pane to become idle or for a specific pattern to appear. Use after launching a command to wait for it to finish. Without a pattern, waits for idle — works universally (shell integration or output quiescence). With a pattern, polls until the text appears. Prefer idle mode (no pattern). Returns status: idle, matched, timeout, or no_progress. On timeout, read_pane to check progress and call wait_for again if needed. no_progress means two timeouts showed the same visible screen, not that the process stopped. Do not blindly repeat the wait: inspect the pane, provide input if it is waiting for some, or report what is visible.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -5294,7 +5294,7 @@ impl Tool for WaitForTool {
                     return Ok(WaitForOutput {
                         status: "no_progress".into(),
                         output: format!(
-                            "The pane timed out twice with an unchanged screen. Do not call wait_for on it again; report the current screen to the user or send the input it is waiting for.\n\n{output}"
+                            "The pane timed out twice with an unchanged visible screen. This does not prove the process stopped. Do not blindly repeat the wait; inspect the pane, provide input if it is waiting for some, or report the current screen to the user.\n\n{output}"
                         ),
                     });
                 }
