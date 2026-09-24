@@ -2,10 +2,11 @@
 
 ## What happened
 
-The macOS release jobs for beta.108, beta.109, and beta.110 succeeded only
-after an initial `zig build` failure, a broad Zig package prefetch, and a
-second build. Both Intel and Apple Silicon jobs showed the pattern. Their logs
-also carried `ranlib` warnings about an empty `libcon_ghostty_ffi_abi.a`.
+The macOS Intel release jobs for beta.108, beta.109, and beta.110 succeeded
+only after an initial `zig build` failure, a broad Zig package prefetch, and a
+second build. The beta.109 Apple Silicon job showed the same pattern. Their
+logs also carried `ranlib` warnings about an empty
+`libcon_ghostty_ffi_abi.a`.
 
 ## Root cause
 
