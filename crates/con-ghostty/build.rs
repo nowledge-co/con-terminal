@@ -94,7 +94,9 @@ fn build_macos() {
     if initial_output_restore_enabled {
         ffi_abi.define("CON_GHOSTTY_EMBEDDED_INITIAL_OUTPUT", None);
     }
-    ffi_abi.compile("con_ghostty_ffi_abi");
+    // This translation unit only contains compile-time assertions. Archiving
+    // its empty object produces ranlib warnings and serves no link purpose.
+    ffi_abi.compile_intermediates();
     println!("cargo:rerun-if-changed=src/ffi_abi.c");
 
     cc::Build::new()
@@ -116,14 +118,15 @@ fn build_macos() {
     configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
     cmd.args(&build_args).current_dir(&ghostty_dir);
 
-    let status = cmd.status().unwrap_or_else(|err| {
+    let output = cmd.output().unwrap_or_else(|err| {
         panic!(
             "failed to run `{}` build for libghostty: {err}",
             zig_bin.to_string_lossy()
         )
     });
 
-    if !status.success() {
+    if !output.status.success() {
+        warn_zig_failure("initial libghostty build", &output);
         println!(
             "cargo:warning=zig build failed for libghostty; prefetching Zig package cache and retrying"
         );
@@ -132,13 +135,14 @@ fn build_macos() {
         let mut retry = Command::new(&zig_bin);
         configure_zig_command(&mut retry, zig_global_cache_dir.as_deref());
         retry.args(&build_args).current_dir(&ghostty_dir);
-        let retry_status = retry.status().unwrap_or_else(|err| {
+        let retry_output = retry.output().unwrap_or_else(|err| {
             panic!(
                 "failed to retry `{}` build for libghostty: {err}",
                 zig_bin.to_string_lossy()
             )
         });
-        if !retry_status.success() {
+        if !retry_output.status.success() {
+            warn_zig_failure("retry of libghostty build", &retry_output);
             panic!("zig build failed for libghostty");
         }
     }
@@ -966,6 +970,21 @@ fn writable_dir(path: &Path) -> bool {
 fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&std::path::Path>) {
     if let Some(dir) = zig_global_cache_dir {
         command.env("ZIG_GLOBAL_CACHE_DIR", dir);
+    }
+}
+
+fn warn_zig_failure(context: &str, output: &std::process::Output) {
+    println!("cargo:warning={context} exited with {}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>();
+    for line in lines.into_iter().rev() {
+        let line = line.chars().take(512).collect::<String>();
+        println!("cargo:warning=zig: {line}");
     }
 }
 

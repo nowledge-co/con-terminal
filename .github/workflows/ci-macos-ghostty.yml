@@ -1,0 +1,21 @@
+name: ci-macos-ghostty
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci-macos-ghostty.yml"
+      - "crates/con-ghostty/**"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+jobs:
+  build-intel:
+    name: Build libghostty (macOS x86_64)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.16.0
+      - name: Build native Ghostty binding
+        run: cargo build -p con-ghostty --release --target x86_64-apple-darwin
