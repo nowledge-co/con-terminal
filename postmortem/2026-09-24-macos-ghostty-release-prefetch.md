@@ -39,8 +39,8 @@ the unrelated `ranlib` warnings.
 - Prefetch packages before macOS app packaging, using the already validated
   curl/git and local `zig fetch` path. Normal development builds keep the
   cheaper build-first behavior and retry only when needed.
-- Exercise the release-equivalent Intel Cargo build on pull requests that
-  change the Ghostty build path.
+- Exercise the Intel native Ghostty build on pull requests that change the
+  build path; retain a manual full-binary build for release-equivalent checks.
 
 ## What we learned
 
@@ -49,3 +49,11 @@ the build script handles it internally. Release logs need the original error,
 and the release path should use a known-good dependency transport before
 starting an expensive native compile rather than treating that failure as a
 routine warm-up step.
+
+## Verification
+
+The prefetch-enabled, release-equivalent Intel CI build completed without an
+initial Zig failure, retry, or empty-archive warning. A local Apple Silicon
+dev app bundle built with the same packaging script and included both the
+terminal resources and terminfo. The macOS arm64 E2E, Windows and Linux CI
+checks passed; all 26 `con-ghostty` unit tests passed locally.
