@@ -4,7 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.110`
+## `v0.1.0-beta.111`
+
+### Fixed
+
+**Updates and Releases**
+
+- macOS release builds now prepare Ghostty's dependencies before compilation,
+  avoiding a recurring download failure that could delay Intel and Apple
+  Silicon packages. _(PR
+  [#398](https://github.com/nowledge-co/con-terminal/pull/398) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
+## `v0.1.0-beta.110` - 2026-09-24
 
 ### Fixed
 
@@ -33,7 +47,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ---
 
-## `v0.1.0-beta.109`
+## `v0.1.0-beta.109` - 2026-09-23
 
 ### Fixed
 
@@ -61,7 +75,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ---
 
-## `v0.1.0-beta.108`
+## `v0.1.0-beta.108` - 2026-09-23
 
 ### Fixed
 
@@ -81,7 +95,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ---
 
-## `v0.1.0-beta.107`
+## `v0.1.0-beta.107` - 2026-09-22
 
 ### Changed
 
@@ -106,7 +120,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ---
 
-## `v0.1.0-beta.106`
+## `v0.1.0-beta.106` - 2026-09-22
 
 ### Fixed
 

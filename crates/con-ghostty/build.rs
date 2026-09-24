@@ -36,6 +36,7 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 const GHOSTTY_REV: &str = "e5077949834c3291a9434f88b38a381d8f5fedfc";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
+const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
 const REQUIRED_ZIG_VERSION: &str = "0.16.0";
 const MAX_PREFETCH_PACKAGES: usize = 256;
@@ -49,6 +50,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
     println!("cargo:rerun-if-env-changed={GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV}");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_PREFETCH_DEPS_ENV}");
     println!("cargo:rerun-if-env-changed=CON_STUB_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
@@ -94,7 +96,9 @@ fn build_macos() {
     if initial_output_restore_enabled {
         ffi_abi.define("CON_GHOSTTY_EMBEDDED_INITIAL_OUTPUT", None);
     }
-    ffi_abi.compile("con_ghostty_ffi_abi");
+    // This translation unit only contains compile-time assertions. Archiving
+    // its empty object produces ranlib warnings and serves no link purpose.
+    ffi_abi.compile_intermediates();
     println!("cargo:rerun-if-changed=src/ffi_abi.c");
 
     cc::Build::new()
@@ -112,18 +116,25 @@ fn build_macos() {
         "-Demit-macos-app=false".to_string(),
         format!("-Doptimize={optimize}"),
     ];
+    if env_flag_enabled(GHOSTTY_PREFETCH_DEPS_ENV) {
+        // Zig's direct git package fetch has repeatedly failed on macOS CI
+        // with HttpConnectionClosing. Use the existing curl/git + local Zig
+        // fetch path before the release build instead of after a failed build.
+        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
+    }
     let mut cmd = Command::new(&zig_bin);
     configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
     cmd.args(&build_args).current_dir(&ghostty_dir);
 
-    let status = cmd.status().unwrap_or_else(|err| {
+    let output = cmd.output().unwrap_or_else(|err| {
         panic!(
             "failed to run `{}` build for libghostty: {err}",
             zig_bin.to_string_lossy()
         )
     });
 
-    if !status.success() {
+    if !output.status.success() {
+        warn_zig_failure("initial libghostty build", &output);
         println!(
             "cargo:warning=zig build failed for libghostty; prefetching Zig package cache and retrying"
         );
@@ -132,13 +143,14 @@ fn build_macos() {
         let mut retry = Command::new(&zig_bin);
         configure_zig_command(&mut retry, zig_global_cache_dir.as_deref());
         retry.args(&build_args).current_dir(&ghostty_dir);
-        let retry_status = retry.status().unwrap_or_else(|err| {
+        let retry_output = retry.output().unwrap_or_else(|err| {
             panic!(
                 "failed to retry `{}` build for libghostty: {err}",
                 zig_bin.to_string_lossy()
             )
         });
-        if !retry_status.success() {
+        if !retry_output.status.success() {
+            warn_zig_failure("retry of libghostty build", &retry_output);
             panic!("zig build failed for libghostty");
         }
     }
@@ -969,6 +981,21 @@ fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&st
     }
 }
 
+fn warn_zig_failure(context: &str, output: &std::process::Output) {
+    println!("cargo:warning={context} exited with {}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>();
+    for line in lines.into_iter().rev() {
+        let line = line.chars().take(512).collect::<String>();
+        println!("cargo:warning=zig: {line}");
+    }
+}
+
 fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir: Option<&Path>) {
     let Some(cache_dir) = resolve_zig_global_cache_dir(zig_bin, zig_global_cache_dir) else {
         println!("cargo:warning=con-ghostty: could not resolve Zig global cache dir for prefetch");
@@ -1020,7 +1047,9 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
         }
     }
 
-    println!("cargo:warning=con-ghostty: prefetched {fetched} Zig package(s), {failed} failed");
+    if failed > 0 {
+        println!("cargo:warning=con-ghostty: prefetched {fetched} Zig package(s), {failed} failed");
+    }
 }
 
 fn collect_zon_files(root: &Path, out: &mut VecDeque<PathBuf>) {

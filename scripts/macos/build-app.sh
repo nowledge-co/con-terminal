@@ -20,6 +20,7 @@ log "Building con and con-cli for $CON_RUST_TARGET"
 (
   cd "$REPO_ROOT"
   CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT="${CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT:-1}" \
+    CON_GHOSTTY_PREFETCH_DEPS="${CON_GHOSTTY_PREFETCH_DEPS:-1}" \
     cargo build --locked --release --target "$CON_RUST_TARGET" -p con -p con-cli
 )
 
