@@ -28,8 +28,8 @@ pub(crate) const FILE_ICON_FONT_FAMILY: &str = "IoskeleyMono";
 /// Icon for a file tree row.
 ///
 /// Directories get a folder icon that tracks `is_expanded`. Files are matched
-/// by language first, then by the extensions that only need an icon, then by
-/// image extension, and finally fall back to a generic text-file icon.
+/// by special filename first, then language, icon-only extension, image
+/// extension, and finally a generic text-file icon.
 pub fn icon_for_path(path: &Path, is_dir: bool, is_expanded: bool) -> FileIcon {
     if is_dir {
         return FileIcon::Svg(if is_expanded {
@@ -39,6 +39,9 @@ pub fn icon_for_path(path: &Path, is_dir: bool, is_expanded: bool) -> FileIcon {
         });
     }
 
+    if let Some(icon) = icon_for_special_filename(path) {
+        return icon;
+    }
     if let Some(language) = language_for_path(path) {
         if let Some(icon) = icon_for_language(language) {
             return icon;
@@ -57,8 +60,8 @@ pub fn icon_for_path(path: &Path, is_dir: bool, is_expanded: bool) -> FileIcon {
 ///
 /// Glyph codepoints come from the Nerd Fonts Seti-UI + Custom table
 /// (`bin/scripts/lib/i_seti.sh`), and each one is present in the bundled
-/// IoskeleyMono. Languages that Phosphor can express keep the SVG; glyphs are
-/// for the languages it cannot.
+/// IoskeleyMono. Use glyphs when they identify a file type more clearly than
+/// a generic Phosphor SVG.
 fn icon_for_language(language: &str) -> Option<FileIcon> {
     Some(match language {
         "rust" => FileIcon::Glyph('\u{e68b}'),   // seti-rust
@@ -78,8 +81,29 @@ fn icon_for_language(language: &str) -> Option<FileIcon> {
         "c" => FileIcon::Glyph('\u{e649}'),      // seti-c
         "cpp" => FileIcon::Glyph('\u{e646}'),    // seti-cpp
         "zig" => FileIcon::Glyph('\u{e6a9}'),    // seti-zig
-        "toml" | "json" | "yaml" => FileIcon::Svg("phosphor/gear.svg"),
-        "bash" => FileIcon::Svg("phosphor/terminal.svg"),
+        "toml" => FileIcon::Glyph('\u{e6b2}'),   // custom-toml
+        "yaml" => FileIcon::Glyph('\u{e6a8}'),   // seti-yml
+        "json" => FileIcon::Svg("phosphor/gear.svg"),
+        "bash" => FileIcon::Glyph('\u{e691}'), // seti-shell
+        _ => return None,
+    })
+}
+
+/// These names carry more meaning than their extension (or have none).
+fn icon_for_special_filename(path: &Path) -> Option<FileIcon> {
+    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    Some(match name.as_str() {
+        ".gitignore" => FileIcon::Glyph('\u{e65d}'), // seti-git_ignore
+        ".editorconfig" => FileIcon::Glyph('\u{e652}'), // seti-editorconfig
+        "tsconfig.json" => FileIcon::Glyph('\u{e69d}'), // seti-tsconfig
+        "cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "gemfile.lock"
+        | "pipfile.lock" | "poetry.lock" => {
+            FileIcon::Glyph('\u{e672}') // seti-lock
+        }
+        "license" | "license.md" | "license.txt" => FileIcon::Glyph('\u{e60a}'), // seti-license
+        _ if name == "dockerfile" || name.starts_with("dockerfile.") => {
+            FileIcon::Glyph('\u{e650}') // seti-docker
+        }
         _ => return None,
     })
 }
@@ -87,22 +111,37 @@ fn icon_for_language(language: &str) -> Option<FileIcon> {
 /// Icon coverage for paths [`language_for_path`] deliberately leaves unmapped,
 /// so adding an icon cannot accidentally enable an unavailable highlighter.
 ///
-/// gpui-component has no Vue or Dockerfile grammar and its Swift grammar has
-/// no highlight query today. These files still deserve recognizable icons.
+/// This only affects presentation. For example, gpui-component has no Vue or
+/// Dockerfile grammar and its Swift grammar has no highlight query today.
 fn icon_for_icon_only_path(path: &Path) -> Option<FileIcon> {
-    let file_name = path.file_name()?.to_string_lossy();
-    if file_name.eq_ignore_ascii_case("dockerfile") {
-        return Some(FileIcon::Glyph('\u{e650}')); // seti-docker
-    }
-
     match path
         .extension()?
         .to_string_lossy()
         .to_ascii_lowercase()
         .as_str()
     {
-        "vue" => Some(FileIcon::Glyph('\u{e6a0}')),   // seti-vue
+        "xml" | "xsl" | "xslt" => Some(FileIcon::Glyph('\u{e619}')), // seti-xml
+        "csv" | "tsv" => Some(FileIcon::Glyph('\u{e64a}')),          // seti-csv
+        "pdf" => Some(FileIcon::Glyph('\u{e67d}')),                  // seti-pdf
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => {
+            Some(FileIcon::Glyph('\u{e6aa}')) // seti-zip
+        }
+        "svg" => Some(FileIcon::Glyph('\u{e698}')), // seti-svg
+        "ttf" | "otf" | "woff" | "woff2" => Some(FileIcon::Glyph('\u{e659}')), // seti-font
+        "graphql" | "gql" => Some(FileIcon::Glyph('\u{e662}')), // seti-graphql
+        "tf" | "tfvars" => Some(FileIcon::Glyph('\u{e69a}')), // seti-terraform
+        "vue" => Some(FileIcon::Glyph('\u{e6a0}')), // seti-vue
+        "svelte" => Some(FileIcon::Glyph('\u{e697}')), // seti-svelte
+        "astro" => Some(FileIcon::Glyph('\u{e6b3}')), // custom-astro
         "swift" => Some(FileIcon::Glyph('\u{e699}')), // seti-swift
+        "php" => Some(FileIcon::Glyph('\u{e608}')), // seti-php
+        "lua" => Some(FileIcon::Glyph('\u{e620}')), // seti-lua
+        "dart" => Some(FileIcon::Glyph('\u{e64c}')), // seti-dart
+        "scala" => Some(FileIcon::Glyph('\u{e68e}')), // seti-scala
+        "ps1" | "psm1" => Some(FileIcon::Glyph('\u{e683}')), // seti-powershell
+        "ipynb" => Some(FileIcon::Glyph('\u{e678}')), // seti-notebook
+        "wasm" => Some(FileIcon::Glyph('\u{e6a1}')), // seti-wasm
+        "wat" => Some(FileIcon::Glyph('\u{e6a2}')), // seti-wat
         _ => None,
     }
 }
@@ -164,6 +203,10 @@ mod tests {
             ("src/engine.cpp", '\u{e646}'),
             ("src/engine.hpp", '\u{e646}'),
             ("src/main.zig", '\u{e6a9}'),
+            ("Cargo.toml", '\u{e6b2}'),
+            ("config.yaml", '\u{e6a8}'),
+            ("config.yml", '\u{e6a8}'),
+            ("build.sh", '\u{e691}'),
         ] {
             assert_eq!(
                 icon_for_path(Path::new(path), false, false),
@@ -177,8 +220,31 @@ mod tests {
     fn icon_only_file_types_do_not_enable_unavailable_highlighters() {
         for (path, glyph) in [
             ("Dockerfile", '\u{e650}'),
+            ("Dockerfile.dev", '\u{e650}'),
             ("src/App.vue", '\u{e6a0}'),
             ("Sources/App.swift", '\u{e699}'),
+            ("config.xml", '\u{e619}'),
+            ("CONFIG.XML", '\u{e619}'),
+            ("layout.xslt", '\u{e619}'),
+            ("data.csv", '\u{e64a}'),
+            ("data.tsv", '\u{e64a}'),
+            ("guide.pdf", '\u{e67d}'),
+            ("archive.tar.gz", '\u{e6aa}'),
+            ("archive.tar.xz", '\u{e6aa}'),
+            ("assets/icon.svg", '\u{e698}'),
+            ("assets/font.woff2", '\u{e659}'),
+            ("schema.graphql", '\u{e662}'),
+            ("main.tf", '\u{e69a}'),
+            ("src/App.svelte", '\u{e697}'),
+            ("src/Page.astro", '\u{e6b3}'),
+            ("index.php", '\u{e608}'),
+            ("script.lua", '\u{e620}'),
+            ("main.dart", '\u{e64c}'),
+            ("Main.scala", '\u{e68e}'),
+            ("build.ps1", '\u{e683}'),
+            ("analysis.ipynb", '\u{e678}'),
+            ("module.wasm", '\u{e6a1}'),
+            ("module.wat", '\u{e6a2}'),
         ] {
             assert_eq!(language_for_path(Path::new(path)), None);
             assert_eq!(
@@ -189,17 +255,27 @@ mod tests {
     }
 
     #[test]
-    fn configuration_and_script_files_use_phosphor_icons() {
-        for path in ["Cargo.toml", "package.json", "ci.yaml", "ci.yml"] {
+    fn special_filenames_override_extension_icons() {
+        for (path, glyph) in [
+            (".gitignore", '\u{e65d}'),
+            (".editorconfig", '\u{e652}'),
+            ("tsconfig.json", '\u{e69d}'),
+            ("Cargo.lock", '\u{e672}'),
+            ("pnpm-lock.yaml", '\u{e672}'),
+            ("LICENSE", '\u{e60a}'),
+        ] {
             assert_eq!(
                 icon_for_path(Path::new(path), false, false),
-                FileIcon::Svg("phosphor/gear.svg"),
-                "unexpected icon for {path}"
+                FileIcon::Glyph(glyph)
             );
         }
+    }
+
+    #[test]
+    fn json_without_a_special_filename_uses_the_configuration_icon() {
         assert_eq!(
-            icon_for_path(Path::new("build.sh"), false, false),
-            FileIcon::Svg("phosphor/terminal.svg")
+            icon_for_path(Path::new("package.json"), false, false),
+            FileIcon::Svg("phosphor/gear.svg")
         );
     }
 
@@ -213,7 +289,11 @@ mod tests {
         for glyph in [
             '\u{e68b}', '\u{e606}', '\u{e627}', '\u{e628}', '\u{e60c}', '\u{e609}', '\u{e60e}',
             '\u{e614}', '\u{e603}', '\u{e64d}', '\u{e650}', '\u{e673}', '\u{e66d}', '\u{e634}',
-            '\u{e605}', '\u{e649}', '\u{e646}', '\u{e699}', '\u{e6a9}', '\u{e6a0}',
+            '\u{e605}', '\u{e649}', '\u{e646}', '\u{e699}', '\u{e6a9}', '\u{e6a0}', '\u{e6b2}',
+            '\u{e6a8}', '\u{e691}', '\u{e65d}', '\u{e652}', '\u{e69d}', '\u{e672}', '\u{e60a}',
+            '\u{e619}', '\u{e64a}', '\u{e67d}', '\u{e6aa}', '\u{e698}', '\u{e659}', '\u{e662}',
+            '\u{e69a}', '\u{e697}', '\u{e6b3}', '\u{e608}', '\u{e620}', '\u{e64c}', '\u{e68e}',
+            '\u{e683}', '\u{e678}', '\u{e6a1}', '\u{e6a2}',
         ] {
             let glyph_id = face.glyph_index(glyph).expect("file icon glyph must exist");
             let bounds = face
@@ -234,13 +314,13 @@ mod tests {
         );
         assert_eq!(
             icon_for_path(Path::new("assets/icon.svg"), false, false),
-            FileIcon::Svg("phosphor/image.svg")
+            FileIcon::Glyph('\u{e698}')
         );
     }
 
     #[test]
     fn unknown_files_fall_back_to_the_text_icon() {
-        for path in ["LICENSE", ".gitignore", "no_extension", "archive.tar.gz"] {
+        for path in ["no_extension", "notes.unknown", "README.bak"] {
             assert_eq!(
                 icon_for_path(Path::new(path), false, false),
                 FileIcon::Svg("phosphor/file-text.svg"),

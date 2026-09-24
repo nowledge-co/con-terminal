@@ -6,6 +6,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.111`
 
+### Changed
+
+**Files**
+
+- The sidebar now gives more file types and familiar project files their own
+  icons, including YAML, TOML, archives, fonts, lockfiles, and Dockerfiles.
+  _(PR [#400](https://github.com/nowledge-co/con-terminal/pull/400) by
+  [@frostming](https://github.com/frostming))_
+
 ### Fixed
 
 **Agent**
