@@ -142,6 +142,11 @@ impl TerminalPane {
             .is_some_and(|terminal| terminal.write_raw_to_pty(data).unwrap_or(false))
     }
 
+    #[cfg(not(target_os = "macos"))]
+    pub fn write_raw_observed(&self, _data: &[u8], _cx: &mut App) -> bool {
+        false
+    }
+
     pub fn ensure_surface(&self, window: &mut Window, cx: &mut App) {
         self.entity.update(cx, |view, cx| {
             view.ensure_initialized_for_control(window, cx)
