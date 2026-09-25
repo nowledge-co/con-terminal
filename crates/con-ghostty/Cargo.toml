@@ -18,6 +18,7 @@ cc = "1"
 serde_json.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 core-foundation = "0.10"
 objc = "0.2"
 dispatch = "0.2"
@@ -32,6 +33,8 @@ windows = { version = "0.61", features = [
     "Win32_Globalization",             # User locale for regional CJK glyph fallback
     "Win32_System_Console",             # ConPTY: CreatePseudoConsole etc.
     "Win32_System_Threading",           # CreateProcessW, STARTUPINFOEXW
+    "Win32_System_Diagnostics_ToolHelp", # Process ancestry candidates
+    "Win32_System_SystemInformation",   # Snapshot creation-time bound
     "Win32_System_Pipes",               # CreatePipe (ConPTY I/O)
     "Win32_System_IO",                  # OVERLAPPED
     "Win32_Storage_FileSystem",         # ReadFile, WriteFile
