@@ -2862,18 +2862,26 @@ fn render_kitty_image_layer(
                     ),
                     size(px(geometry.image_width_px), px(geometry.image_height_px)),
                 );
-                // Only `crop_bounds ∩ bounds` is drawn: paint_image crops the
-                // atlas tile to it, so no content mask is needed.
-                if let Err(err) = window.paint_image(
-                    crop_bounds.intersect(&bounds),
-                    image_bounds,
-                    Default::default(),
-                    image,
-                    0,
-                    false,
-                ) {
-                    log::debug!("failed to paint Kitty image placement: {err:#}");
-                }
+                // Clip the destination, not the atlas tile: paint_image rounds
+                // source crops to whole texels, losing partially visible texels
+                // when a low-resolution image is magnified.
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: crop_bounds.intersect(&bounds),
+                    }),
+                    |window| {
+                        if let Err(err) = window.paint_image(
+                            image_bounds,
+                            image_bounds,
+                            Default::default(),
+                            image,
+                            0,
+                            false,
+                        ) {
+                            log::debug!("failed to paint Kitty image placement: {err:#}");
+                        }
+                    },
+                );
             }
         },
     )
