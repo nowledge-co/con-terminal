@@ -30,6 +30,21 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
     Ok(())
 }
 
+fn private_dir_builder() -> fs::DirBuilder {
+    let builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    }
+    #[cfg(not(unix))]
+    {
+        builder
+    }
+}
+
 pub(super) fn private_dir(path: &Path) -> Result<()> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         ensure!(
@@ -48,13 +63,7 @@ pub(super) fn private_dir(path: &Path) -> Result<()> {
         }
         return Ok(());
     }
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
+    private_dir_builder()
         .create(path)
         .with_context(|| format!("Create {}", path.display()))?;
     Ok(())
@@ -315,13 +324,7 @@ pub(super) fn stage(bundle: &HandoffBundle) -> Result<()> {
             "Unsafe .con directory"
         ),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            builder.create(&parent)?;
+            private_dir_builder().create(&parent)?;
         }
         Err(e) => return Err(e.into()),
     }
