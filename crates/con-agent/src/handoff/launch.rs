@@ -141,6 +141,14 @@ fn validate_uuid(id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn test_cwd() -> PathBuf {
+        std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join("中文 ' $(echo nope)")
+    }
 
     fn target(agent: AgentKind) -> TargetCapabilities {
         TargetCapabilities {
@@ -158,9 +166,10 @@ mod tests {
     #[test]
     fn codex_automatic_prompt_is_one_literal_argument() {
         let prompt = "Read .con/handoffs/id/context.md; $(echo not-a-shell)";
+        let cwd = test_cwd();
         let args = target_args_with_model(
             &target(AgentKind::Codex),
-            Path::new("/tmp"),
+            &cwd,
             None,
             Some(prompt),
             Some("model/id"),
@@ -168,21 +177,28 @@ mod tests {
         .unwrap();
         assert_eq!(
             args,
-            ["--cd", "/tmp", "--model", "model/id", "--", prompt].map(OsString::from)
+            [
+                OsString::from("--cd"),
+                cwd.into_os_string(),
+                OsString::from("--model"),
+                OsString::from("model/id"),
+                OsString::from("--"),
+                OsString::from(prompt),
+            ]
         );
     }
 
     #[test]
     fn native_argv_preserves_paths_and_permission_policy() {
-        let cwd = Path::new("/tmp/中文 ' $(echo nope)");
+        let cwd = test_cwd();
         let id = "020755ba-3c6b-491b-8cdf-4e3c1ab0a6e8";
         for agent in AgentKind::ALL {
             let session_id = session_id_for(agent, id);
-            let args = target_args(&target(agent), cwd, session_id, None).unwrap();
+            let args = target_args(&target(agent), &cwd, session_id, None).unwrap();
             // An unset model must not change the historical argv one bit.
             assert_eq!(
                 args,
-                target_args_with_model(&target(agent), cwd, session_id, None, None).unwrap()
+                target_args_with_model(&target(agent), &cwd, session_id, None, None).unwrap()
             );
             assert!(!args.iter().any(|arg| {
                 [
@@ -205,15 +221,15 @@ mod tests {
 
     #[test]
     fn explicit_model_is_a_standalone_argv_pair() {
-        let cwd = Path::new("/tmp/中文 ' $(echo nope)");
+        let cwd = test_cwd();
         let id = "020755ba-3c6b-491b-8cdf-4e3c1ab0a6e8";
         let model = "provider/some-model 7";
         for agent in AgentKind::ALL {
             let session_id = session_id_for(agent, id);
             let with_model =
-                target_args_with_model(&target(agent), cwd, session_id, None, Some(model));
+                target_args_with_model(&target(agent), &cwd, session_id, None, Some(model));
             let with_model = with_model.unwrap();
-            let without_model = target_args(&target(agent), cwd, session_id, None).unwrap();
+            let without_model = target_args(&target(agent), &cwd, session_id, None).unwrap();
             // The override is exactly one inserted `--model <value>` pair;
             // every other element stays in place.
             let stripped: Vec<_> = with_model
@@ -233,12 +249,12 @@ mod tests {
 
     #[test]
     fn malformed_or_option_like_models_are_rejected() {
-        let cwd = Path::new("/tmp");
+        let cwd = test_cwd();
         for model in ["", "--continue", "-m", "bad\u{7}model"] {
             assert!(
                 target_args_with_model(
                     &target(AgentKind::Cursor),
-                    cwd,
+                    &cwd,
                     Some("020755ba-3c6b-491b-8cdf-4e3c1ab0a6e8"),
                     None,
                     Some(model)
@@ -251,11 +267,12 @@ mod tests {
     #[test]
     fn model_override_precedes_prompt_delivery() {
         let id = Some("020755ba-3c6b-491b-8cdf-4e3c1ab0a6e8");
+        let cwd = test_cwd();
         // Cursor's prompt is a trailing positional; the model pair must not
         // land after it.
         let args = target_args_with_model(
             &target(AgentKind::Cursor),
-            Path::new("/tmp"),
+            &cwd,
             id,
             Some("Read context"),
             Some("composer-2.5"),
@@ -268,25 +285,18 @@ mod tests {
 
     #[test]
     fn noninteractive_flags_cannot_replace_native_prompt_delivery() {
+        let cwd = test_cwd();
         {
             let agent = AgentKind::Kimi;
-            assert!(
-                target_args(
-                    &target(agent),
-                    Path::new("/tmp"),
-                    None,
-                    Some("Read context")
-                )
-                .is_err()
-            );
+            assert!(target_args(&target(agent), &cwd, None, Some("Read context")).is_err());
         }
     }
 
     #[test]
     fn stale_or_malformed_target_ids_are_rejected() {
-        let cwd = Path::new("/tmp");
-        assert!(target_args(&target(AgentKind::Cursor), cwd, Some("--continue"), None).is_err());
-        assert!(target_args(&target(AgentKind::Codex), cwd, Some("old-session"), None).is_err());
+        let cwd = test_cwd();
+        assert!(target_args(&target(AgentKind::Cursor), &cwd, Some("--continue"), None).is_err());
+        assert!(target_args(&target(AgentKind::Codex), &cwd, Some("old-session"), None).is_err());
     }
 }
 
