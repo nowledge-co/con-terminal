@@ -205,16 +205,16 @@ impl PanelState {
     }
 
     pub fn restore_last_assistant_trace(&mut self, thinking: Option<&str>, steps: &[AgentStep]) {
-        if let Some(last) = self.messages.last_mut() {
-            if last.role == "assistant" {
-                last.set_thinking(thinking.map(ToOwned::to_owned));
-                last.steps = restored_steps_from_agent_steps(steps);
-                last.thinking_collapsed = true;
-                if !last.steps.is_empty() {
-                    last.steps_collapsed = true;
-                }
-                last.touch();
+        if let Some(last) = self.messages.last_mut()
+            && last.role == "assistant"
+        {
+            last.set_thinking(thinking.map(ToOwned::to_owned));
+            last.steps = restored_steps_from_agent_steps(steps);
+            last.thinking_collapsed = true;
+            if !last.steps.is_empty() {
+                last.steps_collapsed = true;
             }
+            last.touch();
         }
     }
 
@@ -304,18 +304,18 @@ impl PanelState {
             // Only overwrite streamed content if final_content is non-empty.
             // Some providers don't emit text items, leaving final_content empty —
             // in that case, keep whatever was accumulated during streaming.
-            if !final_content.is_empty() {
-                if let Some(last) = self.messages.last_mut() {
-                    last.replace_content(final_content);
-                }
+            if !final_content.is_empty()
+                && let Some(last) = self.messages.last_mut()
+            {
+                last.replace_content(final_content);
             }
             // Attach metadata to the last assistant message
-            if let Some(last) = self.messages.last_mut() {
-                if last.role == "assistant" {
-                    last.model = model.map(|s| s.to_string());
-                    last.duration_ms = duration_ms;
-                    last.touch();
-                }
+            if let Some(last) = self.messages.last_mut()
+                && last.role == "assistant"
+            {
+                last.model = model.map(|s| s.to_string());
+                last.duration_ms = duration_ms;
+                last.touch();
             }
             self.streaming = false;
         } else if !final_content.is_empty() {
@@ -326,8 +326,7 @@ impl PanelState {
         }
         // Ensure a message exists for tool call steps even when no text was produced.
         // This happens when the agent only used tools without generating text output.
-        if !self.tool_calls.is_empty()
-            && self.messages.last().map_or(true, |m| m.role != "assistant")
+        if !self.tool_calls.is_empty() && self.messages.last().is_none_or(|m| m.role != "assistant")
         {
             let mut msg = PanelMessage::new("assistant", "");
             msg.model = model.map(|s| s.to_string());
@@ -339,7 +338,7 @@ impl PanelState {
             let args_display = format_tool_args(&tc.tool_name, &tc.args);
             let human_name = humanize_tool_name(&tc.tool_name);
             let (status, detail) = if let Some(result) = &tc.result {
-                let formatted = format_tool_result(&tc.tool_name, &result);
+                let formatted = format_tool_result(&tc.tool_name, result);
                 (StepStatus::Complete, Some(formatted))
             } else {
                 (StepStatus::Complete, None)
@@ -359,11 +358,11 @@ impl PanelState {
         }
         // Auto-collapse steps on completed messages to reduce scroll noise. This
         // must happen after live tool calls are moved into the step timeline.
-        if let Some(last) = self.messages.last_mut() {
-            if !last.steps.is_empty() {
-                last.steps_collapsed = true;
-                last.touch();
-            }
+        if let Some(last) = self.messages.last_mut()
+            && !last.steps.is_empty()
+        {
+            last.steps_collapsed = true;
+            last.touch();
         }
     }
 
@@ -580,7 +579,11 @@ impl PanelMessage {
             return;
         };
 
-        self.thinking_markdown = Some(Arc::new(ParsedChatMarkdown::parse(thinking)));
+        // ParsedChatMarkdown carries gpui text-geometry handles: it is
+        // main-thread only, and this Arc never leaves the UI thread.
+        #[allow(clippy::arc_with_non_send_sync)]
+        let parsed = Arc::new(ParsedChatMarkdown::parse(thinking));
+        self.thinking_markdown = Some(parsed);
     }
 }
 
@@ -1444,7 +1447,7 @@ impl AgentPanel {
     ) {
         if let Some(ref input) = self.inline_input_state {
             input.update(cx, |s, cx| {
-                s.set_value(&format!("/{name} "), window, cx);
+                s.set_value(format!("/{name} "), window, cx);
             });
         }
         self.inline_skill_selection = 0;
@@ -1819,6 +1822,8 @@ impl AgentPanel {
         message.touch();
 
         cx.spawn(async move |this, cx| {
+            // Main-thread-only markdown cache (see the same allow above).
+            #[allow(clippy::arc_with_non_send_sync)]
             let parsed = Arc::new(
                 cx.background_executor()
                     .spawn(async move { ParsedChatMarkdown::parse(&parse_content) })
@@ -1857,9 +1862,7 @@ impl AgentPanel {
         is_streaming_assistant: bool,
         cx: &mut Context<Self>,
     ) -> Option<Entity<AssistantMessageView>> {
-        let Some(message) = self.state.messages.get(msg_idx) else {
-            return None;
-        };
+        let message = self.state.messages.get(msg_idx)?;
         if message.role != "assistant" {
             return None;
         }
@@ -2320,13 +2323,13 @@ fn format_exec_result(value: &serde_json::Value) -> String {
                 }
                 out.push_str(&format!("stderr: {}", stderr.trim()));
             }
-            if let Some(code) = exit_code {
-                if code != 0 {
-                    if !out.is_empty() {
-                        out.push('\n');
-                    }
-                    out.push_str(&format!("exit code: {}", code));
+            if let Some(code) = exit_code
+                && code != 0
+            {
+                if !out.is_empty() {
+                    out.push('\n');
                 }
+                out.push_str(&format!("exit code: {}", code));
             }
             if out.is_empty() {
                 "(no output)".to_string()
@@ -2641,9 +2644,7 @@ fn parse_key_value_rows(content: &str) -> Option<Vec<(String, String)>> {
         if trimmed.is_empty() || trimmed.starts_with("…") {
             continue;
         }
-        let Some((key, value)) = trimmed.split_once(": ") else {
-            return None;
-        };
+        let (key, value) = trimmed.split_once(": ")?;
         if key.len() > 32 || value.is_empty() {
             return None;
         }
@@ -2798,14 +2799,13 @@ fn restored_steps_from_agent_steps(agent_steps: &[AgentStep]) -> Vec<StepEntry> 
                 };
 
                 let mut updated = false;
-                if let Some(call_id) = call_id.as_deref() {
-                    if let Some(idx) = tool_call_positions.remove(call_id) {
-                        if let Some(existing) = restored.get_mut(idx) {
-                            existing.detail = detail.clone();
-                            existing.status = status;
-                            updated = true;
-                        }
-                    }
+                if let Some(call_id) = call_id.as_deref()
+                    && let Some(idx) = tool_call_positions.remove(call_id)
+                    && let Some(existing) = restored.get_mut(idx)
+                {
+                    existing.detail = detail.clone();
+                    existing.status = status;
+                    updated = true;
                 }
 
                 if !updated {
@@ -3156,6 +3156,7 @@ fn unparsed_markdown_suffix(message: &PanelMessage) -> Option<&str> {
     (!suffix.is_empty()).then_some(suffix)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_assistant_message(
     msg: &PanelMessage,
     avatar_asset: SharedString,
@@ -4438,30 +4439,30 @@ impl Render for AgentPanel {
         }
 
         // ── Status indicator (hidden when approval cards are visible — they ARE the status) ──
-        if self.state.pending_approvals.is_empty() {
-            if let Some((_icon, label)) = self.status_text() {
-                let status_color = match self.state.status {
-                    AgentStatus::Thinking => theme.warning,
-                    AgentStatus::Responding => theme.success,
-                    AgentStatus::Idle => theme.muted_foreground,
-                };
-                transcript_footer = transcript_footer.child(
-                    div()
-                        .ml(px(19.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .py(px(3.0))
-                        .px(px(4.0))
-                        .child(Spinner::new().small().color(status_color))
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .text_color(theme.muted_foreground.opacity(0.50))
-                                .child(label),
-                        ),
-                );
-            }
+        if self.state.pending_approvals.is_empty()
+            && let Some((_icon, label)) = self.status_text()
+        {
+            let status_color = match self.state.status {
+                AgentStatus::Thinking => theme.warning,
+                AgentStatus::Responding => theme.success,
+                AgentStatus::Idle => theme.muted_foreground,
+            };
+            transcript_footer = transcript_footer.child(
+                div()
+                    .ml(px(19.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .py(px(3.0))
+                    .px(px(4.0))
+                    .child(Spinner::new().small().color(status_color))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme.muted_foreground.opacity(0.50))
+                            .child(label),
+                    ),
+            );
         } // end pending_approvals.is_empty() guard
 
         // ── Header ──────────────────────────────────────────────
@@ -4625,7 +4626,7 @@ impl Render for AgentPanel {
                                         let provider = option.provider.clone();
                                         let panel = panel.clone();
                                         move |_, _, cx| {
-                                            let _ = panel.update(cx, |_, cx| {
+                                            panel.update(cx, |_, cx| {
                                                 cx.emit(SelectSessionProvider {
                                                     provider: provider.clone(),
                                                 });
@@ -4668,7 +4669,7 @@ impl Render for AgentPanel {
                                             let selected_model = model.clone();
                                             let panel = panel.clone();
                                             move |_, _, cx| {
-                                                let _ = panel.update(cx, |_, cx| {
+                                                panel.update(cx, |_, cx| {
                                                     cx.emit(SelectSessionModel {
                                                         model: selected_model.clone(),
                                                     });
@@ -5191,25 +5192,26 @@ impl Render for AgentPanel {
 fn humanize_model_name(model: &str) -> String {
     // Common patterns: "claude-sonnet-4-6" → "Sonnet 4.6",
     // "claude-sonnet-4-5-20250929" → "Sonnet 4.5"
-    if model.contains("claude") {
-        if let Some(rest) = model.strip_prefix("claude-") {
-            let mut segments: Vec<&str> = rest.split('-').collect();
-            // Strip trailing date stamp (8+ contiguous digits, e.g. 20250929).
-            if let Some(last) = segments.last() {
-                if last.len() >= 8 && last.chars().all(|c| c.is_ascii_digit()) {
-                    segments.pop();
-                }
-            }
-            if segments.len() >= 2 {
-                let family = segments[0];
-                let version = segments[1..].join(".");
-                let family_cap = if let Some(first) = family.chars().next() {
-                    format!("{}{}", first.to_uppercase(), &family[first.len_utf8()..])
-                } else {
-                    String::new()
-                };
-                return format!("{} {}", family_cap, version);
-            }
+    if model.contains("claude")
+        && let Some(rest) = model.strip_prefix("claude-")
+    {
+        let mut segments: Vec<&str> = rest.split('-').collect();
+        // Strip trailing date stamp (8+ contiguous digits, e.g. 20250929).
+        if let Some(last) = segments.last()
+            && last.len() >= 8
+            && last.chars().all(|c| c.is_ascii_digit())
+        {
+            segments.pop();
+        }
+        if segments.len() >= 2 {
+            let family = segments[0];
+            let version = segments[1..].join(".");
+            let family_cap = if let Some(first) = family.chars().next() {
+                format!("{}{}", first.to_uppercase(), &family[first.len_utf8()..])
+            } else {
+                String::new()
+            };
+            return format!("{} {}", family_cap, version);
         }
     }
     if model.contains("gpt-4") {
@@ -5223,6 +5225,7 @@ fn humanize_model_name(model: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
     use con_agent::{AgentConfig, ProviderConfig, ProviderKind};

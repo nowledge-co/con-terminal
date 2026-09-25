@@ -266,8 +266,8 @@ fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry>
         }
     }
 
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
 
     let mut result = Vec::new();
     result.extend(dirs);
@@ -396,7 +396,7 @@ impl Render for FileTreeView {
                                 .child(name),
                         )
                         .child({
-                            if !row_has_open_button(&entry) {
+                            if !row_has_open_button(entry) {
                                 div().size(px(ICON_SIZE)).flex_shrink_0().into_any_element()
                             } else {
                                 let path = path.clone();

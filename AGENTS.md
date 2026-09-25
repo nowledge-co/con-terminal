@@ -163,8 +163,9 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 - **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
 - **Config uses Ghostty syntax.** The primary file is `con.conf`: native terminal
   keys use Ghostty's `key = value` form, while Con-owned settings use dotted
-  `con.appearance.*`, `con.agent.*`, `con.keybindings.*`, `con.skills.*`, and
-  `con.network.*` keys with Rust field names in `snake_case`. Keep `con.version = 1`.
+  `con.appearance.*`, `con.agent.*`, `con.keybindings.*`, `con.skills.*`,
+  `con.network.*`, and `con.experimental.*` keys with Rust field names in
+  `snake_case`. Keep `con.version = 1`.
   Paths are `~/Library/Application Support/con/con.conf` on macOS,
   `$XDG_CONFIG_HOME/con/con.conf` (normally `~/.config/con/con.conf`)
   on Linux, and `%APPDATA%\con-terminal\con-terminal.conf` on Windows (CON is

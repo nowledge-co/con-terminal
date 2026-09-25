@@ -35,7 +35,7 @@ mod subscription;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
 mod window_chrome;
 use window_chrome::SETTINGS_HEADER_HEIGHT;
-pub(crate) use window_chrome::settings_titlebar_options;
+pub(crate) use window_chrome::{floating_titlebar_options, settings_titlebar_options};
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
@@ -162,6 +162,7 @@ enum SettingsSection {
     Ai,
     Providers,
     Keys,
+    Experimental,
     Configuration,
 }
 
@@ -173,6 +174,7 @@ impl SettingsSection {
             Self::Ai => "AI",
             Self::Providers => "Providers",
             Self::Keys => "Keys",
+            Self::Experimental => "Experimental",
             Self::Configuration => "Config",
         }
     }
@@ -184,6 +186,7 @@ impl SettingsSection {
             Self::Ai => "phosphor/robot.svg",
             Self::Providers => "phosphor/plugs-connected.svg",
             Self::Keys => "phosphor/keyboard.svg",
+            Self::Experimental => "phosphor/magic-wand-duotone.svg",
             Self::Configuration => "phosphor/file-text.svg",
         }
     }
@@ -195,6 +198,7 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::Ai,
     SettingsSection::Providers,
     SettingsSection::Keys,
+    SettingsSection::Experimental,
     SettingsSection::Configuration,
 ];
 
@@ -1296,7 +1300,7 @@ impl SettingsPanel {
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default or custom model ID", window, cx);
-            s.set_value(&pc.model.clone().unwrap_or_default(), window, cx);
+            s.set_value(pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
         let model_select =
@@ -1332,14 +1336,14 @@ impl SettingsPanel {
         let base_url_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Default endpoint", window, cx);
-            s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx);
+            s.set_value(pc.base_url.clone().unwrap_or_default(), window, cx);
             s
         });
         let max_tokens_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default", window, cx);
             s.set_value(
-                &pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
+                pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
                 window,
                 cx,
             );
@@ -1370,14 +1374,14 @@ impl SettingsPanel {
         let max_turns_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("10", window, cx);
-            s.set_value(&agent.max_turns.to_string(), window, cx);
+            s.set_value(agent.max_turns.to_string(), window, cx);
             s
         });
         let temperature_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("Provider default", window, cx);
             s.set_value(
-                &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
+                agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
                 window,
                 cx,
             );
@@ -1447,7 +1451,7 @@ impl SettingsPanel {
                 cx,
             );
             s.set_value(
-                &config.terminal.shell.clone().unwrap_or_default(),
+                config.terminal.shell.clone().unwrap_or_default(),
                 window,
                 cx,
             );
@@ -1456,14 +1460,14 @@ impl SettingsPanel {
         let font_size_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("14.0", window, cx);
-            s.set_value(&config.terminal.font_size.to_string(), window, cx);
+            s.set_value(config.terminal.font_size.to_string(), window, cx);
             s
         });
         let ui_font_size_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("16.0", window, cx);
             s.set_value(
-                &Self::clamp_ui_font_size(config.appearance.ui_font_size).to_string(),
+                Self::clamp_ui_font_size(config.appearance.ui_font_size).to_string(),
                 window,
                 cx,
             );
@@ -1510,7 +1514,7 @@ impl SettingsPanel {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("~/Pictures/wallpaper.jpg", window, cx);
             s.set_value(
-                &config
+                config
                     .appearance
                     .background_image
                     .clone()
@@ -1638,18 +1642,14 @@ impl SettingsPanel {
             &active_provider_select,
             window,
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
-                if let SelectEvent::Confirm(Some(value)) = ev {
-                    if let Some(provider) = Self::suggestion_provider_from_label(value) {
-                        let provider = Self::provider_for_saved_transport(&this.config, &provider);
-                        this.config.agent.select_provider(provider);
-                        this.active_model_select = Self::make_active_model_select(
-                            &this.config,
-                            &this.registry,
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    }
+                if let SelectEvent::Confirm(Some(value)) = ev
+                    && let Some(provider) = Self::suggestion_provider_from_label(value)
+                {
+                    let provider = Self::provider_for_saved_transport(&this.config, &provider);
+                    this.config.agent.select_provider(provider);
+                    this.active_model_select =
+                        Self::make_active_model_select(&this.config, &this.registry, window, cx);
+                    cx.notify();
                 }
             },
         )
@@ -1930,11 +1930,11 @@ impl SettingsPanel {
         self.load_provider_inputs(&pc, window, cx);
         self.sync_provider_placeholders(&self.selected_provider, window, cx);
         self.max_turns_input.update(cx, |s, cx| {
-            s.set_value(&agent.max_turns.to_string(), window, cx)
+            s.set_value(agent.max_turns.to_string(), window, cx)
         });
         self.temperature_input.update(cx, |s, cx| {
             s.set_value(
-                &agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
+                agent.temperature.map(|t| t.to_string()).unwrap_or_default(),
                 window,
                 cx,
             )
@@ -1992,7 +1992,7 @@ impl SettingsPanel {
         });
         self.shell_input.update(cx, |s, cx| {
             s.set_value(
-                &self.config.terminal.shell.clone().unwrap_or_default(),
+                self.config.terminal.shell.clone().unwrap_or_default(),
                 window,
                 cx,
             )
@@ -2009,11 +2009,11 @@ impl SettingsPanel {
             );
         });
         self.font_size_input.update(cx, |s, cx| {
-            s.set_value(&self.config.terminal.font_size.to_string(), window, cx)
+            s.set_value(self.config.terminal.font_size.to_string(), window, cx)
         });
         self.ui_font_size_input.update(cx, |s, cx| {
             s.set_value(
-                &Self::clamp_ui_font_size(self.config.appearance.ui_font_size).to_string(),
+                Self::clamp_ui_font_size(self.config.appearance.ui_font_size).to_string(),
                 window,
                 cx,
             )
@@ -2059,8 +2059,7 @@ impl SettingsPanel {
             });
         self.background_image_input.update(cx, |s, cx| {
             s.set_value(
-                &self
-                    .config
+                self.config
                     .appearance
                     .background_image
                     .clone()
@@ -2100,14 +2099,14 @@ impl SettingsPanel {
         // Network / proxy — repopulate so reopening the panel shows current values.
         self.http_proxy_input.update(cx, |s, cx| {
             s.set_value(
-                &self.config.network.http_proxy.clone().unwrap_or_default(),
+                self.config.network.http_proxy.clone().unwrap_or_default(),
                 window,
                 cx,
             )
         });
         self.https_proxy_input.update(cx, |s, cx| {
             s.set_value(
-                &self.config.network.https_proxy.clone().unwrap_or_default(),
+                self.config.network.https_proxy.clone().unwrap_or_default(),
                 window,
                 cx,
             )
@@ -2123,7 +2122,7 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) {
         self.model_input.update(cx, |s, cx| {
-            s.set_value(&pc.model.clone().unwrap_or_default(), window, cx)
+            s.set_value(pc.model.clone().unwrap_or_default(), window, cx)
         });
         self.load_reasoning_options(pc, window, cx);
         let key_val = pc
@@ -2134,7 +2133,7 @@ impl SettingsPanel {
         self.api_key_input
             .update(cx, |s, cx| s.set_value(&key_val, window, cx));
         self.base_url_input.update(cx, |s, cx| {
-            s.set_value(&pc.base_url.clone().unwrap_or_default(), window, cx)
+            s.set_value(pc.base_url.clone().unwrap_or_default(), window, cx)
         });
         let endpoint_label =
             Self::endpoint_label_for_base_url(&self.selected_provider, pc.base_url.as_deref())
@@ -2144,7 +2143,7 @@ impl SettingsPanel {
         });
         self.max_tokens_input.update(cx, |s, cx| {
             s.set_value(
-                &pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
+                pc.max_tokens.map(|t| t.to_string()).unwrap_or_default(),
                 window,
                 cx,
             )
@@ -2165,19 +2164,18 @@ impl SettingsPanel {
             .as_ref()
             .map(|model| model.trim())
             .filter(|model| !model.is_empty())
+            && !models.iter().any(|item| item == model)
         {
-            if !models.iter().any(|item| item == model) {
-                models.insert(0, model.to_string());
-            }
+            models.insert(0, model.to_string());
         }
         let selected_index = current_model
             .as_ref()
             .and_then(|m| models.iter().position(|item| item == m).map(IndexPath::new));
-        let entity = cx.new(|cx| {
+
+        cx.new(|cx| {
             SelectState::new(SearchableVec::new(models), selected_index, window, cx)
                 .searchable(true)
-        });
-        entity
+        })
     }
 
     fn make_model_select(
@@ -2338,7 +2336,7 @@ impl SettingsPanel {
 
             window
                 .update(|window, cx| {
-                    _ = input.update(cx, |state, cx| {
+                    input.update(cx, |state, cx| {
                         state.set_value(&path_text, window, cx);
                     });
                     _ = this.update(cx, |panel, cx| {
@@ -2913,7 +2911,6 @@ impl SettingsPanel {
     }
 
     /// Record a keystroke for the binding currently being recorded.
-
     fn set_recording_key(&mut self, key: Option<String>) {
         #[cfg(target_os = "macos")]
         let was_recording = self.recording_key.is_some();
@@ -3173,6 +3170,46 @@ impl SettingsPanel {
 
     // ── Section content ──────────────────────────────────────────
 
+    fn render_experimental(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
+        let card_opacity = self.card_opacity();
+        let theme = cx.theme();
+        section_content(
+            "Experimental",
+            "In-progress features. Behavior may change between releases.",
+            theme,
+        )
+        .child(
+            card(theme, card_opacity).child(toggle_row(
+                "Agent Handoff",
+                "Hand off a running agent session to another agent tab.",
+                Switch::new("experimental-handoff-toggle")
+                    .checked(self.config.experimental.handoff)
+                    .small()
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        let previous = this.config.experimental.handoff;
+                        this.config.experimental.handoff = *checked;
+                        if let Err(err) = this.persist_config(cx) {
+                            this.config.experimental.handoff = previous;
+                            log::warn!("settings: persist experimental.handoff failed: {err}");
+                            this.save_error = Some(err.to_string());
+                            this.save_error_kind = Some(SettingsSaveErrorKind::Other);
+                            cx.notify();
+                            return;
+                        }
+                        this.save_error = None;
+                        this.save_error_kind = None;
+                        // Live-apply so the Handoff entry points appear or
+                        // disappear without waiting for a settings save.
+                        cx.emit(AppearancePreview);
+                        cx.notify();
+                    })),
+                theme,
+                mobile,
+            )),
+        )
+    }
+
     fn render_general(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         let mobile = ResponsiveMode::from_width(window.viewport_size().width.as_f32()).is_mobile();
         let card_opacity = self.card_opacity();
@@ -3246,7 +3283,7 @@ impl SettingsPanel {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .child(group_label("Updates", &theme))
+                    .child(group_label("Updates", theme))
                     .child(
                         card(theme, card_opacity)
                             .child(
@@ -3457,7 +3494,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Terminal", &theme))
+                .child(group_label("Terminal", theme))
                 .child(card(theme, card_opacity).child(row_input_with_hint(
                     "Default Shell",
                     "Command used by new panes after restarting Con. Leave blank for automatic detection.",
@@ -3471,7 +3508,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Continuity", &theme))
+                .child(group_label("Continuity", theme))
                 .child(card(theme, card_opacity).child(toggle_row(
                     "Restore Terminal Text",
                     "Keep terminal text on restart continuity.",
@@ -3489,7 +3526,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Security", &theme))
+                .child(group_label("Security", theme))
                 .child(card(theme, card_opacity).child(toggle_row(
                     "Clipboard Writes",
                     "Allow terminal programs to copy plain text to the system clipboard.",
@@ -3509,7 +3546,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Skills", &theme))
+                .child(group_label("Skills", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(
@@ -3609,7 +3646,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Network", &theme))
+                .child(group_label("Network", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(row_field("HTTP Proxy", &self.http_proxy_input, mobile))
@@ -4150,7 +4187,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Fonts", &theme))
+                .child(group_label("Fonts", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(searchable_select_row(
@@ -4192,7 +4229,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Cursor", &theme))
+                .child(group_label("Cursor", theme))
                 .child(
                     card(theme, card_opacity).child(div().px(px(16.0)).child(select_row(
                         "Cursor Style",
@@ -4209,7 +4246,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Transparency", &theme))
+                .child(group_label("Transparency", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(slider_row(
@@ -4265,7 +4302,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Pane", &theme))
+                .child(group_label("Pane", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(toggle_row(
@@ -4380,7 +4417,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Background Image", &theme))
+                .child(group_label("Background Image", theme))
                 .child(
                     card(theme, card_opacity)
                         .child(
@@ -4507,9 +4544,9 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(group_label("Agent Avatar", &theme))
+            .child(group_label("Agent Avatar", theme))
             .child(
-                card(&theme, card_opacity)
+                card(theme, card_opacity)
                     .child(
                         div()
                             .px(px(16.0))
@@ -4598,7 +4635,7 @@ impl SettingsPanel {
                                 Some(
                                     svg()
                                         .path("phosphor/check.svg")
-                                        .size(ui_icon_px(&theme, 11.0))
+                                        .size(ui_icon_px(theme, 11.0))
                                         .text_color(theme.primary),
                                 )
                             } else {
@@ -4630,16 +4667,16 @@ impl SettingsPanel {
 
         let mut groups = div().flex().flex_col().gap(px(12.0));
         for (group, grid) in group_grids {
-            groups = groups.child(group_label(group, &theme)).child(grid);
+            groups = groups.child(group_label(group, theme)).child(grid);
         }
 
         div()
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(group_label("App Icon", &theme))
+            .child(group_label("App Icon", theme))
             .child(
-                card(&theme, card_opacity)
+                card(theme, card_opacity)
                     .child(
                         div()
                             .px(px(16.0))
@@ -6147,13 +6184,13 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(group_label("Global", &theme))
+            .child(group_label("Global", theme))
             .child(global_summon_card);
         #[cfg(target_os = "macos")]
         let shortcut_groups = shortcut_groups.child(quick_terminal_card);
         let shortcut_groups = shortcut_groups
             .child(div().h(px(8.0)))
-            .child(group_label("General", &theme))
+            .child(group_label("General", theme))
             .child(general_card);
 
         let reset_all_btn = Button::new("keybindings-reset-all")
@@ -6177,7 +6214,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Fixed Shortcuts", &theme))
+                .child(group_label("Fixed Shortcuts", theme))
                 .child(fixed_tab_card),
         )
         .child(
@@ -6185,7 +6222,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Panes", &theme))
+                .child(group_label("Panes", theme))
                 .child(pane_card),
         )
         .child(
@@ -6193,7 +6230,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Surfaces", &theme))
+                .child(group_label("Surfaces", theme))
                 .child(surface_card),
         )
         .child(
@@ -6201,7 +6238,7 @@ impl SettingsPanel {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Terminal", &theme))
+                .child(group_label("Terminal", theme))
                 .child(
                     card(theme, card_opacity)
                         // Terminal clipboard uses ⌘C/V on macOS and the
@@ -6265,6 +6302,7 @@ impl Render for SettingsPanel {
             SettingsSection::Ai => self.render_ai(window, cx),
             SettingsSection::Providers => self.render_providers(window, cx),
             SettingsSection::Keys => self.render_keys(window, cx),
+            SettingsSection::Experimental => self.render_experimental(window, cx),
             SettingsSection::Configuration => self.render_configuration(window, cx),
         };
 

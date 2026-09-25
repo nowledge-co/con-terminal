@@ -172,6 +172,7 @@ impl ConWorkspace {
         Some(popup.into_any_element())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_pane_scope_picker(
         &self,
         terminal_content_left: f32,

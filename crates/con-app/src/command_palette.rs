@@ -62,6 +62,13 @@ const CLOSE_SURFACE_SHORTCUT: &str = "secondary-alt-shift-w";
 const CLOSE_SURFACE_SHORTCUT: &str = "alt-shift-x";
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
+    #[cfg(target_os = "macos")]
+    PaletteAction {
+        id: "handoff-agent",
+        label: "Handoff Agent…",
+        shortcut: "",
+        category: "Agent",
+    },
     PaletteAction {
         id: "new-window",
         label: "New Window",
@@ -288,6 +295,7 @@ pub struct CommandPalette {
     scroll_handle: ScrollHandle,
     ui_opacity: f32,
     overlay_motion: MotionValue,
+    handoff_enabled: bool,
 }
 
 /// Emitted when the user selects an action
@@ -319,7 +327,14 @@ impl CommandPalette {
             scroll_handle: ScrollHandle::new(),
             ui_opacity: 0.90,
             overlay_motion: MotionValue::new(0.0),
+            handoff_enabled: true,
         }
+    }
+
+    /// Gate the experimental Handoff entry; the workspace refreshes this from
+    /// config every time the palette opens.
+    pub fn set_handoff_enabled(&mut self, enabled: bool) {
+        self.handoff_enabled = enabled;
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -372,12 +387,15 @@ impl CommandPalette {
     }
 
     fn filtered_actions(&self) -> Vec<&PaletteAction> {
+        let handoff_enabled = self.handoff_enabled;
+        let available = |action: &&PaletteAction| handoff_enabled || action.id != "handoff-agent";
         if self.query_text.is_empty() {
-            return PALETTE_ACTIONS.iter().collect();
+            return PALETTE_ACTIONS.iter().filter(available).collect();
         }
         let query = self.query_text.to_lowercase();
         PALETTE_ACTIONS
             .iter()
+            .filter(available)
             .filter(|a| {
                 a.label.to_lowercase().contains(&query)
                     || a.category.to_lowercase().contains(&query)
@@ -628,12 +646,10 @@ impl Render for CommandPalette {
                             cx.notify();
                         }
                     }
-                    "down" => {
-                        if count > 0 {
-                            this.selected_index = (this.selected_index + 1) % count;
-                            this.reveal_selected = true;
-                            cx.notify();
-                        }
+                    "down" if count > 0 => {
+                        this.selected_index = (this.selected_index + 1) % count;
+                        this.reveal_selected = true;
+                        cx.notify();
                     }
                     _ => {}
                 }

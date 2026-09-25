@@ -16,6 +16,11 @@ use crate::ui_scale::mono_icon_px;
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 
+/// Callback shapes threaded through the recursive pane renderer.
+type SplitDragCallback = std::sync::Arc<dyn Fn(SplitId, f32, &mut Window, &mut App) + 'static>;
+type SurfaceCallback = std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>;
+type PaneCallback = std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>;
+
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
@@ -834,10 +839,10 @@ impl PaneTree {
     /// Terminal that should receive app-level focus when returning from UI.
     /// While zoomed, only the zoomed pane is visible, so focus that pane.
     pub fn try_visible_focus_terminal(&self) -> Option<(PaneId, &TerminalPane)> {
-        if let Some(zoomed_id) = self.zoomed_pane_id {
-            if let Some(terminal) = Self::find_terminal(&self.root, zoomed_id) {
-                return Some((zoomed_id, terminal));
-            }
+        if let Some(zoomed_id) = self.zoomed_pane_id
+            && let Some(terminal) = Self::find_terminal(&self.root, zoomed_id)
+        {
+            return Some((zoomed_id, terminal));
         }
 
         if let Some(terminal) = Self::find_terminal(&self.root, self.focused_pane_id) {
@@ -1100,8 +1105,8 @@ impl PaneTree {
         let zoomed_pane_id = self.zoomed_pane_id;
         let active_drag_split_id = self.dragging_split_id();
 
-        if let Some(zoomed_id) = zoomed_pane_id {
-            if let Some(zoomed) = Self::render_zoomed_leaf(
+        if let Some(zoomed_id) = zoomed_pane_id
+            && let Some(zoomed) = Self::render_zoomed_leaf(
                 &self.root,
                 zoomed_id,
                 focused_pane_id,
@@ -1119,15 +1124,14 @@ impl PaneTree {
                 tab_accent_inactive_alpha,
                 hide_pane_title_bar,
                 cx,
-            ) {
-                return zoomed;
-            }
+            )
+        {
+            return zoomed;
         }
 
         Self::render_node(
             &self.root,
             focused_pane_id,
-            has_splits,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
             focus_pane_cb,
@@ -1434,6 +1438,7 @@ impl PaneTree {
     }
 
     /// Returns `true` if the target was found and split.
+    #[allow(clippy::too_many_arguments)]
     fn split_node(
         node: &mut PaneNode,
         target_id: PaneId,
@@ -1890,14 +1895,13 @@ impl PaneTree {
     fn render_node(
         node: &PaneNode,
         focused_id: PaneId,
-        has_splits: bool,
-        begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32, &mut Window, &mut App) + 'static>,
-        focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
+        begin_drag_cb: SplitDragCallback,
+        focus_surface_cb: SurfaceCallback,
+        focus_pane_cb: PaneCallback,
+        rename_surface_cb: SurfaceCallback,
+        close_surface_cb: SurfaceCallback,
+        close_pane_cb: PaneCallback,
+        toggle_zoom_cb: PaneCallback,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         resize_cover_color: Hsla,
@@ -1964,7 +1968,6 @@ impl PaneTree {
                 let first_el = Self::render_node(
                     first,
                     focused_id,
-                    has_splits,
                     cb_first,
                     focus_cb_first,
                     focus_pane_cb_first,
@@ -1987,7 +1990,6 @@ impl PaneTree {
                 let second_el = Self::render_node(
                     second,
                     focused_id,
-                    has_splits,
                     cb_second,
                     focus_cb_second,
                     focus_pane_cb_second,
@@ -2107,12 +2109,12 @@ impl PaneTree {
         node: &PaneNode,
         target_id: PaneId,
         focused_id: PaneId,
-        focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
+        focus_surface_cb: SurfaceCallback,
+        focus_pane_cb: PaneCallback,
+        rename_surface_cb: SurfaceCallback,
+        close_surface_cb: SurfaceCallback,
+        close_pane_cb: PaneCallback,
+        toggle_zoom_cb: PaneCallback,
         rename_editor: Option<SurfaceRenameEditor>,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
@@ -2200,6 +2202,7 @@ impl PaneTree {
         theme.title_bar.opacity(1.0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_pane_title_bar(
         pane_id: PaneId,
         session_id: u64,
@@ -2209,9 +2212,9 @@ impl PaneTree {
         is_zoomed: bool,
         _tab_accent_color: Option<con_core::session::TabAccentColor>,
         tab_accent_inactive_alpha: f32,
-        close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
+        close_pane_cb: PaneCallback,
+        toggle_zoom_cb: PaneCallback,
+        focus_pane_cb: PaneCallback,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -2357,12 +2360,12 @@ impl PaneTree {
         active_surface_id: SurfaceId,
         content: &PaneContent,
         focused_id: PaneId,
-        focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
-        close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
+        focus_surface_cb: SurfaceCallback,
+        focus_pane_cb: PaneCallback,
+        rename_surface_cb: SurfaceCallback,
+        close_surface_cb: SurfaceCallback,
+        close_pane_cb: PaneCallback,
+        toggle_zoom_cb: PaneCallback,
         rename_editor: Option<SurfaceRenameEditor>,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
@@ -2543,7 +2546,7 @@ impl PaneTree {
                     .text_color(rail_text)
                     .child(
                         svg()
-                            .path("phosphor/stack.svg")
+                            .path("phosphor/stack-fill.svg")
                             .size(mono_icon_px(theme, 9.0))
                             .text_color(rail_text.opacity(0.82)),
                     )

@@ -8,6 +8,7 @@ pub(super) fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) ->
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::*;
 

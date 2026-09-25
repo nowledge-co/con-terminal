@@ -380,13 +380,12 @@ impl ConWorkspace {
                             }
                         }
                         self.sync_active_tab_native_view_visibility(cx);
-                        if closing_was_focused || close_outcome.closed_pane {
-                            if let Some(replacement) =
+                        if (closing_was_focused || close_outcome.closed_pane)
+                            && let Some(replacement) =
                                 self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
-                            {
-                                replacement.ensure_surface(window, cx);
-                                replacement.focus(window, cx);
-                            }
+                        {
+                            replacement.ensure_surface(window, cx);
+                            replacement.focus(window, cx);
                         }
                         self.sync_active_terminal_focus_states(cx);
                     }
@@ -843,13 +842,14 @@ impl ConWorkspace {
                 if key.chars().count() == 1 {
                     return Ok(key.as_bytes().to_vec());
                 }
-                return Err(ControlError::invalid_params(format!(
+                Err(ControlError::invalid_params(format!(
                     "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-<letter>, ctrl-space/ctrl-@, ctrl-[, ctrl-\\, ctrl-], ctrl-^, ctrl-_, ctrl-/, ctrl-?, ctrl-~, ctrl-2..8."
-                )));
+                )))
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_shell_anchor_command<F>(
         &self,
         _tab_idx: usize,
@@ -878,15 +878,12 @@ impl ConWorkspace {
                     .update(cx, |_, cx| pane.recent_lines(400, cx))
                     .unwrap_or_default();
 
-                match parse_response(lines.clone()) {
-                    Ok(response) => {
-                        let _ = this.update(cx, |_, cx| {
-                            pane.recover_shell_prompt_state(cx);
-                        });
-                        let _ = response_tx.send(response);
-                        return;
-                    }
-                    Err(_) => {}
+                if let Ok(response) = parse_response(lines.clone()) {
+                    let _ = this.update(cx, |_, cx| {
+                        pane.recover_shell_prompt_state(cx);
+                    });
+                    let _ = response_tx.send(response);
+                    return;
                 }
 
                 if std::time::Instant::now() >= deadline {

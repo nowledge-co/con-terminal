@@ -34,7 +34,8 @@ entries are fallbacks. Native examples include `font-family`, `font-size`, `them
 `background-image`.
 
 Con-owned fields are dotted keys rooted at `con.appearance`, `con.agent`,
-`con.keybindings`, `con.skills`, or `con.network`. The part after the namespace uses
+`con.keybindings`, `con.skills`, `con.network`, or `con.experimental`. The part
+after the namespace uses
 the existing Rust field's `snake_case` spelling. Lists are represented by repeating
 the key. Unknown or malformed `con.*` keys are errors; unknown native keys are
 preserved for the native terminal parser.
@@ -61,6 +62,7 @@ con.keybindings.toggle_agent = "secondary-l"
 con.skills.project_paths = ".agents/skills"
 con.skills.project_paths = ".con/skills"
 con.network.https_proxy = "http://127.0.0.1:1086"
+con.experimental.handoff = true
 ```
 
 `con.version = 1` is the current Con schema marker. Native-owned values must use

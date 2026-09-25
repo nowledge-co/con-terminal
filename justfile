@@ -35,17 +35,19 @@ default:
 # aliases because `CON` is a reserved DOS device name and the Windows binary is
 # feature-gated as `con-app.exe`.
 
-# Debug build — current platform
+# Debug build — current platform.
+# con-cli must be a sibling of the Con binary: the handoff launch helper and
+# its pre-dispatch protocol gate resolve `con-cli` next to `current_exe()`.
 build:
-    {{ if os() == "windows" { "cargo wbuild -p con" } else { "cargo build -p con" } }}
+    {{ if os() == "windows" { "cargo wbuild -p con && cargo build -p con-cli" } else { "cargo build -p con -p con-cli" } }}
 
 # Release build — current platform
 build-release:
-    {{ if os() == "windows" { "cargo wbuild -p con --release" } else { "cargo build --release -p con" } }}
+    {{ if os() == "windows" { "cargo wbuild -p con --release && cargo build -p con-cli --release" } else { "cargo build --release -p con -p con-cli" } }}
 
-# Run from source — current platform
+# Run from source — current platform (builds con-cli first so handoff finds it)
 run:
-    {{ if os() == "windows" { "cargo wrun -p con" } else { "cargo run -p con" } }}
+    {{ if os() == "windows" { "cargo build -p con-cli && cargo wrun -p con" } else { "cargo build -p con-cli && cargo run -p con" } }}
 
 # Run the platform-appropriate test set
 test:
@@ -239,6 +241,7 @@ flatpak-build channel=channel arch=arch:
 # [Windows] Debug build (con-app.exe — CON is a reserved DOS device name)
 windows-build:
     cargo wbuild -p con
+    cargo build -p con-cli
 
 # [Windows] Release build
 windows-build-release:
@@ -247,6 +250,7 @@ windows-build-release:
 
 # [Windows] Run
 windows-run:
+    cargo build -p con-cli
     cargo wrun -p con
 
 # [Windows] Test

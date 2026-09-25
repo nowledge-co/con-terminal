@@ -1,0 +1,12 @@
+{
+  "fetched_at": "2020-01-01T00:00:00Z",
+  "auth": {"apiKey": "SECRET_TOP"},
+  "models": [
+    {"slug": "gpt-example", "visibility": "list", "apiKey": "SECRET_MODEL"},
+    {"slug": "gpt-example", "visibility": "list"},
+    {"slug": "SECRET_HIDDEN", "visibility": "hide"},
+    {"slug": "-invalid", "visibility": "list"},
+    {"slug": "has space", "visibility": "list"},
+    {"slug": "gpt-optional"}
+  ]
+}

@@ -244,10 +244,10 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
                     if socket_reader.read_exact(&mut payload).is_err() {
                         break;
                     }
-                    if let Ok(mut w) = pty_writer.lock() {
-                        if w.write_all(&payload).is_err() || w.flush().is_err() {
-                            break;
-                        }
+                    if let Ok(mut w) = pty_writer.lock()
+                        && (w.write_all(&payload).is_err() || w.flush().is_err())
+                    {
+                        break;
                     }
                 }
                 0x01 => {

@@ -210,7 +210,7 @@ fn init_inner() -> bool {
         }
         let sparkle_subpath: id = msg_send![
             class!(NSString),
-            stringWithUTF8String: b"Sparkle.framework\0".as_ptr()
+            stringWithUTF8String: c"Sparkle.framework".as_ptr()
         ];
         let sparkle_path: id =
             msg_send![frameworks_path, stringByAppendingPathComponent: sparkle_subpath];
@@ -265,7 +265,7 @@ fn init_inner() -> bool {
         let info_dict: id = msg_send![main_bundle, infoDictionary];
         let feed_key: id = msg_send![
             class!(NSString),
-            stringWithUTF8String: b"SUFeedURL\0".as_ptr()
+            stringWithUTF8String: c"SUFeedURL".as_ptr()
         ];
         let feed_url: id = msg_send![info_dict, objectForKey: feed_key];
         if feed_url == nil {

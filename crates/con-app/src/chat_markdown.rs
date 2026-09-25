@@ -616,10 +616,10 @@ impl ChatMarkdownBlockView {
         key: RichSvgRenderKey,
         cx: &mut gpui::Context<Self>,
     ) -> (bool, Option<Result<Arc<RenderImage>, SharedString>>) {
-        if let Some(entry) = self.rich_svg_renders.get(&key) {
-            if entry.image.is_some() || entry.pending {
-                return (entry.pending, entry.image.clone());
-            }
+        if let Some(entry) = self.rich_svg_renders.get(&key)
+            && (entry.image.is_some() || entry.pending)
+        {
+            return (entry.pending, entry.image.clone());
         }
 
         let render_key = key.clone();
@@ -1591,7 +1591,7 @@ fn handle_inline_html_token(
 
 fn push_to_html_target(
     inlines: &mut Vec<MarkdownInline>,
-    stack: &mut Vec<HtmlInlineContainer>,
+    stack: &mut [HtmlInlineContainer],
     inline: MarkdownInline,
 ) {
     match stack.last_mut() {
@@ -2620,7 +2620,7 @@ fn mermaid_source_for_theme(source: &str, theme_mode: RichSvgThemeMode) -> Cow<'
                 "#F8FAFC"
             };
             let out = rewritten.get_or_insert_with(|| source[..cursor].to_string());
-            let line_without_newline = line.trim_end_matches(|ch| ch == '\r' || ch == '\n');
+            let line_without_newline = line.trim_end_matches(['\r', '\n']);
             out.push_str(line_without_newline);
             out.push_str(",color:");
             out.push_str(text_color);
@@ -2633,10 +2633,10 @@ fn mermaid_source_for_theme(source: &str, theme_mode: RichSvgThemeMode) -> Cow<'
         cursor += line.len();
     }
 
-    if cursor < source.len() {
-        if let Some(out) = rewritten.as_mut() {
-            out.push_str(&source[cursor..]);
-        }
+    if cursor < source.len()
+        && let Some(out) = rewritten.as_mut()
+    {
+        out.push_str(&source[cursor..]);
     }
 
     rewritten.map_or(Cow::Borrowed(source), Cow::Owned)
@@ -2649,10 +2649,9 @@ fn mermaid_style_has_key(line: &str, key: &str) -> bool {
 fn mermaid_style_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let styles = if let Some(rest) = line.strip_prefix("style ") {
         rest.trim_start().split_once(char::is_whitespace)?.1
-    } else if let Some(rest) = line.strip_prefix("classDef ") {
-        rest.trim_start().split_once(char::is_whitespace)?.1
     } else {
-        return None;
+        let rest = line.strip_prefix("classDef ")?;
+        rest.trim_start().split_once(char::is_whitespace)?.1
     };
 
     styles.trim_start().split(',').find_map(|part| {
@@ -3313,7 +3312,6 @@ fn collect_inline_flow_items(
                 struck.strikethrough = Some(gpui::StrikethroughStyle {
                     thickness: px(1.0),
                     color: Some(current_style.color.opacity(0.55)),
-                    ..Default::default()
                 });
                 collect_inline_flow_items(children, struck, style, items, text, runs, math_index);
             }
@@ -3397,7 +3395,7 @@ fn cached_inline_runs(
         color: base_style.color,
         font_weight: base_style.font_weight,
         font_style: base_style.font_style,
-        underline: base_style.underline.clone(),
+        underline: base_style.underline,
         strikethrough: base_style.strikethrough.is_some(),
         inline_code_background: style.inline_code_background,
         inline_code_text_color: style.inline_code_text_color,
@@ -3481,7 +3479,6 @@ fn append_inline_runs(
                 struck.strikethrough = Some(gpui::StrikethroughStyle {
                     thickness: px(1.0),
                     color: Some(current_style.color.opacity(0.55)),
-                    ..Default::default()
                 });
                 append_inline_runs(children, struck, style, text, runs);
             }
@@ -3714,15 +3711,15 @@ mod tests {
         let base = Path::new("/docs/guide");
         assert!(matches!(
             resolve_image_source(base, "img/a.png"),
-            Some(MarkdownImageSource::LocalFile(path)) if path == PathBuf::from("/docs/guide/img/a.png")
+            Some(MarkdownImageSource::LocalFile(path)) if path == Path::new("/docs/guide/img/a.png")
         ));
         assert!(matches!(
             resolve_image_source(base, "/abs/a.png"),
-            Some(MarkdownImageSource::LocalFile(path)) if path == PathBuf::from("/abs/a.png")
+            Some(MarkdownImageSource::LocalFile(path)) if path == Path::new("/abs/a.png")
         ));
         assert!(matches!(
             resolve_image_source(base, "../shared/b.png"),
-            Some(MarkdownImageSource::LocalFile(path)) if path == PathBuf::from("/docs/guide/../shared/b.png")
+            Some(MarkdownImageSource::LocalFile(path)) if path == Path::new("/docs/guide/../shared/b.png")
         ));
         assert!(matches!(
             resolve_image_source(base, "https://x.com/a.png"),
@@ -3732,11 +3729,8 @@ mod tests {
             resolve_image_source(base, "http://x.com/a.png"),
             Some(MarkdownImageSource::Remote(url)) if url == "http://x.com/a.png"
         ));
-        assert!(matches!(
-            resolve_image_source(base, "data:image/png;base64,xx"),
-            None
-        ));
-        assert!(matches!(resolve_image_source(base, "   "), None));
+        assert!(resolve_image_source(base, "data:image/png;base64,xx").is_none());
+        assert!(resolve_image_source(base, "   ").is_none());
     }
 
     #[test]
@@ -4033,8 +4027,10 @@ mod tests {
 
     #[test]
     fn highlighted_code_runs_keep_mono_font() {
-        let mut theme = Theme::default();
-        theme.mono_font_family = "IoskeleyMono".into();
+        let theme = Theme {
+            mono_font_family: "IoskeleyMono".into(),
+            ..Theme::default()
+        };
         let style = ChatMarkdownStyle::new(&theme, ChatMarkdownTone::Message);
         let (_, runs) = highlighted_code_runs("let value = 1;", &Some("rust".into()), &style);
 
@@ -4129,6 +4125,7 @@ mod tests {
             _window: &mut Window,
             cx: &mut gpui::Context<Self>,
         ) -> impl IntoElement {
+            #[allow(clippy::arc_with_non_send_sync)] // Match the UI-thread-only production API.
             let document = Arc::new(ParsedChatMarkdown::parse(self.source));
             let block_index = self.block_index;
             let view = cx.new(|_| {

@@ -2660,6 +2660,8 @@ impl Render for GhosttyView {
                 }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
+                    // Agent Handoff is macOS-only.
+                    false,
                     window,
                     cx,
                 )

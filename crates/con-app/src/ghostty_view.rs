@@ -334,6 +334,9 @@ pub struct GhosttyView {
     right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
+    /// In-memory `experimental.handoff` gate pushed in by the workspace, so
+    /// the right-click menu matches the toolbar without re-reading config.
+    handoff_menu_entry_enabled: Cell<bool>,
     ime_marked_text: Option<String>,
     terminal_find: Option<Entity<TerminalFind>>,
     pending_terminal_find: Option<PendingTerminalFind>,
@@ -411,6 +414,7 @@ impl GhosttyView {
             left_mouse_sequence: MouseButtonSequence::default(),
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
+            handoff_menu_entry_enabled: Cell::new(false),
             ime_marked_text: None,
             terminal_find: None,
             pending_terminal_find: None,
@@ -894,14 +898,14 @@ impl GhosttyView {
             self.sync_native_scroll_view();
         }
 
-        if let Some(started) = started {
-            if changed {
-                log::info!(
-                    target: "con::perf",
-                    "drain_surface_state changed=1 elapsed_ms={:.3}",
-                    started.elapsed().as_secs_f64() * 1000.0
-                );
-            }
+        if let Some(started) = started
+            && changed
+        {
+            log::info!(
+                target: "con::perf",
+                "drain_surface_state changed=1 elapsed_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
         }
 
         changed
@@ -1916,6 +1920,12 @@ impl GhosttyView {
     /// Show or hide the native NSView. Used to manage z-order when
     /// GPUI overlays (settings, command palette) need to appear on top.
     #[cfg(target_os = "macos")]
+    /// The workspace pushes the in-memory experimental flag here so the
+    /// right-click menu never reads persisted config on the UI thread.
+    pub fn set_handoff_menu_entry_enabled(&self, enabled: bool) {
+        self.handoff_menu_entry_enabled.set(enabled);
+    }
+
     pub fn set_visible(&self, visible: bool) {
         self.native_view_visible.set(visible);
         if !visible {
@@ -2107,10 +2117,10 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 "c" => {
-                    if terminal.has_selection() {
-                        if let Some(selection) = terminal.selection_text() {
-                            cx.write_to_clipboard(ClipboardItem::new_string(selection));
-                        }
+                    if terminal.has_selection()
+                        && let Some(selection) = terminal.selection_text()
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(selection));
                     }
                     return true;
                 }
@@ -2187,7 +2197,7 @@ impl GhosttyView {
             // Only key_char represents actual text translation. The key-name
             // fallback must not consume Shift.
             let translated_text = keystroke.key_char.as_deref();
-            let text_string = translated_text.or_else(|| {
+            let text_string = translated_text.or({
                 if key_name.len() == 1 {
                     Some(key_name)
                 } else {
@@ -2216,11 +2226,11 @@ impl GhosttyView {
 
         // No keycode mapping — fall back to text input.
         // This handles unusual keys and compose sequences.
-        if let Some(ref key_char) = keystroke.key_char {
-            if !key_char.is_empty() {
-                terminal.send_text(key_char);
-                return true;
-            }
+        if let Some(ref key_char) = keystroke.key_char
+            && !key_char.is_empty()
+        {
+            terminal.send_text(key_char);
+            return true;
         }
         if key_name.len() == 1 {
             terminal.send_text(key_name);
@@ -2582,6 +2592,7 @@ impl Render for GhosttyView {
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
         let right_click_consumed = self.right_click_consumed.clone();
+        let handoff_menu_entry_enabled = self.handoff_menu_entry_enabled.get();
         let ui_font = cx.theme().font_family.clone();
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
@@ -2646,7 +2657,7 @@ impl Render for GhosttyView {
                         mods: 0,
                         consumed_mods: 0,
                         keycode: 0x30, // Tab
-                        text: b"\t\0".as_ptr() as *const _,
+                        text: c"\t".as_ptr() as *const _,
                         unshifted_codepoint: '\t' as u32,
                         composing: false,
                     };
@@ -2896,6 +2907,7 @@ impl Render for GhosttyView {
                 }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
+                    handoff_menu_entry_enabled,
                     window,
                     cx,
                 )

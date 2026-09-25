@@ -11,6 +11,7 @@ use con_core::{
 use serde_json::{Value, json};
 
 mod configuration;
+mod handoff;
 mod pty_bridge;
 use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
 mod ssh;
@@ -56,6 +57,11 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: configuration::ConfigurationCommand,
+    },
+    /// Hand off a task between installed agents, preserving the current worktree.
+    Handoff {
+        #[command(subcommand)]
+        command: handoff::HandoffCommand,
     },
     PtyBridge(PtyBridgeArgs),
 }
@@ -701,6 +707,7 @@ fn main() -> Result<()> {
             }
         },
         Command::Config { command } => configuration::run(command)?,
+        Command::Handoff { command } => handoff::run(command, &socket_path, cli.json)?,
         Command::PtyBridge(args) => run_pty_bridge(args)?,
     }
 

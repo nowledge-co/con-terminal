@@ -1118,6 +1118,7 @@ fn pane_query_tmux_list(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn pane_query_tmux_run_command(
     pane_tx: &Sender<PaneRequest>,
     pane: PaneSelector,
@@ -1380,8 +1381,7 @@ fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
     match name
         .trim()
         .to_ascii_lowercase()
-        .replace('_', "-")
-        .replace(' ', "-")
+        .replace(['_', ' '], "-")
         .as_str()
     {
         "codex" => Some("codex"),
@@ -2147,6 +2147,7 @@ fn pane_is_visible_local_agent_cli(pane: &PaneInfo, agent_name: Option<&String>)
         && !pane_has_tmux_observation(pane)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_work_target_candidates(
     pane_tx: &Sender<PaneRequest>,
     panes: Vec<PaneInfo>,
@@ -2164,15 +2165,15 @@ fn resolve_work_target_candidates(
     let mut candidates = Vec::new();
 
     for pane in panes {
-        if let Some(preferred_index) = preferred_pane_index {
-            if pane.index != preferred_index {
-                continue;
-            }
+        if let Some(preferred_index) = preferred_pane_index
+            && pane.index != preferred_index
+        {
+            continue;
         }
-        if let Some(preferred_id) = preferred_pane_id {
-            if pane.pane_id != preferred_id {
-                continue;
-            }
+        if let Some(preferred_id) = preferred_pane_id
+            && pane.pane_id != preferred_id
+        {
+            continue;
         }
         if !pane_matches_host(&pane, host_contains.as_ref()) {
             continue;
@@ -5361,14 +5362,13 @@ fn decode_key_escapes(input: &str) -> String {
             // Only match control characters (0x00-0x1F) and DEL (0x7F)
             // to minimize false positives in normal text.
             let hex = &input[i + 1..i + 3];
-            if hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-                if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                    if byte <= 0x1F || byte == 0x7F {
-                        result.push(byte);
-                        i += 3;
-                        continue;
-                    }
-                }
+            if hex.bytes().all(|b| b.is_ascii_hexdigit())
+                && let Ok(byte) = u8::from_str_radix(hex, 16)
+                && (byte <= 0x1F || byte == 0x7F)
+            {
+                result.push(byte);
+                i += 3;
+                continue;
             }
             result.push(bytes[i]);
             i += 1;
@@ -6666,18 +6666,17 @@ impl CreatePaneTool {
                 },
                 response_tx: status_tx,
             });
-            if status_sent.is_ok() {
-                if let Ok(PaneResponse::BusyStatus {
+            if status_sent.is_ok()
+                && let Ok(PaneResponse::BusyStatus {
                     surface_ready: sr,
                     is_alive: alive,
                     is_busy: _,
                     has_shell_integration: si,
                 }) = status_rx.recv_timeout(std::time::Duration::from_secs(2))
-                {
-                    surface_ready = sr;
-                    is_alive = alive;
-                    has_shell_integration = si;
-                }
+            {
+                surface_ready = sr;
+                is_alive = alive;
+                has_shell_integration = si;
             }
 
             let (tx, rx) = crossbeam_channel::bounded(1);

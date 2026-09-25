@@ -97,7 +97,7 @@ impl ReleaseChannel {
     }
 
     /// Parse from the `ConReleaseChannel` value baked into Info.plist.
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "beta" => Self::Beta,
             "stable" => Self::Stable,
@@ -134,7 +134,7 @@ fn detect_channel() -> ReleaseChannel {
         }
 
         let key: *mut objc::runtime::Object =
-            msg_send![class!(NSString), stringWithUTF8String: b"ConReleaseChannel\0".as_ptr()];
+            msg_send![class!(NSString), stringWithUTF8String: c"ConReleaseChannel".as_ptr()];
         let value: *mut objc::runtime::Object = msg_send![info, objectForKey: key];
         if value.is_null() {
             return ReleaseChannel::Dev;
@@ -146,7 +146,7 @@ fn detect_channel() -> ReleaseChannel {
         }
 
         let channel_str = CStr::from_ptr(utf8).to_str().unwrap_or("dev");
-        ReleaseChannel::from_str(channel_str)
+        ReleaseChannel::parse(channel_str)
     }
 }
 
@@ -157,7 +157,7 @@ fn detect_channel() -> ReleaseChannel {
     // `option_env!` captures it in the binary. Fall back to the runtime
     // env var for local overrides, and finally to Dev.
     if let Some(baked) = option_env!("CON_RELEASE_CHANNEL") {
-        return ReleaseChannel::from_str(baked);
+        return ReleaseChannel::parse(baked);
     }
     match std::env::var("CON_RELEASE_CHANNEL").as_deref() {
         Ok("beta") => ReleaseChannel::Beta,

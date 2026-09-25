@@ -110,6 +110,7 @@ use con_core::{
     TabSummaryRequest,
 };
 
+mod agent_handoff;
 mod agent_panel_events;
 mod caption;
 mod chrome;
@@ -177,6 +178,7 @@ pub struct ConWorkspace {
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
     settings_window: Option<AnyWindowHandle>,
+    handoff_window: Option<AnyWindowHandle>,
     settings_window_panel: Option<Entity<SettingsPanel>>,
     command_palette: Entity<CommandPalette>,
     model_registry: ModelRegistry,

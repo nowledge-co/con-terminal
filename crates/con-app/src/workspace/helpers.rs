@@ -13,10 +13,10 @@ pub(super) fn file_tree_root_for_focus(
         FileTreeFocusSource::Terminal { cwd } => cwd.map(PathBuf::from),
         FileTreeFocusSource::Editor { file_path } => {
             let file_path = file_path?;
-            if let Some(root) = current_root {
-                if file_path.starts_with(root) {
-                    return Some(root.to_path_buf());
-                }
+            if let Some(root) = current_root
+                && file_path.starts_with(root)
+            {
+                return Some(root.to_path_buf());
             }
             file_path.parent().map(Path::to_path_buf)
         }
@@ -24,6 +24,7 @@ pub(super) fn file_tree_root_for_focus(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub(super) enum WorkspaceCloseIntent {
     CloseEditorFile,
     ClosePane,

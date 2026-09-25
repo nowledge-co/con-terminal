@@ -221,6 +221,7 @@ impl Default for Session {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::*;
     use serde_json::json;

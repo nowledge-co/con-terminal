@@ -43,11 +43,20 @@ fn action_row(
         .into_any_element()
 }
 
+/// The right-click entry follows the same experimental gate as the toolbar
+/// button and the command palette; the workspace passes its in-memory config
+/// value so the menu never re-reads persisted config on the UI thread.
 pub(crate) fn terminal_context_menu(
     menu: PopupMenu,
+    handoff_enabled: bool,
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let menu = if cfg!(target_os = "macos") && handoff_enabled {
+        menu.item(action_item("Handoff Agent…", Box::new(crate::HandoffAgent)))
+    } else {
+        menu
+    };
     menu.min_w(px(220.0))
         .item(action_item("Paste", Box::new(crate::Paste)))
         .item(action_item("Copy", Box::new(crate::Copy)))

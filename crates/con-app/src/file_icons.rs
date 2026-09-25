@@ -42,10 +42,10 @@ pub fn icon_for_path(path: &Path, is_dir: bool, is_expanded: bool) -> FileIcon {
     if let Some(icon) = icon_for_special_filename(path) {
         return icon;
     }
-    if let Some(language) = language_for_path(path) {
-        if let Some(icon) = icon_for_language(language) {
-            return icon;
-        }
+    if let Some(language) = language_for_path(path)
+        && let Some(icon) = icon_for_language(language)
+    {
+        return icon;
     }
     if let Some(icon) = icon_for_icon_only_path(path) {
         return icon;

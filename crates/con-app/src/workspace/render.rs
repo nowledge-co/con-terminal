@@ -648,77 +648,76 @@ impl Render for ConWorkspace {
                 let Some(pane_id) = dragged.pane_id else {
                     return;
                 };
-                if let Some(drag) = this.pane_title_drag.take() {
-                    if let Some(PaneDropTarget::Split(target)) = drag.target {
-                        this.tab_strip_drop_slot = None;
-                        this.tabs[this.active_tab].pane_tree.move_pane(
-                            pane_id,
-                            target.target_pane_id,
-                            target.direction,
-                            target.placement,
-                        );
-                        this.sync_sidebar(cx);
-                        cx.notify();
-                        return;
-                    }
+                if let Some(drag) = this.pane_title_drag.take()
+                    && let Some(PaneDropTarget::Split(target)) = drag.target
+                {
+                    this.tab_strip_drop_slot = None;
+                    this.tabs[this.active_tab].pane_tree.move_pane(
+                        pane_id,
+                        target.target_pane_id,
+                        target.direction,
+                        target.placement,
+                    );
+                    this.sync_sidebar(cx);
+                    cx.notify();
                 }
                 // No split target — drop on pane content without a target does nothing.
                 // (Tab-strip drops are handled by the tab strip's own on_drop.)
             }));
 
-        if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active) {
-            if let Some(PaneDropTarget::Split(target)) = drag.target {
-                let content_bounds = self
-                    .pane_content_bounds
-                    .lock()
-                    .ok()
-                    .and_then(|guard| *guard);
-                if let Some(content_bounds) = content_bounds {
-                    let regions =
-                        split_preview_regions(target.bounds, target.direction, target.placement);
-                    let (existing_left, existing_top, existing_width, existing_height) =
-                        split_preview_local_rect(regions.existing, content_bounds);
-                    let (incoming_left, incoming_top, incoming_width, incoming_height) =
-                        split_preview_local_rect(regions.incoming, content_bounds);
-                    let (seam_left, seam_top, seam_width, seam_height) =
-                        split_preview_local_rect(regions.seam, content_bounds);
-                    pane_content = pane_content
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(existing_left))
-                                .top(px(existing_top))
-                                .w(px(existing_width.max(0.0)))
-                                .h(px(existing_height.max(0.0)))
-                                .bg(theme.background.opacity(0.18)),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(incoming_left))
-                                .top(px(incoming_top))
-                                .w(px(incoming_width.max(0.0)))
-                                .h(px(incoming_height.max(0.0)))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .px(px(12.0))
-                                .bg(theme.primary.opacity(0.22))
-                                .font_family(theme.font_family.clone())
-                                .text_size(px(12.0))
-                                .text_color(theme.foreground.opacity(0.78))
-                                .child(div().truncate().child(drag.title.clone())),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(seam_left))
-                                .top(px(seam_top))
-                                .w(px(seam_width.max(0.0)))
-                                .h(px(seam_height.max(0.0)))
-                                .bg(theme.primary.opacity(0.62)),
-                        );
-                }
+        if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active)
+            && let Some(PaneDropTarget::Split(target)) = drag.target
+        {
+            let content_bounds = self
+                .pane_content_bounds
+                .lock()
+                .ok()
+                .and_then(|guard| *guard);
+            if let Some(content_bounds) = content_bounds {
+                let regions =
+                    split_preview_regions(target.bounds, target.direction, target.placement);
+                let (existing_left, existing_top, existing_width, existing_height) =
+                    split_preview_local_rect(regions.existing, content_bounds);
+                let (incoming_left, incoming_top, incoming_width, incoming_height) =
+                    split_preview_local_rect(regions.incoming, content_bounds);
+                let (seam_left, seam_top, seam_width, seam_height) =
+                    split_preview_local_rect(regions.seam, content_bounds);
+                pane_content = pane_content
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(existing_left))
+                            .top(px(existing_top))
+                            .w(px(existing_width.max(0.0)))
+                            .h(px(existing_height.max(0.0)))
+                            .bg(theme.background.opacity(0.18)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(incoming_left))
+                            .top(px(incoming_top))
+                            .w(px(incoming_width.max(0.0)))
+                            .h(px(incoming_height.max(0.0)))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .px(px(12.0))
+                            .bg(theme.primary.opacity(0.22))
+                            .font_family(theme.font_family.clone())
+                            .text_size(px(12.0))
+                            .text_color(theme.foreground.opacity(0.78))
+                            .child(div().truncate().child(drag.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(seam_left))
+                            .top(px(seam_top))
+                            .w(px(seam_width.max(0.0)))
+                            .h(px(seam_height.max(0.0)))
+                            .bg(theme.primary.opacity(0.62)),
+                    );
             }
         }
 
@@ -1113,9 +1112,7 @@ impl Render for ConWorkspace {
                         );
                         cx.notify();
                     }
-                    if this.active_tab >= this.tabs.len() {
-                        return;
-                    }
+                    if this.active_tab >= this.tabs.len() {}
                 }),
             )
             .on_action(cx.listener(Self::quit))
@@ -1160,6 +1157,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::close_surface))
             .on_action(cx.listener(Self::focus_input))
             .on_action(cx.listener(Self::ask_ai))
+            .on_action(cx.listener(Self::open_agent_handoff))
             .on_action(cx.listener(Self::editor_move_left))
             .on_action(cx.listener(Self::editor_move_right))
             .on_action(cx.listener(Self::editor_move_up))
@@ -1422,18 +1420,16 @@ impl Render for ConWorkspace {
             );
         }
 
-        if input_bar_snap_guard_active {
-            if self.input_bar_visible {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .left(px(terminal_content_left))
-                        .right(px(agent_panel_outer_width))
-                        .bottom(self.input_bar.read(cx).rendered_height(cx))
-                        .h(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
+        if input_bar_snap_guard_active && self.input_bar_visible {
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(terminal_content_left))
+                    .right(px(agent_panel_outer_width))
+                    .bottom(self.input_bar.read(cx).rendered_height(cx))
+                    .h(px(CHROME_MOTION_SEAM_OVERDRAW))
+                    .bg(chrome_transition_seam_color),
+            );
         }
 
         if input_bar_release_cover_active {
@@ -1448,21 +1444,19 @@ impl Render for ConWorkspace {
             );
         }
 
-        if agent_panel_snap_guard_active {
-            if self.agent_panel_open {
-                let agent_panel_seam_right = (effective_agent_panel_width
-                    - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
-                    .max(0.0);
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .right(px(agent_panel_seam_right))
-                        .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
+        if agent_panel_snap_guard_active && self.agent_panel_open {
+            let agent_panel_seam_right = (effective_agent_panel_width
+                - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
+                .max(0.0);
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom_0()
+                    .right(px(agent_panel_seam_right))
+                    .w(px(CHROME_MOTION_SEAM_OVERDRAW))
+                    .bg(chrome_transition_seam_color),
+            );
         }
 
         if agent_panel_release_cover_active {

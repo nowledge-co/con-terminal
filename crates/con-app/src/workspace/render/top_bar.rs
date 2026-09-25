@@ -1,5 +1,10 @@
 use super::super::*;
 use gpui_component::menu::ContextMenuExt;
+#[cfg(target_os = "macos")]
+use gpui_component::{
+    Icon,
+    button::{Button, ButtonVariants},
+};
 
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     if alpha.is_finite() {
@@ -88,6 +93,7 @@ fn chrome_control_active_bg(theme: &gpui_component::Theme) -> Hsla {
 }
 
 impl ConWorkspace {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_top_bar(
         &mut self,
         window: &mut Window,
@@ -312,11 +318,11 @@ impl ConWorkspace {
                 {
                     *guard = None;
                 }
-                if dragged.origin == DraggedTabOrigin::Pane {
-                    if let Some(pane_id) = dragged.pane_id {
-                        this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
-                        return;
-                    }
+                if dragged.origin == DraggedTabOrigin::Pane
+                    && let Some(pane_id) = dragged.pane_id
+                {
+                    this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
+                    return;
                 }
                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                 cx.notify();
@@ -557,10 +563,10 @@ impl ConWorkspace {
                             // Only track session id for tab-strip drags.
                             // Pane-origin drags must not set this or the dragged
                             // tab will be hidden and live-reorder will misfire.
-                            if dragged.origin == DraggedTabOrigin::HorizontalTabStrip {
-                                if let Ok(mut guard) = active_dragged_tab_session_id.lock() {
-                                    *guard = Some(dragged.session_id);
-                                }
+                            if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                                && let Ok(mut guard) = active_dragged_tab_session_id.lock()
+                            {
+                                *guard = Some(dragged.session_id);
                             }
                             let mut d = dragged.clone();
                             if let Some(ref mut c) = d.preview_constraint {
@@ -646,11 +652,11 @@ impl ConWorkspace {
                         {
                             *guard = None;
                         }
-                        if dragged.origin == DraggedTabOrigin::Pane {
-                            if let Some(pane_id) = dragged.pane_id {
-                                this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
-                                return;
-                            }
+                        if dragged.origin == DraggedTabOrigin::Pane
+                            && let Some(pane_id) = dragged.pane_id
+                        {
+                            this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
+                            return;
                         }
                         this.reorder_tab_by_id(dragged.session_id, to, cx);
                         cx.notify();
@@ -822,23 +828,21 @@ impl ConWorkspace {
                 // with an inline Input. Escape cancels; Enter confirms
                 // (handled in begin_tab_rename's subscribe_in).
                 let is_renaming = renaming_tab_index == Some(index);
-                if is_renaming {
-                    if let Some(input) = rename_input.clone() {
-                        tab_content = div()
-                            .flex()
-                            .items_center()
-                            .gap(px(5.0))
-                            .w_full()
-                            .min_w_0()
-                            .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
-                                if let Some(editor) = this.tab_rename.as_ref() {
-                                    this.tab_rename_cancelled_generation = Some(editor.generation);
-                                }
-                                this.tab_rename = None;
-                                cx.notify();
-                            }))
-                            .child(Input::new(&input).small().appearance(false));
-                    }
+                if is_renaming && let Some(input) = rename_input.clone() {
+                    tab_content = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .w_full()
+                        .min_w_0()
+                        .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                            if let Some(editor) = this.tab_rename.as_ref() {
+                                this.tab_rename_cancelled_generation = Some(editor.generation);
+                            }
+                            this.tab_rename = None;
+                            cx.notify();
+                        }))
+                        .child(Input::new(&input).small().appearance(false));
                 }
 
                 if is_dragged_source {
@@ -1067,13 +1071,11 @@ impl ConWorkspace {
                                 if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
                                     *guard = None;
                                 }
-                                if dragged.origin == DraggedTabOrigin::Pane {
-                                    if let Some(pane_id) = dragged.pane_id {
-                                        this.detach_pane_to_new_tab_at_slot(
-                                            pane_id, to, window, cx,
-                                        );
-                                        return;
-                                    }
+                                if dragged.origin == DraggedTabOrigin::Pane
+                                    && let Some(pane_id) = dragged.pane_id
+                                {
+                                    this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
+                                    return;
                                 }
                                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                                 cx.notify();
@@ -1208,6 +1210,26 @@ impl ConWorkspace {
         let new_tab_icon_color = chrome_icon_tone(theme, compact_titlebar_progress);
         let chrome_hover_bg = chrome_control_hover_bg(theme);
         let chrome_active_bg = chrome_control_active_bg(theme);
+        #[cfg(target_os = "macos")]
+        if self.handoff_button_visible(cx) {
+            tab_controls = tab_controls.child(
+                Button::new("handoff-agent")
+                    .icon(
+                        Icon::default()
+                            .path("phosphor/handshake.svg")
+                            .text_color(chrome_icon_tone(theme, compact_titlebar_progress)),
+                    )
+                    .ghost()
+                    .with_size(px(22.0))
+                    .rounded(px(5.0))
+                    .text_color(chrome_icon_tone(theme, compact_titlebar_progress))
+                    .tooltip("Handoff Agent…")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_agent_handoff(&crate::HandoffAgent, window, cx);
+                    }))
+                    .occlude(),
+            );
+        }
         let new_tab_button = div()
             .id("tab-new")
             .flex()

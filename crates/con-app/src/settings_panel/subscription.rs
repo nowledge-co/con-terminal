@@ -29,10 +29,10 @@ fn reasoning_options(config: &ProviderConfig) -> Vec<String> {
         );
     }
     // Keep authored values visible until the user explicitly changes them.
-    if let Some(effort) = config.reasoning_effort {
-        if !options.iter().any(|v| v == effort.as_str()) {
-            options.push(effort.as_str().into());
-        }
+    if let Some(effort) = config.reasoning_effort
+        && !options.iter().any(|v| v == effort.as_str())
+    {
+        options.push(effort.as_str().into());
     }
     options
 }
