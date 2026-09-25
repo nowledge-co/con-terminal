@@ -879,7 +879,6 @@ impl EditorView {
         };
         let tab = &mut self.tabs[self.active_tab];
         tab.preview = preview;
-        let preview = tab.preview;
         self.preview_scroll_handle = ScrollHandle::new();
         if preview {
             self.schedule_preview_parse(self.active_tab, cx);
