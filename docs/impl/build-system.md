@@ -49,8 +49,8 @@ members = [
 
 | Dependency | Purpose |
 |------------|---------|
-| `gpui` | native GPU UI framework (upstream Zed git source) |
-| `gpui-component` | reusable UI controls (upstream Longbridge git source) |
+| `gpui` | native GPU UI framework (Zed's GPUI via exact-pinned `gpui-pre` crates.io snapshots) |
+| `gpui-component` | reusable UI controls (Longbridge, crates.io, pinned together with `gpui-pre`) |
 | `rig-core` | multi-provider agent runtime (crates.io) |
 | `tokio` | async runtime for agent work |
 | `crossbeam-channel` | UI and harness event routing |
@@ -62,6 +62,10 @@ members = [
 
 - `3pp/` is read-only reference material only.
 - Cargo dependencies resolve from crates.io or explicit git sources in the workspace manifest.
+- GPUI follows gpui-component's releases: an unreleased Zed fix cannot be picked
+  up by moving a git rev, and `[patch]` from Zed's repo does not apply because the
+  crate there is named `gpui`, not `gpui-pre`. Wait for a `gpui-pre` snapshot with a
+  matching gpui-component release, or move both back to git sources together.
 - Ghostty source is fetched by `con-ghostty/build.rs` when needed, unless an override source directory is provided for local development.
 
 ## Platform boundary

@@ -2073,8 +2073,8 @@ impl PaneTree {
 
                 let make_pane = |child: AnyElement, basis: f32| -> Div {
                     let mut d = div()
-                        .flex_grow()
-                        .flex_shrink()
+                        .flex_grow_1()
+                        .flex_shrink_1()
                         .flex_basis(relative(basis))
                         .overflow_hidden();
                     d = match dir {

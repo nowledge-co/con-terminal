@@ -2,7 +2,7 @@ use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, sanitize_terminal_fon
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
-use gpui_component::scroll::ScrollbarShow;
+use gpui_component::scroll::ScrollbarMode;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
 
@@ -279,8 +279,11 @@ pub fn canonical_terminal_font_family(name: &str) -> String {
 /// Apply con's scrollbar overrides after any Theme::change call.
 /// Must run AFTER Theme::change because it resets colors from the theme config.
 fn apply_scrollbar_overrides(cx: &mut App) {
-    Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+    Theme::global_mut(cx).scrollbar_mode = ScrollbarMode::Hover;
     Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
+    // Base primitives and TextView cache a projection of the styled theme.
+    // Publish both these overrides and the preceding font overrides together.
+    Theme::sync_base(cx);
 }
 
 /// Generate a GPUI theme dynamically from terminal ANSI colors and register it.
@@ -633,6 +636,23 @@ fn lighten(c: Color, amount: f64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn overrides_reach_base_theme_after_each_mode_change(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            for mode in [ThemeMode::Light, ThemeMode::Dark, ThemeMode::Light] {
+                Theme::set_scrollbar_mode(ScrollbarMode::Scrolling, cx);
+                Theme::change(mode, None, cx);
+                apply_font_overrides("Ioskeley Mono", ".SystemUIFont", 19.0, cx);
+                apply_scrollbar_overrides(cx);
+
+                let base = gpui_base::Theme::global(cx);
+                assert_eq!(base.scrollbar.mode(), ScrollbarMode::Hover);
+                assert_eq!(base.tokens, Theme::global(cx).semantic_tokens());
+            }
+        });
+    }
 
     fn generated_colors(theme: &TerminalTheme) -> serde_json::Map<String, serde_json::Value> {
         let json: serde_json::Value =

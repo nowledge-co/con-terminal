@@ -39,7 +39,7 @@ con-ghostty.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
-gpui-component-assets.workspace = true
+gpui-kit-assets.workspace = true
 reqwest_client.workspace = true
 anyhow.workspace = true
 log.workspace = true
@@ -103,6 +103,8 @@ socket2 = "0.6"
 [dev-dependencies]
 # Layout tests use gpui's visual test harness (debug_bounds, TestAppContext).
 gpui = { workspace = true, features = ["test-support"] }
+# Inspect the theme projection consumed by the component library's primitives.
+gpui-base = "=0.6.6"
 # Verify the bundled status font has outlines, not only character mappings.
 ttf-parser = "0.25"
 

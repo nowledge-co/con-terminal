@@ -21,7 +21,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, Sizable, Theme,
     button::{Button, ButtonVariants as _},
-    scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow},
+    scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarMode},
 };
 use std::{
     collections::HashMap,
@@ -879,7 +879,6 @@ impl EditorView {
         };
         let tab = &mut self.tabs[self.active_tab];
         tab.preview = preview;
-        let preview = tab.preview;
         self.preview_scroll_handle = ScrollHandle::new();
         if preview {
             self.schedule_preview_parse(self.active_tab, cx);
@@ -2111,7 +2110,7 @@ impl Render for EditorView {
             .flex_1()
             .min_h_0()
             .child(list)
-            .child(Scrollbar::new(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always));
+            .child(Scrollbar::new(&self.scroll_handle).mode(ScrollbarMode::Always));
 
         let body = if image_tab {
             let path = active.path.clone();

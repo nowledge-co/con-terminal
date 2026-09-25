@@ -90,7 +90,7 @@ pub(crate) fn highlighted_line_runs(
     let rope = Rope::from_str(text);
     let mut highlighter = SyntaxHighlighter::new(language);
     highlighter.update(None, &rope, None);
-    let highlights = highlighter.styles(&(0..text.len()), &theme.highlight_theme);
+    let highlights = highlighter.styles(&(0..text.len()), &*theme.highlight_theme);
 
     lines
         .iter()
