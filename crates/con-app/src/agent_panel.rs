@@ -1136,7 +1136,8 @@ impl AgentPanel {
         cx.subscribe_in(&input_state, window, {
             move |this, _, ev: &InputEvent, _window, cx| {
                 if let InputEvent::PressEnter {
-                    secondary: false, ..
+                    secondary: false,
+                    shift: false,
                 } = ev
                 {
                     this.submit_edit(cx);
@@ -5227,6 +5228,51 @@ fn humanize_model_name(model: &str) -> String {
 mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
     use con_agent::{AgentConfig, ProviderConfig, ProviderKind};
+
+    #[gpui::test]
+    fn editing_shift_enter_preserves_draft_until_plain_enter(cx: &mut gpui::TestAppContext) {
+        use gpui::Focusable;
+
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = AgentPanel::new(window, cx);
+            panel.state.add_message("user", "original");
+            panel.state.add_message("assistant", "existing reply");
+            panel.start_editing(1, "original", window, cx);
+            let input = panel.edit_input_state.as_ref().unwrap();
+            input.update(cx, |input, cx| {
+                input.set_cursor_position(gpui_component::input::Position::new(0, 8), window, cx);
+                input.focus_handle(cx).focus(window, cx);
+            });
+            panel
+        });
+
+        cx.simulate_keystrokes("shift-enter");
+        cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(panel.editing_msg_idx, Some(1));
+            assert_eq!(panel.state.messages.len(), 3);
+            assert_eq!(panel.state.messages[2].content, "existing reply");
+            assert_eq!(
+                panel.edit_input_state.as_ref().unwrap().read(cx).value(),
+                "original\n"
+            );
+        });
+
+        cx.simulate_input("continued");
+        cx.simulate_keystrokes("enter");
+        cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(panel.editing_msg_idx, None);
+            assert!(panel.edit_input_state.is_none());
+            assert_eq!(panel.state.messages.len(), 2);
+            assert_eq!(
+                panel.state.messages[1].content.trim_end(),
+                "original\ncontinued"
+            );
+        });
+    }
 
     #[test]
     fn humanize_strips_date_suffix() {
