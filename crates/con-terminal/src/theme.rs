@@ -542,26 +542,26 @@ impl TerminalTheme {
                 "foreground" => foreground = parse_hex_color(value),
                 "palette" => {
                     let mut idx_color = value.splitn(2, '=');
-                    if let (Some(idx_str), Some(hex)) = (idx_color.next(), idx_color.next()) {
-                        if let Ok(idx) = idx_str.trim().parse::<usize>() {
-                            if idx < 16 {
-                                if let Some(color) = parse_hex_color(hex.trim()) {
-                                    ansi[idx] = color;
-                                    palette_count += 1;
-                                }
-                            }
-                        }
+                    if let (Some(idx_str), Some(hex)) = (idx_color.next(), idx_color.next())
+                        && let Ok(idx) = idx_str.trim().parse::<usize>()
+                        && idx < 16
+                        && let Some(color) = parse_hex_color(hex.trim())
+                    {
+                        ansi[idx] = color;
+                        palette_count += 1;
                     }
                 }
                 _ => {}
             }
         }
 
-        if background.is_some() && foreground.is_some() && palette_count >= 8 {
+        if let (Some(foreground), Some(background)) = (foreground, background)
+            && palette_count >= 8
+        {
             Some(Self {
                 name: name.to_string(),
-                foreground: foreground.unwrap(),
-                background: background.unwrap(),
+                foreground,
+                background,
                 ansi,
             })
         } else {
@@ -590,10 +590,10 @@ impl TerminalTheme {
                 .unwrap_or("")
                 .to_lowercase()
                 .replace(' ', "-");
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Some(theme) = Self::from_ghostty_format(&name, &content) {
-                    themes.push(theme);
-                }
+            if let Ok(content) = std::fs::read_to_string(&path)
+                && let Some(theme) = Self::from_ghostty_format(&name, &content)
+            {
+                themes.push(theme);
             }
         }
 

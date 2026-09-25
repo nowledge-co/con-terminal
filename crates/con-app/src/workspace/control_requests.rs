@@ -50,20 +50,19 @@ impl ConWorkspace {
             .map(|pending| pending.auto_approve_tools)
             .unwrap_or(false);
 
-        if auto_approve {
-            if let HarnessEvent::ToolApprovalNeeded {
+        if auto_approve
+            && let HarnessEvent::ToolApprovalNeeded {
                 call_id,
                 approval_tx,
                 ..
             } = event
-            {
-                let _ = approval_tx.send(con_agent::ToolApprovalDecision {
-                    call_id: call_id.clone(),
-                    allowed: true,
-                    reason: Some("auto-approved by con-cli".to_string()),
-                });
-                return true;
-            }
+        {
+            let _ = approval_tx.send(con_agent::ToolApprovalDecision {
+                call_id: call_id.clone(),
+                allowed: true,
+                reason: Some("auto-approved by con-cli".to_string()),
+            });
+            return true;
         }
 
         match event {
@@ -111,6 +110,9 @@ impl ConWorkspace {
         } = request;
 
         match command {
+            ControlCommand::Handoff(command) => {
+                self.handle_handoff_command(command, response_tx, cx)
+            }
             ControlCommand::SystemIdentify => {
                 let result = serde_json::to_value(SystemIdentifyResult {
                     app: "con".to_string(),
@@ -860,18 +862,16 @@ impl ConWorkspace {
             ControlCommand::AgentOpenPanelForRequest { tab_index } => {
                 match self.resolve_control_tab_index(tab_index) {
                     Ok(tab_idx) => {
-                        if tab_idx == self.active_tab {
-                            if let Some(target) =
+                        if tab_idx == self.active_tab
+                            && let Some(target) =
                                 super::chrome::agent_panel_motion_target_for_agent_request(
                                     self.agent_panel_open,
                                 )
-                            {
-                                self.agent_panel_open = true;
-                                let duration =
-                                    Self::terminal_adjacent_chrome_duration(true, 290, 220);
-                                self.agent_panel_motion.set_target(target, duration);
-                                cx.notify();
-                            }
+                        {
+                            self.agent_panel_open = true;
+                            let duration = Self::terminal_adjacent_chrome_duration(true, 290, 220);
+                            self.agent_panel_motion.set_target(target, duration);
+                            cx.notify();
                         }
                         let open = if tab_idx == self.active_tab {
                             self.agent_panel_open

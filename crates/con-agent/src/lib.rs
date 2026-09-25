@@ -2,6 +2,7 @@ pub mod chatgpt_subscription;
 pub mod context;
 pub mod control;
 pub mod conversation;
+pub mod handoff;
 pub mod hook;
 pub mod playbooks;
 pub mod provider;

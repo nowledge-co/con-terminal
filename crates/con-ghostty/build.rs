@@ -446,13 +446,13 @@ fn build_vt_backend(target_os: &str) {
 ///   3. Named step matching one of the known candidates.
 fn pick_vt_invocation(
     zig_bin: &std::ffi::OsStr,
-    ghostty_dir: &PathBuf,
-    zig_global_cache_dir: Option<&std::path::Path>,
+    ghostty_dir: &Path,
+    zig_global_cache_dir: Option<&Path>,
 ) -> Vec<String> {
-    if let Some(val) = env::var_os("CON_GHOSTTY_VT_STEP") {
-        if let Some(s) = val.to_str() {
-            return vec![s.to_string()];
-        }
+    if let Some(val) = env::var_os("CON_GHOSTTY_VT_STEP")
+        && let Some(s) = val.to_str()
+    {
+        return vec![s.to_string()];
     }
 
     let help_text = zig_build_help_text(zig_bin, ghostty_dir, zig_global_cache_dir);
@@ -949,13 +949,9 @@ fn zig_global_cache_dir(target_os: &str) -> Option<PathBuf> {
     }
 
     let candidates = [PathBuf::from(r"C:\zc"), env::temp_dir().join("zc")];
-    for candidate in candidates {
-        if fs::create_dir_all(&candidate).is_ok() && writable_dir(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| fs::create_dir_all(candidate).is_ok() && writable_dir(candidate))
 }
 
 fn writable_dir(path: &Path) -> bool {

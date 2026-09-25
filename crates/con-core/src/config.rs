@@ -1008,16 +1008,37 @@ impl NetworkConfig {
     /// # Safety
     /// Same as `apply_to_env` — must be called single-threaded.
     unsafe fn apply_one(upper: &str, lower: &str, value: Option<&str>) {
-        if let Some(v) = value {
-            if !v.is_empty() {
-                unsafe {
-                    std::env::set_var(upper, v);
-                    std::env::set_var(lower, v);
-                }
-                log::info!("network: {upper} set from config");
+        if let Some(v) = value
+            && !v.is_empty()
+        {
+            unsafe {
+                std::env::set_var(upper, v);
+                std::env::set_var(lower, v);
             }
+            log::info!("network: {upper} set from config");
         }
         // None or empty string → leave the environment untouched.
+    }
+}
+
+/// Experimental features guarded by individual switches.
+///
+/// # Example
+/// ```toml
+/// [experimental]
+/// handoff = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExperimentalConfig {
+    /// Agent Handoff: hand a running agent session off to another agent tab.
+    /// Ships as an experimental feature; disable to hide all entry points.
+    pub handoff: bool,
+}
+
+impl Default for ExperimentalConfig {
+    fn default() -> Self {
+        Self { handoff: true }
     }
 }
 
@@ -1030,6 +1051,7 @@ pub struct Config {
     pub keybindings: KeybindingConfig,
     pub skills: SkillsConfig,
     pub network: NetworkConfig,
+    pub experimental: ExperimentalConfig,
     /// Authored source/provenance used for lossless, collision-safe saves.
     #[serde(skip)]
     source: std::sync::Mutex<ghostty::SourceState>,
@@ -1044,6 +1066,7 @@ impl Clone for Config {
             keybindings: self.keybindings.clone(),
             skills: self.skills.clone(),
             network: self.network.clone(),
+            experimental: self.experimental.clone(),
             source: std::sync::Mutex::new(
                 self.source
                     .lock()
@@ -1108,16 +1131,9 @@ impl SkillsConfig {
         let home = dirs::home_dir();
         self.global_paths
             .iter()
-            .map(|p| {
-                if p.starts_with("~/") {
-                    if let Some(ref h) = home {
-                        h.join(&p[2..])
-                    } else {
-                        PathBuf::from(p)
-                    }
-                } else {
-                    PathBuf::from(p)
-                }
+            .map(|p| match (p.strip_prefix("~/"), &home) {
+                (Some(rest), Some(home)) => home.join(rest),
+                _ => PathBuf::from(p),
             })
             .collect()
     }
@@ -1147,7 +1163,7 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let mut config =
-            Self::load_from_paths(&Self::config_path(), &con_paths::legacy_config_file())?;
+            Self::load_from_paths(Self::config_path(), con_paths::legacy_config_file())?;
         config.apply_zero_touch_chatgpt_default();
         Ok(config)
     }
@@ -1286,17 +1302,16 @@ impl Config {
                 "[config] Recomputed automatic agent provider as {provider} from credential readiness"
             );
             self.agent.provider = provider;
-            if !self.agent.provider_is_explicit {
-                if let Some(authored) = self
+            if !self.agent.provider_is_explicit
+                && let Some(authored) = self
                     .source
                     .lock()
                     .expect("config source mutex poisoned")
                     .authored
                     .as_mut()
-                {
-                    authored["agent"]["provider"] = serde_json::to_value(&self.agent.provider)
-                        .expect("provider serialization cannot fail");
-                }
+            {
+                authored["agent"]["provider"] = serde_json::to_value(&self.agent.provider)
+                    .expect("provider serialization cannot fail");
             }
         }
     }

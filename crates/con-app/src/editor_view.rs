@@ -846,7 +846,11 @@ impl EditorView {
         if tab.buffer.revision() != revision {
             return false;
         }
-        tab.preview_cache = Some((revision, Arc::new(parsed)));
+        // Parsed markdown carries gpui text-geometry handles: main-thread
+        // only, and this cache never leaves the UI thread.
+        #[allow(clippy::arc_with_non_send_sync)]
+        let cached = Arc::new(parsed);
+        tab.preview_cache = Some((revision, cached));
         true
     }
 
@@ -1354,10 +1358,9 @@ impl EditorView {
                         .iter()
                         .find(|tab| tab.path == path)
                         .map(|tab| tab.buffer.text())
+                        && let Some(client) = this.lsp_clients.get(&path)
                     {
-                        if let Some(client) = this.lsp_clients.get(&path) {
-                            client.did_change(text);
-                        }
+                        client.did_change(text);
                     }
                 });
             }),
@@ -2337,6 +2340,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::arc_with_non_send_sync)] // Match the UI-thread-only production API.
     fn preview_parse_plan_skips_current_cache_and_duplicate_pending() {
         let mut tab = EditorTab::new(
             PathBuf::from("notes.md"),

@@ -478,10 +478,10 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.has_active_tab() {
-            if let Some(t) = self.try_active_terminal() {
-                t.clear_scrollback(cx);
-            }
+        if self.has_active_tab()
+            && let Some(t) = self.try_active_terminal()
+        {
+            t.clear_scrollback(cx);
         }
     }
 
@@ -669,10 +669,8 @@ impl ConWorkspace {
             .pane_terminals()
             .iter()
             .any(|(id, _)| *id == focused_pane_id);
-        if focused_is_terminal {
-            if let Some(t) = self.try_active_terminal() {
-                t.focus(window, cx);
-            }
+        if focused_is_terminal && let Some(t) = self.try_active_terminal() {
+            t.focus(window, cx);
         }
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);

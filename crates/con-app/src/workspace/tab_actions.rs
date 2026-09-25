@@ -493,13 +493,12 @@ impl ConWorkspace {
             }
             if tab_idx == self.active_tab {
                 self.sync_active_tab_native_view_visibility(cx);
-                if should_focus_replacement {
-                    if let Some(replacement) =
+                if should_focus_replacement
+                    && let Some(replacement) =
                         self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
-                    {
-                        replacement.ensure_surface(window, cx);
-                        replacement.focus(window, cx);
-                    }
+                {
+                    replacement.ensure_surface(window, cx);
+                    replacement.focus(window, cx);
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
@@ -793,9 +792,20 @@ impl ConWorkspace {
         // terminal in each pane's cwd.
         let ghostty_app = self.ghostty_app.clone();
         let font_size = self.font_size;
+        let handoff_menu_entry_enabled = self.config.experimental.handoff;
         let mut make_terminal =
             |cwd: Option<&str>, _screen_text: Option<&[String]>, _force: bool| {
-                make_ghostty_terminal(&ghostty_app, cwd, None, None, None, font_size, window, cx)
+                make_ghostty_terminal(
+                    &ghostty_app,
+                    cwd,
+                    None,
+                    None,
+                    None,
+                    font_size,
+                    handoff_menu_entry_enabled,
+                    window,
+                    cx,
+                )
             };
         let pane_tree = PaneTree::from_state(&layout, focused_pane_id, &mut make_terminal);
 

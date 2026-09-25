@@ -99,10 +99,10 @@ fn scope_for_file(path: &Path) -> Option<String> {
         created: metadata.created().ok(),
         len: metadata.len(),
     };
-    if let Some((cached_stamp, scope)) = scopes.get(path) {
-        if *cached_stamp == stamp {
-            return scope.clone();
-        }
+    if let Some((cached_stamp, scope)) = scopes.get(path)
+        && *cached_stamp == stamp
+    {
+        return scope.clone();
     }
     let scope = read_context(path).ok().map(|auth| auth.scope);
     scopes.insert(path.into(), (stamp, scope.clone()));

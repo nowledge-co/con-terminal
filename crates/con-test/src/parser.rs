@@ -28,11 +28,12 @@
 /// form is preferred.
 use anyhow::{Context, Result, bail};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum MatchMode {
     /// Full string equality (trailing whitespace trimmed per line)
     Exact,
     /// Actual output contains the expected string (default)
+    #[default]
     Contains,
     /// Expected is valid JSON; every key present in expected must match in actual
     JsonSubset,
@@ -42,12 +43,6 @@ pub enum MatchMode {
     Ok,
     /// Check exit code != 0; match expected against stderr
     Error,
-}
-
-impl Default for MatchMode {
-    fn default() -> Self {
-        MatchMode::Contains
-    }
 }
 
 impl MatchMode {
@@ -221,12 +216,10 @@ fn split_inline_comment(s: &str) -> (&str, &str) {
         match bytes[idx] {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
-            b'#' if !in_single && !in_double => {
-                if idx == 0 || bytes[idx - 1] == b' ' {
-                    let args = s[..idx].trim_end();
-                    let comment = s[idx + 1..].trim();
-                    return (args, comment);
-                }
+            b'#' if !in_single && !in_double && (idx == 0 || bytes[idx - 1] == b' ') => {
+                let args = s[..idx].trim_end();
+                let comment = s[idx + 1..].trim();
+                return (args, comment);
             }
             _ => {}
         }

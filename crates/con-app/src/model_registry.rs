@@ -208,11 +208,14 @@ struct CacheEntry {
     fetched_at: Instant,
 }
 
+/// Per-provider custom model IDs keyed by `(provider, model id)`.
+type CustomModelMap = HashMap<(ProviderKind, String), Vec<String>>;
+
 /// Shared, thread-safe model registry with background fetching.
 #[derive(Clone)]
 pub struct ModelRegistry {
     inner: Arc<Mutex<Option<CacheEntry>>>,
-    custom: Arc<Mutex<HashMap<(ProviderKind, String), Vec<String>>>>,
+    custom: Arc<Mutex<CustomModelMap>>,
 }
 
 impl ModelRegistry {
@@ -267,25 +270,23 @@ impl ModelRegistry {
         let canonical = canonical_models_provider(provider);
         {
             let custom = self.custom.lock().unwrap();
-            if let Some(endpoint) = base_url.and_then(Self::custom_models_scope) {
-                if let Some(models) = custom.get(&(canonical.clone(), endpoint)) {
-                    if !models.is_empty() {
-                        let mut models = models.clone();
-                        append_missing_models(&mut models, pinned_models(provider));
-                        return models;
-                    }
-                }
+            if let Some(endpoint) = base_url.and_then(Self::custom_models_scope)
+                && let Some(models) = custom.get(&(canonical.clone(), endpoint))
+                && !models.is_empty()
+            {
+                let mut models = models.clone();
+                append_missing_models(&mut models, pinned_models(provider));
+                return models;
             }
         }
         let guard = self.inner.lock().unwrap();
-        if let Some(entry) = guard.as_ref() {
-            if let Some(models) = entry.models.get(&canonical) {
-                if !models.is_empty() {
-                    let mut models = models.clone();
-                    append_missing_models(&mut models, pinned_models(provider));
-                    return models;
-                }
-            }
+        if let Some(entry) = guard.as_ref()
+            && let Some(models) = entry.models.get(&canonical)
+            && !models.is_empty()
+        {
+            let mut models = models.clone();
+            append_missing_models(&mut models, pinned_models(provider));
+            return models;
         }
         // Fallback
         let mut models: Vec<String> = fallback_models(provider)

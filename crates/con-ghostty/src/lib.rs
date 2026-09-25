@@ -242,6 +242,8 @@ mod pty_write;
 #[cfg(target_os = "macos")]
 pub mod ffi;
 #[cfg(target_os = "macos")]
+mod raw_input;
+#[cfg(target_os = "macos")]
 pub mod terminal;
 
 // `stub` defines the shared shape (TerminalColors, GhosttySplitDirection,

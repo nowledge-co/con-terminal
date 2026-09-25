@@ -692,6 +692,7 @@ fn rewrite_file(path: &Path, _steps: &[Step], rewrites: &[(usize, String)]) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::*;
 

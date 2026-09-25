@@ -107,6 +107,36 @@ pub struct ControlMethodInfo {
 
 const CONTROL_METHODS: &[(&str, &str)] = &[
     (
+        "handoffs.agents",
+        "List installed local agents and handoff capabilities.",
+    ),
+    (
+        "handoffs.open",
+        "Open Agent Handoff for the active terminal (macOS).",
+    ),
+    (
+        "handoffs.sources",
+        "List exact local sessions for the selected agent (macOS).",
+    ),
+    (
+        "handoffs.prepare",
+        "Prepare a filtered handoff preview for a handoff job.",
+    ),
+    ("handoffs.list", "List durable handoffs for a directory."),
+    ("handoffs.get", "Read handoff state and preview."),
+    (
+        "handoffs.start",
+        "Open a one-shot native agent startup helper in a new surface.",
+    ),
+    (
+        "handoffs.respond",
+        "Explicitly confirm delivery, receipt, or stopped work.",
+    ),
+    (
+        "handoffs.cancel",
+        "Cancel preparation or request a visible stop confirmation.",
+    ),
+    (
         "system.identify",
         "Return app identity, active tab, socket path, and method inventory.",
     ),
@@ -244,6 +274,7 @@ pub struct AgentAskResult {
 
 #[derive(Debug, Clone)]
 pub enum ControlCommand {
+    Handoff(crate::handoff::HandoffRpc),
     SystemIdentify,
     SystemCapabilities,
     TabsList,
@@ -396,6 +427,7 @@ pub enum ControlCommand {
 impl ControlCommand {
     pub fn method_name(&self) -> &'static str {
         match self {
+            Self::Handoff(command) => command.method(),
             Self::SystemIdentify => "system.identify",
             Self::SystemCapabilities => "system.capabilities",
             Self::TabsList => "tabs.list",
@@ -433,6 +465,7 @@ impl ControlCommand {
 
     pub fn params_json(&self) -> Value {
         match self {
+            Self::Handoff(command) => command.params(),
             Self::SystemIdentify | Self::SystemCapabilities | Self::TabsList | Self::TabsNew => {
                 json!({})
             }
@@ -675,6 +708,11 @@ impl ControlCommand {
     }
 
     pub fn from_rpc(method: &str, params: Value) -> Result<Self, ControlError> {
+        if method.starts_with("handoffs.") {
+            return crate::handoff::HandoffRpc::parse(method, params)
+                .map(Self::Handoff)
+                .map_err(|error| ControlError::invalid_params(error.to_string()));
+        }
         match method {
             "system.identify" => Ok(Self::SystemIdentify),
             "system.capabilities" => Ok(Self::SystemCapabilities),
@@ -1018,22 +1056,22 @@ impl Drop for ControlSocketHandle {
 }
 
 pub fn control_socket_path() -> PathBuf {
-    if let Ok(value) = env::var("CON_SOCKET_PATH") {
-        if !value.trim().is_empty() {
-            return PathBuf::from(value);
-        }
+    if let Ok(value) = env::var("CON_SOCKET_PATH")
+        && !value.trim().is_empty()
+    {
+        return PathBuf::from(value);
     }
     #[cfg(unix)]
     {
-        if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR") {
-            if !runtime_dir.trim().is_empty() {
-                let socket_name = if cfg!(debug_assertions) {
-                    "con-debug.sock"
-                } else {
-                    "con.sock"
-                };
-                return PathBuf::from(runtime_dir).join("con").join(socket_name);
-            }
+        if let Ok(runtime_dir) = env::var("XDG_RUNTIME_DIR")
+            && !runtime_dir.trim().is_empty()
+        {
+            let socket_name = if cfg!(debug_assertions) {
+                "con-debug.sock"
+            } else {
+                "con.sock"
+            };
+            return PathBuf::from(runtime_dir).join("con").join(socket_name);
         }
     }
     PathBuf::from(DEFAULT_SOCKET_PATH)
