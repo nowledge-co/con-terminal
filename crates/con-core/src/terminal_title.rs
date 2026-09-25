@@ -73,7 +73,7 @@ impl TerminalTitle {
     }
 }
 
-fn without_indicator(title: &str, range: std::ops::Range<usize>) -> String {
+pub(crate) fn without_indicator(title: &str, range: std::ops::Range<usize>) -> String {
     let before = &title[..range.start];
     let after = title[range.end..].trim_start();
     match (before.trim().is_empty(), after.is_empty()) {
@@ -94,7 +94,7 @@ fn without_indicator(title: &str, range: std::ops::Range<usize>) -> String {
     }
 }
 
-fn title_indicator(title: &str) -> Option<(std::ops::Range<usize>, TitleIndicator)> {
+pub(crate) fn title_indicator(title: &str) -> Option<(std::ops::Range<usize>, TitleIndicator)> {
     // Codex's explicit input-required title segment, not a generic punctuation rule.
     for (text, frame) in [
         ("[ ! ] Action Required", '!'),
@@ -109,7 +109,8 @@ fn title_indicator(title: &str) -> Option<(std::ops::Range<usize>, TitleIndicato
     }
     let mut candidate = None;
     for (start, frame) in title.char_indices() {
-        if !('\u{2801}'..='\u{28ff}').contains(&frame) && !"·✢✳✶✻✽".contains(frame) {
+        if !('\u{2801}'..='\u{28ff}').contains(&frame) && !"·✢✳✶✻✽◐◑".contains(frame)
+        {
             continue;
         }
         let end = start + frame.len_utf8();
