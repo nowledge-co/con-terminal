@@ -125,11 +125,15 @@ pub(super) fn agent_cli_icon(agent_cli: Option<&str>) -> Option<&'static str> {
 /// `grok` is matched by prefix because its binary carries the version,
 /// e.g. `grok-1.0.34-macos-aarch64`.
 pub(super) fn agent_from_process_name(name: &str) -> Option<&'static str> {
-    let name = name.trim();
+    let normalized = name.trim().to_ascii_lowercase();
+    let name = normalized.strip_suffix(".exe").unwrap_or(&normalized);
     if name.starts_with("grok-") {
         return Some("grok");
     }
     match name {
+        "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "opencode" => Some("opencode"),
         "herdr" => Some("herdr"),
         "kimi" => Some("kimi"),
         "mimo" => Some("mimo"),
@@ -137,7 +141,7 @@ pub(super) fn agent_from_process_name(name: &str) -> Option<&'static str> {
         "kiro-cli" | "kiro" => Some("kiro"),
         "crush" => Some("crush"),
         "goose" => Some("goose"),
-        "amp" | "amp.exe" => Some("amp"),
+        "amp" => Some("amp"),
         "dim" => Some("dim"),
         _ => None,
     }
@@ -257,14 +261,6 @@ pub(super) fn agent_from_screen_text(lines: &[String]) -> Option<&'static str> {
     None
 }
 
-/// Whether the cached classification should be replaced.
-pub(super) fn next_agent_cli(
-    previous: Option<&'static str>,
-    detected: Option<&'static str>,
-) -> Option<Option<&'static str>> {
-    (previous != detected).then_some(detected)
-}
-
 const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -288,12 +284,6 @@ pub(super) struct AgentCliDetectionState {
 }
 
 impl AgentCliDetectionState {
-    pub(super) fn terminal_changed(&self, terminal_id: u64) -> bool {
-        self.observation
-            .as_ref()
-            .is_some_and(|previous| previous.terminal_id != terminal_id)
-    }
-
     pub(super) fn observe(&mut self, observation: AgentCliObservation) -> bool {
         if self.observation.as_ref() == Some(&observation) {
             return false;
@@ -752,7 +742,10 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_from_process_name("zsh"), None);
         assert_eq!(agent_from_process_name("node"), None);
         assert_eq!(agent_from_process_name("python3"), None);
-        assert_eq!(agent_from_process_name("codex"), None);
+        assert_eq!(agent_from_process_name("codex"), Some("codex"));
+        assert_eq!(agent_from_process_name("Claude.EXE"), Some("claude"));
+        assert_eq!(agent_from_process_name("opencode"), Some("opencode"));
+        assert_eq!(agent_from_process_name("claude-helper"), None);
         assert_eq!(agent_from_process_name(""), None);
     }
 
@@ -860,18 +853,6 @@ mod tests_agent_cli_icon {
     }
 
     #[test]
-    fn next_agent_cli_reports_only_changes() {
-        assert_eq!(next_agent_cli(None, None), None);
-        assert_eq!(next_agent_cli(Some("codex"), Some("codex")), None);
-        assert_eq!(next_agent_cli(None, Some("codex")), Some(Some("codex")));
-        assert_eq!(next_agent_cli(Some("codex"), None), Some(None));
-        assert_eq!(
-            next_agent_cli(Some("codex"), Some("claude")),
-            Some(Some("claude"))
-        );
-    }
-
-    #[test]
     fn should_refresh_agent_cli_throttles_after_first_call() {
         let now = Instant::now();
         let interval = Duration::from_secs(1);
@@ -899,7 +880,6 @@ mod tests_agent_cli_icon {
         let mut state = AgentCliDetectionState::default();
 
         assert!(state.observe(observation));
-        assert!(!state.terminal_changed(7));
         for _ in 0..AGENT_CLI_SCREEN_SCAN_ATTEMPTS {
             assert!(state.take_screen_scan_attempt());
         }
@@ -916,8 +896,6 @@ mod tests_agent_cli_icon {
         state.finish();
         assert!(state.is_exhausted());
         assert!(!state.take_screen_scan_attempt());
-
-        assert!(state.terminal_changed(8));
     }
 }
 

@@ -613,6 +613,20 @@ impl LinuxPtySession {
         self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.is_write_desynchronized()
     }
 
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        match &self.backend {
+            LinuxPtyBackend::Local { master, .. } => {
+                let master = master.lock();
+                let fd = master.as_raw_fd()?;
+                // SAFETY: the master owns this descriptor for the locked scope.
+                let pgid = unsafe { libc::tcgetpgrp(fd) };
+                (pgid > 0).then_some(pgid as u64)
+            }
+            // Host process IDs must be queried in the host PID namespace.
+            LinuxPtyBackend::HostBridge { .. } => None,
+        }
+    }
+
     pub fn prompt_state(&self) -> crate::TerminalPromptState {
         self.shared.screen.prompt_state()
     }

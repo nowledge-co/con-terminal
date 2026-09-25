@@ -370,6 +370,12 @@ impl WindowsGhosttyTerminal {
     pub fn foreground_process_group_id(&self) -> Option<u64> {
         None
     }
+    pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::root_identity)
+    }
     pub fn tty_name(&self) -> Option<String> {
         None
     }

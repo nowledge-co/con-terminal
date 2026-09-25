@@ -266,7 +266,7 @@ pub struct LinuxGhosttyTerminal {
 }
 
 impl LinuxGhosttyTerminal {
-    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = false;
+    pub const SUPPORTS_FOREGROUND_PROCESS_GROUP_ID: bool = true;
     pub const SUPPORTS_TTY_NAME: bool = false;
 
     pub fn new() -> Self {
@@ -543,7 +543,10 @@ impl LinuxGhosttyTerminal {
     }
 
     pub fn foreground_process_group_id(&self) -> Option<u64> {
-        None
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::foreground_process_group_id)
     }
 
     pub fn tty_name(&self) -> Option<String> {

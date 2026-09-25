@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::mem::size_of;
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -107,21 +107,37 @@ pub(super) fn read_process(pid: u32) -> Option<ProcessInfo> {
 ///
 /// Inaccessible processes are omitted. Creation times reject reused PIDs and
 /// processes created after enumeration began. This remains best-effort metadata.
-pub(super) fn descendants(root: &ProcessIdentity) -> Vec<ProcessInfo> {
-    let Some(current_root) = read_process(root.pid) else {
-        return Vec::new();
-    };
-    if current_root.identity.started_at != root.started_at {
+pub(super) fn descendants_batch(roots: &[ProcessIdentity]) -> Vec<Vec<ProcessInfo>> {
+    if roots.is_empty() {
         return Vec::new();
     }
+    let Some((children, cutoff)) = snapshot() else {
+        return vec![Vec::new(); roots.len()];
+    };
+    roots
+        .iter()
+        .map(|root| {
+            let same_root = || {
+                read_process(root.pid)
+                    .is_some_and(|process| process.identity.started_at == root.started_at)
+            };
+            if !same_root() {
+                return Vec::new();
+            }
+            let result = resolve_descendants(root, &children, cutoff, read_process);
+            if same_root() { result } else { Vec::new() }
+        })
+        .collect()
+}
 
+fn snapshot() -> Option<(BTreeMap<u32, Vec<u32>>, u64)> {
     // SAFETY: no pointer arguments. Processes newer than this cannot be matched
     // to an old snapshot entry when its original PID has since been reused.
     let cutoff = filetime_ticks(unsafe { GetSystemTimeAsFileTime() });
     // SAFETY: process snapshots ignore the process-id argument.
     let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
         Ok(handle) => OwnedHandle::new(handle),
-        Err(_) => return Vec::new(),
+        Err(_) => return None,
     };
     let mut entry = PROCESSENTRY32W {
         dwSize: size_of::<PROCESSENTRY32W>() as u32,
@@ -129,50 +145,43 @@ pub(super) fn descendants(root: &ProcessIdentity) -> Vec<ProcessInfo> {
     };
     // Keep only immutable snapshot relationships here; live identities are read
     // after enumeration so every accepted edge has creation-time validation.
-    let mut candidates = Vec::new();
+    let mut children = BTreeMap::<u32, Vec<u32>>::new();
+    let mut count = 0;
     // SAFETY: `entry` has the required dwSize and remains writable throughout.
     if unsafe { Process32FirstW(snapshot.get(), &mut entry) }.is_err() {
-        return Vec::new();
+        return None;
     }
     loop {
-        if candidates.len() == MAX_PROCESS_ENTRIES {
-            return Vec::new();
+        if count == MAX_PROCESS_ENTRIES {
+            return None;
         }
-        candidates.push((entry.th32ProcessID, entry.th32ParentProcessID));
-        // SAFETY: same initialized PROCESSENTRY32W as above. Any failure ends
-        // enumeration; ERROR_NO_MORE_FILES is the normal terminal condition.
-        if unsafe { Process32NextW(snapshot.get(), &mut entry) }.is_err() {
-            break;
+        count += 1;
+        children
+            .entry(entry.th32ParentProcessID)
+            .or_default()
+            .push(entry.th32ProcessID);
+        // SAFETY: same initialized PROCESSENTRY32W as above. Reject partial
+        // snapshots on errors other than the documented end of enumeration.
+        if let Err(error) = unsafe { Process32NextW(snapshot.get(), &mut entry) } {
+            return (error.code() == windows::core::HRESULT::from_win32(ERROR_NO_MORE_FILES.0))
+                .then_some((children, cutoff));
         }
-    }
-
-    let result = resolve_descendants(root, candidates, cutoff, read_process);
-
-    // Revalidate after all potentially slow per-process queries. This prevents
-    // returning a graph rooted at a PID that was recycled during collection.
-    match read_process(root.pid) {
-        Some(process) if process.identity.started_at == root.started_at => result,
-        _ => Vec::new(),
     }
 }
 
 fn resolve_descendants(
     root: &ProcessIdentity,
-    candidates: Vec<(u32, u32)>,
+    children: &BTreeMap<u32, Vec<u32>>,
     cutoff: u64,
     mut read: impl FnMut(u32) -> Option<ProcessInfo>,
 ) -> Vec<ProcessInfo> {
-    let mut children = BTreeMap::<u32, Vec<u32>>::new();
-    for (pid, parent_pid) in candidates {
-        children.entry(parent_pid).or_default().push(pid);
-    }
     let mut accepted = vec![(root.pid, root.started_at)];
     let mut seen = HashSet::from([root.pid]);
     let mut result = Vec::new();
     let mut index = 0;
     while let Some(&(parent_pid, parent_started_at)) = accepted.get(index) {
         index += 1;
-        for pid in children.remove(&parent_pid).unwrap_or_default() {
+        for &pid in children.get(&parent_pid).into_iter().flatten() {
             if !seen.insert(pid) {
                 continue;
             }
@@ -219,8 +228,8 @@ mod tests {
     #[test]
     fn rejects_reused_parent_and_child_pids_without_losing_valid_descendants() {
         let root = process(10, 100).identity;
-        let entries = vec![(13, 12), (11, 10), (12, 10), (14, 10), (15, 11)];
-        let result = resolve_descendants(&root, entries, 200, |pid| {
+        let entries = BTreeMap::from([(12, vec![13]), (10, vec![11, 12, 14]), (11, vec![15])]);
+        let result = resolve_descendants(&root, &entries, 200, |pid| {
             Some(process(
                 pid,
                 match pid {

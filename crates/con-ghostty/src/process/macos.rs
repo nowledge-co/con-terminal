@@ -44,7 +44,17 @@ pub(super) fn read_process(pid: u32) -> Option<ProcessInfo> {
     {
         return None;
     }
-    let name = executable.file_name()?.to_string_lossy().into_owned();
+    let name_bytes: Vec<u8> = after
+        .pbi_name
+        .iter()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect();
+    let name = if name_bytes.is_empty() {
+        executable.file_name()?.to_string_lossy().into_owned()
+    } else {
+        String::from_utf8_lossy(&name_bytes).into_owned()
+    };
     Some(ProcessInfo {
         identity: ProcessIdentity {
             pid,

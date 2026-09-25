@@ -50,8 +50,20 @@ pub fn group_members(pgid: u32) -> Vec<ProcessInfo> {
     platform::group_members(pgid)
 }
 
+/// Collect many jobs without rescanning Linux's process table per terminal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn group_members_batch(pgids: &[u32]) -> Vec<Vec<ProcessInfo>> {
+    #[cfg(target_os = "linux")]
+    return linux::group_members_batch(pgids);
+    #[cfg(target_os = "macos")]
+    return pgids
+        .iter()
+        .map(|pgid| macos::group_members(*pgid))
+        .collect();
+}
+
 /// Candidates only: Windows process ancestry does not establish foreground status.
 #[cfg(target_os = "windows")]
-pub fn descendants(root: &ProcessIdentity) -> Vec<ProcessInfo> {
-    platform::descendants(root)
+pub fn descendants_batch(roots: &[ProcessIdentity]) -> Vec<Vec<ProcessInfo>> {
+    platform::descendants_batch(roots)
 }

@@ -208,9 +208,6 @@ pub(super) struct Tab {
     /// Cached classification of the focused terminal as an interactive agent
     /// CLI. Detection combines process, title, and bounded screen signals.
     pub(super) agent_cli: Option<&'static str>,
-    /// Observation and retry budget for the comparatively expensive screen
-    /// fallback. Stable tabs perform no screen reads.
-    pub(super) agent_cli_detection: AgentCliDetectionState,
     /// Stable identifier for this tab across the lifetime of the
     /// window — used as the cache key in the `TabSummaryEngine` so
     /// reorders, closes, and re-opens don't collide. Allocated from

@@ -130,6 +130,7 @@ mod suggestions;
 mod tab_actions;
 mod tab_presentation;
 mod terminal_factory;
+mod terminal_status;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -147,6 +148,7 @@ pub struct ConWorkspace {
     config: Config,
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
+    terminal_presentation: terminal_status::TerminalPresentation,
     active_tab: usize,
     /// Stable summary id of the last activated editor-only tab.
     ///

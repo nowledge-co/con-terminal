@@ -72,7 +72,6 @@ mod model_registry;
 mod motion;
 mod mouse_sequence;
 mod pane_tree;
-mod process_name;
 mod settings_panel;
 mod sidebar;
 mod sidebar_search_view;

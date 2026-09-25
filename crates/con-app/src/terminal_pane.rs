@@ -56,6 +56,21 @@ impl TerminalPane {
             .and_then(|terminal| terminal.foreground_process_group_id())
     }
 
+    pub fn surface_instance(&self, cx: &App) -> Option<std::sync::Weak<GhosttyTerminal>> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .map(std::sync::Arc::downgrade)
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn root_identity(&self, cx: &App) -> Option<con_ghostty::process::ProcessIdentity> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.root_identity())
+    }
+
     pub fn tty_name(&self, cx: &App) -> Option<String> {
         self.entity
             .read(cx)

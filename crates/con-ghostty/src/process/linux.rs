@@ -31,18 +31,27 @@ pub(super) fn read_process(pid: u32) -> Option<ProcessInfo> {
 }
 
 pub(super) fn group_members(pgid: u32) -> Vec<ProcessInfo> {
-    if pgid == 0 || pgid > i32::MAX as u32 {
-        return Vec::new();
-    }
+    group_members_batch(&[pgid]).pop().unwrap_or_default()
+}
 
+pub(super) fn group_members_batch(pgids: &[u32]) -> Vec<Vec<ProcessInfo>> {
+    let mut groups: std::collections::BTreeMap<u32, Option<Vec<ProcessInfo>>> = pgids
+        .iter()
+        .copied()
+        .filter(|pid| *pid != 0 && *pid <= i32::MAX as u32)
+        .map(|pid| (pid, Some(Vec::new())))
+        .collect();
+    let unavailable = || vec![Vec::new(); pgids.len()];
+    if groups.is_empty() {
+        return unavailable();
+    }
     let entries = match fs::read_dir("/proc") {
         Ok(entries) => entries,
-        Err(_) => return Vec::new(),
+        Err(_) => return unavailable(),
     };
-    let mut members = Vec::new();
     for (index, entry) in entries.flatten().enumerate() {
         if index == MAX_PROCESS_ENTRIES {
-            return Vec::new();
+            return unavailable();
         }
         let Some(pid) = entry
             .file_name()
@@ -55,11 +64,16 @@ pub(super) fn group_members(pgid: u32) -> Vec<ProcessInfo> {
         let Some(stat) = read_stat(&entry.path().join("stat"), pid) else {
             continue;
         };
-        if stat.process_group_id != pgid {
+        let pgid = stat.process_group_id;
+        let Some(group) = groups.get_mut(&pgid) else {
             continue;
-        }
+        };
+        let Some(members) = group else {
+            continue;
+        };
         if members.len() == MAX_PROCESS_CANDIDATES {
-            return Vec::new();
+            *group = None;
+            continue;
         }
         if let Some(process) = read_process(pid)
             && process.process_group_id == Some(pgid)
@@ -68,8 +82,19 @@ pub(super) fn group_members(pgid: u32) -> Vec<ProcessInfo> {
         }
     }
 
-    members.sort_unstable_by_key(|process| process.identity.pid);
-    members
+    for members in groups.values_mut().flatten() {
+        members.sort_unstable_by_key(|process| process.identity.pid);
+    }
+    pgids
+        .iter()
+        .map(|pid| {
+            groups
+                .get(pid)
+                .and_then(Option::as_ref)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 fn read_stat(path: &std::path::Path, expected_pid: u32) -> Option<Stat> {
