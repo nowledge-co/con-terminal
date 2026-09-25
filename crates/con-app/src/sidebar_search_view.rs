@@ -9,8 +9,8 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Sizable as _,
-    input::{Input, InputState},
-    scroll::{Scrollbar, ScrollbarShow},
+    input::{Textarea, TextareaState},
+    scroll::{Scrollbar, ScrollbarMode},
     switch::Switch,
 };
 use regex::{Regex, RegexBuilder};
@@ -104,7 +104,7 @@ impl EventEmitter<OpenFile> for SidebarSearchView {}
 
 pub struct SidebarSearchView {
     root: Option<PathBuf>,
-    query: Entity<InputState>,
+    query: Entity<TextareaState>,
     results_scroll_handle: ScrollHandle,
     query_text: String,
     options: SearchOptions,
@@ -116,7 +116,7 @@ pub struct SidebarSearchView {
 impl SidebarSearchView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let query = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder("Search")
                 .auto_grow(1, 3)
         });
@@ -444,7 +444,7 @@ impl Render for SidebarSearchView {
                             )
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Input::new(&self.query)
+                                    Textarea::new(&self.query)
                                         .appearance(false)
                                         .text_size(px(12.0))
                                         .line_height(px(17.0)),
@@ -494,7 +494,7 @@ impl Render for SidebarSearchView {
                     )
                     .child(
                         Scrollbar::vertical(&self.results_scroll_handle)
-                            .scrollbar_show(ScrollbarShow::Always),
+                            .mode(ScrollbarMode::Always),
                     ),
             )
             .into_any_element()

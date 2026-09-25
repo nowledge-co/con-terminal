@@ -2,10 +2,10 @@ use crossbeam_channel::Sender;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::clipboard::Clipboard;
-use gpui_component::divider::Divider;
-use gpui_component::input::{Input, InputEvent, InputState, Position};
+use gpui_component::input::{InputEvent, Position, Textarea, TextareaState};
 use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::separator::Separator;
 use gpui_component::spinner::Spinner;
 use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, Theme};
@@ -439,12 +439,12 @@ pub struct AgentPanel {
     /// Index of user message currently being edited inline (None = not editing)
     editing_msg_idx: Option<usize>,
     /// Input state for the inline edit field
-    edit_input_state: Option<Entity<InputState>>,
+    edit_input_state: Option<Entity<TextareaState>>,
     /// When true, show a compact inline input at the bottom of the panel
     /// (used when the main input bar is hidden but agent panel is open)
     show_inline_input: bool,
     /// Input state for the inline input at bottom of agent panel
-    inline_input_state: Option<Entity<InputState>>,
+    inline_input_state: Option<Entity<TextareaState>>,
     /// Skills available for /slash-command completion in inline input
     skills: Vec<SkillEntry>,
     /// Global submitted-input history for the inline composer.
@@ -1128,14 +1128,17 @@ impl AgentPanel {
     ) {
         let content = content.to_string();
         let input_state = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).auto_grow(1, 6);
+            let mut s = TextareaState::new(window, cx).auto_grow(1, 6);
             s.set_value(&content, window, cx);
             s
         });
         // Subscribe to Enter key to submit the edit
         cx.subscribe_in(&input_state, window, {
             move |this, _, ev: &InputEvent, _window, cx| {
-                if let InputEvent::PressEnter { secondary: false } = ev {
+                if let InputEvent::PressEnter {
+                    secondary: false, ..
+                } = ev
+                {
                     this.submit_edit(cx);
                 }
             }
@@ -1194,7 +1197,7 @@ impl AgentPanel {
         }
 
         let state = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder("Ask anything…")
                 .auto_grow(1, 4)
         });
@@ -3893,9 +3896,8 @@ impl AgentPanel {
                                         },
                                     ))
                                     .child(
-                                        Input::new(edit_input)
+                                        Textarea::new(edit_input)
                                             .appearance(false)
-                                            .cleanable(false)
                                             .font_family(theme.mono_font_family.clone()),
                                     ),
                             )
@@ -4097,7 +4099,7 @@ impl Render for AgentPanel {
         .w_full()
         .pt(px(12.0))
         .pb(px(64.0))
-        .flex_grow();
+        .flex_grow_1();
 
         let mut transcript_footer = div().flex().flex_col().gap(px(16.0));
 
@@ -4396,7 +4398,7 @@ impl Render for AgentPanel {
                             .whitespace_nowrap()
                             .child(truncate_str(&args_display, 80)),
                     )
-                    .child(Divider::horizontal().color(theme.warning.opacity(0.12)))
+                    .child(Separator::horizontal().color(theme.warning.opacity(0.12)))
                     // Action row — clear hierarchy
                     .child(
                         div()
@@ -4608,7 +4610,7 @@ impl Render for AgentPanel {
                             .child(provider_short_label),
                     ),
             )
-            .dropdown_menu_with_anchor(Corner::BottomLeft, {
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                 let options = self.session_provider_options.clone();
                 let current_provider = self.current_provider.clone();
                 let panel = panel.clone();
@@ -4652,7 +4654,7 @@ impl Render for AgentPanel {
                 .tooltip("Model")
                 .disabled(self.session_model_options.is_empty())
                 .label(model_label)
-                .dropdown_menu_with_anchor(Corner::BottomLeft, {
+                .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                     let current_model = self.model_name.clone();
                     let options = self.session_model_options.clone();
                     let panel = panel.clone();
@@ -4728,7 +4730,7 @@ impl Render for AgentPanel {
                                     .child(truncate_str(&args_display, 96)),
                             ),
                     )
-                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
+                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else if let Some(tc) = self.running_tool_call() {
@@ -4767,7 +4769,7 @@ impl Render for AgentPanel {
                                     .child(truncate_str(&args_display, 96)),
                             ),
                     )
-                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
+                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else if let Some((_icon, label)) = self.status_text() {
@@ -4796,7 +4798,7 @@ impl Render for AgentPanel {
                                     .child(label),
                             ),
                     )
-                    .child(Divider::horizontal().color(theme.muted.opacity(0.10)))
+                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
                     .into_any_element(),
             )
         } else {
@@ -4817,7 +4819,7 @@ impl Render for AgentPanel {
             .font_family(theme.font_family.clone())
             .text_size(theme.font_size)
             .child(header)
-            .child(Divider::horizontal().color(theme.muted.opacity(0.08)));
+            .child(Separator::horizontal().color(theme.muted.opacity(0.08)));
 
         if let Some(live_activity_strip) = live_activity_strip {
             panel = panel.child(live_activity_strip);
@@ -5170,9 +5172,8 @@ impl Render for AgentPanel {
                                     .text_size(inline_input_text_size)
                                     .child(
                                         div().w_full().child(
-                                            Input::new(&inline_input)
+                                            Textarea::new(&inline_input)
                                                 .appearance(false)
-                                                .cleanable(false)
                                                 .font_family(theme.mono_font_family.clone())
                                                 .text_size(inline_input_text_size),
                                         ),

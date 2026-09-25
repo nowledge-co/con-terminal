@@ -1570,6 +1570,9 @@ impl SettingsPanel {
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
+                // Release repeats the last Change value; previewing again would
+                // re-apply the native terminal config for no visible change.
+                SliderEvent::Release(_) => {}
             },
         )
         .detach();
@@ -1581,6 +1584,7 @@ impl SettingsPanel {
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
+                SliderEvent::Release(_) => {}
             },
         )
         .detach();
@@ -1601,6 +1605,7 @@ impl SettingsPanel {
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
+                SliderEvent::Release(_) => {}
             },
         )
         .detach();
@@ -1619,6 +1624,7 @@ impl SettingsPanel {
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
+                SliderEvent::Release(_) => {}
             },
         )
         .detach();
@@ -1631,6 +1637,7 @@ impl SettingsPanel {
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
+                SliderEvent::Release(_) => {}
             },
         )
         .detach();

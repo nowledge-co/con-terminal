@@ -10,7 +10,7 @@ con is an open-source, GPU-accelerated terminal emulator with a built-in AI agen
 
 ## Stack
 
-- **UI**: upstream Zed GPUI (git dependency on `zed-industries/zed`, Apache 2.0). Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
+- **UI**: Zed's GPUI (Apache 2.0), consumed as the `gpui-pre-*` crates.io snapshots that gpui-component releases are built against (`gpui-pre 0.3.6` = zed@`bcf6582`). Pin `gpui-pre-*` and `gpui-component` exactly (`=`) and bump them together. Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
 - **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS uses the full embedded libghostty; Windows and Linux consume the carved-out `libghostty-vt` parser instead and pair it with their own renderers (D3D11/DirectWrite on Windows, cached GPUI text spans painted on a fixed cell grid on Linux / a dedicated glyph-atlas renderer in the long term). Preserve native cell/grapheme boundaries through shaping; concatenating cells can incorrectly recombine emoji when DEC 2027 is off.
 - **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API on macOS (surface lifecycle, action callbacks, clipboard, key/mouse input). On Windows + Linux it wraps `libghostty-vt` plus per-platform PTY (`ConPTY` / Unix PTY) and renderer plumbing. Per-platform code lives in `con-ghostty/src/{terminal,windows,linux}/`; the workspace consumes the same `GhosttyApp` / `GhosttyTerminal` / `TerminalColors` type names from each.
 - **Terminal support crate**: con-terminal — theme and palette helpers only
@@ -126,14 +126,14 @@ Before building custom UI, check `3pp/gpui-component/` for an existing component
 
 - **Select** (`select::Select`, `SelectState<SearchableVec<String>>`) — searchable dropdowns. Use for any list selection instead of hand-rolling clickable divs.
 - **Button** (`button::Button`) — use `.ghost()`, `.primary()`, `.small()`, `.icon()` variants. Never hand-roll clickable divs for buttons.
-- **Input** (`input::Input`, `InputState`) — text fields with `.appearance(false)` for inline, `.cleanable()`, `.placeholder()`.
+- **Input** (`input::Input`, `InputState`) — single-line text fields with `.appearance(false)` for inline, `.cleanable()`, `.placeholder()`. Multi-line and auto-growing fields use `input::Textarea` with `TextareaState` (`.auto_grow(min, max)`).
 - **Switch** (`switch::Switch`) — toggles. Never hand-roll toggle divs.
 - **Icon** (`Icon::default().path("phosphor/name.svg")`) — use with Button via `.icon()`.
 - **Clipboard** (`clipboard::Clipboard`) — copy-to-clipboard with auto check-icon feedback.
 - **Sidebar** (`sidebar::Sidebar`) — collapsible sidebar with icon-only mode.
 - **Settings** (`setting::SettingPage`) — native settings layouts.
 
-Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand its API before using it. The upstream `CLAUDE.md` in `3pp/gpui-component/` documents the full architecture.
+Read the component's source in `3pp/gpui-component/crates/component/src/` (styled components) and `3pp/gpui-component/crates/base/src/` (unstyled `gpui-base` primitives such as input state) to understand its API before using it. The upstream `CLAUDE.md` in `3pp/gpui-component/` documents the full architecture.
 
 ### Visual normalization
 

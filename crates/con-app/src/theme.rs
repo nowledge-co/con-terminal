@@ -2,7 +2,7 @@ use con_core::config::{MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE, sanitize_terminal_fon
 use con_terminal::{Color, TerminalTheme};
 use gpui::App;
 use gpui_component::highlighter::LanguageRegistry;
-use gpui_component::scroll::ScrollbarShow;
+use gpui_component::scroll::ScrollbarMode;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
 use std::borrow::Cow;
 
@@ -279,7 +279,7 @@ pub fn canonical_terminal_font_family(name: &str) -> String {
 /// Apply con's scrollbar overrides after any Theme::change call.
 /// Must run AFTER Theme::change because it resets colors from the theme config.
 fn apply_scrollbar_overrides(cx: &mut App) {
-    Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Hover;
+    Theme::global_mut(cx).scrollbar_mode = ScrollbarMode::Hover;
     Theme::global_mut(cx).colors.scrollbar = gpui::transparent_black();
 }
 

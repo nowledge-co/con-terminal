@@ -787,8 +787,8 @@ impl ConWorkspace {
                 let theme = cx.theme();
                 let make_pane = |child: AnyElement, basis: f32| {
                     div()
-                        .flex_grow()
-                        .flex_shrink()
+                        .flex_grow_1()
+                        .flex_shrink_1()
                         .flex_basis(relative(basis.clamp(0.15, 0.85)))
                         .overflow_hidden()
                         .child(child)

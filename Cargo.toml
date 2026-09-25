@@ -25,22 +25,17 @@ con-terminal = { path = "crates/con-terminal" }
 con-ghostty = { path = "crates/con-ghostty" }
 con-agent = { path = "crates/con-agent" }
 
-# UI — upstream GPUI
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
-gpui_macros = { git = "https://github.com/zed-industries/zed" }
-# Intentionally unpinned like the other zed crates: gpui-component's
-# transitive gpui dependency shares this git source, and a `rev` pin would
-# fork the tree into two zed checkouts (two incompatible `http_client`
-# types). Cargo.lock freezes the commit; if a `cargo update` drifts it,
-# restore with:
-#   cargo update -p gpui --precise b310904bd95cecc9b2804261701d0bb7110529d9
-reqwest_client = { git = "https://github.com/zed-industries/zed" }
+# UI — Zed's GPUI via the `gpui-pre-*` crates.io snapshots (0.3.6 = zed@bcf6582).
+# Pin them exactly to the snapshot gpui-component was released against and bump
+# both together: any snapshot may change GPUI's API, and two snapshots in one
+# tree are incompatible types.
+gpui = { package = "gpui-pre", version = "=0.3.6" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.6" }
 
 # UI Components — upstream gpui-component, never local 3pp paths
-gpui-component = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component" }
-gpui-component-macros = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component-macros" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", branch = "main", package = "gpui-component-assets" }
+gpui-component = "=0.6.6"
+gpui-kit-assets = "=0.6.6"
 
 # AI Agent
 rig = { package = "rig-core", version = "0.40.0", default-features = false, features = ["rustls"] }

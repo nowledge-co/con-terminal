@@ -2917,7 +2917,7 @@ fn highlighted_code_runs(
     let mut runs = if let Some(lang) = lang.as_deref() {
         let mut highlighter = SyntaxHighlighter::new(lang);
         highlighter.update(None, &rope, None);
-        let highlights = highlighter.styles(&(0..code.len()), &style.theme.highlight_theme);
+        let highlights = highlighter.styles(&(0..code.len()), &*style.theme.highlight_theme);
         let mut runs = Vec::new();
         let mut cursor = 0usize;
 

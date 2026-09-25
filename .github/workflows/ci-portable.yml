@@ -106,15 +106,15 @@ jobs:
             throw "PowerShell parse errors in scripts/install.ps1"
           }
       - name: cargo check — portable crates
-        run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo check --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: cargo check — UI binary
         # The default `bin-con` target compiles to `con.exe`, which Win32
         # file APIs reject because CON is a reserved device name. The
         # `bin-con-app` feature routes the same `main.rs` to `con-app.exe`
         # instead — mirrors what `cargo wbuild` / `cargo wrun` do locally.
-        run: cargo check -p con --no-default-features --features con/bin-con-app
+        run: cargo check --locked -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
-        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
 
   linux:
     name: check (ubuntu-latest)
@@ -173,8 +173,8 @@ jobs:
             libwayland-dev libvulkan-dev \
             libfreetype-dev libfontconfig1-dev
       - name: cargo check — portable crates
-        run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo check --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: cargo check — UI binary
-        run: cargo check -p con
+        run: cargo check --locked -p con
       - name: cargo test — portable crates
-        run: cargo test -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty

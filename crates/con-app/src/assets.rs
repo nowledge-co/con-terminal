@@ -1,4 +1,3 @@
-use futures::FutureExt;
 use gpui::{
     App, Asset, AssetSource, ImageCacheError, ImageSource, RenderImage, Result, SharedString,
 };
@@ -49,7 +48,7 @@ impl AssetSource for ConAssets {
         }
 
         // Fall back to gpui-component's bundled assets
-        gpui_component_assets::Assets.load(path)
+        gpui_kit_assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
@@ -70,7 +69,7 @@ impl AssetSource for ConAssets {
                 .map(|p| p.into()),
         );
 
-        if let Ok(mut component_results) = gpui_component_assets::Assets.list(path) {
+        if let Ok(mut component_results) = gpui_kit_assets::Assets.list(path) {
             results.append(&mut component_results);
         }
 
@@ -92,18 +91,7 @@ pub fn png_bytes(asset_path: &str) -> Option<Cow<'static, [u8]>> {
 pub fn png_preview(path: &'static str, logical_size: f32) -> ImageSource {
     ImageSource::Custom(Arc::new(move |window, cx| {
         let size = (logical_size * window.scale_factor()).round().max(1.0) as u32;
-        let (load, _) = cx.fetch_asset::<PngPreview>(&(path, size));
-        load.clone().now_or_never().or_else(|| {
-            // The pinned GPUI use_asset only notifies the first requesting view.
-            // Retain one waiter per displayed preview, including reopened windows.
-            window.use_keyed_state((path, size), cx, |_, cx| {
-                cx.spawn(async move |this, cx| {
-                    let _ = load.await;
-                    let _ = this.update(cx, |_, cx| cx.notify());
-                })
-            });
-            None
-        })
+        window.use_asset::<PngPreview>(&(path, size), cx)
     }))
 }
 

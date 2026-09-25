@@ -10,7 +10,7 @@ con currently builds against the upstream GPUI crates from the Zed repository, n
 - **Text**: Core Text (macOS), cosmic-text (Linux), DirectWrite (Windows)
 - **Layout**: taffy (flexbox/CSS Grid)
 - **IME**: Full InputHandler trait — macOS AppKit, Linux X11 xim, Windows WM_IME
-- **Source**: upstream `zed-industries/zed` git dependency (crate name: `gpui`)
+- **Source**: `gpui-pre` crates.io snapshots of `zed-industries/zed` (package `gpui-pre`, imported as `gpui`)
 
 ## Programming Model
 
@@ -81,4 +81,4 @@ Read these upstream or read-only reference sources when you need framework detai
 
 ## Dependency
 
-In our workspace manifest, GPUI resolves from the upstream Zed git source rather than a local path dependency.
+In our workspace manifest, GPUI resolves from exact-pinned `gpui-pre` crates.io snapshots of Zed rather than a local path dependency.

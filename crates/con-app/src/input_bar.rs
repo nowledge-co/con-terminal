@@ -1,7 +1,7 @@
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
-    input::{Input, InputEvent, InputState, Position},
+    input::{InputEvent, Position, Textarea, TextareaState},
     tooltip::Tooltip,
 };
 
@@ -155,8 +155,8 @@ enum PaneScopeMode {
 }
 
 pub struct InputBar {
-    agent_input_state: Entity<InputState>,
-    shell_input_state: Entity<InputState>,
+    agent_input_state: Entity<TextareaState>,
+    shell_input_state: Entity<TextareaState>,
     mode: InputMode,
     cwd: String,
     panes: Vec<PaneInfo>,
@@ -226,7 +226,7 @@ impl InputBar {
         ]);
     }
 
-    fn current_input_state(&self) -> Entity<InputState> {
+    fn current_input_state(&self) -> Entity<TextareaState> {
         match self.mode {
             InputMode::Agent => self.agent_input_state.clone(),
             InputMode::Smart | InputMode::Shell => self.shell_input_state.clone(),
@@ -301,7 +301,7 @@ impl InputBar {
     }
 
     fn subscribe_input_state(
-        input_state: &Entity<InputState>,
+        input_state: &Entity<TextareaState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription {
@@ -436,14 +436,13 @@ impl InputBar {
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let agent_input_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder("Ask anything…")
                 .auto_grow(1, INPUT_BAR_MAX_ROWS)
         });
         let shell_input_state = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
-                .code_editor("con-shell")
                 .auto_grow(1, INPUT_BAR_MAX_ROWS)
         });
         shell_input_state.update(cx, |state, cx| {
@@ -1679,9 +1678,8 @@ impl Render for InputBar {
             }))
             .child(div().relative().top(input_vertical_offset).child(
                 if self.mode == InputMode::Agent {
-                    Input::new(&input_state)
+                    Textarea::new(&input_state)
                         .appearance(false)
-                        .cleanable(false)
                         .font_family(input_font)
                         .text_color(if input_value.is_empty() {
                             theme.muted_foreground.opacity(0.88)
@@ -1694,9 +1692,8 @@ impl Render for InputBar {
                         .min_h(control_size)
                         .into_any_element()
                 } else {
-                    Input::new(&input_state)
+                    Textarea::new(&input_state)
                         .appearance(false)
-                        .cleanable(false)
                         .font_family(input_font)
                         .text_color(if hide_native_command_text {
                             gpui::transparent_black()

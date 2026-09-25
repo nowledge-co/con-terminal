@@ -39,7 +39,7 @@ con-ghostty.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
-gpui-component-assets.workspace = true
+gpui-kit-assets.workspace = true
 reqwest_client.workspace = true
 anyhow.workspace = true
 log.workspace = true
