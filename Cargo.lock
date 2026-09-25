@@ -1330,6 +1330,7 @@ dependencies = [
  "env_logger",
  "fontdb",
  "futures",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",
