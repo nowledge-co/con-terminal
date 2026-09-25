@@ -11,10 +11,14 @@ pub(super) struct ThreadEvidence {
 }
 
 impl ThreadEvidence {
+    // Only the macOS process-inspection path merges or emptiness-checks
+    // evidence sets; the cross-platform tests go through `current()`.
+    #[cfg(target_os = "macos")]
     pub(super) fn is_empty(&self) -> bool {
         self.rollouts.is_empty() && self.locks.is_empty()
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn extend(&mut self, other: Self) {
         self.rollouts.extend(other.rollouts);
         self.locks.extend(other.locks);
