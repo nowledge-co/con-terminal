@@ -198,8 +198,14 @@ impl HandoffDestinationPanel {
         selected: bool,
         palette: &Palette,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let id = id.into();
+        let focus = window
+            .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
         let mut row = card_row()
             .id(id)
             .gap_2()
@@ -242,15 +248,28 @@ impl HandoffDestinationPanel {
                 .child(row_icon_tinted("phosphor/check.svg", palette.primary));
         }
         if enabled {
+            let on_click = std::rc::Rc::new(on_click);
+            let on_key = on_click.clone();
             let hover_bg = if selected {
                 palette.primary.opacity(0.14)
             } else {
                 palette.muted.opacity(0.08)
             };
+            let focused = focus.is_focused(window);
+            row = row.track_focus(&focus.tab_stop(true));
+            if focused {
+                row = row.bg(hover_bg);
+            }
             row = row
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover_bg))
-                .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)));
+                .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        on_key(this, window, cx);
+                        cx.stop_propagation();
+                    }
+                }));
         } else {
             row = row.opacity(0.45);
         }
@@ -305,7 +324,7 @@ impl HandoffDestinationPanel {
 }
 
 impl Render for HandoffDestinationPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = Palette::of(cx);
         // A previous job never hides the form or blocks another send.
         let has_footer = true;
@@ -336,7 +355,7 @@ impl Render for HandoffDestinationPanel {
                     .flex_col()
                     .gap(px(6.0))
                     .child(group_label("SOURCE", &palette))
-                    .child(self.render_source_card(&palette, cx)),
+                    .child(self.render_source_card(&palette, window, cx)),
             );
             body = body.child(
                 div()
@@ -344,7 +363,7 @@ impl Render for HandoffDestinationPanel {
                     .flex_col()
                     .gap(px(6.0))
                     .child(group_label("CONTINUE IN", &palette))
-                    .child(self.render_destination_card(&palette, cx)),
+                    .child(self.render_destination_card(&palette, window, cx)),
             );
         }
 
@@ -369,6 +388,13 @@ impl Render for HandoffDestinationPanel {
 
         let mut root = div()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    window.remove_window();
+                    cx.stop_propagation();
+                }
+            }))
             .overflow_hidden()
             .flex()
             .flex_col()

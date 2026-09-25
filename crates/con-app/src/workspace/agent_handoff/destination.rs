@@ -61,6 +61,7 @@ pub(super) struct ExecuteHandoff {
 }
 
 pub(super) struct HandoffDestinationPanel {
+    focus_handle: FocusHandle,
     cwd: PathBuf,
     runtime: Arc<Runtime>,
     source_agent: AgentKind,
@@ -124,8 +125,10 @@ impl HandoffDestinationPanel {
         source_foreground_group: u64,
         source_terminal: crate::terminal_pane::TerminalPane,
         existing: Vec<ExistingAgentTab>,
+        cx: &mut Context<Self>,
     ) -> Self {
         Self {
+            focus_handle: cx.focus_handle(),
             cwd,
             runtime,
             source_agent,
@@ -376,5 +379,11 @@ impl HandoffDestinationPanel {
         }
         let value = self.model_value(cx);
         (!value.is_empty()).then_some(value)
+    }
+}
+
+impl Focusable for HandoffDestinationPanel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }

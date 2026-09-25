@@ -1,10 +1,5 @@
 use super::super::*;
 use gpui_component::menu::ContextMenuExt;
-#[cfg(target_os = "macos")]
-use gpui_component::{
-    Icon,
-    button::{Button, ButtonVariants},
-};
 
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     if alpha.is_finite() {
@@ -1213,21 +1208,26 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         if self.handoff_button_visible(cx) {
             tab_controls = tab_controls.child(
-                Button::new("handoff-agent")
-                    .icon(
-                        Icon::default()
-                            .path("phosphor/handshake.svg")
-                            .text_color(chrome_icon_tone(theme, compact_titlebar_progress)),
-                    )
-                    .ghost()
-                    .with_size(px(22.0))
+                div()
+                    .id("handoff-agent")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.0))
                     .rounded(px(5.0))
-                    .text_color(chrome_icon_tone(theme, compact_titlebar_progress))
-                    .tooltip("Handoff Agent…")
+                    .cursor_pointer()
+                    .occlude()
+                    .hover(move |style| style.bg(chrome_hover_bg))
+                    .tooltip(|window, cx| chrome_tooltip("Handoff Agent", None, window, cx))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_agent_handoff(&crate::HandoffAgent, window, cx);
                     }))
-                    .occlude(),
+                    .child(
+                        svg()
+                            .path("phosphor/handshake.svg")
+                            .size(ui_icon_px(theme, 12.0))
+                            .text_color(new_tab_icon_color),
+                    ),
             );
         }
         let new_tab_button = div()

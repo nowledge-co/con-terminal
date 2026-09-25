@@ -198,6 +198,7 @@ impl ConWorkspace {
                         group,
                         source.clone(),
                         existing,
+                        cx,
                     );
                     // Closing the window (or app teardown) releases undelivered
                     // Prepared jobs; persisted launch/delivery intents survive.
@@ -208,6 +209,7 @@ impl ConWorkspace {
                     panel.load(window, cx);
                     panel
                 });
+                panel.read(cx).focus_handle(cx).focus(window, cx);
                 let panel_for_result = panel.clone();
                 let panel_for_route = panel.clone();
                 cx.subscribe(&panel, move |_, event: &ExecuteHandoff, cx| {

@@ -3,7 +3,12 @@ use gpui_component::{Sizable, input::Input};
 use super::*;
 
 impl HandoffDestinationPanel {
-    pub(super) fn render_source_card(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_source_card(
+        &self,
+        palette: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut source_card = card(palette);
         if let Some(warning) = &self.binding_warning {
             source_card = source_card.child(muted_note(warning.clone(), palette));
@@ -31,12 +36,14 @@ impl HandoffDestinationPanel {
         } else if let Some(source) = self.selected_source().cloned() {
             source_card = source_card.child(
                 card_row()
-                    .justify_between()
+                    .gap_1()
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_2()
+                            .w_full()
+                            .min_w_0()
                             .child(
                                 svg()
                                     .path(agent_icon(self.source_agent))
@@ -46,13 +53,18 @@ impl HandoffDestinationPanel {
                             )
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Session"),
+                                    .text_ellipsis()
+                                    .child(source.title),
                             ),
                     )
                     .child(
                         div()
+                            .w_full()
+                            .pl(px(24.0))
                             .text_size(px(11.5))
                             .font_family(palette.mono_font_family.clone())
                             .text_color(palette.muted_foreground)
@@ -105,8 +117,8 @@ impl HandoffDestinationPanel {
                 list = list.child(Self::destination_row(
                     format!("handoff-session-{id}"),
                     agent_icon(self.source_agent),
-                    id.clone(),
-                    warning.clone().unwrap_or(title),
+                    title,
+                    warning.clone().unwrap_or_else(|| compact_session_id(&id)),
                     !self.busy,
                     selected,
                     palette,
@@ -125,6 +137,7 @@ impl HandoffDestinationPanel {
                         this.promote_related_job(cx);
                         cx.notify();
                     },
+                    window,
                     cx,
                 ));
             }
@@ -147,6 +160,7 @@ impl HandoffDestinationPanel {
                         this.visible_candidate_limit += CANDIDATE_PAGE;
                         cx.notify();
                     },
+                    window,
                     cx,
                 ));
             }
@@ -159,7 +173,12 @@ impl HandoffDestinationPanel {
         source_card
     }
 
-    pub(super) fn render_destination_card(&self, palette: &Palette, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_destination_card(
+        &self,
+        palette: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let selectable = !self.busy && !self.loading_sessions;
         let source_available = selectable && self.selected_source().is_some();
         let mut destination_card = card(palette);
@@ -181,6 +200,7 @@ impl HandoffDestinationPanel {
                     log::info!("handoff: selected existing tab {}", target.tab_id);
                     cx.notify();
                 },
+                window,
                 cx,
             ));
         }
@@ -206,6 +226,7 @@ impl HandoffDestinationPanel {
             new_tab_agent.is_some(),
             palette,
             |this, _, cx| this.set_picker_open(!this.picker_open, cx),
+            window,
             cx,
         ));
         if self.picker_open {
@@ -229,11 +250,15 @@ impl HandoffDestinationPanel {
                         }
                         this.selected_destination = Some(Destination::NewTab(agent));
                         this.ensure_model_input(window, cx);
+                        if let Some(input) = &this.model_input {
+                            input.read(cx).focus_handle(cx).focus(window, cx);
+                        }
                         this.load_model_candidates(agent, cx);
                         log::info!("handoff: selected new {:?} tab", agent);
                         this.set_picker_open(false, cx);
                         cx.notify();
                     },
+                    window,
                     cx,
                 ));
             }
@@ -352,6 +377,15 @@ impl HandoffDestinationPanel {
             }
         }
         destination_card
+    }
+}
+
+fn compact_session_id(id: &str) -> String {
+    let prefix: String = id.chars().take(12).collect();
+    if id.chars().count() > 12 {
+        format!("ID {prefix}…")
+    } else {
+        format!("ID {prefix}")
     }
 }
 
