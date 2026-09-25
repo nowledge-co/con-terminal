@@ -47,8 +47,9 @@ fn con_cli_path() -> anyhow::Result<std::path::PathBuf> {
 impl ConWorkspace {
     /// The toolbar entry point is only offered while the experimental feature
     /// is on and the active tab has a live terminal running a known Agent CLI.
+    #[cfg(target_os = "macos")]
     pub(super) fn handoff_button_visible(&self, cx: &App) -> bool {
-        if !cfg!(target_os = "macos") || !self.config.experimental.handoff {
+        if !self.config.experimental.handoff {
             return false;
         }
         let Some(tab) = self.tabs.get(self.active_tab) else {
