@@ -381,7 +381,13 @@ fn staged_matches(dir: &Path, bundle: &HandoffBundle) -> Result<bool> {
 fn stage_files(bundle: &HandoffBundle, dir: &Path) -> Result<()> {
     // Exclude only this registered job, preserving other untracked files and user rules.
     let relative = dir.strip_prefix(&bundle.workspace.root)?;
-    let relative = relative.to_str().context("Non-UTF-8 project path")?;
+    // Git exclude patterns use '/' on every platform, including Windows.
+    let relative = relative
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()
+        .context("Non-UTF-8 project path")?
+        .join("/");
     ensure!(
         !relative.contains(['\n', '\r']),
         "Newlines in project paths are unsupported"

@@ -250,6 +250,11 @@ fn stage_preserves_index_untracked_work_and_exclude_rules() {
             .unwrap()
             .starts_with("# existing user rule\nkeep-local\n")
     );
+    assert!(
+        fs::read_to_string(f.repo.join(".git/info/exclude"))
+            .unwrap()
+            .contains(&format!("/.con/handoffs/{}/", job.id))
+    );
     let bundle = f.service.bundle(&job.id).unwrap();
     let staged = fs::read_to_string(
         f.repo
