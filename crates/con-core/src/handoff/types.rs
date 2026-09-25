@@ -126,7 +126,7 @@ impl HandoffState {
             Self::Delivering => "Delivery outcome unknown — check the target",
             Self::AwaitingConfirmation => "Delivery attempted — confirm receipt",
             Self::AwaitingManualDelivery => "Automatic delivery unavailable — paste instruction",
-            Self::Active => "Continuation confirmed",
+            Self::Active => "Sent — check target",
             Self::NeedsInteraction => "Finish handoff manually",
             Self::Cancelled => "Handoff cancelled",
             Self::Failed => "Handoff failed before launch",

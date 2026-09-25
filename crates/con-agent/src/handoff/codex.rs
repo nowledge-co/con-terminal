@@ -14,6 +14,7 @@ fn codex_home() -> Result<PathBuf> {
         .context("Codex storage cannot be resolved")
 }
 
+#[cfg(any(test, target_os = "macos"))]
 mod evidence;
 #[cfg(target_os = "macos")]
 mod lsof;

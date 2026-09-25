@@ -78,6 +78,7 @@ fn macos_process_name(pid: i32) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes[..(len as usize).min(bytes.len())]).into_owned())
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn agent_from_argv(args: &[String]) -> Option<AgentKind> {
     let command = args.first()?;
     if let Some(agent) = agent_from_executable(command) {
@@ -94,6 +95,7 @@ fn agent_from_argv(args: &[String]) -> Option<AgentKind> {
         .and_then(|arg| agent_from_executable(arg))
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn agent_from_executable(path: &str) -> Option<AgentKind> {
     let name = std::path::Path::new(path).file_name()?.to_str()?;
     match name {
