@@ -53,7 +53,9 @@ ring in a 32pt slot. Busy-without-percentage uses a 90-degree monochrome arc
 (75% foreground, faint track), with a two-second period. Determinate progress
 uses the same ring, with no underline. Attention, error and pause use static
 warning/danger rings with Phosphor badges; the badge quadrant has no stroke.
-Selection/tab color uses a left indicator and unread yields to semantic badges.
+Selection/tab color uses an inset left indicator and unread yields to semantic
+badges. The compact tile fill is 40pt wide and 32pt tall, leaving room for the
+indicator inside the fill while the 28pt ring stays centered on the 44pt rail.
 Expanded/horizontal tabs replace the identity icon within the original-sized
 slot: busy/progress rings or a semantic glyph, without moving the title.
 

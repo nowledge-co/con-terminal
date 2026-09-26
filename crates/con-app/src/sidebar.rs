@@ -1027,7 +1027,8 @@ impl SessionSidebar {
 
             let tab_bounds = self.tab_bounds.clone();
             // No accent-color background fill — keep pills monochrome.
-            // Accent color is expressed only via the active dot below.
+            // The wider fill contains the selection stripe without moving the
+            // centered icon/ring or changing the vertical drag-and-drop stride.
             let pill_bg = if is_active {
                 active_bg
             } else {
@@ -1040,7 +1041,8 @@ impl SessionSidebar {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(RAIL_ICON_SIZE))
+                .w(px(RAIL_WIDTH - 4.0))
+                .h(px(RAIL_ICON_SIZE))
                 .flex_shrink_0()
                 .rounded(px(8.0))
                 .cursor_pointer()
@@ -1122,7 +1124,7 @@ impl SessionSidebar {
                 pill = pill.child(
                     div()
                         .absolute()
-                        .left(px(-2.0))
+                        .left(px(2.0))
                         .top(px(9.0))
                         .w(px(2.0))
                         .h(px(14.0))
