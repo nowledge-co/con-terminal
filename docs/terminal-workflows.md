@@ -146,6 +146,10 @@ Use the platform modifier to open links from terminal output:
 - macOS: hold <kbd>⌘</kbd>, then click a URL.
 - Windows and Linux: hold <kbd>⌃</kbd>, then click a URL.
 
+Inside a mouse-aware TUI, hold <kbd>⇧</kbd> while dragging to select and
+copy terminal text rather than sending the drag to the app. On macOS,
+<kbd>⌘</kbd>-drag also selects text; <kbd>⌘</kbd>-click opens a link.
+
 Paste text normally. Dragging files into the terminal sends their paths. When a
 TUI supports image/file paste protocols, con forwards compatible clipboard and
 drop payloads through the terminal path.

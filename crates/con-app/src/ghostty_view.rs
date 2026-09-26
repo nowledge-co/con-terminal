@@ -2012,6 +2012,18 @@ impl GhosttyView {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn pointer_mods(&self, modifiers: &Modifiers) -> i32 {
+        pointer_mods_to_ghostty(
+            modifiers,
+            modifiers.platform
+                && self
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|terminal| terminal.mouse_captured()),
+        )
+    }
+
     fn begin_mouse_sequence(
         &mut self,
         button: MouseButton,
@@ -2092,7 +2104,11 @@ impl GhosttyView {
         };
 
         let (x, y) = self.view_local_pos(position);
-        terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(modifiers));
+        terminal.send_mouse_pos(
+            x,
+            y,
+            pointer_mods_to_ghostty(modifiers, modifiers.platform && terminal.mouse_captured()),
+        );
     }
 
     /// Handle key input by forwarding to ghostty's key processing pipeline.
@@ -2409,6 +2425,18 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
         m |= ffi::GHOSTTY_MODS_SUPER;
     }
     m
+}
+
+#[cfg(target_os = "macos")]
+fn pointer_mods_to_ghostty(mods: &Modifiers, mouse_captured: bool) -> i32 {
+    let mut result = gpui_mods_to_ghostty(mods);
+    if mouse_captured && mods.platform {
+        // Ghostty uses Shift to return captured mouse input to the terminal.
+        // Its link matcher removes that Shift under capture, leaving Cmd as
+        // the link modifier. Outside capture, Shift would prevent a match.
+        result |= ffi::GHOSTTY_MODS_SHIFT;
+    }
+    result
 }
 
 /// Return the Shift modifier safely inferred as consumed by text translation.
@@ -2735,7 +2763,7 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
-                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    let mods = this.pointer_mods(&event.modifiers);
                     this.begin_mouse_sequence(MouseButton::Left, event.position, mods);
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -2746,7 +2774,7 @@ impl Render for GhosttyView {
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.scrollbar_drag = None;
                     this.last_mouse_position = Some(event.position);
-                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    let mods = this.pointer_mods(&event.modifiers);
                     if this.release_left_mouse_sequence(event.position, Some(mods), cx)
                         && this.drain_surface_state(true, cx)
                     {
@@ -2762,7 +2790,7 @@ impl Render for GhosttyView {
                         return;
                     }
                     this.last_mouse_position = Some(event.position);
-                    let mods = gpui_mods_to_ghostty(&event.modifiers);
+                    let mods = this.pointer_mods(&event.modifiers);
                     if this.release_left_mouse_sequence(event.position, Some(mods), cx)
                         && this.drain_surface_state(true, cx)
                     {
@@ -2802,7 +2830,11 @@ impl Render for GhosttyView {
                     return;
                 }
                 this.last_mouse_position = Some(event.position);
-                let mods = gpui_mods_to_ghostty(&event.modifiers);
+                let mods = if event.pressed_button == Some(gpui::MouseButton::Right) {
+                    gpui_mods_to_ghostty(&event.modifiers)
+                } else {
+                    this.pointer_mods(&event.modifiers)
+                };
                 if event.pressed_button.is_none() {
                     let released_left =
                         this.release_left_mouse_sequence(event.position, Some(mods), cx);
@@ -2972,6 +3004,35 @@ mod tests {
         Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn command_link_modifier_escapes_tui_mouse_capture_only() {
+        let command = Modifiers {
+            platform: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            super::pointer_mods_to_ghostty(&command, false),
+            ffi::GHOSTTY_MODS_SUPER
+        );
+        assert_eq!(
+            super::pointer_mods_to_ghostty(&command, true),
+            ffi::GHOSTTY_MODS_SUPER | ffi::GHOSTTY_MODS_SHIFT
+        );
+        assert_eq!(
+            super::pointer_mods_to_ghostty(&Modifiers::default(), true),
+            0
+        );
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            super::pointer_mods_to_ghostty(&shift, true),
+            ffi::GHOSTTY_MODS_SHIFT
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

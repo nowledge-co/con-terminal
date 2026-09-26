@@ -1430,6 +1430,11 @@ impl GhosttyTerminal {
         }
     }
 
+    /// Whether the foreground application is receiving mouse reports.
+    pub fn mouse_captured(&self) -> bool {
+        unsafe { ffi::ghostty_surface_mouse_captured(self.surface) }
+    }
+
     /// Send a mouse button event.
     pub fn send_mouse_button(&self, pressed: bool, button: MouseButton, mods: i32) -> bool {
         let state = if pressed {

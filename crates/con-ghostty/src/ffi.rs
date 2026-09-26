@@ -734,6 +734,7 @@ unsafe extern "C" {
         width: *mut c_double,
         height: *mut c_double,
     );
+    pub fn ghostty_surface_mouse_captured(surface: ghostty_surface_t) -> bool;
     pub fn ghostty_surface_mouse_button(
         surface: ghostty_surface_t,
         state: ghostty_input_mouse_state_e,

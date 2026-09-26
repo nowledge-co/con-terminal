@@ -17,6 +17,13 @@ con is still pre-release, so entries may group related beta work while the produ
   [#401](https://github.com/nowledge-co/con-terminal/pull/401) by
   [@sunny0826](https://github.com/sunny0826))_
 
+### Fixed
+
+**Terminal · macOS**
+
+- Cmd-click now opens links inside mouse-aware terminal apps, including long
+  Codex sign-in URLs. Shift-drag still selects text for copying.
+
 ---
 
 ## `v0.1.0-beta.111` - 2026-09-24
