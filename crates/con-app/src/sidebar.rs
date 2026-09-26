@@ -46,8 +46,8 @@ pub const PANEL_MAX_WIDTH: f32 = 360.0;
 const HOVER_CARD_WIDTH: f32 = 240.0;
 /// Per-row height in pinned mode (two-line layout — name + subtitle).
 const ROW_HEIGHT: f32 = 44.0;
-/// Per-icon size in the rail.
-const RAIL_ICON_SIZE: f32 = 32.0;
+/// Square session tile size, leaving 2px on each side of the rail.
+const RAIL_ICON_SIZE: f32 = RAIL_WIDTH - 4.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
@@ -991,7 +991,7 @@ impl SessionSidebar {
         // the rail. The control buttons and dividers above stay fixed:
         // when the window is short or there are many sessions, this area
         // absorbs the vertical deficit (flex_1 + min_h_0) and scrolls
-        // instead of compressing the 32px pills.
+        // instead of compressing the square session tiles.
         let mut pill_list = div()
             .id("tab-sidebar-rail-scroll")
             .flex_1()
@@ -1027,8 +1027,8 @@ impl SessionSidebar {
 
             let tab_bounds = self.tab_bounds.clone();
             // No accent-color background fill — keep pills monochrome.
-            // The wider fill contains the selection stripe without moving the
-            // centered icon/ring or changing the vertical drag-and-drop stride.
+            // The square fill contains the selection stripe around the
+            // centered icon/ring. Drag geometry uses the same tile size.
             let pill_bg = if is_active {
                 active_bg
             } else {
@@ -1041,8 +1041,7 @@ impl SessionSidebar {
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(RAIL_WIDTH - 4.0))
-                .h(px(RAIL_ICON_SIZE))
+                .size(px(RAIL_ICON_SIZE))
                 .flex_shrink_0()
                 .rounded(px(8.0))
                 .cursor_pointer()
@@ -1125,7 +1124,7 @@ impl SessionSidebar {
                     div()
                         .absolute()
                         .left(px(2.0))
-                        .top(px(9.0))
+                        .top(px((RAIL_ICON_SIZE - 14.0) / 2.0))
                         .w(px(2.0))
                         .h(px(14.0))
                         .rounded(px(1.0))
@@ -2472,6 +2471,14 @@ mod tests {
             rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + RAIL_ICON_SIZE * 0.75, 3, 0.0),
             Some(1)
         );
+        // 40px tiles + 2px gaps: the second slot's midpoint is 63px.
+        // A stale 32px stride would incorrectly insert after the second tile.
+        for (offset, expected) in [(62.0, 1), (64.0, 2), (126.0, 3)] {
+            assert_eq!(
+                rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + 7.0 + offset, 3, 7.0),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
