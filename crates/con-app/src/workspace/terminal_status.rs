@@ -103,10 +103,15 @@ impl Surface {
         if !self.instance.ptr_eq(instance) || self.query != *query || self.revision != revision {
             return;
         }
-        if self.processes != processes {
-            self.processes = processes;
+        self.replace_processes(processes);
+    }
+
+    fn replace_processes(&mut self, processes: Vec<ProcessInfo>) {
+        // Unrelated child PID churn must not reopen the screen-scan budget.
+        if native_agent(&self.processes, None) != native_agent(&processes, None) {
             self.detection = AgentCliDetectionState::default();
         }
+        self.processes = processes;
     }
 }
 
@@ -122,6 +127,20 @@ fn native_agent<'a>(
             .and_then(|name| name.to_str())
             .and_then(agent_from_process_name)
             .or_else(|| agent_from_process_name(&process.identity.name))
+            .or_else(|| {
+                // Claude's native installer resolves `claude` to a versioned
+                // executable; macOS reports the version as its process name.
+                let path = &process.identity.executable;
+                let version = path.file_name()?.to_str()?;
+                let mut parts = version.split('.');
+                (path.parent()?.file_name()? == "versions"
+                    && path.parent()?.parent()?.file_name()? == "claude"
+                    && parts.clone().count() == 3
+                    && parts.all(|part| {
+                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                    }))
+                .then_some("claude")
+            })
             .map(|agent| (agent, &process.identity))
     });
     let mut selected = candidates.next()?;
@@ -147,6 +166,25 @@ pub(super) struct TerminalPresentation {
 }
 
 impl ConWorkspace {
+    pub(super) fn observe_terminal_title(
+        &mut self,
+        entity: &Entity<GhosttyView>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(surface) = self
+            .terminal_presentation
+            .surfaces
+            .get_mut(&entity.entity_id().as_u64())
+        else {
+            // The collector initializes new surfaces on its next pass.
+            return;
+        };
+        surface
+            .status
+            .observe_title(entity.read(cx).title().as_deref(), Instant::now());
+        self.refresh_cached_tab_presentation(cx);
+    }
+
     /// Called by the event pump, never by an animation/render callback.
     pub(super) fn refresh_terminal_presentation(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
@@ -213,12 +251,9 @@ impl ConWorkspace {
                                 surface.revision += 1;
                                 surface.status.observe_identity(id, state.sequence, None);
                             }
-                            surface.host_observed = Some((metadata.process_group_id, sent));
+                            surface.host_observed = Some((metadata.process_group_id, now));
                             surface.host_request = None;
-                            if surface.processes != metadata.processes {
-                                surface.processes = metadata.processes;
-                                surface.detection = AgentCliDetectionState::default();
-                            }
+                            surface.replace_processes(metadata.processes);
                         }
                     }
                     if surface
@@ -235,7 +270,11 @@ impl ConWorkspace {
                 let title_agent = agent_from_osc_title(title.as_deref());
                 let observation = AgentCliObservation {
                     terminal_id: id,
-                    foreground_process_group_id: terminal.foreground_process_group_id(cx),
+                    foreground_process_group_id: match surface.query {
+                        #[cfg(any(target_os = "macos", target_os = "linux"))]
+                        Query::Foreground(pgid) => Some(u64::from(pgid)),
+                        _ => None,
+                    },
                     title_agent,
                     input_generation: terminal.input_generation(cx),
                 };
@@ -257,7 +296,7 @@ impl ConWorkspace {
                 } else {
                     IdentityScope::ForegroundJob
                 };
-                let mut scanned = false;
+                let mut screen_hit = false;
                 let detected = if shell_foreground {
                     None
                 } else if let Some((agent, _)) = direct {
@@ -271,23 +310,28 @@ impl ConWorkspace {
                     && surface.detection.take_screen_scan_attempt()
                 {
                     surface.last_scan = Some(now);
-                    scanned = true;
                     log::trace!(target: "con::activity", "identity_screen_scan surface={id}");
                     let lines = terminal.content_lines(200, cx);
-                    con_agent::context::classify_screen_agent_cli(title.as_deref(), &lines)
-                        .or_else(|| agent_from_screen_text(&lines))
+                    let agent =
+                        con_agent::context::classify_screen_agent_cli(title.as_deref(), &lines)
+                            .or_else(|| agent_from_screen_text(&lines));
+                    screen_hit = agent.is_some();
+                    agent
                         .map(|agent| (agent, IdentityScope::Screen))
+                        .or_else(|| {
+                            (!surface.detection.is_exhausted())
+                                .then(|| surface.status.identity())
+                                .flatten()
+                                .filter(|identity| identity.scope == IdentityScope::Screen)
+                                .map(|identity| (identity.agent, identity.scope))
+                        })
                 } else {
                     surface
                         .status
                         .identity()
                         .map(|identity| (identity.agent, identity.scope))
                 };
-                if direct.is_some()
-                    || shell_foreground
-                    || title_agent.is_some()
-                    || (scanned && detected.is_some())
-                {
+                if direct.is_some() || shell_foreground || title_agent.is_some() || screen_hit {
                     surface.detection.finish();
                 }
                 // A presentation sequence is local to each observation pass;
@@ -301,7 +345,6 @@ impl ConWorkspace {
                     .status
                     .observe_identity(id, state.sequence + 1, identity);
                 surface.status.observe_title(title.as_deref(), now);
-                surface.status.observe_command(terminal.is_busy(cx));
                 surface
                     .status
                     .observe_progress(terminal.progress(cx).map(|progress| {
@@ -492,6 +535,26 @@ mod tests {
     }
 
     #[test]
+    fn native_claude_versions_are_recognized_without_matching_arbitrary_versions() {
+        for (path, expected) in [
+            (
+                "/home/me/.local/share/claude/versions/2.1.283",
+                Some("claude"),
+            ),
+            ("/opt/other/versions/2.1.283", None),
+            ("/opt/claude/versions/not-a-version", None),
+            ("/opt/claude/versions/2..283", None),
+        ] {
+            let mut candidate = process(4, "2.1.283");
+            candidate.identity.executable = path.into();
+            assert_eq!(
+                native_agent(&[candidate], None).map(|(agent, _)| agent),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn process_completion_rejects_aba_revision_but_accepts_current_work() {
         let instance = Weak::new();
         let mut surface = Surface {
@@ -523,6 +586,19 @@ mod tests {
             vec![process(8, "claude")],
         );
         assert_eq!(surface.processes, vec![process(8, "claude")]);
+        surface.detection.finish();
+        surface.replace_processes(vec![process(8, "claude"), process(20, "rustc")]);
+        assert!(surface.detection.is_exhausted());
+        surface.replace_processes(vec![process(8, "claude"), process(21, "rustc")]);
+        assert!(surface.detection.is_exhausted());
+        surface.replace_processes(vec![process(22, "codex")]);
+        assert!(surface.detection.observe(super::AgentCliObservation {
+            terminal_id: 7,
+            foreground_process_group_id: None,
+            title_agent: None,
+            input_generation: 0,
+        }));
+        assert!(!surface.detection.is_exhausted());
     }
 
     #[test]

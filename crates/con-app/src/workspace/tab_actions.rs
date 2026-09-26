@@ -532,7 +532,7 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_title_changed(
         &mut self,
-        _entity: &Entity<GhosttyView>,
+        entity: &Entity<GhosttyView>,
         event: &GhosttyTitleChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -545,7 +545,7 @@ impl ConWorkspace {
         }
         // Record title evidence immediately, but only a semantic status change
         // invalidates chrome. Individual application spinner frames do not.
-        self.refresh_terminal_presentation(cx);
+        self.observe_terminal_title(entity, cx);
     }
 
     pub(crate) fn on_terminal_bell(

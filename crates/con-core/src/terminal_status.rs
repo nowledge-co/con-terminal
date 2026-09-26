@@ -36,7 +36,6 @@ pub enum Activity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evidence {
-    ShellCommand,
     TitleMotion,
     AgentTitle,
     Progress,
@@ -74,9 +73,8 @@ pub struct SurfaceStatus {
     last_title: Option<String>,
     reported: Option<Report>,
     /// OSC 9;4 timeout belongs to the terminal backend. Clearing it must not
-    /// clear independent title or command observations.
+    /// clear independent title observations.
     progress: Option<Progress>,
-    command_running: bool,
 }
 
 impl SurfaceStatus {
@@ -88,7 +86,6 @@ impl SurfaceStatus {
             last_title: None,
             reported: None,
             progress: None,
-            command_running: false,
         }
     }
 
@@ -145,14 +142,15 @@ impl SurfaceStatus {
             Some((_, TitleIndicator::Activity('◐' | '◑'))) if direct_claude => {
                 Some((Activity::Busy, Evidence::AgentTitle))
             }
-            Some((_, TitleIndicator::Activity('✳'))) if direct_claude => {
+            Some((_, TitleIndicator::Activity('✳')))
+                if direct_claude
+                    && self.reported.is_some_and(|report| {
+                        report.evidence == Evidence::AgentTitle && report.activity == Activity::Busy
+                    }) =>
+            {
                 // Claude uses a static ✳ in multiplexers even while working.
                 // Only a transition from the direct busy protocol reports idle.
-                self.reported
-                    .filter(|report| {
-                        report.evidence == Evidence::AgentTitle && report.activity == Activity::Busy
-                    })
-                    .map(|_| (Activity::Idle, Evidence::AgentTitle))
+                Some((Activity::Idle, Evidence::AgentTitle))
             }
             Some((range, TitleIndicator::Activity(frame))) => {
                 let moving = self.last_title.as_deref().is_some_and(|previous| {
@@ -178,10 +176,6 @@ impl SurfaceStatus {
         self.progress = progress;
     }
 
-    pub fn observe_command(&mut self, running: bool) {
-        self.command_running = running;
-    }
-
     pub fn status(&self, now: Instant) -> Option<Status> {
         let reported = self.reported.filter(|report| {
             report.evidence != Evidence::TitleMotion
@@ -199,17 +193,9 @@ impl SurfaceStatus {
             evidence: Evidence::Progress,
             percent: progress.percent,
         });
-        // A resident agent is itself a running shell command, including while
-        // waiting for a prompt. Do not turn that fact into agent activity.
-        let command = (self.command_running && self.identity.is_none()).then_some(Status {
-            surface_id: self.surface_id,
-            activity: Activity::Busy,
-            evidence: Evidence::ShellCommand,
-            percent: None,
-        });
-        // Prefer actual progress to a title at equal activity. Shell activity
-        // is independent and lower priority than either explicit report.
-        [progress, title, command]
+        // Prefer actual progress to a title at equal activity. PTY writes do
+        // not establish agent activity: a resident shell/TUI may never finish.
+        [progress, title]
             .into_iter()
             .flatten()
             .fold(None, |best, next| match best {
@@ -257,7 +243,6 @@ mod tests {
         let now = Instant::now();
         let mut surface = SurfaceStatus::new(7);
         claude(&mut surface, 1, 1);
-        surface.observe_command(true);
         surface.observe_title(Some("✳ task"), now);
         assert_eq!(surface.status(now), None);
         surface.observe_title(Some("◐ task"), now);
@@ -285,6 +270,18 @@ mod tests {
     }
 
     #[test]
+    fn direct_claude_generic_spinner_does_not_clear_motion_at_asterisk() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        claude(&mut surface, 1, 1);
+        surface.observe_title(Some("✢ task"), now);
+        surface.observe_title(Some("✳ task"), now);
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::TitleMotion);
+        surface.observe_title(Some("✶ task"), now);
+        assert_eq!(surface.status(now).unwrap().activity, Activity::Busy);
+    }
+
+    #[test]
     fn descendant_identity_does_not_enable_direct_title_protocol() {
         let now = Instant::now();
         let mut surface = SurfaceStatus::new(7);
@@ -305,10 +302,9 @@ mod tests {
     }
 
     #[test]
-    fn attention_beats_paused_and_shell_activity_without_losing_progress() {
+    fn attention_beats_paused_without_losing_progress() {
         let now = Instant::now();
         let mut surface = SurfaceStatus::new(7);
-        surface.observe_command(true);
         surface.observe_progress(Some(Progress {
             activity: Activity::Paused,
             percent: Some(23),
@@ -319,10 +315,7 @@ mod tests {
         surface.observe_title(Some("task"), now);
         assert_eq!(surface.status(now).unwrap().percent, Some(23));
         surface.observe_progress(None);
-        assert_eq!(
-            surface.status(now).unwrap().evidence,
-            Evidence::ShellCommand
-        );
+        assert_eq!(surface.status(now), None);
     }
 
     #[test]
