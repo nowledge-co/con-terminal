@@ -98,7 +98,12 @@ These contracts refer to the locked `gpui-pre 0.3.6` (Zed `bcf6582`) and
 - [`AnyView::cached`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/view.rs#L421-L525)
   uses the supplied style as its layout contract. Bounds, mask and text style
   participate in reuse; parent opacity does not. Keep both dimensions constrained
-  and bypass caching through the final transition frame. Do not cache the row
+  on the cache shell. Its contents are laid out as an independent root with
+  those bounds as available space, not inherited styles: a horizontal-filling
+  view such as `InputBar` must also declare `w_full()` on its rendered root.
+  Test both cached and normal parent layout, including shrink/grow resizes,
+  rather than assuming the shell stretches an auto-width flex root.
+  Bypass caching through the final transition frame. Do not cache the row
   registration subtree: a cache hit skips its canvas prepaint callbacks.
 - [`with_max_fps`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/elements/animation.rs#L451-L469)
   throttles animation notifications, not all renders. Synced repeating animations

@@ -1409,6 +1409,7 @@ impl Render for InputBar {
         // ── Send button — inside container, right edge ──
         let send_button = div()
             .id("send-button")
+            .debug_selector(|| "command-send-button".into())
             .flex()
             .items_center()
             .justify_center()
@@ -1496,6 +1497,7 @@ impl Render for InputBar {
             Self::should_hide_native_command_text(&input_value, command_overlay_runs.is_some());
 
         let input_field = div()
+            .debug_selector(|| "command-input-field".into())
             .flex_1()
             .min_h(control_size)
             .relative()
@@ -1709,6 +1711,9 @@ impl Render for InputBar {
 
         // ── Main layout — flat bar, no rounded bubble ──
         div()
+            // Cached views lay out this subtree as an independent root; the
+            // cache shell's width does not stretch an auto-width flex root.
+            .w_full()
             .flex()
             .flex_col()
             .bg(theme.title_bar.opacity(self.ui_opacity))
@@ -1738,6 +1743,71 @@ mod tests {
         input_bar_rendered_height_for_rows, text_end_position,
     };
     use gpui_component::input::Position;
+
+    #[gpui::test]
+    fn cached_input_bar_preserves_available_width(cx: &mut gpui::TestAppContext) {
+        use gpui::*;
+
+        struct Host {
+            bar: Entity<InputBar>,
+            cached: bool,
+        }
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let bar = if self.cached {
+                    self.bar
+                        .clone()
+                        .cached(
+                            StyleRefinement::default()
+                                .w_full()
+                                .h(self.bar.read(cx).rendered_height(cx)),
+                        )
+                        .into_any_element()
+                } else {
+                    self.bar.clone().into_any_element()
+                };
+                div().flex().flex_col().w_full().child(bar)
+            }
+        }
+
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        for mode in [
+            super::InputMode::Smart,
+            super::InputMode::Shell,
+            super::InputMode::Agent,
+        ] {
+            for cached in [false, true] {
+                let (_, view) = cx.add_window_view(|window, cx| {
+                    let bar = cx.new(|cx| {
+                        let mut bar = InputBar::new(window, cx);
+                        bar.set_mode(mode, window, cx);
+                        bar
+                    });
+                    Host { bar, cached }
+                });
+                for width in [1100.0, 420.0, 800.0] {
+                    view.simulate_resize(size(px(width), px(200.0)));
+                    let input = view
+                        .debug_bounds("command-input-field")
+                        .expect("input field");
+                    let send = view
+                        .debug_bounds("command-send-button")
+                        .expect("send button");
+                    assert!(
+                        input.size.width > px(width * 0.5),
+                        "{mode:?}, cached={cached}: {input:?}"
+                    );
+                    assert!(
+                        send.right() > px(width - 40.0),
+                        "{mode:?}, cached={cached}: {send:?}"
+                    );
+                    assert!(input.right() <= send.left(), "input overlaps send button");
+                    assert!(send.right() <= px(width), "send button outside viewport");
+                }
+            }
+        }
+    }
 
     #[test]
     fn content_rows_counts_trailing_newline_and_clamps() {
