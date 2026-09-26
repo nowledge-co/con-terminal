@@ -30,12 +30,11 @@ pub fn reusable_editor_tab_index(
 
     // Track the last editor by stable tab identity, not by index. Indices shift
     // whenever the user closes or reorders tabs.
-    if let Some(tab_id) = last_editor_tab_id {
-        if let Some(idx) = tab_ids.iter().position(|id| *id == tab_id)
-            && is_editor_tab[idx]
-        {
-            return Some(idx);
-        }
+    if let Some(tab_id) = last_editor_tab_id
+        && let Some(idx) = tab_ids.iter().position(|id| *id == tab_id)
+        && is_editor_tab[idx]
+    {
+        return Some(idx);
     }
 
     // Fall back to active_tab if it is an editor tab

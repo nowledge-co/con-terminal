@@ -1,5 +1,6 @@
 pub mod config;
 pub mod control;
+pub mod handoff;
 pub mod harness;
 pub mod release_channel;
 pub mod session;

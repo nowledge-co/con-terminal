@@ -289,7 +289,7 @@ impl Conversation {
             })
             .collect();
 
-        summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.created_at));
         summaries
     }
 

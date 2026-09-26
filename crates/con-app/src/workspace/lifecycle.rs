@@ -176,6 +176,7 @@ impl ConWorkspace {
         }
 
         let restore_terminal_text = config.appearance.restore_terminal_text;
+        let handoff_menu_entry_enabled = config.experimental.handoff;
         let initial_working_directory = RefCell::new(initial_working_directory);
         let initial_command = RefCell::new(initial_command);
         let make_terminal = |cwd: Option<&str>,
@@ -198,6 +199,7 @@ impl ConWorkspace {
                 working_directory,
                 command,
                 font_size,
+                handoff_menu_entry_enabled,
                 window,
                 cx,
             )
@@ -829,6 +831,7 @@ impl ConWorkspace {
             settings_window: None,
             settings_window_panel: None,
             command_palette,
+            handoff_window: None,
             model_registry,
             harness,
             shell_suggestion_engine,
@@ -944,6 +947,7 @@ impl ConWorkspace {
             None,
             None,
             self.font_size,
+            self.config.experimental.handoff,
             window,
             cx,
         )
@@ -1389,16 +1393,16 @@ impl ConWorkspace {
                     changed |= terminal.drain_surface_state_with_native_scroll(false, cx);
                 }
             }
-            if let Some(started) = started {
-                if changed {
-                    log::info!(
-                        target: "con::perf",
-                        "pump_ghostty_views generation_unchanged terminals={} drains={} changed=1 elapsed_ms={:.3}",
-                        terminal_count,
-                        drain_count,
-                        started.elapsed().as_secs_f64() * 1000.0
-                    );
-                }
+            if let Some(started) = started
+                && changed
+            {
+                log::info!(
+                    target: "con::perf",
+                    "pump_ghostty_views generation_unchanged terminals={} drains={} changed=1 elapsed_ms={:.3}",
+                    terminal_count,
+                    drain_count,
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
             }
             return changed;
         }
@@ -1503,7 +1507,7 @@ impl ConWorkspace {
         cx.defer(move |cx| {
             let result = window_handle.update(cx, |_root, window, cx| {
                 if let Some(workspace) = workspace_handle.upgrade() {
-                    let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.update(cx, |workspace, cx| {
                         workspace.flush_pending_window_control_requests(window, cx);
                         workspace.flush_pending_create_pane_requests(window, cx);
                         workspace.flush_pending_surface_control_requests(window, cx);
@@ -1527,7 +1531,7 @@ impl ConWorkspace {
         cx.defer(move |cx| {
             let result = window_handle.update(cx, |_root, window, cx| {
                 if let Some(workspace) = workspace_handle.upgrade() {
-                    let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.update(cx, |workspace, cx| {
                         if !workspace.has_active_tab() {
                             return;
                         }

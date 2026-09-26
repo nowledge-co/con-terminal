@@ -100,6 +100,12 @@ pub struct AgentSession {
     cancel_flag: Arc<AtomicBool>,
 }
 
+impl Default for AgentSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentSession {
     /// Create a fresh session with a new conversation.
     pub fn new() -> Self {
@@ -333,8 +339,8 @@ impl AgentHarness {
     pub fn classify_input(&self, input: &str, is_remote: bool) -> InputKind {
         let trimmed = input.trim();
 
-        if trimmed.starts_with('/') {
-            let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
+        if let Some(rest) = trimmed.strip_prefix('/') {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
             let skill_name = parts[0].to_string();
             let args = parts.get(1).map(|s| s.to_string());
             if self.skills.get(&skill_name).is_some() {
@@ -781,6 +787,7 @@ fn existing_skill_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::*;
     use crate::config::{Config, SkillsConfig};
@@ -1208,10 +1215,8 @@ fn looks_like_command(input: &str, is_remote: bool) -> bool {
     // On SSH sessions, remote executables aren't on local $PATH.
     // A command-shaped first word is likely a remote command — unless
     // the input reads like natural language.
-    if is_remote && is_command_shaped(first_word) {
-        if !has_natural_language_signals(input) {
-            return true;
-        }
+    if is_remote && is_command_shaped(first_word) && !has_natural_language_signals(input) {
+        return true;
     }
 
     false

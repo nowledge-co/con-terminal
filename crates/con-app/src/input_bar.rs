@@ -542,10 +542,10 @@ impl InputBar {
         self.focused_pane_id = focused_id;
         let valid_ids: Vec<usize> = self.panes.iter().map(|p| p.id).collect();
         self.selected_pane_ids.retain(|id| valid_ids.contains(id));
-        if let Some(last_single) = self.last_single_target_id {
-            if !valid_ids.contains(&last_single) {
-                self.last_single_target_id = None;
-            }
+        if let Some(last_single) = self.last_single_target_id
+            && !valid_ids.contains(&last_single)
+        {
+            self.last_single_target_id = None;
         }
         if self.selected_pane_ids.is_empty() && previous_focused_id != focused_id {
             self.last_single_target_id = Some(focused_id);
@@ -556,12 +556,10 @@ impl InputBar {
         } else if self.panes.len() <= 1 {
             self.pane_scope_mode = PaneScopeMode::Focused;
             self.selected_pane_ids.clear();
-        } else if matches!(self.pane_scope_mode, PaneScopeMode::Focused)
-            && self.last_single_target_id.is_none()
-        {
-            self.pane_scope_mode = PaneScopeMode::Broadcast;
-        } else if matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-            && self.selected_pane_ids.is_empty()
+        } else if (matches!(self.pane_scope_mode, PaneScopeMode::Focused)
+            && self.last_single_target_id.is_none())
+            || (matches!(self.pane_scope_mode, PaneScopeMode::Custom)
+                && self.selected_pane_ids.is_empty())
         {
             self.pane_scope_mode = PaneScopeMode::Broadcast;
         }
@@ -830,7 +828,7 @@ impl InputBar {
 
     pub fn complete_skill(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.current_input_state().update(cx, |s, cx| {
-            s.set_value(&format!("/{name} "), window, cx);
+            s.set_value(format!("/{name} "), window, cx);
         });
         self.skill_selection = 0;
         self.clear_completion_ui();
@@ -1045,22 +1043,14 @@ impl InputBar {
 
         let mut boundary = cursor;
         while boundary > 0 {
-            let prev = text[..boundary]
-                .char_indices()
-                .last()
-                .map(|(idx, ch)| (idx, ch))
-                .unwrap();
+            let prev = text[..boundary].char_indices().last().unwrap();
             if !prev.1.is_whitespace() {
                 break;
             }
             boundary = prev.0;
         }
         while boundary > 0 {
-            let prev = text[..boundary]
-                .char_indices()
-                .last()
-                .map(|(idx, ch)| (idx, ch))
-                .unwrap();
+            let prev = text[..boundary].char_indices().last().unwrap();
             if prev.1.is_whitespace() {
                 break;
             }

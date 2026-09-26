@@ -604,6 +604,23 @@ mod tests {
     }
 
     #[test]
+    fn experimental_flags_default_on_and_parse() {
+        assert!(parse("", None).unwrap().experimental.handoff);
+        assert!(
+            !parse("con.experimental.handoff = false\n", None)
+                .unwrap()
+                .experimental
+                .handoff
+        );
+        assert!(
+            parse("con.experimental.handoff = maybe\n", None)
+                .unwrap_err()
+                .to_string()
+                .contains("expected boolean")
+        );
+    }
+
+    #[test]
     fn validation_errors_do_not_echo_values() {
         assert!(
             parse("con.no_such_field = secret", None)

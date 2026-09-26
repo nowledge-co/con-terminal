@@ -806,6 +806,7 @@ impl GhosttyApp {
     }
 
     /// Create a new ghostty app with the given terminal colors.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         colors: Option<&TerminalColors>,
         shell: Option<&str>,
@@ -940,6 +941,7 @@ impl GhosttyApp {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_appearance(
         &self,
         colors: &TerminalColors,
@@ -1057,7 +1059,10 @@ impl GhosttyApp {
         font_size: Option<f32>,
     ) -> Result<GhosttyTerminal, String> {
         // Per-surface state — stored as surface userdata so callbacks can
-        // update the correct terminal's state.
+        // update the correct terminal's state. TerminalState carries a raw
+        // `ghostty_surface_t`, so it is !Send/!Sync by construction; this Arc
+        // only lives as Ghostty's surface userdata.
+        #[allow(clippy::arc_with_non_send_sync)]
         let state: StateRef = Arc::new(Mutex::new(TerminalState {
             clipboard_write_policy: self.wake_handle.clipboard_write_policy.clone(),
             ..TerminalState::default()
@@ -1283,6 +1288,7 @@ impl GhosttyTerminal {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_appearance(
         &self,
         colors: &TerminalColors,
@@ -2223,7 +2229,7 @@ unsafe extern "C" fn read_clipboard_callback(
                 remember: false,
             };
             ffi::ghostty_surface_complete_clipboard_request(surface, &complete, request);
-            return ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_STARTED;
+            ffi::ghostty_clipboard_read_result_e::GHOSTTY_CLIPBOARD_READ_STARTED
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -2364,6 +2370,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::arc_with_non_send_sync)] // Match the UI-thread-only production API.
     fn mark_child_exited_state_clears_busy_and_marks_input_finished() {
         let state = Arc::new(Mutex::new(TerminalState {
             is_busy: true,

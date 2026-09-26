@@ -456,6 +456,7 @@ fn collect_from_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::*;
     use std::ffi::OsString;

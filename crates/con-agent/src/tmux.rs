@@ -256,11 +256,11 @@ pub fn build_tmux_exec_command(
         TmuxExecLocation::SplitVertical => args.push("-v".to_string()),
         TmuxExecLocation::NewWindow => {}
     }
-    if let Some(window_name) = window_name {
-        if matches!(location, TmuxExecLocation::NewWindow) {
-            args.push("-n".to_string());
-            args.push(shell_quote(window_name));
-        }
+    if let Some(window_name) = window_name
+        && matches!(location, TmuxExecLocation::NewWindow)
+    {
+        args.push("-n".to_string());
+        args.push(shell_quote(window_name));
     }
     if let Some(cwd) = cwd {
         args.push("-c".to_string());

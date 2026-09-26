@@ -669,6 +669,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         match event.action_id.as_str() {
+            "handoff-agent" => self.open_agent_handoff(&crate::HandoffAgent, window, cx),
             "new-window" => {
                 cx.dispatch_action(&crate::NewWindow);
             }
@@ -764,10 +765,10 @@ impl ConWorkspace {
                 self.close_current_surface_in_focused_pane(window, cx);
             }
             "clear-terminal" => {
-                if self.has_active_tab() {
-                    if let Some(t) = self.try_active_terminal() {
-                        t.clear_scrollback(cx);
-                    }
+                if self.has_active_tab()
+                    && let Some(t) = self.try_active_terminal()
+                {
+                    t.clear_scrollback(cx);
                 }
             }
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -778,10 +779,10 @@ impl ConWorkspace {
                 self.clear_restored_terminal_history(window, cx);
             }
             "focus-terminal" => {
-                if self.has_active_tab() {
-                    if let Some(t) = self.try_active_terminal() {
-                        t.focus(window, cx);
-                    }
+                if self.has_active_tab()
+                    && let Some(t) = self.try_active_terminal()
+                {
+                    t.focus(window, cx);
                 }
             }
             "toggle-input-bar" => {
@@ -852,6 +853,8 @@ impl ConWorkspace {
         let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
         let old_keybindings = self.config.keybindings.clone();
         self.config = full_config.clone();
+        #[cfg(target_os = "macos")]
+        self.sync_handoff_menu_entry(cx);
         if !self.vertical_tabs_enabled() {
             self.sidebar_tools_open = self.left_panel_open;
         }
@@ -905,10 +908,10 @@ impl ConWorkspace {
         // Apply updated skills paths (forces rescan on next cwd check)
         let skills_config = full_config.skills.clone();
         self.harness.update_skills_config(skills_config);
-        if self.has_active_tab() {
-            if let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx)) {
-                self.request_skill_scan_for_cwd(&cwd);
-            }
+        if self.has_active_tab()
+            && let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx))
+        {
+            self.request_skill_scan_for_cwd(&cwd);
         }
 
         // Note: network/proxy config changes take effect on next app restart.
@@ -973,6 +976,11 @@ impl ConWorkspace {
             log::error!("Failed to preview native Ghostty configuration: {error}");
             return;
         }
+        // Feature gates (Experimental section) live-apply with the preview so
+        // entry points appear/disappear immediately.
+        self.config.experimental = settings.read(cx).config().experimental.clone();
+        #[cfg(target_os = "macos")]
+        self.sync_handoff_menu_entry(cx);
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
@@ -1206,7 +1214,6 @@ impl ConWorkspace {
                 self.terminal_blur,
                 self.terminal_opacity,
             );
-            return;
         }
         #[cfg(not(target_os = "macos"))]
         let colors = theme_to_ghostty_colors(_theme);

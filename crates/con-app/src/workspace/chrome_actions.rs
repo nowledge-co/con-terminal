@@ -286,7 +286,8 @@ impl ConWorkspace {
         err: impl std::fmt::Display,
     ) {
         let detail = err.to_string();
-        let _ = window.prompt(PromptLevel::Critical, message, Some(&detail), &["OK"], cx);
+        // Informational only: the answer is intentionally not awaited.
+        std::mem::drop(window.prompt(PromptLevel::Critical, message, Some(&detail), &["OK"], cx));
     }
 
     pub(super) fn show_layout_profile_info(
@@ -295,7 +296,8 @@ impl ConWorkspace {
         message: &str,
         detail: String,
     ) {
-        let _ = window.prompt(PromptLevel::Info, message, Some(&detail), &["OK"], cx);
+        // Informational only: the answer is intentionally not awaited.
+        std::mem::drop(window.prompt(PromptLevel::Info, message, Some(&detail), &["OK"], cx));
     }
 
     pub(super) fn save_current_layout_profile_to(
@@ -358,6 +360,7 @@ impl ConWorkspace {
         let ghostty_app = self.ghostty_app.clone();
         let font_size = self.font_size;
         let restore_terminal_text = self.config.appearance.restore_terminal_text;
+        let handoff_menu_entry_enabled = self.config.experimental.handoff;
         let pane_tree = if let Some(layout) = &tab_state.layout {
             let mut restore_terminal =
                 |restore_cwd: Option<&str>,
@@ -376,6 +379,7 @@ impl ConWorkspace {
                         None,
                         None,
                         font_size,
+                        handoff_menu_entry_enabled,
                         window,
                         cx,
                     )

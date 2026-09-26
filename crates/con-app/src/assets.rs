@@ -37,10 +37,10 @@ impl AssetSource for ConAssets {
             return Ok(Some(data.data));
         }
 
-        if let Some(name) = path.strip_prefix("app-icons/") {
-            if let Some(data) = AppIcons::get(name) {
-                return Ok(Some(data.data));
-            }
+        if let Some(name) = path.strip_prefix("app-icons/")
+            && let Some(data) = AppIcons::get(name)
+        {
+            return Ok(Some(data.data));
         }
 
         if let Some(data) = ConImages::get(path) {
@@ -78,10 +78,10 @@ impl AssetSource for ConAssets {
 }
 
 pub fn png_bytes(asset_path: &str) -> Option<Cow<'static, [u8]>> {
-    if let Some(name) = asset_path.strip_prefix("app-icons/") {
-        if let Some(file) = AppIcons::get(name) {
-            return Some(file.data);
-        }
+    if let Some(name) = asset_path.strip_prefix("app-icons/")
+        && let Some(file) = AppIcons::get(name)
+    {
+        return Some(file.data);
     }
     ConImages::get(asset_path).map(|file| file.data)
 }

@@ -907,7 +907,7 @@ impl ConWorkspace {
                                                 tab_idx,
                                                 &pane,
                                                 con_agent::context::PaneRuntimeEvent::ShellProbe {
-                                                    result: recorded_result,
+                                                    result: Box::new(recorded_result),
                                                     captured_input_generation: pane.input_generation(cx),
                                                 },
                                             );
@@ -1029,7 +1029,7 @@ impl ConWorkspace {
                         // Spawn async task — direct terminal access, no channel overhead
                         cx.spawn(async move |this, cx| {
                         let deadline = std::time::Instant::now()
-                            + std::time::Duration::from_secs(timeout as u64);
+                            + std::time::Duration::from_secs(timeout);
 
                         // Three modes:
                         // 1. Shell integration idle: 100ms polling, check is_busy/command_finished

@@ -181,12 +181,11 @@ fn run_with_options(options: &Options) -> i32 {
         }
     };
 
-    if status.success() {
-        if let Some(destination) = cache_entry {
-            if Cache::user().add(&destination).is_ok() {
-                verbose(options, &format!("cache: wrote {destination}"));
-            }
-        }
+    if status.success()
+        && let Some(destination) = cache_entry
+        && Cache::user().add(&destination).is_ok()
+    {
+        verbose(options, &format!("cache: wrote {destination}"));
     }
     if let Some(path) = control_path {
         let _ = fs::remove_file(&path);
@@ -235,10 +234,10 @@ fn local_terminfo() -> Option<Vec<u8>> {
     // source form, so keep this as source output and never pipe `b64:` data to
     // the remote compiler.
     command.args(["-x", "-0", "-q", TERMINFO_NAME]);
-    if std::env::var_os("TERMINFO").is_none() {
-        if let Some(path) = bundled_terminfo_dir() {
-            command.env("TERMINFO", path);
-        }
+    if std::env::var_os("TERMINFO").is_none()
+        && let Some(path) = bundled_terminfo_dir()
+    {
+        command.env("TERMINFO", path);
     }
     let output = command.output().ok()?;
     output.status.success().then_some(output.stdout)
@@ -271,13 +270,12 @@ fn ssh_connection_args(args: &[OsString]) -> Vec<OsString> {
             break;
         }
         connection.push(arg.clone());
-        if let Some(consumes_next) = short_option_value_form(&value) {
-            if consumes_next {
-                if let Some(value) = args.get(index + 1) {
-                    connection.push(value.clone());
-                    index += 1;
-                }
-            }
+        if let Some(consumes_next) = short_option_value_form(&value)
+            && consumes_next
+            && let Some(value) = args.get(index + 1)
+        {
+            connection.push(value.clone());
+            index += 1;
         }
         index += 1;
     }

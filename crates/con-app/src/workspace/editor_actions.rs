@@ -437,19 +437,15 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(item) = cx.read_from_clipboard() {
-            if let Some(text) = item.text() {
-                if self
-                    .with_focused_editor_view(window, cx, |editor, cx| {
-                        editor.insert_text(&text, cx)
-                    })
-                    .is_some()
-                {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    Self::notify_editor_action(cx);
-                }
-            }
+        if let Some(item) = cx.read_from_clipboard()
+            && let Some(text) = item.text()
+            && self
+                .with_focused_editor_view(window, cx, |editor, cx| editor.insert_text(&text, cx))
+                .is_some()
+        {
+            window.prevent_default();
+            cx.stop_propagation();
+            Self::notify_editor_action(cx);
         }
     }
 

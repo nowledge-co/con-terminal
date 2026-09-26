@@ -128,7 +128,9 @@ fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
 /// Supported LLM providers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ProviderKind {
+    #[default]
     Anthropic,
     OpenAI,
     #[serde(rename = "chatgpt")]
@@ -159,12 +161,6 @@ pub enum ProviderKind {
     Mistral,
     Together,
     XAI,
-}
-
-impl Default for ProviderKind {
-    fn default() -> Self {
-        Self::Anthropic
-    }
 }
 
 impl std::fmt::Display for ProviderKind {
@@ -239,8 +235,9 @@ fn truncate_utf8_for_log(text: &str, max_bytes: usize) -> String {
 const THINK_OPEN_TAG: &str = "<think>";
 const THINK_CLOSE_TAG: &str = "</think>";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ThinkParseMode {
+    #[default]
     Normal,
     InThink,
 }
@@ -255,12 +252,6 @@ struct ThinkParseOutput {
 struct ThinkTagStreamParser {
     pending: String,
     mode: ThinkParseMode,
-}
-
-impl Default for ThinkParseMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl ThinkTagStreamParser {
@@ -1772,16 +1763,12 @@ pub struct SuggestionModelConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum AgentPurpose {
+    #[default]
     Build,
     Explain,
     Operate,
-}
-
-impl Default for AgentPurpose {
-    fn default() -> Self {
-        Self::Build
-    }
 }
 
 impl AgentPurpose {
@@ -2246,6 +2233,7 @@ impl AgentProvider {
         &self.config
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn send(
         &self,
         conversation: &Conversation,
@@ -2331,7 +2319,7 @@ impl AgentProvider {
             .as_ref()
             .map(std::path::PathBuf::from)
             .filter(|p| p.is_dir())
-            .or_else(|| dirs::home_dir())
+            .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir);
 
         macro_rules! stream_with {
@@ -2855,7 +2843,6 @@ impl AgentProvider {
             && self
                 .config
                 .effective_base_url(kind)
-                .as_deref()
                 .is_some_and(is_local_openai_compatible_base_url)
     }
 

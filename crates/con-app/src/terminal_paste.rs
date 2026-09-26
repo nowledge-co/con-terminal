@@ -20,16 +20,14 @@ pub fn unsafe_paste_preview(text: &str) -> String {
 
     let mut preview = String::with_capacity(text.len().min(MAX_CHARS));
     let mut chars = text.chars();
-    let mut consumed = 0;
     let mut lines = 1;
     let mut truncated = false;
 
-    for ch in chars.by_ref() {
+    for (consumed, ch) in chars.by_ref().enumerate() {
         if consumed == MAX_CHARS {
             truncated = true;
             break;
         }
-        consumed += 1;
 
         match ch {
             '\n' if lines < MAX_LINES => {
@@ -166,9 +164,7 @@ fn paths_from_uri_list(text: &str) -> Option<Vec<PathBuf>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some(path) = path_from_file_uri(line) else {
-            return None;
-        };
+        let path = path_from_file_uri(line)?;
         paths.push(path);
     }
 

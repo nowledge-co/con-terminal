@@ -556,9 +556,7 @@ impl SessionSidebar {
         // the sidebar (drop_slot is Some). If the pane is being dragged but
         // the cursor is outside the sidebar, the workspace pane floating
         // preview should be the only visible preview.
-        if self.drop_slot.is_none() {
-            return None;
-        }
+        self.drop_slot?;
         // For pane-origin drags, the workspace floating preview already follows
         // the cursor. The sidebar only needs to show the drop indicator line —
         // no extra overlay here.
@@ -649,10 +647,10 @@ impl SessionSidebar {
         active: usize,
         cx: &mut Context<Self>,
     ) {
-        if let Some(state) = &self.rename {
-            if state.index >= sessions.len() || sessions[state.index].id != state.session_id {
-                self.rename = None;
-            }
+        if let Some(state) = &self.rename
+            && (state.index >= sessions.len() || sessions[state.index].id != state.session_id)
+        {
+            self.rename = None;
         }
         self.sessions = sessions;
         self.active_session = active;
@@ -1843,7 +1841,6 @@ impl SessionSidebar {
                 cx.notify();
             }))
             .context_menu({
-                let total = total;
                 let session_id = session.id;
                 let has_user_label = session.has_user_label;
                 let current_color = session.color;

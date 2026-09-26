@@ -1,0 +1,24 @@
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                    │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                                                                    │
+ │  ▐█████▌  Run /login or /provider to get started.                                                                  │
+ │                                                                                                                    │
+[isolated directory]
+ │  Session:                                                                                                          │
+ │  Model:     not set, run /login or /provider                                                                       │
+ │  Version:   2.1.1                                                                                                  │
+ │                                                                                                                    │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Kimi Code Desktop is here — Everything you love about Kimi Code, now on desktop
+   Run /desktop or visit https://www.kimi.com/code to install
+
+   No session yet — one will be created on your first message.
+   Error: LLM not set, send "/login" to login
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[isolated directory]
+                                                                                                            context: 0%

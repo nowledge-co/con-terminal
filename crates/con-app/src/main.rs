@@ -72,6 +72,7 @@ mod model_registry;
 mod motion;
 mod mouse_sequence;
 mod pane_tree;
+mod process_name;
 mod reduced_motion;
 mod settings_panel;
 mod sidebar;
@@ -157,6 +158,7 @@ actions!(
         CloseSurface,
         FocusInput,
         AskAi,
+        HandoffAgent,
         CycleInputMode,
         TogglePaneScopePicker,
         ToggleLeftPanel,
@@ -909,12 +911,12 @@ pub(crate) fn fresh_window_session_with_history_for_cwd(
             .collect()
     };
 
-    if let Some(cwd) = cwd.and_then(|cwd| cwd.into_os_string().into_string().ok()) {
-        if let Some(tab) = session.tabs.first_mut() {
-            tab.cwd = Some(cwd.clone());
-            if let Some(pane) = tab.panes.first_mut() {
-                pane.cwd = Some(cwd);
-            }
+    if let Some(cwd) = cwd.and_then(|cwd| cwd.into_os_string().into_string().ok())
+        && let Some(tab) = session.tabs.first_mut()
+    {
+        tab.cwd = Some(cwd.clone());
+        if let Some(pane) = tab.panes.first_mut() {
+            pane.cwd = Some(cwd);
         }
     }
 
@@ -1033,14 +1035,14 @@ pub(crate) fn session_from_workspace_layout_path(
 
 fn startup_session(startup: &StartupArgs) -> Session {
     if let Some(path) = startup.workspace.as_ref() {
-        match session_from_workspace_layout_path(&path) {
+        match session_from_workspace_layout_path(path) {
             Ok(session) => {
                 log::info!("opening workspace path {}", path.display());
                 return session;
             }
             Err(err) => {
                 log::warn!("failed to open workspace path {}: {err}", path.display());
-                return workspace_path_error_session(&path, &err);
+                return workspace_path_error_session(path, &err);
             }
         }
     }
@@ -1762,9 +1764,7 @@ fn validated_file_sidebar_shortcut(label: &str, binding: &str) -> Option<String>
     }
 
     let mut strokes = trimmed.split_whitespace();
-    let Some(stroke) = strokes.next() else {
-        return None;
-    };
+    let stroke = strokes.next()?;
     if strokes.next().is_some() || Keystroke::parse(stroke).is_err() {
         log::warn!("{label}: expected a single parseable shortcut, ignoring {binding:?}");
         return None;
@@ -1978,6 +1978,7 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // Keep existing production item ordering.
 mod tests {
     use super::{
         BindingSpec, EditorDeleteBackward, EditorInsertNewline, FileSidebarShortcutBindings,
@@ -2195,9 +2196,11 @@ mod tests {
 
     #[test]
     fn file_sidebar_shortcut_bindings_ignore_invalid_config_values() {
-        let mut kb = KeybindingConfig::default();
-        kb.focus_files = "secondary-k secondary-e".to_string();
-        kb.search_files = "not-a-valid binding".to_string();
+        let kb = KeybindingConfig {
+            focus_files: "secondary-k secondary-e".to_string(),
+            search_files: "not-a-valid binding".to_string(),
+            ..KeybindingConfig::default()
+        };
 
         let bindings = FileSidebarShortcutBindings::from_keybindings(&kb);
 

@@ -1,12 +1,18 @@
-use gpui::{Pixels, TitlebarOptions, px};
+use gpui::{Pixels, SharedString, TitlebarOptions, px};
 #[cfg(target_os = "macos")]
 use gpui_component::{TITLE_BAR_HEIGHT, TitleBar};
 
 pub(super) const SETTINGS_HEADER_HEIGHT: Pixels = px(44.0);
 
 pub(crate) fn settings_titlebar_options() -> TitlebarOptions {
+    floating_titlebar_options("Settings".into())
+}
+
+/// Transparent-titlebar chrome for standalone secondary windows (Settings,
+/// Agent Handoff): native traffic lights aligned to the 44px custom header.
+pub(crate) fn floating_titlebar_options(title: SharedString) -> TitlebarOptions {
     TitlebarOptions {
-        title: Some("Settings".into()),
+        title: Some(title),
         appears_transparent: cfg!(target_os = "macos"),
         traffic_light_position: {
             #[cfg(target_os = "macos")]

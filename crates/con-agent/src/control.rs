@@ -284,12 +284,12 @@ impl PaneControlState {
                 "Visible shell prompt is not confirmed. cwd and last_command may describe an earlier shell frame, not the current foreground target.".to_string(),
             );
         }
-        if let Some(host) = &runtime.remote_host {
-            if visible_target.kind == PaneVisibleTargetKind::ShellPrompt {
-                notes.push(format!(
-                    "Visible shell execution in this pane will run on host `{host}`."
-                ));
-            }
+        if let Some(host) = &runtime.remote_host
+            && visible_target.kind == PaneVisibleTargetKind::ShellPrompt
+        {
+            notes.push(format!(
+                "Visible shell execution in this pane will run on host `{host}`."
+            ));
         }
         if runtime.shell_context_fresh {
             if let Some(tmux) = runtime
@@ -487,47 +487,47 @@ fn attachments_from_runtime(
         });
     }
 
-    if runtime_has_native_tmux_anchor(runtime) {
-        if let Some(session_name) = tmux_session_hint(runtime) {
-            let (authority, note) = if runtime.shell_context_fresh
-                && runtime
-                    .shell_context
-                    .as_ref()
-                    .and_then(|context| context.tmux.as_ref())
-                    .is_some()
-            {
-                (
+    if runtime_has_native_tmux_anchor(runtime)
+        && let Some(session_name) = tmux_session_hint(runtime)
+    {
+        let (authority, note) = if runtime.shell_context_fresh
+            && runtime
+                .shell_context
+                .as_ref()
+                .and_then(|context| context.tmux.as_ref())
+                .is_some()
+        {
+            (
                     PaneAttachmentAuthority::ShellProbe,
                     "A fresh shell probe confirmed a same-session tmux shell anchor. con can query tmux state, create tmux targets, and send tmux-native keys through that shell."
                         .to_string(),
                 )
-            } else if runtime.screen_prompt_like && runtime.screen_tmux_like {
-                (
+        } else if runtime.screen_prompt_like && runtime.screen_tmux_like {
+            (
                     PaneAttachmentAuthority::ActionHistory,
                     "A recent con-executed tmux command and the current prompt-like tmux screen keep a durable same-session tmux control anchor alive."
                         .to_string(),
                 )
-            } else {
-                (
+        } else {
+            (
                     PaneAttachmentAuthority::ActionHistory,
                     "A recent con-executed tmux command and the current prompt-like shell keep a durable same-session tmux control anchor alive."
                         .to_string(),
                 )
-            };
-            attachments.push(PaneProtocolAttachment {
-                id: "tmux_control".to_string(),
-                kind: PaneAttachmentKind::TmuxControl,
-                authority,
-                transport: PaneAttachmentTransport::TmuxProtocol,
-                label: Some(session_name),
-                capabilities: vec![
-                    PaneControlCapability::QueryTmux,
-                    PaneControlCapability::SendTmuxKeys,
-                    PaneControlCapability::ExecTmuxCommand,
-                ],
-                note: Some(note),
-            });
-        }
+        };
+        attachments.push(PaneProtocolAttachment {
+            id: "tmux_control".to_string(),
+            kind: PaneAttachmentKind::TmuxControl,
+            authority,
+            transport: PaneAttachmentTransport::TmuxProtocol,
+            label: Some(session_name),
+            capabilities: vec![
+                PaneControlCapability::QueryTmux,
+                PaneControlCapability::SendTmuxKeys,
+                PaneControlCapability::ExecTmuxCommand,
+            ],
+            note: Some(note),
+        });
     }
 
     attachments

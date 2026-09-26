@@ -208,7 +208,7 @@ impl PaneShellContext {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PaneObservationSupport {
     /// Whether the backend can provide authoritative foreground command text.
     pub foreground_command: bool,
@@ -251,18 +251,6 @@ impl PaneObservationSupport {
             "The terminal backend does not currently export authoritative {} for this pane. Unproven foreground runtimes must stay unknown.",
             missing.join(", ")
         ))
-    }
-}
-
-impl Default for PaneObservationSupport {
-    fn default() -> Self {
-        Self {
-            foreground_command: false,
-            foreground_process_group_id: false,
-            tty_name: false,
-            alternate_screen: false,
-            remote_host_identity: false,
-        }
     }
 }
 
@@ -431,7 +419,10 @@ pub enum PaneRuntimeEvent {
         input_generation: u64,
     },
     ShellProbe {
-        result: ShellProbeResult,
+        // Boxed: this variant is ~392 B larger than the others, and boxing
+        // keeps PaneRuntimeEvent cheap to clone as it flows through the
+        // tracker.
+        result: Box<ShellProbeResult>,
         captured_input_generation: u64,
     },
     ProcessExited,
@@ -506,14 +497,15 @@ impl PaneRuntimeTracker {
                 result,
                 captured_input_generation,
             } => {
+                let summary = summarize_shell_probe(&result);
                 self.shell_context = Some(TrackedShellContext {
-                    result: result.clone(),
+                    result: *result,
                     captured_input_generation,
                 });
                 self.push_recent_action(PaneActionRecord {
                     sequence,
                     kind: PaneActionKind::ShellProbe,
-                    summary: summarize_shell_probe(&result),
+                    summary,
                     command: None,
                     source: PaneEvidenceSource::ShellProbe,
                     confidence: PaneConfidence::Strong,
@@ -745,9 +737,9 @@ impl PaneRuntimeTracker {
                 .as_ref()
                 .and_then(|context| context.tmux.as_ref())
                 .is_none()
+            && let Some(session) = action_tmux_session.as_ref()
         {
-            if let Some(session) = action_tmux_session.as_ref() {
-                evidence.push(PaneEvidence {
+            evidence.push(PaneEvidence {
                     subject: "tmux_shell_anchor".to_string(),
                     value: Some(session.clone()),
                     source: PaneEvidenceSource::ActionHistory,
@@ -758,7 +750,6 @@ impl PaneRuntimeTracker {
                             .to_string(),
                     ),
                 });
-            }
         }
 
         let active_scope = front_scope;
@@ -893,17 +884,21 @@ fn command_intent_note(command: &str) -> Option<String> {
     None
 }
 
-fn remote_host_from_shell_context(
-    shell_context: Option<&TrackedShellContext>,
-    shell_context_fresh: bool,
-    generation: u64,
-) -> (
+/// Contributions of the tracked shell context to pane evidence: remote host,
+/// its confidence and source, the runtime scope, and the evidence record.
+type ShellContextEvidence = (
     Option<String>,
     Option<PaneConfidence>,
     Option<PaneEvidenceSource>,
     Option<PaneRuntimeScope>,
     Option<PaneEvidence>,
-) {
+);
+
+fn remote_host_from_shell_context(
+    shell_context: Option<&TrackedShellContext>,
+    shell_context_fresh: bool,
+    generation: u64,
+) -> ShellContextEvidence {
     let Some(context) = shell_context else {
         return (None, None, None, None, None);
     };
@@ -1048,8 +1043,8 @@ fn is_env_assignment(token: &str) -> bool {
 }
 
 fn command_basename(command: &str) -> Option<String> {
-    let mut tokens = command.split_whitespace().peekable();
-    while let Some(token) = tokens.next() {
+    let tokens = command.split_whitespace();
+    for token in tokens {
         let token = token.trim_matches(&['"', '\''][..]);
         if token.is_empty() {
             continue;
@@ -1075,15 +1070,15 @@ fn parse_tmux_target(command: &str) -> Option<String> {
         if matches!(window[0], "-t" | "-s") {
             return Some(window[1].trim_matches(&['"', '\''][..]).to_string());
         }
-        if let Some(rest) = window[0].strip_prefix("-t") {
-            if !rest.is_empty() {
-                return Some(rest.trim_matches(&['"', '\''][..]).to_string());
-            }
+        if let Some(rest) = window[0].strip_prefix("-t")
+            && !rest.is_empty()
+        {
+            return Some(rest.trim_matches(&['"', '\''][..]).to_string());
         }
-        if let Some(rest) = window[0].strip_prefix("-s") {
-            if !rest.is_empty() {
-                return Some(rest.trim_matches(&['"', '\''][..]).to_string());
-            }
+        if let Some(rest) = window[0].strip_prefix("-s")
+            && !rest.is_empty()
+        {
+            return Some(rest.trim_matches(&['"', '\''][..]).to_string());
         }
     }
     None
@@ -1697,8 +1692,7 @@ fn canonical_agent_cli_name(name: &str) -> Option<&'static str> {
     match name
         .trim()
         .to_ascii_lowercase()
-        .replace('_', "-")
-        .replace(' ', "-")
+        .replace(['_', ' '], "-")
         .as_str()
     {
         "codex" => Some("codex"),
@@ -2340,10 +2334,11 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
     }
 
     let mut remote_workspaces = Vec::new();
-    if !focused_looks_tmux && !focused_disconnected {
-        if let Some(anchor) = &ctx.focused_remote_workspace {
-            remote_workspaces.push((ctx.focused_pane_index, anchor));
-        }
+    if !focused_looks_tmux
+        && !focused_disconnected
+        && let Some(anchor) = &ctx.focused_remote_workspace
+    {
+        remote_workspaces.push((ctx.focused_pane_index, anchor));
     }
     for pane in &ctx.other_panes {
         let tmux_like = pane
@@ -2391,17 +2386,16 @@ fn preferred_work_target_hints(ctx: &TerminalContext) -> Vec<String> {
         && (ctx.focused_control.visible_target.kind == PaneVisibleTargetKind::AgentCli
             || classify_recent_agent_cli_action(&ctx.focused_recent_actions).is_some());
     let mut best_local_agent: Option<(usize, &'static str)> = None;
-    if focused_local_agent {
-        if let Some(agent) = ctx
+    if focused_local_agent
+        && let Some(agent) = ctx
             .focused_control
             .visible_target
             .label
             .as_deref()
             .and_then(canonical_agent_cli_name)
             .or_else(|| classify_recent_agent_cli_action(&ctx.focused_recent_actions))
-        {
-            best_local_agent = Some((ctx.focused_pane_index, agent));
-        }
+    {
+        best_local_agent = Some((ctx.focused_pane_index, agent));
     }
     for pane in &ctx.other_panes {
         let tmux_like = pane
@@ -2918,7 +2912,7 @@ impl TerminalContext {
                 if let Some(input_generation) = action.input_generation {
                     prompt.push_str(&format!(" input_generation=\"{}\"", input_generation));
                 }
-                prompt.push_str(">");
+                prompt.push('>');
                 prompt.push_str(&xml_escape(&action.summary));
                 prompt.push_str("</action>\n");
             }
@@ -3159,10 +3153,11 @@ impl TerminalContext {
             .focused_screen_hints
             .iter()
             .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
-        if !focused_tmux_like && !focused_disconnected {
-            if let Some(anchor) = &self.focused_remote_workspace {
-                remote_workspaces.push((self.focused_pane_index, self.focused_pane_id, anchor));
-            }
+        if !focused_tmux_like
+            && !focused_disconnected
+            && let Some(anchor) = &self.focused_remote_workspace
+        {
+            remote_workspaces.push((self.focused_pane_index, self.focused_pane_id, anchor));
         }
         for pane in &self.other_panes {
             let tmux_like = pane
@@ -3173,10 +3168,11 @@ impl TerminalContext {
                 .screen_hints
                 .iter()
                 .any(|hint| hint.kind == PaneObservationHintKind::SshConnectionClosed);
-            if !tmux_like && !disconnected {
-                if let Some(anchor) = &pane.remote_workspace {
-                    remote_workspaces.push((pane.pane_index, pane.pane_id, anchor));
-                }
+            if !tmux_like
+                && !disconnected
+                && let Some(anchor) = &pane.remote_workspace
+            {
+                remote_workspaces.push((pane.pane_index, pane.pane_id, anchor));
             }
         }
         remote_workspaces.sort_by(|(pane_a, _, anchor_a), (pane_b, _, anchor_b)| {
@@ -3231,7 +3227,7 @@ impl TerminalContext {
                 if let Some(cwd) = &workspace.cwd {
                     prompt.push_str(&format!(" cwd=\"{}\"", xml_escape(cwd)));
                 }
-                prompt.push_str(">");
+                prompt.push('>');
                 prompt.push_str(&xml_escape(&workspace.note));
                 prompt.push_str("</workspace>\n");
             }
@@ -3260,7 +3256,7 @@ impl TerminalContext {
                 if let Some(agent) = &workspace.agent_cli {
                     prompt.push_str(&format!(" agent_cli=\"{}\"", xml_escape(agent)));
                 }
-                prompt.push_str(">");
+                prompt.push('>');
                 prompt.push_str(&xml_escape(&workspace.note));
                 prompt.push_str("</workspace>\n");
             }
@@ -3834,7 +3830,7 @@ mod tests {
     fn shell_probe_turns_tmux_shell_into_nested_runtime_stack() {
         let mut tracker = PaneRuntimeTracker::default();
         tracker.record_action(PaneRuntimeEvent::ShellProbe {
-            result: ShellProbeResult {
+            result: Box::new(ShellProbeResult {
                 host: Some("haswell".to_string()),
                 pwd: Some("/home/weyl".to_string()),
                 term: Some("xterm-ghostty".to_string()),
@@ -3853,7 +3849,7 @@ mod tests {
                     client_tty: Some("/dev/pts/7".to_string()),
                 }),
                 facts: Default::default(),
-            },
+            }),
             captured_input_generation: 3,
         });
 

@@ -163,16 +163,14 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.input_bar_visible {
-            if self.agent_panel_open {
-                let focused_inline = self
-                    .agent_panel
-                    .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
-                if !focused_inline {
-                    self.focus_agent_inline_input_next_frame(window, cx);
-                }
-                return;
+        if !self.input_bar_visible && self.agent_panel_open {
+            let focused_inline = self
+                .agent_panel
+                .update(cx, |panel, cx| panel.focus_inline_input(window, cx));
+            if !focused_inline {
+                self.focus_agent_inline_input_next_frame(window, cx);
             }
+            return;
         }
         self.focus_input_bar_surface(window, cx);
     }
@@ -245,6 +243,7 @@ impl ConWorkspace {
         // repeated key-down events while modifiers are held should focus the
         // palette, not close it and strand focus.
         self.command_palette.update(cx, |palette, cx| {
+            palette.set_handoff_enabled(self.config.experimental.handoff);
             palette.show(window, cx);
         });
         cx.notify();

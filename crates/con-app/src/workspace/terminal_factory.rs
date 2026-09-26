@@ -136,6 +136,7 @@ impl ConWorkspace {
 // Standalone so they can be called both during ConWorkspace::new()
 // (before `self` exists) and from create_terminal() (after).
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn make_ghostty_terminal(
     app: &std::sync::Arc<con_ghostty::GhosttyApp>,
     cwd: Option<&str>,
@@ -143,6 +144,7 @@ pub(super) fn make_ghostty_terminal(
     initial_working_directory: Option<std::path::PathBuf>,
     command: Option<crate::startup_args::TerminalCommand>,
     font_size: f32,
+    handoff_menu_entry_enabled: bool,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
@@ -174,6 +176,12 @@ pub(super) fn make_ghostty_terminal(
             crate::ghostty_view::GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)
         })
     };
+    #[cfg(target_os = "macos")]
+    view.update(cx, |view, _| {
+        view.set_handoff_menu_entry_enabled(handoff_menu_entry_enabled);
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = handoff_menu_entry_enabled;
     let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane

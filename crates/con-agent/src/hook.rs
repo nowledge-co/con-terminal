@@ -446,12 +446,11 @@ mod tests {
         let mut stream = agent.stream_prompt("run the contract tool").await;
         let mut final_output = None;
         while let Some(item) = stream.next().await {
-            match item.expect("Rig streaming loop should complete") {
-                MultiTurnStreamItem::FinalResponse(response) => {
-                    final_output = Some(response.output);
-                    break;
-                }
-                _ => {}
+            if let MultiTurnStreamItem::FinalResponse(response) =
+                item.expect("Rig streaming loop should complete")
+            {
+                final_output = Some(response.output);
+                break;
             }
         }
 

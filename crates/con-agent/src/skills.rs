@@ -71,11 +71,11 @@ impl SkillRegistry {
 
         // Load global first (later entries override earlier)
         for dir in global_dirs {
-            self.scan_directory(dir, |path| SkillSource::Global(path));
+            self.scan_directory(dir, SkillSource::Global);
         }
         // Then project (overrides global on collision)
         for dir in project_dirs {
-            self.scan_directory(dir, |path| SkillSource::Project(path));
+            self.scan_directory(dir, SkillSource::Project);
         }
 
         let count = self.skills.len();
@@ -322,7 +322,7 @@ mod tests {
         .unwrap();
 
         let mut registry = SkillRegistry::new();
-        let loaded = registry.scan(&[root.clone()], &[]);
+        let loaded = registry.scan(std::slice::from_ref(&root), &[]);
 
         assert_eq!(loaded, 2);
         assert!(registry.get("top-level").is_some());

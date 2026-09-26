@@ -4,7 +4,22 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.111`
+## `v0.1.0-beta.112`
+
+### Added
+
+**Agent**
+
+- On macOS, hand a Codex, Cursor, or Kimi session to another supported agent
+  without losing the working directory and relevant conversation context.
+  Con shows when the instruction was sent and keeps a recovery path if delivery
+  cannot be confirmed. _(PR
+  [#401](https://github.com/nowledge-co/con-terminal/pull/401) by
+  [@sunny0826](https://github.com/sunny0826))_
+
+---
+
+## `v0.1.0-beta.111` - 2026-09-24
 
 ### Changed
 
