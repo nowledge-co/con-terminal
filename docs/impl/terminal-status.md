@@ -23,6 +23,12 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   child PID churn does not reopen the screen-scan budget. Versioned native
   Claude executables under `claude/versions/<major.minor.patch>` are recognized
   as presentation evidence, not control-plane authority.
+  Screen detection allows six 300 ms attempts followed by retries spaced
+  2, 4, 8, 16, 32 and 64 seconds apart for slow startup. Successful detection
+  stops retries. Only a new terminal/job/title classification/input observation
+  reopens the budget; no background screen polling continues indefinitely.
+  Ghostty's app-wide wake generation is not a per-surface output signal and
+  must not be used to renew this budget.
 - The host PTY bridge returns sequence-correlated process metadata through one
   bounded worker. Host PIDs must never be queried in the sandbox namespace.
   Missing/oversize metadata does not end the shell. Old bridges retain terminal
@@ -34,6 +40,11 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   Built-in approval lifetime follows its request's channel identity, not FIFO
   completion order; stopping a session denies pending approvals. Panel activity
   changes notify aggregation without waiting for terminal output or polling.
+  Approval-needed/ended events originate at the hook's actual wait boundary,
+  after its request-time auto-approval policy. End events match both channel
+  and call ID. Clearing/truncating a conversation explicitly denies its pending
+  approvals. Panel setters own conditional notifications so cached views update
+  independently of their callers.
 
 ## Rendering contract
 

@@ -115,7 +115,7 @@ impl ConWorkspace {
                 window,
                 cx,
             );
-            panel.set_model_name(event.model.clone());
+            panel.set_model_name(event.model.clone(), cx);
             panel.set_session_model_options(available_models, window, cx);
         });
 
@@ -144,7 +144,7 @@ impl ConWorkspace {
                 cx,
             );
             panel.set_provider_name(provider.clone(), window, cx);
-            panel.set_model_name(model_name);
+            panel.set_model_name(model_name, cx);
             panel.set_session_model_options(available_models, window, cx);
         });
 

@@ -2103,6 +2103,16 @@ pub enum AgentEvent {
         tool_name: String,
         args: String,
     },
+    /// A dangerous tool is actually blocked waiting for a decision.
+    ToolApprovalNeeded {
+        call_id: String,
+        tool_name: String,
+        args: String,
+    },
+    /// The approval wait ended by decision, timeout, cancellation, or disconnect.
+    ToolApprovalEnded {
+        call_id: String,
+    },
     ToolCallComplete {
         call_id: String,
         tool_name: String,

@@ -171,6 +171,12 @@ impl ConHook {
                 return Flow::cont();
             }
 
+            let _ = event_tx.send(AgentEvent::ToolApprovalNeeded {
+                call_id: call_id.clone(),
+                tool_name: tool_name.clone(),
+                args: args.clone(),
+            });
+
             // Poll for approval with short intervals so we can respond
             // to cancellation (e.g. app quit) without blocking shutdown.
             let decision = tokio::task::block_in_place(|| {
@@ -181,6 +187,10 @@ impl ConHook {
                     APPROVAL_TIMEOUT,
                     APPROVAL_POLL_INTERVAL,
                 )
+            });
+
+            let _ = event_tx.send(AgentEvent::ToolApprovalEnded {
+                call_id: call_id.clone(),
             });
 
             match decision {
@@ -309,11 +319,37 @@ mod tests {
             event_rx.try_recv(),
             Ok(AgentEvent::ToolCallStart { call_id, .. }) if call_id == "call-2"
         ));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(AgentEvent::ToolApprovalNeeded { call_id, .. }) if call_id == "call-2"
+        ));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(AgentEvent::ToolApprovalEnded { call_id }) if call_id == "call-2"
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn auto_approved_tool_never_emits_pending_approval() {
+        let (hook, event_rx, _approval_tx) = hook(true, false);
+        assert_eq!(
+            hook.on_tool_call("terminal_exec", "auto-call", "{}").await,
+            Flow::Continue
+        );
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCallStart { call_id, .. } if call_id == "auto-call"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolApprovalNeeded { .. } | AgentEvent::ToolApprovalEnded { .. }
+        )));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn cancellation_releases_pending_approval() {
-        let (hook, _event_rx, _approval_tx) = hook(false, true);
+        let (hook, event_rx, _approval_tx) = hook(false, true);
 
         let flow = hook.on_tool_call("file_write", "call-3", "{}").await;
 
@@ -323,6 +359,15 @@ mod tests {
                 reason: "Tool approval timed out or cancelled".into()
             }
         );
+        let events = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolApprovalNeeded { call_id, .. } if call_id == "call-3"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolApprovalEnded { call_id } if call_id == "call-3"
+        )));
     }
 
     #[test]

@@ -176,9 +176,9 @@ impl PanelState {
     }
 
     pub fn clear(&mut self) {
+        self.deny_pending_approvals("Conversation cleared before approval");
         self.messages = vec![PanelMessage::new("system", SYSTEM_GREETING)];
         self.tool_calls.clear();
-        self.pending_approvals.clear();
         self.streaming = false;
         self.status = AgentStatus::Idle;
     }
@@ -186,11 +186,11 @@ impl PanelState {
     /// Truncate conversation back to (but not including) the message at `msg_idx`.
     /// Used for edit-and-rerun: removes the old user message and everything after it.
     pub fn truncate_to(&mut self, msg_idx: usize) {
+        self.deny_pending_approvals("Conversation truncated before approval");
         if msg_idx < self.messages.len() {
             self.messages.truncate(msg_idx);
         }
         self.tool_calls.clear();
-        self.pending_approvals.clear();
         self.streaming = false;
         self.status = AgentStatus::Idle;
     }
@@ -305,6 +305,12 @@ impl PanelState {
             }
         }
         self.pending_approvals = retained;
+    }
+
+    fn finish_approval(&mut self, approval_tx: &Sender<ToolApprovalDecision>, call_id: &str) {
+        self.pending_approvals.retain(|approval| {
+            !(approval.call_id == call_id && approval.approval_tx.same_channel(approval_tx))
+        });
     }
 
     pub(crate) fn stop(&mut self) {
@@ -442,6 +448,10 @@ impl PanelState {
             } => {
                 self.add_pending_approval(&call_id, &tool_name, &args, approval_tx);
             }
+            HarnessEvent::ToolApprovalEnded {
+                call_id,
+                approval_tx,
+            } => self.finish_approval(&approval_tx, &call_id),
             HarnessEvent::ToolCallComplete {
                 call_id,
                 tool_name: _,
@@ -1034,9 +1044,12 @@ impl AgentPanel {
         &self.state
     }
 
-    pub fn set_model_name(&mut self, name: String) -> bool {
+    pub fn set_model_name(&mut self, name: String, cx: &mut Context<Self>) -> bool {
         let changed = self.model_name != name;
         self.model_name = name;
+        if changed {
+            cx.notify();
+        }
         changed
     }
 
@@ -1044,11 +1057,14 @@ impl AgentPanel {
         &mut self,
         provider: ProviderKind,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
         let provider = Some(Self::session_sidebar_provider_kind(&provider));
         let changed = self.current_provider != provider;
         self.current_provider = provider;
+        if changed {
+            cx.notify();
+        }
         changed
     }
 
@@ -1056,7 +1072,7 @@ impl AgentPanel {
         &mut self,
         providers: Vec<ProviderKind>,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
         let providers = providers
             .into_iter()
@@ -1064,6 +1080,9 @@ impl AgentPanel {
             .collect::<Vec<_>>();
         let changed = self.session_provider_options != providers;
         self.session_provider_options = providers;
+        if changed {
+            cx.notify();
+        }
         changed
     }
 
@@ -1071,19 +1090,31 @@ impl AgentPanel {
         &mut self,
         models: Vec<String>,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
         let changed = self.session_model_options != models;
         self.session_model_options = models;
+        if changed {
+            cx.notify();
+        }
         changed
     }
 
-    pub fn set_auto_approve(&mut self, enabled: bool) {
+    pub fn set_auto_approve(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.auto_approve == enabled {
+            return;
+        }
         self.auto_approve = enabled;
+        cx.notify();
     }
 
-    pub fn set_ui_opacity(&mut self, opacity: f32) {
-        self.ui_opacity = opacity.clamp(0.35, 1.0);
+    pub fn set_ui_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
+        let opacity = opacity.clamp(0.35, 1.0);
+        if self.ui_opacity == opacity {
+            return;
+        }
+        self.ui_opacity = opacity;
+        cx.notify();
     }
 
     pub fn set_assistant_avatar_asset(&mut self, asset: &'static str, cx: &mut Context<Self>) {
@@ -1245,9 +1276,12 @@ impl AgentPanel {
         cx.notify();
     }
 
-    pub fn set_show_inline_input(&mut self, show: bool) -> bool {
+    pub fn set_show_inline_input(&mut self, show: bool, cx: &mut Context<Self>) -> bool {
         let changed = self.show_inline_input != show;
         self.show_inline_input = show;
+        if changed {
+            cx.notify();
+        }
         changed
     }
 
@@ -1392,13 +1426,14 @@ impl AgentPanel {
         }
     }
 
-    pub fn set_recent_inputs(&mut self, inputs: Vec<String>) {
+    pub fn set_recent_inputs(&mut self, inputs: Vec<String>, cx: &mut Context<Self>) {
         if self.recent_inputs == inputs {
             return;
         }
         self.recent_inputs = inputs;
         self.inline_history_nav_index = None;
         self.inline_history_nav_draft = None;
+        cx.notify();
     }
 
     fn sync_inline_input_visual_state(&mut self, cx: &App) -> bool {
@@ -1875,6 +1910,17 @@ impl AgentPanel {
         cx: &mut Context<Self>,
     ) {
         self.state.finish_request(approval_tx);
+        self.follow_output_after_change();
+        cx.notify();
+    }
+
+    pub fn finish_approval(
+        &mut self,
+        approval_tx: &Sender<ToolApprovalDecision>,
+        call_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.finish_approval(approval_tx, call_id);
         self.follow_output_after_change();
         cx.notify();
     }
@@ -5352,6 +5398,44 @@ mod tests {
         assert!(!first_rx.try_recv().expect("first request denial").allowed);
         assert!(state.pending_approvals.is_empty());
         assert_eq!(state.activity(), Activity::Idle);
+    }
+
+    #[test]
+    fn approval_end_is_scoped_to_channel_and_call_id() {
+        let mut state = PanelState::new();
+        let (first_tx, first_rx) = crossbeam_channel::bounded(1);
+        let (second_tx, second_rx) = crossbeam_channel::bounded(1);
+        state.add_pending_approval("shared-call", "shell", "{}", first_tx.clone());
+        state.add_pending_approval("other-call", "shell", "{}", first_tx.clone());
+        state.add_pending_approval("shared-call", "shell", "{}", second_tx.clone());
+
+        state.apply_event(con_core::harness::HarnessEvent::ToolApprovalEnded {
+            call_id: "shared-call".into(),
+            approval_tx: first_tx,
+        });
+
+        assert_eq!(state.pending_approvals.len(), 2);
+        assert!(state.pending_approvals.iter().any(|approval| {
+            approval.call_id == "other-call"
+                && approval.approval_tx.same_channel(&second_tx) == false
+        }));
+        assert!(state.pending_approvals.iter().any(|approval| {
+            approval.call_id == "shared-call" && approval.approval_tx.same_channel(&second_tx)
+        }));
+        assert!(first_rx.try_recv().is_err());
+        assert!(second_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn clear_and_truncate_deny_pending_approvals() {
+        let mut state = PanelState::new();
+        let clear_rx = pending_approval(&mut state, "clear-call");
+        state.clear();
+        assert!(!clear_rx.try_recv().expect("clear denial").allowed);
+
+        let truncate_rx = pending_approval(&mut state, "truncate-call");
+        state.truncate_to(0);
+        assert!(!truncate_rx.try_recv().expect("truncate denial").allowed);
     }
 
     #[test]

@@ -181,7 +181,7 @@ impl ConWorkspace {
         };
         surface
             .status
-            .observe_title(entity.read(cx).title().as_deref(), Instant::now());
+            .observe_title(entity.read(cx).terminal_title.raw(), Instant::now());
         self.refresh_cached_tab_presentation(cx);
     }
 
@@ -279,6 +279,9 @@ impl ConWorkspace {
                     input_generation: terminal.input_generation(cx),
                 };
                 let observation_changed = surface.detection.observe(observation);
+                if observation_changed {
+                    surface.last_scan = None;
+                }
                 let shell_foreground = !cfg!(target_os = "windows")
                     && !surface.processes.is_empty()
                     && surface
@@ -304,9 +307,9 @@ impl ConWorkspace {
                 } else if let Some(agent) = title_agent {
                     Some((agent, IdentityScope::Title))
                 } else if (observation_changed || !surface.detection.is_exhausted())
-                    && surface
-                        .last_scan
-                        .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(300))
+                    && surface.last_scan.is_none_or(|last| {
+                        now.duration_since(last) >= surface.detection.scan_interval()
+                    })
                     && surface.detection.take_screen_scan_attempt()
                 {
                     surface.last_scan = Some(now);

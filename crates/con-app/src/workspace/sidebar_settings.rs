@@ -888,14 +888,17 @@ impl ConWorkspace {
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, cx| {
-            panel.set_auto_approve(auto_approve);
+            panel.set_auto_approve(auto_approve, cx);
             panel.set_session_provider_options(
                 AgentPanel::configured_session_providers(&active_agent_config),
                 window,
                 cx,
             );
             panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
-            panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
+            panel.set_model_name(
+                AgentHarness::active_model_name_for(&active_agent_config),
+                cx,
+            );
             panel.set_session_model_options(active_agent_models, window, cx);
         });
 
@@ -1118,7 +1121,7 @@ impl ConWorkspace {
 
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.agent_panel.update(cx, |panel, cx| {
-            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_ui_opacity(effective_ui_opacity, cx);
             panel.set_assistant_avatar_asset(
                 con_core::config::agent_avatar_asset(&appearance_config.agent_avatar),
                 cx,

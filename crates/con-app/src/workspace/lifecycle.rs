@@ -354,7 +354,7 @@ impl ConWorkspace {
             std::mem::replace(&mut tabs[active_tab].panel_state, PanelState::new());
         let agent_panel = cx.new(|cx| {
             let mut panel = AgentPanel::with_state(initial_panel_state, window, cx);
-            panel.set_auto_approve(config.agent.auto_approve_tools);
+            panel.set_auto_approve(config.agent.auto_approve_tools, cx);
             panel
         });
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
@@ -370,12 +370,12 @@ impl ConWorkspace {
             .cloned()
             .collect::<Vec<_>>();
         agent_panel.update(cx, |panel, cx| {
-            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_ui_opacity(effective_ui_opacity, cx);
             panel.set_assistant_avatar_asset(
                 con_core::config::agent_avatar_asset(&config.appearance.agent_avatar),
                 cx,
             );
-            panel.set_recent_inputs(initial_recent_inputs.clone());
+            panel.set_recent_inputs(initial_recent_inputs.clone(), cx);
         });
         input_bar.update(cx, |bar, cx| {
             bar.set_ui_opacity(effective_ui_opacity);

@@ -233,7 +233,7 @@ pub(super) fn agent_from_screen_text(lines: &[String]) -> Option<&'static str> {
     None
 }
 
-const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 6;
+const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct AgentCliObservation {
@@ -247,8 +247,9 @@ pub(super) struct AgentCliObservation {
 ///
 /// Reading a terminal's visible screen is materially more expensive than
 /// observing its process, title, or input generation. A changed observation
-/// opens a short retry window so script-based TUIs can finish their initial
-/// paint; a stable tab performs no screen reads after that window closes.
+/// opens a retry window so script-based TUIs can finish their initial paint.
+/// Six fast attempts are followed by six exponentially spaced attempts for
+/// slow startup; a stable tab performs no reads after that bounded window.
 #[derive(Default)]
 pub(super) struct AgentCliDetectionState {
     observation: Option<AgentCliObservation>,
@@ -256,6 +257,14 @@ pub(super) struct AgentCliDetectionState {
 }
 
 impl AgentCliDetectionState {
+    pub(super) fn scan_interval(&self) -> std::time::Duration {
+        if self.screen_scan_attempts_remaining > 6 {
+            std::time::Duration::from_millis(300)
+        } else {
+            std::time::Duration::from_secs(1 << (7 - self.screen_scan_attempts_remaining))
+        }
+    }
+
     pub(super) fn observe(&mut self, observation: AgentCliObservation) -> bool {
         if self.observation.as_ref() == Some(&observation) {
             return false;
@@ -852,7 +861,12 @@ mod tests_agent_cli_icon {
         let mut state = AgentCliDetectionState::default();
 
         assert!(state.observe(observation));
-        for _ in 0..AGENT_CLI_SCREEN_SCAN_ATTEMPTS {
+        for _ in 0..6 {
+            assert_eq!(state.scan_interval(), Duration::from_millis(300));
+            assert!(state.take_screen_scan_attempt());
+        }
+        for seconds in [2, 4, 8, 16, 32, 64] {
+            assert_eq!(state.scan_interval(), Duration::from_secs(seconds));
             assert!(state.take_screen_scan_attempt());
         }
         assert!(!state.take_screen_scan_attempt());
@@ -864,6 +878,7 @@ mod tests_agent_cli_icon {
             ..observation
         };
         assert!(state.observe(changed));
+        assert_eq!(state.scan_interval(), Duration::from_millis(300));
         assert!(state.take_screen_scan_attempt());
         state.finish();
         assert!(state.is_exhausted());
