@@ -9,15 +9,20 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   lifetime and executable information; a PID or process-group ID alone is not
   an executable identity. Windows descendant evidence is not a foreground-job
   assertion.
-- `con-core::terminal_status` reduces independent identity, command, title and
+- `con-core::terminal_status` reduces independent identity, title and
   progress observations. Generic title motion has a three-second lease; expiry
   means unknown, not completion. OSC 9;4 expiry remains backend-owned.
+  PTY writes and long-lived shell commands do not establish agent activity.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous
   batches and tab aggregation. Closed/replaced surfaces and stale completions
   cannot update a new surface. Completions check revision as well as query and
   incarnation, so an A→B→A query transition cannot accept old work.
   Batches have a 300 ms minimum interval and a
   one-second backstop; screen fallback is bounded separately.
+  Title events update only their surface's retained title evidence. Unrelated
+  child PID churn does not reopen the screen-scan budget. Versioned native
+  Claude executables under `claude/versions/<major.minor.patch>` are recognized
+  as presentation evidence, not control-plane authority.
 - The host PTY bridge returns sequence-correlated process metadata through one
   bounded worker. Host PIDs must never be queried in the sandbox namespace.
   Missing/oversize metadata does not end the shell. Old bridges retain terminal
@@ -26,6 +31,9 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   and built-in agent activity contribute to status. Severity wins first, then
   the focused surface, then tree order; percentages retain their source and are
   never averaged across panes.
+  Built-in approval lifetime follows its request's channel identity, not FIFO
+  completion order; stopping a session denies pending approvals. Panel activity
+  changes notify aggregation without waiting for terminal output or polling.
 
 ## Rendering contract
 

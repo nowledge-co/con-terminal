@@ -287,20 +287,21 @@ impl Render for ConWorkspace {
             let available_models = self.provider_models_for_config(&active_agent_config);
             let show_inline = !self.input_bar_visible && self.agent_panel_open;
             self.agent_panel.update(cx, |panel, cx| {
-                panel.set_session_provider_options(
+                let mut changed = panel.set_session_provider_options(
                     AgentPanel::configured_session_providers(&active_agent_config),
                     window,
                     cx,
                 );
-                panel.set_provider_name(provider, window, cx);
-                panel.set_model_name(model_name);
-                panel.set_session_model_options(available_models, window, cx);
-                panel.set_show_inline_input(show_inline);
+                changed |= panel.set_provider_name(provider, window, cx);
+                changed |= panel.set_model_name(model_name);
+                changed |= panel.set_session_model_options(available_models, window, cx);
+                changed |= panel.set_show_inline_input(show_inline);
                 panel.set_skills(skill_entries, cx);
                 panel.set_recent_inputs(self.recent_input_history(80));
-                // These setters historically relied on parent renders. The
-                // retained child now needs explicit invalidation on data changes.
-                cx.notify();
+                // Unchanged terminal chrome must not invalidate the cached chat.
+                if changed {
+                    cx.notify();
+                }
             });
         }
 

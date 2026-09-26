@@ -56,6 +56,11 @@ pub enum HarnessEvent {
         tool_name: String,
         result: String,
     },
+    /// One agent invocation ended. The channel identifies exactly the
+    /// approvals belonging to that invocation, even when requests overlap.
+    RequestFinished {
+        approval_tx: Sender<ToolApprovalDecision>,
+    },
     /// Agent produced a final response
     ResponseComplete(Message),
     /// An error occurred
@@ -586,6 +591,7 @@ impl AgentHarness {
                 }
             }
 
+            let _ = harness_tx.send(HarnessEvent::RequestFinished { approval_tx });
             log::info!("[harness] Request complete");
         });
     }

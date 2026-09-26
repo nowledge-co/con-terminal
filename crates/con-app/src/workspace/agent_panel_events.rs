@@ -84,6 +84,7 @@ impl ConWorkspace {
         _cx: &mut Context<Self>,
     ) {
         self.tabs[self.active_tab].session.cancel_current();
+        self.agent_panel.update(_cx, |panel, cx| panel.stop(cx));
     }
 
     pub(super) fn on_set_auto_approve(

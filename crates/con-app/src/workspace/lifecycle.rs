@@ -437,6 +437,15 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_rerun_from_message)
             .detach();
+        let mut panel_activity = agent_panel.read(cx).state().activity();
+        cx.observe(&agent_panel, move |workspace, panel, cx| {
+            let activity = panel.read(cx).state().activity();
+            if activity != panel_activity {
+                panel_activity = activity;
+                workspace.refresh_cached_tab_presentation(cx);
+            }
+        })
+        .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)

@@ -281,6 +281,38 @@ impl PanelState {
         });
     }
 
+    fn deny_pending_approvals(&mut self, reason: &str) {
+        for approval in self.pending_approvals.drain(..) {
+            let _ = approval.approval_tx.send(ToolApprovalDecision {
+                call_id: approval.call_id,
+                allowed: false,
+                reason: Some(reason.to_string()),
+            });
+        }
+    }
+
+    fn finish_request(&mut self, approval_tx: &Sender<ToolApprovalDecision>) {
+        let mut retained = Vec::with_capacity(self.pending_approvals.len());
+        for approval in self.pending_approvals.drain(..) {
+            if approval.approval_tx.same_channel(approval_tx) {
+                let _ = approval.approval_tx.send(ToolApprovalDecision {
+                    call_id: approval.call_id,
+                    allowed: false,
+                    reason: Some("Agent request finished before approval".to_string()),
+                });
+            } else {
+                retained.push(approval);
+            }
+        }
+        self.pending_approvals = retained;
+    }
+
+    pub(crate) fn stop(&mut self) {
+        self.deny_pending_approvals("Agent request cancelled");
+        self.streaming = false;
+        self.status = AgentStatus::Idle;
+    }
+
     pub fn update_thinking(&mut self, text: &str) {
         self.status = AgentStatus::Thinking;
         if !self.streaming {
@@ -417,6 +449,9 @@ impl PanelState {
             } => {
                 self.complete_tool_call(&call_id, &result);
             }
+            HarnessEvent::RequestFinished { approval_tx } => {
+                self.finish_request(&approval_tx);
+            }
             HarnessEvent::ResponseComplete(msg) => {
                 self.complete_response(&msg.content, msg.model.as_deref(), msg.duration_ms);
             }
@@ -473,7 +508,7 @@ pub struct AgentPanel {
     ui_opacity: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct ProviderSelectItem {
     provider: ProviderKind,
     short_label: &'static str,
@@ -999,8 +1034,10 @@ impl AgentPanel {
         &self.state
     }
 
-    pub fn set_model_name(&mut self, name: String) {
+    pub fn set_model_name(&mut self, name: String) -> bool {
+        let changed = self.model_name != name;
         self.model_name = name;
+        changed
     }
 
     pub fn set_provider_name(
@@ -1008,8 +1045,11 @@ impl AgentPanel {
         provider: ProviderKind,
         _: &mut Window,
         _: &mut Context<Self>,
-    ) {
-        self.current_provider = Some(Self::session_sidebar_provider_kind(&provider));
+    ) -> bool {
+        let provider = Some(Self::session_sidebar_provider_kind(&provider));
+        let changed = self.current_provider != provider;
+        self.current_provider = provider;
+        changed
     }
 
     pub fn set_session_provider_options(
@@ -1017,11 +1057,14 @@ impl AgentPanel {
         providers: Vec<ProviderKind>,
         _: &mut Window,
         _: &mut Context<Self>,
-    ) {
-        self.session_provider_options = providers
+    ) -> bool {
+        let providers = providers
             .into_iter()
             .map(Self::provider_option)
             .collect::<Vec<_>>();
+        let changed = self.session_provider_options != providers;
+        self.session_provider_options = providers;
+        changed
     }
 
     pub fn set_session_model_options(
@@ -1029,8 +1072,10 @@ impl AgentPanel {
         models: Vec<String>,
         _: &mut Window,
         _: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        let changed = self.session_model_options != models;
         self.session_model_options = models;
+        changed
     }
 
     pub fn set_auto_approve(&mut self, enabled: bool) {
@@ -1200,8 +1245,10 @@ impl AgentPanel {
         cx.notify();
     }
 
-    pub fn set_show_inline_input(&mut self, show: bool) {
+    pub fn set_show_inline_input(&mut self, show: bool) -> bool {
+        let changed = self.show_inline_input != show;
         self.show_inline_input = show;
+        changed
     }
 
     fn ensure_inline_input_state(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1812,6 +1859,22 @@ impl AgentPanel {
                 self.remeasure_message(last_idx);
             }
         }
+        self.follow_output_after_change();
+        cx.notify();
+    }
+
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
+        self.state.stop();
+        self.follow_output_after_change();
+        cx.notify();
+    }
+
+    pub fn finish_request(
+        &mut self,
+        approval_tx: &Sender<ToolApprovalDecision>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.finish_request(approval_tx);
         self.follow_output_after_change();
         cx.notify();
     }
@@ -5240,10 +5303,19 @@ fn humanize_model_name(model: &str) -> String {
 mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
     use con_agent::{AgentConfig, ProviderConfig, ProviderKind};
+    use con_core::terminal_status::Activity;
+
+    fn pending_approval(
+        state: &mut PanelState,
+        call_id: &str,
+    ) -> crossbeam_channel::Receiver<con_agent::ToolApprovalDecision> {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        state.add_pending_approval(call_id, "shell", "{}", tx);
+        rx
+    }
 
     #[test]
     fn presentation_attention_precedes_streaming_without_resolving_approval() {
-        use con_core::terminal_status::Activity;
         let mut state = PanelState::new();
         state.streaming = true;
         assert_eq!(state.activity(), Activity::Busy);
@@ -5254,6 +5326,45 @@ mod tests {
         state.pending_approvals.clear();
         assert_eq!(state.activity(), Activity::Busy);
         state.streaming = false;
+        assert_eq!(state.activity(), Activity::Idle);
+    }
+
+    #[test]
+    fn out_of_order_request_completion_uses_approval_channel_identity() {
+        let mut state = PanelState::new();
+        let (first_tx, first_rx) = crossbeam_channel::bounded(1);
+        let (second_tx, second_rx) = crossbeam_channel::bounded(1);
+        state.add_pending_approval("first-call", "shell", "{}", first_tx.clone());
+        state.add_pending_approval("second-call", "shell", "{}", second_tx.clone());
+
+        state.apply_event(con_core::harness::HarnessEvent::RequestFinished {
+            approval_tx: second_tx,
+        });
+
+        assert!(first_rx.try_recv().is_err());
+        assert!(!second_rx.try_recv().expect("second request denial").allowed);
+        assert_eq!(state.pending_approvals.len(), 1);
+        assert_eq!(state.activity(), Activity::NeedsInput);
+
+        state.apply_event(con_core::harness::HarnessEvent::RequestFinished {
+            approval_tx: first_tx,
+        });
+        assert!(!first_rx.try_recv().expect("first request denial").allowed);
+        assert!(state.pending_approvals.is_empty());
+        assert_eq!(state.activity(), Activity::Idle);
+    }
+
+    #[test]
+    fn stop_denies_all_pending_approvals_and_becomes_idle() {
+        let mut state = PanelState::new();
+        state.add_message("user", "stop");
+        state.streaming = true;
+        let first_rx = pending_approval(&mut state, "first-call");
+        let second_rx = pending_approval(&mut state, "second-call");
+        state.stop();
+
+        assert!(!first_rx.try_recv().expect("first denial").allowed);
+        assert!(!second_rx.try_recv().expect("second denial").allowed);
         assert_eq!(state.activity(), Activity::Idle);
     }
 

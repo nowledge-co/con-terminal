@@ -188,6 +188,11 @@ impl ConWorkspace {
                     panel.complete_tool_call(&call_id, &tool_name, &result, cx);
                 });
             }
+            HarnessEvent::RequestFinished { approval_tx } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.finish_request(&approval_tx, cx);
+                });
+            }
             HarnessEvent::ResponseComplete(msg) => {
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.complete_response(&msg, cx);
