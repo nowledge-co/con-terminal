@@ -641,7 +641,12 @@ impl ConWorkspace {
             subtitle: presentation.subtitle,
             is_ssh: presentation.is_ssh,
             needs_attention: tab.needs_attention,
-            title_indicator: tab_title_indicator(&tab.pane_tree, cx),
+            status: self
+                .terminal_presentation
+                .tabs
+                .get(&tab.summary_id)
+                .copied()
+                .flatten(),
             terminal_titles: tab
                 .pane_tree
                 .all_surface_terminals()
@@ -649,10 +654,6 @@ impl ConWorkspace {
                 .filter_map(|terminal| terminal.cached_title(cx))
                 .filter(|title| !title.is_empty())
                 .collect(),
-            progress: tab
-                .pane_tree
-                .focused_pane_terminal()
-                .and_then(|terminal| terminal.progress(cx)),
             icon: presentation.icon,
             has_user_label: tab.user_label.is_some(),
             pane_count,
@@ -890,14 +891,17 @@ impl ConWorkspace {
 
         // Sync auto-approve to agent panel UI
         self.agent_panel.update(cx, |panel, cx| {
-            panel.set_auto_approve(auto_approve);
+            panel.set_auto_approve(auto_approve, cx);
             panel.set_session_provider_options(
                 AgentPanel::configured_session_providers(&active_agent_config),
                 window,
                 cx,
             );
             panel.set_provider_name(active_agent_config.provider.clone(), window, cx);
-            panel.set_model_name(AgentHarness::active_model_name_for(&active_agent_config));
+            panel.set_model_name(
+                AgentHarness::active_model_name_for(&active_agent_config),
+                cx,
+            );
             panel.set_session_model_options(active_agent_models, window, cx);
         });
 
@@ -1125,7 +1129,7 @@ impl ConWorkspace {
 
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.agent_panel.update(cx, |panel, cx| {
-            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_ui_opacity(effective_ui_opacity, cx);
             panel.set_assistant_avatar_asset(
                 con_core::config::agent_avatar_asset(&appearance_config.agent_avatar),
                 cx,

@@ -216,6 +216,7 @@ pub struct ConPty {
     input_worker: PtyWriteWorker,
     /// Process handle (kept so callers can `WaitForSingleObject` for exit).
     process: OwnedHandle,
+    root_identity: Option<crate::process::ProcessIdentity>,
     /// Child thread handle.
     _thread: OwnedHandle,
     /// Output reader thread; joined on drop.
@@ -434,6 +435,8 @@ impl ConPty {
             _input_writer: input_writer,
             input_worker,
             process,
+            root_identity: crate::process::read_process(process_info.dwProcessId)
+                .map(|process| process.identity),
             _thread: thread,
             output_thread: Some(output_thread),
             exit_watcher,
@@ -460,6 +463,12 @@ impl ConPty {
 
     pub fn process_handle(&self) -> HANDLE {
         self.process.as_handle()
+    }
+
+    pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
+        self.is_alive()
+            .then(|| self.root_identity.clone())
+            .flatten()
     }
 
     /// `true` while the pseudo-console is still open. Flips to `false`

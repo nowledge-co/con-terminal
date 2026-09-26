@@ -12,6 +12,7 @@ path = "src/main.rs"
 con-agent.workspace = true
 con-core.workspace = true
 con-paths.workspace = true
+con-process.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

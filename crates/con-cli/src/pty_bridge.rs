@@ -25,6 +25,9 @@ pub struct PtyBridgeArgs {
     /// Execute `program` with exactly `args`, even when the argument list is empty.
     #[arg(long)]
     pub literal_command: bool,
+    /// Enable bounded host process metadata request/response frames.
+    #[arg(long)]
+    pub process_metadata: bool,
     #[arg(trailing_var_arg = true)]
     pub args: Vec<OsString>,
 }
@@ -38,6 +41,28 @@ const PTY_EXIT_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_mill
 
 #[cfg(unix)]
 const PTY_EXIT_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+#[cfg(unix)]
+const MAX_PENDING_METADATA_REQUESTS: usize = 1;
+
+#[cfg(unix)]
+fn process_metadata_frame(
+    sequence: u64,
+    process_group_id: Option<u32>,
+    processes: Vec<con_process::ProcessInfo>,
+) -> Vec<u8> {
+    // Metadata failure must not terminate the user's shell. Non-Unicode paths
+    // and overlarge snapshots yield an unavailable observation instead.
+    let payload = serde_json::to_vec(&(sequence, process_group_id, processes))
+        .ok()
+        .filter(|payload| payload.len() <= 256 * 1024)
+        .unwrap_or_else(|| format!("[{sequence},null,[]]").into_bytes());
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(0x06);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&payload);
+    frame
+}
 
 #[cfg(unix)]
 fn wait_for_pty_output(
@@ -107,7 +132,7 @@ fn configure_shell_startup(program: &OsStr, command: &mut portable_pty::CommandB
 #[cfg(unix)]
 pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
+    use std::os::fd::{AsRawFd, BorrowedFd};
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -163,11 +188,62 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     let (reader_exit_signal, reader_exit_wait) =
         UnixStream::pair().context("create pty reader exit signal")?;
-    let mut socket_writer = stream.try_clone().context("clone socket writer")?;
-    let mut exit_writer = stream.try_clone().context("clone exit writer")?;
+    let socket_writer = Arc::new(std::sync::Mutex::new(
+        stream.try_clone().context("clone socket writer")?,
+    ));
+
+    // Metadata collection can traverse the host process table, so keep it off
+    // both terminal I/O loops. A one-slot queue bounds stale work; requests are
+    // observations, and callers correlate (and may retry) by sequence number.
+    let metadata_active = Arc::new(AtomicBool::new(args.process_metadata));
+    let metadata_requests = args
+        .process_metadata
+        .then(|| {
+            // The detached worker may outlive teardown. Own a descriptor rather
+            // than borrowing a numeric fd that the OS could recycle meanwhile.
+            let metadata_pty = unsafe { BorrowedFd::borrow_raw(pty_fd) }
+                .try_clone_to_owned()
+                .ok()?;
+            let (sender, receiver) =
+                std::sync::mpsc::sync_channel::<u64>(MAX_PENDING_METADATA_REQUESTS);
+            let writer = socket_writer.clone();
+            let active = metadata_active.clone();
+            let worker = std::thread::Builder::new()
+                .name("con-pty-metadata".into())
+                .spawn(move || {
+                    while let Ok(sequence) = receiver.recv() {
+                        if !active.load(Ordering::Acquire) {
+                            break;
+                        }
+                        // SAFETY: the worker owns this descriptor for the call.
+                        let pgid = unsafe { libc::tcgetpgrp(metadata_pty.as_raw_fd()) };
+                        let process_group_id = (pgid > 0).then_some(pgid as u32);
+                        let processes = process_group_id
+                            .map(|id| {
+                                con_process::group_members_batch(&[id])
+                                    .pop()
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default();
+                        let frame = process_metadata_frame(sequence, process_group_id, processes);
+                        let failed = writer.lock().map_or(true, |mut writer| {
+                            if !active.load(Ordering::Acquire) {
+                                return false;
+                            }
+                            writer.write_all(&frame).is_err() || writer.flush().is_err()
+                        });
+                        if failed {
+                            break;
+                        }
+                    }
+                });
+            worker.ok().map(|_| sender)
+        })
+        .flatten();
 
     // Thread 1: Read raw output from host PTY master, send TAG_DATA frame to socket
     let running_r = running.clone();
+    let data_writer = socket_writer.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         let mut drain_deadline = None;
@@ -201,12 +277,14 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
             match pty_reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    let len_bytes = (n as u32).to_be_bytes();
-                    if socket_writer.write_all(&[0x00]).is_err()
-                        || socket_writer.write_all(&len_bytes).is_err()
-                        || socket_writer.write_all(&buf[..n]).is_err()
-                        || socket_writer.flush().is_err()
-                    {
+                    let mut frame = Vec::with_capacity(5 + n);
+                    frame.push(0x00);
+                    frame.extend_from_slice(&(n as u32).to_be_bytes());
+                    frame.extend_from_slice(&buf[..n]);
+                    let failed = data_writer.lock().map_or(true, |mut writer| {
+                        writer.write_all(&frame).is_err() || writer.flush().is_err()
+                    });
+                    if failed {
                         break;
                     }
                 }
@@ -224,6 +302,7 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
         .try_clone()
         .context("clone socket reader interrupt")?;
     let mut socket_reader = stream;
+    let process_metadata = args.process_metadata;
     let socket_reader_thread = std::thread::spawn(move || {
         while running_w.load(Ordering::Relaxed) {
             let mut tag = [0u8; 1];
@@ -268,6 +347,18 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
                         });
                     }
                 }
+                0x05 if process_metadata => {
+                    let mut sequence_bytes = [0u8; 8];
+                    if socket_reader.read_exact(&mut sequence_bytes).is_err() {
+                        break;
+                    }
+                    let sequence = u64::from_be_bytes(sequence_bytes);
+                    // Never delay terminal input behind process-table work and
+                    // never accumulate an unbounded backlog of stale queries.
+                    if let Some(requests) = &metadata_requests {
+                        let _ = requests.try_send(sequence);
+                    }
+                }
                 _ => break,
             }
         }
@@ -276,6 +367,7 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
 
     let status = child.wait();
     running.store(false, Ordering::Relaxed);
+    metadata_active.store(false, Ordering::Release);
 
     // Stop waiting for more input from Con and wake the PTY reader. It drains
     // buffered output until the PTY is briefly quiet, with a hard limit for
@@ -295,8 +387,13 @@ pub fn run_pty_bridge(args: PtyBridgeArgs) -> Result<()> {
     let mut exit_frame = [0u8; 5];
     exit_frame[0] = 0x02; // TAG_EXIT
     exit_frame[1..5].copy_from_slice(&code.to_be_bytes());
-    let _ = exit_writer.write_all(&exit_frame);
-    let _ = exit_writer.flush();
+    if let Ok(mut writer) = socket_writer.lock() {
+        let _ = writer.write_all(&exit_frame);
+        let _ = writer.flush();
+        // This applies to every cloned descriptor. It gives the client EOF even
+        // if a platform process query is stuck in the detached worker.
+        let _ = writer.shutdown(std::net::Shutdown::Write);
+    }
 
     Ok(())
 }
@@ -308,12 +405,57 @@ pub fn run_pty_bridge(_args: PtyBridgeArgs) -> Result<()> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime};
 
     use super::*;
+
+    #[test]
+    fn unavailable_metadata_preserves_sequence_and_valid_framing() {
+        use std::os::unix::ffi::OsStringExt;
+        for executable in [
+            PathBuf::from("x".repeat(256 * 1024)),
+            PathBuf::from(OsString::from_vec(vec![0xff])),
+        ] {
+            let frame = process_metadata_frame(
+                7301,
+                Some(17),
+                vec![con_process::ProcessInfo {
+                    identity: con_process::ProcessIdentity {
+                        pid: 19,
+                        started_at: 201,
+                        executable,
+                        name: "claude".into(),
+                    },
+                    parent_pid: 11,
+                    process_group_id: Some(17),
+                }],
+            );
+            assert_eq!(frame[0], 6);
+            assert_eq!(
+                u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize,
+                frame.len() - 5
+            );
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&frame[5..]).unwrap(),
+                serde_json::json!([7301, null, []])
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_request_backlog_is_bounded_and_nonblocking() {
+        let (sender, receiver) =
+            std::sync::mpsc::sync_channel::<u64>(MAX_PENDING_METADATA_REQUESTS);
+        sender.try_send(1).unwrap();
+        assert_eq!(sender.try_send(2).unwrap_err(), mpsc::TrySendError::Full(2));
+        assert_eq!(receiver.recv().unwrap(), 1);
+        sender.try_send(3).unwrap();
+        assert_eq!(receiver.recv().unwrap(), 3);
+    }
 
     fn run_finite_command(
         iteration: usize,
@@ -321,12 +463,30 @@ mod tests {
         literal_command: bool,
         completion_timeout: Duration,
     ) -> (Vec<u8>, i32) {
+        run_command(
+            iteration,
+            script,
+            literal_command,
+            completion_timeout,
+            false,
+        )
+    }
+
+    fn run_command(
+        iteration: usize,
+        script: &str,
+        literal_command: bool,
+        completion_timeout: Duration,
+        process_metadata: bool,
+    ) -> (Vec<u8>, i32) {
+        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
+        let serial = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("clock after unix epoch")
             .as_nanos();
         let socket = std::env::temp_dir().join(format!(
-            "con-pty-bridge-{}-{unique}-{iteration}.sock",
+            "con-pty-{}-{unique:x}-{serial:x}-{iteration}.sock",
             std::process::id(),
         ));
         let listener = UnixListener::bind(&socket).expect("bind bridge test socket");
@@ -340,6 +500,7 @@ mod tests {
             cwd: None,
             program: Some(OsString::from("/bin/sh")),
             literal_command,
+            process_metadata,
             args: vec![OsString::from("-c"), OsString::from(script)],
         };
         let (done_tx, done_rx) = mpsc::channel();
@@ -366,17 +527,43 @@ mod tests {
                 Err(err) => panic!("accept bridge connection: {err}"),
             }
         };
+        stream.set_nonblocking(false).unwrap();
+        let mut frames = Vec::new();
+        if process_metadata {
+            // The child waits for stdin while output and metadata contend for
+            // the shared socket. Fragment the request to exercise read_exact.
+            stream.write_all(&[5]).unwrap();
+            stream.write_all(&7301u64.to_be_bytes()).unwrap();
+            stream.set_read_timeout(Some(completion_timeout)).unwrap();
+            loop {
+                let mut header = [0; 5];
+                stream.read_exact(&mut header).unwrap();
+                assert!(matches!(header[0], 0 | 6));
+                let len = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
+                assert!(len <= 256 * 1024);
+                let mut payload = vec![0; len];
+                stream.read_exact(&mut payload).unwrap();
+                frames.extend_from_slice(&header);
+                frames.extend_from_slice(&payload);
+                if header[0] == 6 {
+                    break;
+                }
+            }
+            stream
+                .write_all(&[0, 0, 0, 0, 3, b'g', b'o', b'\n'])
+                .unwrap();
+        }
         done_rx
             .recv_timeout(completion_timeout)
             .expect("bridge should return after child exit")
             .expect("bridge should exit cleanly");
 
-        let mut frames = Vec::new();
         stream
             .read_to_end(&mut frames)
             .expect("read completed bridge stream");
         let mut frames = frames.as_slice();
         let mut output = Vec::new();
+        let mut metadata_seen = false;
         let exit_code = loop {
             let (&tag, rest) = frames
                 .split_first()
@@ -394,11 +581,49 @@ mod tests {
                     let (code, _) = frames.split_at(4);
                     break i32::from_be_bytes(code.try_into().expect("exit status"));
                 }
+                0x06 => {
+                    let (len, rest) = frames.split_at(4);
+                    let len = u32::from_be_bytes(len.try_into().unwrap()) as usize;
+                    let (payload, rest) = rest.split_at(len);
+                    let (sequence, pgid, processes): (
+                        u64,
+                        Option<u32>,
+                        Vec<con_process::ProcessInfo>,
+                    ) = serde_json::from_slice(payload).unwrap();
+                    assert_eq!(sequence, 7301);
+                    assert!(pgid.is_some_and(|pid| pid > 0));
+                    assert!(!processes.is_empty());
+                    assert!(
+                        processes
+                            .iter()
+                            .all(|process| process.process_group_id == pgid)
+                    );
+                    metadata_seen = true;
+                    frames = rest;
+                }
                 tag => panic!("unexpected bridge frame tag {tag:#x}"),
             }
         };
+        assert_eq!(metadata_seen, process_metadata);
         let _ = std::fs::remove_file(socket);
         (output, exit_code)
+    }
+
+    #[test]
+    fn metadata_frames_coexist_with_terminal_output_and_exit() {
+        for iteration in 0..8 {
+            let (output, exit_code) = run_command(
+                iteration,
+                "printf before; read line; printf after; exit 7",
+                true,
+                Duration::from_secs(5),
+                true,
+            );
+            assert_eq!(exit_code, 7);
+            for marker in [b"before".as_slice(), b"after".as_slice()] {
+                assert!(output.windows(marker.len()).any(|value| value == marker));
+            }
+        }
     }
 
     #[test]

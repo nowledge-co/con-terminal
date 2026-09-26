@@ -28,6 +28,14 @@ const MAX_BRIDGE_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const BRIDGE_READY: u8 = 0x03;
 const BRIDGE_STARTUP_ERROR: u8 = 0x04;
 const MAX_BRIDGE_STARTUP_ERROR_BYTES: usize = 64 * 1024;
+const MAX_BRIDGE_METADATA_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostProcessMetadata {
+    pub sequence: u64,
+    pub process_group_id: Option<u32>,
+    pub processes: Vec<crate::process::ProcessInfo>,
+}
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -135,6 +143,7 @@ enum LinuxPtyBackend {
         stream_shutdown: UnixStream,
         socket_path: PathBuf,
         child: Mutex<std::process::Child>,
+        process_metadata: bool,
     },
 }
 
@@ -295,6 +304,7 @@ struct SessionShared {
     finished_signal: Mutex<Option<CommandFinishedSignal>>,
     last_exit_code: Mutex<Option<i32>>,
     last_duration: Mutex<Option<Duration>>,
+    process_metadata: Mutex<Option<HostProcessMetadata>>,
 }
 
 impl SessionShared {
@@ -313,6 +323,7 @@ impl SessionShared {
             finished_signal: Mutex::new(None),
             last_exit_code: Mutex::new(None),
             last_duration: Mutex::new(None),
+            process_metadata: Mutex::new(None),
         }
     }
 
@@ -613,6 +624,48 @@ impl LinuxPtySession {
         self.shared.alive.load(Ordering::Acquire) && !self.shared.screen.is_write_desynchronized()
     }
 
+    pub fn foreground_process_group_id(&self) -> Option<u64> {
+        match &self.backend {
+            LinuxPtyBackend::Local { master, .. } => {
+                let master = master.lock();
+                let fd = master.as_raw_fd()?;
+                // SAFETY: the master owns this descriptor for the locked scope.
+                let pgid = unsafe { libc::tcgetpgrp(fd) };
+                (pgid > 0).then_some(pgid as u64)
+            }
+            // Host process IDs must be queried in the host PID namespace.
+            LinuxPtyBackend::HostBridge { .. } => None,
+        }
+    }
+
+    pub fn uses_host_process_namespace(&self) -> bool {
+        matches!(self.backend, LinuxPtyBackend::HostBridge { .. })
+    }
+
+    /// Enqueues a host-namespace query. Results arrive asynchronously and may be stale.
+    pub fn request_process_metadata(&self, sequence: u64) -> bool {
+        let LinuxPtyBackend::HostBridge {
+            process_metadata: true,
+            ..
+        } = &self.backend
+        else {
+            return false;
+        };
+        let mut frame = [0u8; 9];
+        frame[0] = 0x05;
+        frame[1..].copy_from_slice(&sequence.to_be_bytes());
+        if let LinuxPtyInput::HostBridge(queue) = &self.input {
+            return queue.enqueue(&frame).is_ok();
+        }
+        false
+    }
+
+    /// Latest host response. Callers must match `sequence` and expire old results;
+    /// host PIDs are never valid for sandbox-local process queries.
+    pub fn cached_process_metadata(&self) -> Option<HostProcessMetadata> {
+        self.shared.process_metadata.lock().clone()
+    }
+
     pub fn prompt_state(&self) -> crate::TerminalPromptState {
         self.shared.screen.prompt_state()
     }
@@ -755,6 +808,7 @@ impl Drop for LinuxPtySession {
                 child,
                 stream_shutdown,
                 socket_path,
+                ..
             } => {
                 if let Err(err) = child.lock().kill() {
                     log::debug!("failed to terminate host pty bridge child during drop: {err}");
@@ -1034,16 +1088,17 @@ fn spawn_host_bridge(
     let host_cli_probe = con_paths::host_command("con-cli")
         .args(["pty-bridge", "--help"])
         .output();
-    let use_con_cli = host_cli_probe
-        .map(|output| {
-            bridge_help_supports_literal_commands(output.status.success(), &output.stdout)
-        })
-        .unwrap_or(false);
+    let (use_con_cli, con_cli_process_metadata) = host_cli_probe
+        .map(|output| bridge_capabilities(output.status.success(), &output.stdout))
+        .unwrap_or((false, false));
 
     if use_con_cli {
         cmd.arg("con-cli");
         cmd.arg("pty-bridge");
         cmd.arg("--socket").arg(&socket_path);
+        if con_cli_process_metadata {
+            cmd.arg("--process-metadata");
+        }
         cmd.arg("--cols")
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
@@ -1066,6 +1121,7 @@ fn spawn_host_bridge(
         cmd.arg("-c");
         cmd.arg(EMBEDDED_PYTHON_BRIDGE);
         cmd.arg("--socket").arg(&socket_path);
+        cmd.arg("--process-metadata");
         cmd.arg("--cols")
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
@@ -1202,6 +1258,7 @@ fn spawn_host_bridge(
             stream_shutdown: stream,
             socket_path,
             child: Mutex::new(child),
+            process_metadata: !use_con_cli || con_cli_process_metadata,
         },
         input,
         input_worker,
@@ -1225,6 +1282,20 @@ fn bridge_help_supports_literal_commands(status_success: bool, stdout: &[u8]) ->
         && stdout
             .windows(b"--literal-command".len())
             .any(|window| window == b"--literal-command")
+}
+
+fn bridge_help_supports_process_metadata(status_success: bool, stdout: &[u8]) -> bool {
+    status_success
+        && stdout
+            .windows(b"--process-metadata".len())
+            .any(|w| w == b"--process-metadata")
+}
+
+fn bridge_capabilities(status_success: bool, stdout: &[u8]) -> (bool, bool) {
+    (
+        bridge_help_supports_literal_commands(status_success, stdout),
+        bridge_help_supports_process_metadata(status_success, stdout),
+    )
 }
 
 fn spawn_bridge_reader_thread(
@@ -1270,12 +1341,44 @@ fn spawn_bridge_reader_thread(
                         shared.mark_exited(code, started_at.elapsed());
                         break;
                     }
+                    0x06 => {
+                        let mut len_bytes = [0u8; 4];
+                        if stream_reader.read_exact(&mut len_bytes).is_err() { break; }
+                        let len = u32::from_be_bytes(len_bytes) as usize;
+                        if len > MAX_BRIDGE_METADATA_BYTES {
+                            // Metadata is optional. Discard an oversized frame in
+                            // bounded chunks so it cannot kill an otherwise healthy
+                            // terminal session or force a large allocation.
+                            let mut remaining = len;
+                            let mut discard = [0_u8; 8192];
+                            while remaining > 0 {
+                                let chunk = remaining.min(discard.len());
+                                if stream_reader.read_exact(&mut discard[..chunk]).is_err() {
+                                    break;
+                                }
+                                remaining -= chunk;
+                            }
+                            if remaining > 0 { break; }
+                            continue;
+                        }
+                        let mut payload = vec![0; len];
+                        if stream_reader.read_exact(&mut payload).is_err() { break; }
+                        if let Ok((sequence, process_group_id, processes)) = serde_json::from_slice::<(u64, Option<u32>, Vec<crate::process::ProcessInfo>)>(&payload) {
+                            if processes.len() <= 256 {
+                                *shared.process_metadata.lock() = Some(HostProcessMetadata { sequence, process_group_id, processes });
+                                shared.wake();
+                            }
+                        }
+                    }
                     _ => {
                         shared.mark_exited(None, started_at.elapsed());
                         break;
                     }
                 }
             }
+            // Includes malformed or truncated metadata frames. Never leave a
+            // disconnected bridge looking alive; an existing EXIT code survives.
+            shared.mark_exited(None, started_at.elapsed());
         })
         .expect("failed to spawn linux pty bridge reader thread");
 }
@@ -1377,7 +1480,7 @@ fn configure_shell_startup(program: &OsStr, command: &mut CommandBuilder) {
 }
 
 const EMBEDDED_PYTHON_BRIDGE: &str = r#"
-import argparse, fcntl, os, pty, select, socket, struct, sys, termios, time
+import argparse, fcntl, json, os, pty, queue, select, socket, struct, sys, termios, threading, time
 
 PTY_EXIT_DRAIN_QUIET = 0.025
 PTY_EXIT_DRAIN_LIMIT = 0.250
@@ -1393,6 +1496,7 @@ def main():
     parser.add_argument('--cwd')
     parser.add_argument('--program')
     parser.add_argument('--literal-command', action='store_true')
+    parser.add_argument('--process-metadata', action='store_true')
     args, remaining = parser.parse_known_args()
     if remaining and remaining[0] == '--':
         remaining = remaining[1:]
@@ -1497,6 +1601,69 @@ def main():
     except OSError:
         sys.exit(1)
 
+    metadata_requests = None
+    metadata_results = None
+    metadata_notify_read = None
+    if args.process_metadata:
+        metadata_requests = queue.Queue(maxsize=1)
+        metadata_results = queue.Queue(maxsize=1)
+        metadata_notify_read, metadata_notify_write = os.pipe()
+
+        def collect_metadata():
+            while True:
+                sequence = metadata_requests.get()
+                try:
+                    try:
+                        pgid = os.tcgetpgrp(master)
+                    except OSError:
+                        pgid = None
+                    processes = []
+                    try:
+                        if pgid is not None and pgid > 0:
+                            with os.scandir('/proc') as entries:
+                                for index, entry in enumerate(entries):
+                                    if index == 65536:
+                                        processes = []
+                                        break
+                                    if not entry.name.isdigit(): continue
+                                    try:
+                                        def read_stat():
+                                            with open(entry.path + '/stat', 'rb') as stat:
+                                                raw = stat.read(65536)
+                                            fields = raw[raw.rfind(b')') + 2:].split()
+                                            return (int(fields[1]), int(fields[2]), int(fields[19]))
+                                        before = read_stat()
+                                        if before[1] != pgid: continue
+                                        if len(processes) == 256:
+                                            processes = []
+                                            break
+                                        exe = os.readlink(entry.path + '/exe')
+                                        with open(entry.path + '/comm', encoding='utf-8') as comm:
+                                            name = comm.read(65536).rstrip('\r\n')
+                                        if before != read_stat(): continue
+                                        exe.encode('utf-8')
+                                        processes.append({'identity': {'pid': int(entry.name), 'started_at': before[2], 'executable': exe, 'name': name}, 'parent_pid': before[0], 'process_group_id': pgid})
+                                    except (OSError, ValueError, IndexError, UnicodeError):
+                                        continue
+                    except OSError:
+                        processes = []
+                    processes.sort(key=lambda process: process['identity']['pid'])
+                    payload = json.dumps([sequence, pgid, processes], separators=(',', ':')).encode()
+                    if len(payload) > 256 * 1024:
+                        payload = json.dumps([sequence, None, []], separators=(',', ':')).encode()
+                except BaseException:
+                    payload = json.dumps([sequence, None, []], separators=(',', ':')).encode()
+                frame = bytes([6]) + struct.pack('>I', len(payload)) + payload
+                # A bounded result queue prevents a stalled terminal loop from
+                # retaining snapshots. This daemon never owns the client socket.
+                metadata_results.put(frame)
+                try:
+                    os.write(metadata_notify_write, b'1')
+                except OSError:
+                    return
+
+        threading.Thread(target=collect_metadata, name='con-pty-metadata', daemon=True).start()
+
     child_status = None
     drain_deadline = None
     quiet_deadline = None
@@ -1515,6 +1682,8 @@ def main():
 
         if child_status is None:
             readable = [sock, master]
+            if metadata_notify_read is not None:
+                readable.append(metadata_notify_read)
             timeout = PTY_EXIT_DRAIN_QUIET
         else:
             now = time.monotonic()
@@ -1574,6 +1743,24 @@ def main():
                         fcntl.ioctl(master, termios.TIOCSWINSZ, ws)
                     except OSError:
                         pass
+            elif tag[0] == 5 and args.process_metadata:
+                sequence_raw = b''
+                while len(sequence_raw) < 8:
+                    chunk = sock.recv(8 - len(sequence_raw))
+                    if not chunk: break
+                    sequence_raw += chunk
+                if len(sequence_raw) != 8: break
+                sequence = struct.unpack('>Q', sequence_raw)[0]
+                try:
+                    metadata_requests.put_nowait(sequence)
+                except queue.Full:
+                    pass
+        if metadata_notify_read is not None and metadata_notify_read in r:
+            try:
+                os.read(metadata_notify_read, 1)
+                sock.sendall(metadata_results.get_nowait())
+            except (OSError, queue.Empty):
+                break
         if master in r:
             try:
                 data = os.read(master, 8192)
@@ -1642,8 +1829,9 @@ mod tests {
 
     use super::{
         BRIDGE_READY, BRIDGE_STARTUP_ERROR, EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions,
-        LinuxPtySession, SessionShared, bridge_help_supports_literal_commands, duplicate_fd,
-        host_bridge_option, set_fd_nonblocking, write_all_cancellable,
+        LinuxPtySession, MAX_BRIDGE_METADATA_BYTES, SessionShared, bridge_capabilities,
+        bridge_help_supports_literal_commands, bridge_help_supports_process_metadata, duplicate_fd,
+        host_bridge_option, set_fd_nonblocking, spawn_bridge_reader_thread, write_all_cancellable,
     };
 
     fn unique_test_socket(name: &str) -> std::path::PathBuf {
@@ -1671,6 +1859,70 @@ mod tests {
             false,
             b"--literal-command"
         ));
+    }
+
+    #[test]
+    fn host_bridge_probe_requires_process_metadata_capability() {
+        assert!(bridge_help_supports_process_metadata(
+            true,
+            b"Usage: con-cli pty-bridge [OPTIONS]\n    --process-metadata"
+        ));
+        assert!(!bridge_help_supports_process_metadata(
+            true,
+            b"Usage: con-cli pty-bridge [OPTIONS]"
+        ));
+        assert!(!bridge_help_supports_process_metadata(
+            false,
+            b"--process-metadata"
+        ));
+    }
+
+    #[test]
+    fn host_bridge_uses_older_literal_capable_cli_without_metadata() {
+        assert_eq!(
+            bridge_capabilities(
+                true,
+                b"Usage: con-cli pty-bridge [OPTIONS]\n    --literal-command"
+            ),
+            (true, false)
+        );
+        assert_eq!(
+            bridge_capabilities(true, b"--literal-command\n--process-metadata"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn oversized_optional_metadata_does_not_tear_down_output_stream() {
+        let (mut writer, reader) = UnixStream::pair().expect("create bridge stream pair");
+        let shared = Arc::new(SessionShared::new(
+            Arc::new(VtScreen::new(80, 24, None).expect("create vt screen")),
+            None,
+            None,
+        ));
+        spawn_bridge_reader_thread(reader, shared.clone(), std::time::Instant::now());
+
+        let oversized = MAX_BRIDGE_METADATA_BYTES + 1;
+        writer.write_all(&[0x06]).unwrap();
+        writer.write_all(&(oversized as u32).to_be_bytes()).unwrap();
+        writer.write_all(&vec![b'x'; oversized]).unwrap();
+        writer
+            .write_all(&[0x00, 0, 0, 0, 6, b'm', b'a', b'r', b'k', b'e', b'r'])
+            .unwrap();
+        writer.write_all(&[0x02, 0, 0, 0, 0]).unwrap();
+        drop(writer);
+
+        for _ in 0..100 {
+            if !shared.alive.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*shared.last_exit_code.lock(), Some(0));
+        assert_eq!(
+            shared.transcript.lock().search("marker", 1),
+            vec![(0, "marker".to_string())]
+        );
     }
 
     #[test]
@@ -1755,6 +2007,96 @@ mod tests {
         assert!(
             frames.len() >= 5 && frames[frames.len() - 5] == 0x02,
             "bridge stream should end with TAG_EXIT: {frames:?}"
+        );
+    }
+
+    #[test]
+    fn python_bridge_metadata_coexists_with_output_and_preserves_sequence() {
+        let socket = unique_test_socket("metadata");
+        let listener = UnixListener::bind(&socket).expect("bind Python bridge test socket");
+        let mut bridge = Command::new("python3")
+            .arg("-c")
+            .arg(EMBEDDED_PYTHON_BRIDGE)
+            .arg("--socket")
+            .arg(&socket)
+            .arg("--process-metadata")
+            .arg("--program")
+            .arg("/bin/sh")
+            .arg("--literal-command")
+            .arg("--")
+            .arg("-c")
+            .arg("printf before; read line; printf after")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn embedded Python bridge");
+        let (mut stream, _) = listener.accept().expect("accept Python bridge");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+
+        let mut ready = [0_u8; 1];
+        stream.read_exact(&mut ready).unwrap();
+        assert_eq!(ready[0], BRIDGE_READY);
+        stream.write_all(&[5]).unwrap();
+        stream.write_all(&7301_u64.to_be_bytes()).unwrap();
+
+        let mut output = Vec::new();
+        loop {
+            let mut tag = [0_u8; 1];
+            stream.read_exact(&mut tag).unwrap();
+            let mut len = [0_u8; 4];
+            stream.read_exact(&mut len).unwrap();
+            match tag[0] {
+                0 => {
+                    let mut payload = vec![0; u32::from_be_bytes(len) as usize];
+                    stream.read_exact(&mut payload).unwrap();
+                    output.extend(payload);
+                }
+                6 => {
+                    let mut payload = vec![0; u32::from_be_bytes(len) as usize];
+                    stream.read_exact(&mut payload).unwrap();
+                    let (sequence, _pgid, processes): (
+                        u64,
+                        Option<u32>,
+                        Vec<crate::process::ProcessInfo>,
+                    ) = serde_json::from_slice(&payload).unwrap();
+                    assert_eq!(sequence, 7301);
+                    #[cfg(target_os = "linux")]
+                    {
+                        let pgid = _pgid.expect("shell should own a foreground process group");
+                        assert!(
+                            !processes.is_empty()
+                                && processes
+                                    .iter()
+                                    .all(|process| process.process_group_id == Some(pgid)),
+                            "Linux metadata should include the foreground process group: {processes:?}"
+                        );
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    assert!(
+                        processes.is_empty(),
+                        "hosts without /proc report an unavailable process observation"
+                    );
+                    break;
+                }
+                tag => panic!("unexpected frame before metadata: {tag:#x}"),
+            }
+        }
+        stream
+            .write_all(&[0, 0, 0, 0, 3, b'g', b'o', b'\n'])
+            .unwrap();
+        stream.read_to_end(&mut output).unwrap();
+        let status = bridge.wait().expect("wait for Python bridge");
+        let _ = std::fs::remove_file(&socket);
+
+        assert!(status.success());
+        for marker in [b"before".as_slice(), b"after".as_slice()] {
+            assert!(output.windows(marker.len()).any(|bytes| bytes == marker));
+        }
+        assert!(
+            output.len() >= 5 && output[output.len() - 5] == 2,
+            "bridge stream should end with TAG_EXIT: {output:?}"
         );
     }
 

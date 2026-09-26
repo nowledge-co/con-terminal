@@ -1,15 +1,9 @@
 //! Best-effort process-name lookup for a PID.
 //!
-//! Tab presentation uses this to recognize interactive TUIs that leave
-//! no stable text marker on their visible screen — Herdr is the first
-//! one: its UI never prints "herdr", so screen-text classification can
-//! never see it. The caller passes the foreground process-group ID
-//! reported by the terminal backend; for a job-control foreground
-//! process the group leader *is* that TUI, so its command name is the
-//! signal we need.
-//!
-//! Failures are always soft: `None` just means "no name-based
-//! classification", and callers fall back to screen-text detection.
+//! Handoff uses this for live source/target checks, alongside its process-group
+//! and session-binding evidence. A group leader's name alone does not identify
+//! the agent running in that group. Lookup failures yield no evidence.
+//! Tab presentation uses the separate bounded background `con-process` queries.
 
 /// Return the short command name for `pid`, when the platform allows it.
 #[cfg(target_os = "macos")]

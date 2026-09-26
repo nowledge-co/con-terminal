@@ -38,13 +38,6 @@ impl TerminalPane {
         self.entity.read(cx).terminal_title.raw().map(str::to_owned)
     }
 
-    pub fn title_indicator(&self, cx: &App) -> Option<con_core::terminal_title::TitleIndicator> {
-        let view = self.entity.read(cx);
-        view.is_alive()
-            .then(|| view.terminal_title.indicator())
-            .flatten()
-    }
-
     pub fn current_dir(&self, cx: &App) -> Option<String> {
         self.entity.read(cx).current_dir()
     }
@@ -56,6 +49,21 @@ impl TerminalPane {
             .and_then(|terminal| terminal.foreground_process_group_id())
     }
 
+    pub fn surface_instance(&self, cx: &App) -> Option<std::sync::Weak<GhosttyTerminal>> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .map(std::sync::Arc::downgrade)
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn root_identity(&self, cx: &App) -> Option<con_ghostty::process::ProcessIdentity> {
+        self.entity
+            .read(cx)
+            .terminal()
+            .and_then(|terminal| terminal.root_identity())
+    }
+
     pub fn tty_name(&self, cx: &App) -> Option<String> {
         self.entity
             .read(cx)
@@ -64,6 +72,17 @@ impl TerminalPane {
     }
 
     pub fn observation_support(&self, _cx: &App) -> PaneObservationSupport {
+        #[cfg(target_os = "linux")]
+        if self
+            .entity
+            .read(_cx)
+            .terminal()
+            .is_some_and(|terminal| terminal.uses_host_process_namespace())
+        {
+            // Host metadata is presentation-only; host PIDs and TTY names are
+            // not available to the sandbox's local control-plane observations.
+            return PaneObservationSupport::default();
+        }
         PaneObservationSupport {
             foreground_process_group_id: GhosttyTerminal::SUPPORTS_FOREGROUND_PROCESS_GROUP_ID,
             tty_name: GhosttyTerminal::SUPPORTS_TTY_NAME,

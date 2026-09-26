@@ -6,6 +6,7 @@ pub mod release_channel;
 pub mod session;
 pub mod suggestions;
 pub mod tab_summary;
+pub mod terminal_status;
 pub mod terminal_title;
 pub mod workspace_layout;
 

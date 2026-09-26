@@ -1,31 +1,3 @@
-use con_core::terminal_title::TitleIndicator;
-
-/// Attention first, then focused activity, then the first active surface in
-/// tree order. No timing-based arbitration: different frame rates cannot make
-/// the representative indicator jump between terminals.
-pub(super) fn tab_title_indicator(
-    tree: &crate::pane_tree::PaneTree,
-    cx: &gpui::App,
-) -> Option<TitleIndicator> {
-    let focused = tree.focused_terminal_entity_id();
-    tree.all_surface_terminals()
-        .into_iter()
-        .filter_map(|terminal| {
-            terminal.title_indicator(cx).map(|indicator| {
-                let priority = (
-                    matches!(indicator, TitleIndicator::Attention(_)),
-                    Some(terminal.entity_id()) == focused,
-                );
-                (priority, indicator)
-            })
-        })
-        .fold(None, |best, candidate| match best {
-            Some((priority, _)) if priority >= candidate.0 => best,
-            _ => Some(candidate),
-        })
-        .map(|(_, indicator)| indicator)
-}
-
 /// Derive a display name for a pane from available signals.
 ///
 /// Priority:

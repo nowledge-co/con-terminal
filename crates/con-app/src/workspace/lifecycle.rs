@@ -263,7 +263,6 @@ impl ConWorkspace {
                     ai_label: None,
                     ai_icon: None,
                     agent_cli: None,
-                    agent_cli_detection: AgentCliDetectionState::default(),
                     color: tab_state.color,
                     summary_id: i as u64,
                     summary_epoch: 0,
@@ -290,7 +289,6 @@ impl ConWorkspace {
                 ai_label: None,
                 ai_icon: None,
                 agent_cli: None,
-                agent_cli_detection: AgentCliDetectionState::default(),
                 color: None,
                 summary_id: 0,
                 summary_epoch: 0,
@@ -331,8 +329,7 @@ impl ConWorkspace {
                         subtitle: presentation.subtitle,
                         is_ssh: presentation.is_ssh,
                         needs_attention: false,
-                        progress: None,
-                        title_indicator: None,
+                        status: None,
                         terminal_titles: Vec::new(),
                         icon: presentation.icon,
                         has_user_label: tab.user_label.is_some(),
@@ -359,7 +356,7 @@ impl ConWorkspace {
             std::mem::replace(&mut tabs[active_tab].panel_state, PanelState::new());
         let agent_panel = cx.new(|cx| {
             let mut panel = AgentPanel::with_state(initial_panel_state, window, cx);
-            panel.set_auto_approve(config.agent.auto_approve_tools);
+            panel.set_auto_approve(config.agent.auto_approve_tools, cx);
             panel
         });
         let input_bar = cx.new(|cx| InputBar::new(window, cx));
@@ -375,12 +372,12 @@ impl ConWorkspace {
             .cloned()
             .collect::<Vec<_>>();
         agent_panel.update(cx, |panel, cx| {
-            panel.set_ui_opacity(effective_ui_opacity);
+            panel.set_ui_opacity(effective_ui_opacity, cx);
             panel.set_assistant_avatar_asset(
                 con_core::config::agent_avatar_asset(&config.appearance.agent_avatar),
                 cx,
             );
-            panel.set_recent_inputs(initial_recent_inputs.clone());
+            panel.set_recent_inputs(initial_recent_inputs.clone(), cx);
         });
         input_bar.update(cx, |bar, cx| {
             bar.set_ui_opacity(effective_ui_opacity);
@@ -442,6 +439,15 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&agent_panel, window, Self::on_rerun_from_message)
             .detach();
+        let mut panel_activity = agent_panel.read(cx).state().activity();
+        cx.observe(&agent_panel, move |workspace, panel, cx| {
+            let activity = panel.read(cx).state().activity();
+            if activity != panel_activity {
+                panel_activity = activity;
+                workspace.refresh_cached_tab_presentation(cx);
+            }
+        })
+        .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_select)
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_new_session)
@@ -469,6 +475,10 @@ impl ConWorkspace {
         })
         .detach();
         cx.observe_window_activation(window, Self::on_window_activation_changed)
+            .detach();
+        // Child animations dirty rendered ancestors too, but do not notify this
+        // entity's observers. Only workspace notifications invalidate these inputs.
+        cx.observe_self(|this, _| this.chrome_preparation_dirty = true)
             .detach();
 
         // Activity bar: sync file/search drawer state back to workspace on click.
@@ -634,7 +644,7 @@ impl ConWorkspace {
             // Backstop interval for the AI-summary trigger below.
             // See the comment on `last_summary_poll` use site.
             let summary_poll_interval = std::time::Duration::from_secs(3);
-            let agent_cli_poll_interval = std::time::Duration::from_secs(1);
+            let agent_cli_poll_interval = std::time::Duration::from_millis(300);
             let mut last_summary_poll = std::time::Instant::now();
             let mut last_agent_cli_refresh: Option<std::time::Instant> = None;
             loop {
@@ -711,11 +721,6 @@ impl ConWorkspace {
 
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
-                        // Output flowed — ask the AI summarizer to
-                        // re-check. The engine's per-tab 5 s budget
-                        // and context-hash dedupe keep this from
-                        // firing more than once per real change.
-                        workspace.request_tab_summaries(cx);
                         let now = std::time::Instant::now();
                         if should_refresh_agent_cli(
                             last_agent_cli_refresh,
@@ -726,19 +731,19 @@ impl ConWorkspace {
                             last_agent_cli_refresh = Some(now);
                         }
                         cx.notify();
-                    } else if last_summary_poll.elapsed() >= summary_poll_interval {
-                        // Backstop for the pump-driven trigger
-                        // above. `pump_ghostty_views` only fires
-                        // while output is actively streaming, so a
-                        // tab whose context drifted while it sat
-                        // idle (user navigated away and back)
-                        // would never re-summarize. The engine's
-                        // per-tab cache + 5 s success budget keep
-                        // repeated calls cheap.
+                    }
+                    if last_summary_poll.elapsed() >= summary_poll_interval {
+                        // Title frames and metadata wakes are not terminal
+                        // content changes. Summary screen reads have their own
+                        // bounded cadence, never the presentation/animation rate.
                         workspace.request_tab_summaries(cx);
-                        workspace.refresh_agent_cli_detection(cx);
-                        last_agent_cli_refresh = Some(std::time::Instant::now());
                         last_summary_poll = std::time::Instant::now();
+                    }
+                    let now = std::time::Instant::now();
+                    if should_refresh_agent_cli(last_agent_cli_refresh, now, Duration::from_secs(1))
+                    {
+                        workspace.refresh_agent_cli_detection(cx);
+                        last_agent_cli_refresh = Some(now);
                     }
                 })
                 .ok();
@@ -797,6 +802,9 @@ impl ConWorkspace {
             config: config.clone(),
             sidebar,
             tabs,
+            terminal_presentation: Default::default(),
+            tab_activity: cx.new(|_| crate::tab_activity::TabActivity::default()),
+            chrome_preparation_dirty: true,
             active_tab,
             last_editor_tab_id: None,
             is_quick_terminal: false,
@@ -1362,94 +1370,6 @@ impl ConWorkspace {
                 }
             }
         });
-    }
-
-    pub(super) fn refresh_agent_cli_detection(&mut self, cx: &mut Context<Self>) {
-        // `content_lines` reads the visible viewport and keeps its last N
-        // lines, so the cap has to exceed any realistic window height —
-        // otherwise a tall window drops the top of the screen, where agent
-        // CLIs paint their title banner, and detection silently misses. The
-        // per-tab retry state below bounds these comparatively expensive reads.
-        const SCREEN_LINES: usize = 200;
-        let mut changed = false;
-        for (index, tab) in self.tabs.iter_mut().enumerate() {
-            let Some(terminal) = tab.pane_tree.try_focused_terminal() else {
-                continue;
-            };
-            let foreground_process_group_id = terminal.foreground_process_group_id(cx);
-            let title = terminal.title_name(cx);
-            let title_agent = agent_from_osc_title(title.as_deref());
-            let terminal_id = terminal.entity_id().as_u64();
-            let focused_terminal_changed = tab.agent_cli_detection.terminal_changed(terminal_id);
-            let observation = AgentCliObservation {
-                terminal_id,
-                foreground_process_group_id,
-                title_agent,
-                input_generation: terminal.input_generation(cx),
-            };
-            let observation_changed = tab.agent_cli_detection.observe(observation);
-            if !observation_changed && tab.agent_cli_detection.is_exhausted() {
-                continue;
-            }
-
-            // Detection runs cheapest-and-most-reliable first:
-            // 1. foreground process name (native binaries such as Herdr)
-            // 2. OSC terminal title (grok, pi)
-            // 3. visible screen text — the shared classifier for
-            //    codex/claude/opencode, then the local table for CLIs
-            //    that ship as interpreter scripts (cursor, qoder, …)
-            // Re-read the process name during the bounded retry window: a
-            // script launcher may `exec` the real agent without changing its
-            // process-group ID or title.
-            let process_name =
-                foreground_process_group_id.and_then(crate::process_name::process_name);
-            let shell_foreground = process_name.as_deref().is_some_and(process_name_is_shell);
-            let direct_agent = if shell_foreground {
-                None
-            } else {
-                process_name
-                    .as_deref()
-                    .and_then(agent_from_process_name)
-                    .or_else(|| {
-                        foreground_process_group_id
-                            .and_then(con_agent::handoff::agent_from_process_group)
-                            .map(|agent| agent.as_str())
-                    })
-                    .or(title_agent)
-            };
-            let detected = if direct_agent.is_some() || shell_foreground {
-                direct_agent
-            } else if tab.agent_cli_detection.take_screen_scan_attempt() {
-                let lines = terminal.content_lines(SCREEN_LINES, cx);
-                con_agent::context::classify_screen_agent_cli(title.as_deref(), &lines)
-                    .or_else(|| agent_from_screen_text(&lines))
-            } else {
-                None
-            };
-            if detected.is_some() || shell_foreground {
-                tab.agent_cli_detection.finish();
-            } else if !focused_terminal_changed && !tab.agent_cli_detection.is_exhausted() {
-                // Keep the previous result while a newly launched TUI is
-                // painting. Clear it only after every bounded retry misses.
-                continue;
-            }
-            let Some(next) = next_agent_cli(tab.agent_cli, detected) else {
-                continue;
-            };
-            log::debug!(
-                target: "con::agent_cli",
-                "tab {} agent_cli {:?} -> {:?}",
-                index,
-                tab.agent_cli,
-                next
-            );
-            tab.agent_cli = next;
-            changed = true;
-        }
-        if changed {
-            self.sync_sidebar(cx);
-            cx.notify();
-        }
     }
 
     pub(super) fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {

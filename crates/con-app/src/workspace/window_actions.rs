@@ -6,6 +6,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Reevaluate activity animation on both activation and deactivation,
+        // including when a modal prevents keyboard-focus restoration.
+        cx.notify();
         if !window.is_window_active() || self.is_modal_open(cx) {
             return;
         }
@@ -413,7 +416,6 @@ impl ConWorkspace {
             ai_label: None,
             ai_icon: None,
             agent_cli: None,
-            agent_cli_detection: AgentCliDetectionState::default(),
             color: None,
             summary_id,
             summary_epoch: 0,

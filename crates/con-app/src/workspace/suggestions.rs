@@ -607,6 +607,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn request_tab_summaries(&self, cx: &App) {
+        log::trace!(target: "con::activity", "summary_poll");
         if !self.harness.config().suggestion_model.enabled {
             return;
         }

@@ -100,6 +100,7 @@ impl ConWorkspace {
         elevated_ui_surface_opacity: f32,
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
+        self.tab_activity.read(cx).clear();
         let theme = cx.theme();
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
@@ -394,42 +395,23 @@ impl ConWorkspace {
                 let session_id = tab.summary_id;
                 let tab_id = session_id;
                 let tab_color = tab.color;
-                let terminal_progress = tab
-                    .pane_tree
-                    .focused_pane_terminal()
-                    .and_then(|terminal| terminal.progress(cx));
+                let terminal_status = self
+                    .terminal_presentation
+                    .tabs
+                    .get(&session_id)
+                    .copied()
+                    .flatten();
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
-                let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
-                let (hostname_for_tab, title_for_tab, dir_for_tab) =
-                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
-                        (
-                            self.effective_remote_host_for_tab(index, terminal, cx),
-                            terminal.title_name(cx),
-                            terminal.current_dir(cx),
-                        )
-                    } else {
-                        (None, Some(tab.title.clone()), None)
-                    };
-                let presentation = smart_tab_presentation(
-                    tab.user_label.as_deref(),
-                    tab.ai_label.as_deref(),
-                    tab.ai_icon.map(|k| k.svg_path()),
-                    tab.agent_cli,
-                    hostname_for_tab.as_deref(),
-                    title_for_tab.as_deref(),
-                    dir_for_tab.as_deref(),
-                    index,
-                    is_editor_only,
-                );
-                let tab_icon = presentation.icon;
+                // Sidebar and strip consume the same retained names and icons.
+                // Paint-only ticks must not query terminal/runtime metadata.
+                let presentation = self.sidebar.read(cx).session(index);
+                let tab_icon = presentation.map_or("phosphor/terminal.svg", |entry| entry.icon);
+                let name = presentation.map_or(tab.title.as_str(), |entry| entry.name.as_str());
 
-                let display_title: String = if presentation.name.chars().count() > 24 {
-                    format!(
-                        "{}…",
-                        &presentation.name[..presentation.name.floor_char_boundary(22)]
-                    )
+                let display_title: String = if name.chars().count() > 24 {
+                    format!("{}…", &name[..name.floor_char_boundary(22)])
                 } else {
-                    presentation.name
+                    name.to_owned()
                 };
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
@@ -726,34 +708,6 @@ impl ConWorkspace {
                     );
                 }
 
-                if let Some(progress) = terminal_progress {
-                    let (color, percent) = match progress {
-                        TerminalProgress::Running(percent) => (theme.progress_bar, percent),
-                        TerminalProgress::Error(percent) => (theme.danger, percent),
-                        TerminalProgress::Indeterminate => (theme.progress_bar, None),
-                        TerminalProgress::Paused(percent) => (theme.warning, percent),
-                    };
-                    let mut progress_indicator =
-                        div().absolute().left_0().right_0().bottom_0().h(px(2.0));
-                    if let Some(percent) = percent {
-                        progress_indicator = progress_indicator
-                            .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(relative(f32::from(percent) / 100.0))
-                                    .bg(color.opacity(if is_active { 0.82 } else { 0.58 })),
-                            );
-                    } else {
-                        progress_indicator = progress_indicator.bg(color.opacity(if is_active {
-                            0.62
-                        } else {
-                            0.42
-                        }));
-                    }
-                    tab_el = tab_el.child(progress_indicator);
-                }
-
                 let mut tab_content = div()
                     .flex()
                     .items_center()
@@ -780,21 +734,25 @@ impl ConWorkspace {
                         .min_w(px(0.0))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
-                        .child(crate::sidebar::tab_status_icon(
-                            tab_icon,
-                            tab_title_indicator(&tab.pane_tree, cx),
-                            mono_icon_px(theme, 12.5),
-                            if is_active {
-                                tab_color
-                                    .map(|color| {
-                                        crate::tab_colors::tab_accent_color_hsla(color, cx)
-                                    })
-                                    .unwrap_or_else(|| theme.foreground.opacity(0.68))
-                            } else {
-                                theme.muted_foreground.opacity(0.38)
-                            },
-                            theme,
-                        ))
+                        .child(
+                            self.tab_activity.read(cx).icon(
+                                tab_icon,
+                                mono_icon_px(theme, 12.5),
+                                if is_active {
+                                    tab_color
+                                        .map(|color| {
+                                            crate::tab_colors::tab_accent_color_hsla(color, cx)
+                                        })
+                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
+                                } else {
+                                    theme.muted_foreground.opacity(0.38)
+                                },
+                                terminal_status
+                                    .filter(|_| !is_dragged_source && tab_strip_progress > 0.01),
+                                theme,
+                                false,
+                            ),
+                        )
                         .child(
                             div()
                                 .min_w_0()
@@ -1482,6 +1440,14 @@ impl ConWorkspace {
             }
         }
 
-        top_bar
+        top_bar.relative().child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .opacity(tab_strip_progress)
+                .child(self.tab_activity.clone()),
+        )
     }
 }

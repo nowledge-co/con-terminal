@@ -17,13 +17,12 @@
 use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
 use crate::ui_scale::ui_icon_px;
-use con_core::terminal_title::TitleIndicator;
-use con_ghostty::TerminalProgress;
+use con_core::terminal_status::Status;
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
     Render, SharedString, Size, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div, point, prelude::*, px, relative, svg,
+    div, point, prelude::*, px, svg,
 };
 use gpui_component::{
     ActiveTheme, ElementExt, InteractiveElementExt, Sizable,
@@ -47,8 +46,8 @@ pub const PANEL_MAX_WIDTH: f32 = 360.0;
 const HOVER_CARD_WIDTH: f32 = 240.0;
 /// Per-row height in pinned mode (two-line layout — name + subtitle).
 const ROW_HEIGHT: f32 = 44.0;
-/// Per-icon size in the rail.
-const RAIL_ICON_SIZE: f32 = 32.0;
+/// Square session tile size, leaving 2px on each side of the rail.
+const RAIL_ICON_SIZE: f32 = RAIL_WIDTH - 4.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
@@ -74,8 +73,7 @@ pub struct SessionEntry {
     pub subtitle: Option<String>,
     pub is_ssh: bool,
     pub needs_attention: bool,
-    pub progress: Option<TerminalProgress>,
-    pub title_indicator: Option<TitleIndicator>,
+    pub status: Option<Status>,
     pub terminal_titles: Vec<String>,
     pub icon: &'static str,
     pub has_user_label: bool,
@@ -228,6 +226,7 @@ impl Render for DraggedTab {
 pub struct SessionSidebar {
     mode: PanelMode,
     sessions: Vec<SessionEntry>,
+    activity_layer: Option<Entity<crate::tab_activity::TabActivity>>,
     active_session: usize,
     leading_top_pad: f32,
     /// Smooth width animation between rail (0.0) and pinned (1.0).
@@ -349,6 +348,7 @@ impl SessionSidebar {
         Self {
             mode: PanelMode::Collapsed,
             sessions: Vec::new(),
+            activity_layer: None,
             active_session: 0,
             // The workspace top bar already reserves the macOS
             // traffic-light/titlebar area before the sidebar is
@@ -635,6 +635,11 @@ impl SessionSidebar {
         self.set_pinned(now_pinned, cx);
     }
 
+    /// Retained metadata also used by the horizontal tab strip.
+    pub(crate) fn session(&self, index: usize) -> Option<&SessionEntry> {
+        self.sessions.get(index)
+    }
+
     /// Update the session list from workspace state.
     pub fn sync_sessions(
         &mut self,
@@ -650,17 +655,6 @@ impl SessionSidebar {
         self.sessions = sessions;
         self.active_session = active;
         cx.notify();
-    }
-
-    pub fn update_session(&mut self, entry: SessionEntry, cx: &mut Context<Self>) {
-        if let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == entry.id)
-        {
-            *session = entry;
-            cx.notify();
-        }
     }
 
     fn begin_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -995,7 +989,7 @@ impl SessionSidebar {
         // the rail. The control buttons and dividers above stay fixed:
         // when the window is short or there are many sessions, this area
         // absorbs the vertical deficit (flex_1 + min_h_0) and scrolls
-        // instead of compressing the 32px pills.
+        // instead of compressing the square session tiles.
         let mut pill_list = div()
             .id("tab-sidebar-rail-scroll")
             .flex_1()
@@ -1031,7 +1025,8 @@ impl SessionSidebar {
 
             let tab_bounds = self.tab_bounds.clone();
             // No accent-color background fill — keep pills monochrome.
-            // Accent color is expressed only via the active dot below.
+            // The square fill contains the selection stripe around the
+            // centered icon/ring. Drag geometry uses the same tile size.
             let pill_bg = if is_active {
                 active_bg
             } else {
@@ -1083,19 +1078,30 @@ impl SessionSidebar {
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
                 })
-                .child(tab_status_icon(
+                .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
                     session.icon,
-                    session.title_indicator,
                     ui_icon_px(theme, 16.0),
                     if is_active {
                         theme.foreground
                     } else {
                         theme.muted_foreground.opacity(0.78)
                     },
+                    session.status,
                     theme,
+                    true,
                 ));
 
-            if session.needs_attention && !is_active {
+            if session.needs_attention
+                && !is_active
+                && !session.status.is_some_and(|status| {
+                    matches!(
+                        status.activity,
+                        con_core::terminal_status::Activity::Error
+                            | con_core::terminal_status::Activity::NeedsInput
+                            | con_core::terminal_status::Activity::Paused
+                    )
+                })
+            {
                 pill = pill.child(
                     div()
                         .absolute()
@@ -1106,9 +1112,6 @@ impl SessionSidebar {
                         .bg(theme.primary),
                 );
             }
-            if let Some(progress) = session.progress {
-                pill = pill.child(tab_progress_indicator(theme, progress, is_active, 4.0));
-            }
             if is_active {
                 let dot_color = if let Some(color) = session.color {
                     crate::tab_colors::tab_accent_color_hsla(color, cx)
@@ -1118,10 +1121,11 @@ impl SessionSidebar {
                 pill = pill.child(
                     div()
                         .absolute()
-                        .bottom(px(3.0))
-                        .right(px(3.0))
-                        .size(px(6.0))
-                        .rounded_full()
+                        .left(px(2.0))
+                        .top(px(8.0))
+                        .bottom(px(8.0))
+                        .w(px(2.0))
+                        .rounded(px(1.0))
                         .bg(dot_color),
                 );
             }
@@ -1477,8 +1481,7 @@ impl SessionSidebar {
                 subtitle: self.sessions[i].subtitle.clone(),
                 is_ssh: self.sessions[i].is_ssh,
                 needs_attention: self.sessions[i].needs_attention,
-                progress: self.sessions[i].progress,
-                title_indicator: self.sessions[i].title_indicator,
+                status: self.sessions[i].status,
                 terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
@@ -1683,18 +1686,32 @@ impl SessionSidebar {
         };
         let tab_bounds = self.tab_bounds.clone();
 
-        let mut icon_stack = div().relative().flex_shrink_0().child(tab_status_icon(
-            session.icon,
-            session.title_indicator,
-            ui_icon_px(theme, 15.0),
-            if is_active {
-                theme.foreground
-            } else {
-                theme.muted_foreground.opacity(0.78)
-            },
-            theme,
-        ));
-        if session.needs_attention && !is_active {
+        let icon_size = ui_icon_px(theme, 15.0);
+        let mut icon_stack = div().relative().flex_shrink_0().child(
+            self.activity_layer.as_ref().unwrap().read(cx).icon(
+                session.icon,
+                icon_size,
+                if is_active {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground.opacity(0.78)
+                },
+                session.status,
+                theme,
+                false,
+            ),
+        );
+        if session.needs_attention
+            && !is_active
+            && !session.status.is_some_and(|status| {
+                matches!(
+                    status.activity,
+                    con_core::terminal_status::Activity::Error
+                        | con_core::terminal_status::Activity::NeedsInput
+                        | con_core::terminal_status::Activity::Paused
+                )
+            })
+        {
             icon_stack = icon_stack.child(
                 div()
                     .absolute()
@@ -1714,15 +1731,16 @@ impl SessionSidebar {
             icon_stack = icon_stack.child(
                 div()
                     .absolute()
-                    .bottom(px(-2.0))
-                    .right(px(-2.0))
-                    .size(px(6.0))
-                    .rounded_full()
+                    .left(px(-4.0))
+                    .top((icon_size - px(12.0)) / 2.0)
+                    .w(px(2.0))
+                    .h(px(12.0))
+                    .rounded(px(1.0))
                     .bg(dot_color),
             );
         }
 
-        let mut row = div()
+        let row = div()
             .id(SharedString::from(format!("panel-tab-{i}")))
             .group(row_group.clone())
             .relative()
@@ -1852,15 +1870,17 @@ impl SessionSidebar {
                     .child(rename_btn)
                     .child(close_btn),
             );
-        if let Some(progress) = session.progress {
-            row = row.child(tab_progress_indicator(theme, progress, is_active, 8.0));
-        }
         row.into_any_element()
     }
 }
 
 impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let activity_layer = self
+            .activity_layer
+            .get_or_insert_with(|| cx.new(|_| crate::tab_activity::TabActivity::default()))
+            .clone();
+        activity_layer.read(cx).clear();
         // Clear stale drop indicator after the drag completes — GPUI
         // doesn't expose an on_drag_end hook for the source element.
         let has_drag = cx.has_active_drag();
@@ -1879,7 +1899,7 @@ impl Render for SessionSidebar {
             }
         }
         // Drive the width-tween animation frame.
-        let _progress = self.width_motion.value(window);
+        let _progress = self.width_motion.value(window, cx);
 
         if self.tools_panel_open || self.rail_only_override {
             return div()
@@ -1888,6 +1908,7 @@ impl Render for SessionSidebar {
                 .w(px(RAIL_WIDTH))
                 .flex_shrink_0()
                 .child(self.render_rail(window, cx))
+                .child(activity_layer)
                 .into_any_element();
         }
 
@@ -1898,6 +1919,7 @@ impl Render for SessionSidebar {
                 let panel = self.render_panel_body(false, window, cx);
                 let panel_w = (visible_w - RAIL_WIDTH).max(0.0);
                 div()
+                    .relative()
                     .flex()
                     .h_full()
                     .w(px(visible_w))
@@ -1912,6 +1934,7 @@ impl Render for SessionSidebar {
                             .overflow_hidden()
                             .child(panel),
                     )
+                    .child(activity_layer)
                     .into_any_element()
             }
             PanelMode::Collapsed => div()
@@ -1920,6 +1943,7 @@ impl Render for SessionSidebar {
                 .w(px(RAIL_WIDTH))
                 .flex_shrink_0()
                 .child(self.render_rail(window, cx))
+                .child(activity_layer)
                 .into_any_element(),
         }
     }
@@ -1971,76 +1995,6 @@ fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
         bar.top(px(-2.0))
     } else {
         bar.bottom(px(-2.0))
-    }
-}
-
-/// A source-owned frame shares the icon's fixed slot; there is deliberately no
-/// host animation clock. Paused/stale applications must not keep spinning here.
-pub(crate) fn tab_status_icon(
-    icon: &'static str,
-    indicator: Option<TitleIndicator>,
-    size: Pixels,
-    color: Hsla,
-    theme: &gpui_component::Theme,
-) -> AnyElement {
-    if let Some(indicator) = indicator {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(size)
-            .flex_shrink_0()
-            // Status glyphs are icons, not terminal text. Some user fonts map
-            // Braille to empty outlines, which also prevents font fallback.
-            .font_family(crate::file_icons::FILE_ICON_FONT_FAMILY)
-            .text_size(size)
-            .line_height(size)
-            .text_color(if matches!(indicator, TitleIndicator::Attention(_)) {
-                theme.warning
-            } else {
-                theme.foreground
-            })
-            .child(indicator.frame().to_string())
-            .into_any_element()
-    } else {
-        svg()
-            .path(icon)
-            .size(size)
-            .flex_shrink_0()
-            .text_color(color)
-            .into_any_element()
-    }
-}
-
-fn tab_progress_indicator(
-    theme: &gpui_component::Theme,
-    progress: TerminalProgress,
-    is_active: bool,
-    inset: f32,
-) -> Div {
-    let (color, percent) = match progress {
-        TerminalProgress::Running(percent) => (theme.progress_bar, percent),
-        TerminalProgress::Error(percent) => (theme.danger, percent),
-        TerminalProgress::Indeterminate => (theme.progress_bar, None),
-        TerminalProgress::Paused(percent) => (theme.warning, percent),
-    };
-    let indicator = div()
-        .absolute()
-        .left(px(inset))
-        .right(px(inset))
-        .bottom(px(1.0))
-        .h(px(2.0));
-    if let Some(percent) = percent {
-        indicator
-            .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
-            .child(
-                div()
-                    .h_full()
-                    .w(relative(f32::from(percent) / 100.0))
-                    .bg(color.opacity(if is_active { 0.82 } else { 0.58 })),
-            )
-    } else {
-        indicator.bg(color.opacity(if is_active { 0.62 } else { 0.42 }))
     }
 }
 
@@ -2451,35 +2405,6 @@ mod tests {
     };
     use gpui::{Bounds, Point, Size, px};
 
-    #[gpui::test]
-    fn title_status_font_is_independent_of_user_fonts(_cx: &mut gpui::TestAppContext) {
-        use gpui::Styled;
-
-        let theme = gpui_component::Theme {
-            mono_font_family: "BerkeleyMono Nerd Font Mono".into(),
-            font_family: "Other UI Font".into(),
-            ..gpui_component::Theme::default()
-        };
-        for indicator in [
-            super::TitleIndicator::Activity('⠋'),
-            super::TitleIndicator::Activity('✽'),
-            super::TitleIndicator::Attention('!'),
-        ] {
-            let mut element = super::tab_status_icon(
-                "phosphor/terminal.svg",
-                Some(indicator),
-                px(16.0),
-                theme.foreground,
-                &theme,
-            );
-            let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
-            assert_eq!(
-                text.font_family.as_ref().map(|font| font.as_ref()),
-                Some(crate::file_icons::FILE_ICON_FONT_FAMILY)
-            );
-        }
-    }
-
     #[test]
     fn bundled_font_has_visible_title_status_glyphs() {
         let face = ttf_parser::Face::parse(
@@ -2543,6 +2468,14 @@ mod tests {
             rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + RAIL_ICON_SIZE * 0.75, 3, 0.0),
             Some(1)
         );
+        // 40px tiles + 2px gaps: the second slot's midpoint is 63px.
+        // A stale 32px stride would incorrectly insert after the second tile.
+        for (offset, expected) in [(62.0, 1), (64.0, 2), (126.0, 3)] {
+            assert_eq!(
+                rail_slot_from_local_y(RAIL_TOP_CONTROLS_HEIGHT + 7.0 + offset, 3, 7.0),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

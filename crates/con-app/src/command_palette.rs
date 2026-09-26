@@ -425,7 +425,7 @@ impl Focusable for CommandPalette {
 
 impl Render for CommandPalette {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let overlay_progress = self.overlay_motion.value(window);
+        let overlay_progress = self.overlay_motion.value(window, cx);
         if !self.visible && overlay_progress <= 0.001 {
             return div().id("palette-overlay");
         }

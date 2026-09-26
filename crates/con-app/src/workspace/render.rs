@@ -208,95 +208,105 @@ impl Render for ConWorkspace {
         self.modal_was_open = is_modal_open;
 
         // Keep pane focus in sync with which terminal has window focus
+        let previous_focus = self.tabs[self.active_tab].pane_tree.focused_pane_id();
         self.tabs[self.active_tab].pane_tree.sync_focus(window, cx);
-        self.reconcile_runtime_trackers_for_tab(self.active_tab);
+        self.chrome_preparation_dirty |=
+            previous_focus != self.tabs[self.active_tab].pane_tree.focused_pane_id();
+        if std::mem::take(&mut self.chrome_preparation_dirty) {
+            log::trace!(target: "con::activity", "chrome_prepare");
+            self.refresh_cached_tab_presentation(cx);
+            self.reconcile_runtime_trackers_for_tab(self.active_tab);
 
-        // Sync pane info and CWD to input bar
-        let pane_tree = &self.tabs[self.active_tab].pane_tree;
-        let focused_pane_id = pane_tree.focused_pane_id();
-        let pane_infos: Vec<PaneInfo> = pane_tree
-            .pane_terminals()
-            .into_iter()
-            .map(|(id, terminal)| {
-                let hostname = self
-                    .cached_runtime_for_tab(self.active_tab, &terminal)
-                    .and_then(|runtime| runtime.remote_host);
-                let title = terminal.title(cx);
-                let current_dir = terminal.current_dir(cx);
-                let name = pane_display_name(&hostname, &title, &current_dir, id);
-                let is_busy = terminal.is_busy(cx);
-                let is_alive = terminal.is_alive(cx);
-                PaneInfo {
-                    id,
-                    name,
-                    hostname,
-                    is_busy,
-                    is_alive,
-                }
-            })
-            .collect();
-
-        let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
-        if self.file_tree_view.read(cx).root().is_none() {
-            self.sync_file_tree_from_active_focus(cx);
-        }
-        let display_cwd = cwd
-            .map(|cwd| match dirs::home_dir() {
-                Some(home) => {
-                    let home_str = home.to_string_lossy().to_string();
-                    if cwd.starts_with(&home_str) {
-                        format!("~{}", &cwd[home_str.len()..])
-                    } else {
-                        cwd
+            // Sync pane info and CWD to input bar
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            let focused_pane_id = pane_tree.focused_pane_id();
+            let pane_infos: Vec<PaneInfo> = pane_tree
+                .pane_terminals()
+                .into_iter()
+                .map(|(id, terminal)| {
+                    let hostname = self
+                        .cached_runtime_for_tab(self.active_tab, &terminal)
+                        .and_then(|runtime| runtime.remote_host);
+                    let title = terminal.title(cx);
+                    let current_dir = terminal.current_dir(cx);
+                    let name = pane_display_name(&hostname, &title, &current_dir, id);
+                    let is_busy = terminal.is_busy(cx);
+                    let is_alive = terminal.is_alive(cx);
+                    PaneInfo {
+                        id,
+                        name,
+                        hostname,
+                        is_busy,
+                        is_alive,
                     }
-                }
-                None => cwd,
-            })
-            .unwrap_or_else(|| "~".to_string());
+                })
+                .collect();
 
-        let skill_entries: Vec<crate::input_bar::SkillEntry> = self
-            .harness
-            .skill_summaries()
-            .into_iter()
-            .map(|(name, desc)| crate::input_bar::SkillEntry {
-                name,
-                description: desc,
-            })
-            .collect();
-        self.input_bar.update(cx, |bar, cx| {
-            bar.set_panes(pane_infos, focused_pane_id, window, cx);
-            bar.set_cwd(display_cwd, cx);
-            bar.set_skills(skill_entries.clone(), cx);
-        });
-        // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
-        // backed by the global submitted-input history across all modes.
-        let recent_commands = self.recent_input_history(80);
-        self.input_bar
-            .update(cx, |bar, cx| bar.set_recent_commands(recent_commands, cx));
+            let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
+            if self.file_tree_view.read(cx).root().is_none() {
+                self.sync_file_tree_from_active_focus(cx);
+            }
+            let display_cwd = cwd
+                .map(|cwd| match dirs::home_dir() {
+                    Some(home) => {
+                        let home_str = home.to_string_lossy().to_string();
+                        if cwd.starts_with(&home_str) {
+                            format!("~{}", &cwd[home_str.len()..])
+                        } else {
+                            cwd
+                        }
+                    }
+                    None => cwd,
+                })
+                .unwrap_or_else(|| "~".to_string());
 
-        // Sync model name, inline input, and skills to agent panel
-        let active_agent_config = self.active_tab_agent_config();
-        let model_name = AgentHarness::active_model_name_for(&active_agent_config);
-        let provider = active_agent_config.provider.clone();
-        let available_models = self.provider_models_for_config(&active_agent_config);
-        let show_inline = !self.input_bar_visible && self.agent_panel_open;
-        self.agent_panel.update(cx, |panel, cx| {
-            panel.set_session_provider_options(
-                AgentPanel::configured_session_providers(&active_agent_config),
-                window,
-                cx,
-            );
-            panel.set_provider_name(provider, window, cx);
-            panel.set_model_name(model_name);
-            panel.set_session_model_options(available_models, window, cx);
-            panel.set_show_inline_input(show_inline);
-            panel.set_skills(skill_entries, cx);
-            panel.set_recent_inputs(self.recent_input_history(80));
-        });
+            let skill_entries: Vec<crate::input_bar::SkillEntry> = self
+                .harness
+                .skill_summaries()
+                .into_iter()
+                .map(|(name, desc)| crate::input_bar::SkillEntry {
+                    name,
+                    description: desc,
+                })
+                .collect();
+            self.input_bar.update(cx, |bar, cx| {
+                bar.set_panes(pane_infos, focused_pane_id, window, cx);
+                bar.set_cwd(display_cwd, cx);
+                bar.set_skills(skill_entries.clone(), cx);
+            });
+            // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
+            // backed by the global submitted-input history across all modes.
+            let recent_commands = self.recent_input_history(80);
+            self.input_bar
+                .update(cx, |bar, cx| bar.set_recent_commands(recent_commands, cx));
 
-        let agent_panel_progress = self.agent_panel_motion.value(window);
-        let input_bar_progress = self.input_bar_motion.value(window);
-        let tab_strip_progress = self.tab_strip_motion.value(window);
+            // Sync model name, inline input, and skills to agent panel
+            let active_agent_config = self.active_tab_agent_config();
+            let model_name = AgentHarness::active_model_name_for(&active_agent_config);
+            let provider = active_agent_config.provider.clone();
+            let available_models = self.provider_models_for_config(&active_agent_config);
+            let show_inline = !self.input_bar_visible && self.agent_panel_open;
+            self.agent_panel.update(cx, |panel, cx| {
+                panel.set_session_provider_options(
+                    AgentPanel::configured_session_providers(&active_agent_config),
+                    window,
+                    cx,
+                );
+                panel.set_provider_name(provider, window, cx);
+                panel.set_model_name(model_name, cx);
+                panel.set_session_model_options(available_models, window, cx);
+                panel.set_show_inline_input(show_inline, cx);
+                panel.set_skills(skill_entries, cx);
+                panel.set_recent_inputs(self.recent_input_history(80), cx);
+            });
+        }
+
+        // Sampling before value() also includes the final settled frame.
+        let agent_panel_transition_frame = self.agent_panel_motion.is_animating();
+        let input_bar_transition_frame = self.input_bar_motion.is_animating();
+        let agent_panel_progress = self.agent_panel_motion.value(window, cx);
+        let input_bar_progress = self.input_bar_motion.value(window, cx);
+        let tab_strip_progress = self.tab_strip_motion.value(window, cx);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
@@ -768,7 +778,20 @@ impl Render for ConWorkspace {
                         div()
                             .min_h(px((input_bar_height - 1.0).max(0.0)))
                             .opacity(input_bar_content_opacity)
-                            .child(self.input_bar.clone()),
+                            .child(
+                                if input_bar_transition_frame || input_bar_content_opacity < 1.0 {
+                                    self.input_bar.clone().into_any_element()
+                                } else {
+                                    self.input_bar
+                                        .clone()
+                                        .cached(
+                                            StyleRefinement::default()
+                                                .w_full()
+                                                .h(px(full_input_bar_height - 1.0)),
+                                        )
+                                        .into_any_element()
+                                },
+                            ),
                     ),
             );
         }
@@ -946,7 +969,17 @@ impl Render for ConWorkspace {
                             .min_w_0()
                             .h_full()
                             .opacity(agent_panel_content_opacity)
-                            .child(self.agent_panel.clone()),
+                            .child(
+                                if agent_panel_transition_frame || agent_panel_content_opacity < 1.0
+                                {
+                                    self.agent_panel.clone().into_any_element()
+                                } else {
+                                    self.agent_panel
+                                        .clone()
+                                        .cached(StyleRefinement::default().size_full())
+                                        .into_any_element()
+                                },
+                            ),
                     ),
             );
         }

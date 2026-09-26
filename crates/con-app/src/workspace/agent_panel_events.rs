@@ -84,6 +84,7 @@ impl ConWorkspace {
         _cx: &mut Context<Self>,
     ) {
         self.tabs[self.active_tab].session.cancel_current();
+        self.agent_panel.update(_cx, |panel, cx| panel.stop(cx));
     }
 
     pub(super) fn on_set_auto_approve(
@@ -114,7 +115,7 @@ impl ConWorkspace {
                 window,
                 cx,
             );
-            panel.set_model_name(event.model.clone());
+            panel.set_model_name(event.model.clone(), cx);
             panel.set_session_model_options(available_models, window, cx);
         });
 
@@ -143,7 +144,7 @@ impl ConWorkspace {
                 cx,
             );
             panel.set_provider_name(provider.clone(), window, cx);
-            panel.set_model_name(model_name);
+            panel.set_model_name(model_name, cx);
             panel.set_session_model_options(available_models, window, cx);
         });
 

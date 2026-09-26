@@ -516,6 +516,10 @@ impl RenderSession {
         self.conpty.is_alive() && !self.vt.is_write_desynchronized()
     }
 
+    pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
+        self.conpty.root_identity()
+    }
+
     pub fn is_decckm(&self) -> bool {
         self.vt.is_decckm()
     }

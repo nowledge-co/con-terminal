@@ -540,21 +540,11 @@ impl ConWorkspace {
         if event.content_changed {
             self.sync_sidebar(cx);
             self.request_tab_summaries(cx);
-        } else if self.vertical_tabs_enabled() {
-            // Do not rebuild every tab's names, paths and SSH metadata at the
-            // application's animation cadence. Update only the owning row.
-            if let Some(index) = self.tabs.iter().position(|tab| {
-                tab.pane_tree
-                    .pane_id_for_entity(entity.entity_id())
-                    .is_some()
-            }) {
-                let entry = self.sidebar_entry(index, cx);
-                self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.update_session(entry, cx);
-                });
-            }
+            cx.notify();
         }
-        cx.notify();
+        // Record title evidence immediately, but only a semantic status change
+        // invalidates chrome. Individual application spinner frames do not.
+        self.observe_terminal_title(entity, cx);
     }
 
     pub(crate) fn on_terminal_bell(
@@ -818,7 +808,6 @@ impl ConWorkspace {
             ai_label: None,
             ai_icon: None,
             agent_cli: None,
-            agent_cli_detection: AgentCliDetectionState::default(),
             color: self.tabs[index].color,
             summary_id,
             summary_epoch: 0,
@@ -874,7 +863,6 @@ impl ConWorkspace {
             ai_label: None,
             ai_icon: None,
             agent_cli: None,
-            agent_cli_detection: AgentCliDetectionState::default(),
             color: None,
             summary_id,
             summary_epoch: 0,

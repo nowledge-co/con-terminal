@@ -1,6 +1,6 @@
 use con_agent::{
     AgentEvent, AgentProvider, Conversation, Message, PaneRequest, SkillRegistry, TerminalContext,
-    TerminalExecRequest, ToolApprovalDecision, is_dangerous,
+    TerminalExecRequest, ToolApprovalDecision,
 };
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
@@ -50,11 +50,22 @@ pub enum HarnessEvent {
         /// This is per-request: each agent invocation gets its own channel.
         approval_tx: Sender<ToolApprovalDecision>,
     },
+    /// A previously announced approval wait has ended. Both channel identity
+    /// and call ID are required because requests and provider call IDs overlap.
+    ToolApprovalEnded {
+        call_id: String,
+        approval_tx: Sender<ToolApprovalDecision>,
+    },
     /// Tool finished executing
     ToolCallComplete {
         call_id: String,
         tool_name: String,
         result: String,
+    },
+    /// One agent invocation ended. The channel identifies exactly the
+    /// approvals belonging to that invocation, even when requests overlap.
+    RequestFinished {
+        approval_tx: Sender<ToolApprovalDecision>,
     },
     /// Agent produced a final response
     ResponseComplete(Message),
@@ -480,18 +491,26 @@ impl AgentHarness {
                                         input,
                                     },
                                 );
-                                if is_dangerous(&tool_name) {
-                                    let _ = htx.send(HarnessEvent::ToolApprovalNeeded {
-                                        call_id: call_id.clone(),
-                                        tool_name: tool_name.clone(),
-                                        args: args.clone(),
-                                        approval_tx: per_request_approval_tx.clone(),
-                                    });
-                                }
                                 HarnessEvent::ToolCallStart {
                                     call_id,
                                     tool_name,
                                     args,
+                                }
+                            }
+                            AgentEvent::ToolApprovalNeeded {
+                                call_id,
+                                tool_name,
+                                args,
+                            } => HarnessEvent::ToolApprovalNeeded {
+                                call_id,
+                                tool_name,
+                                args,
+                                approval_tx: per_request_approval_tx.clone(),
+                            },
+                            AgentEvent::ToolApprovalEnded { call_id } => {
+                                HarnessEvent::ToolApprovalEnded {
+                                    call_id,
+                                    approval_tx: per_request_approval_tx.clone(),
                                 }
                             }
                             AgentEvent::ToolCallComplete {
@@ -592,6 +611,7 @@ impl AgentHarness {
                 }
             }
 
+            let _ = harness_tx.send(HarnessEvent::RequestFinished { approval_tx });
             log::info!("[harness] Request complete");
         });
     }

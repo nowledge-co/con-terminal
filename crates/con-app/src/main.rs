@@ -73,10 +73,12 @@ mod motion;
 mod mouse_sequence;
 mod pane_tree;
 mod process_name;
+mod reduced_motion;
 mod settings_panel;
 mod sidebar;
 mod sidebar_search_view;
 mod startup_args;
+mod tab_activity;
 mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
@@ -2694,6 +2696,7 @@ fn main() {
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);
+        reduced_motion::init(cx);
         input_bar::InputBar::init(cx);
 
         // Load and activate con's design theme (synced to terminal theme)

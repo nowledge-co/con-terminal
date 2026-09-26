@@ -115,7 +115,7 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_cli_icon(Some("amp")), Some("agents/amp.svg"));
         assert_eq!(agent_cli_icon(Some("kilo")), Some("agents/kilo.svg"));
         assert_eq!(agent_cli_icon(Some("goose")), Some("agents/goose.svg"));
-        assert_eq!(agent_cli_icon(Some("dim")), None);
+        assert_eq!(agent_cli_icon(Some("dim")), Some("agents/dim.svg"));
         // Crush has no usable monochrome mark; the icon falls back.
         assert_eq!(agent_cli_icon(Some("crush")), None);
         assert_eq!(agent_cli_icon(None), None);
@@ -142,11 +142,15 @@ mod tests_agent_cli_icon {
         assert_eq!(agent_from_process_name("amp"), Some("amp"));
         // The npm amp build reports itself as `amp.exe` on macOS.
         assert_eq!(agent_from_process_name("amp.exe"), Some("amp"));
-        assert_eq!(agent_from_process_name("dim"), None);
+        assert_eq!(agent_from_process_name("dim"), Some("dim"));
         assert_eq!(agent_from_process_name("zsh"), None);
         assert_eq!(agent_from_process_name("node"), None);
         assert_eq!(agent_from_process_name("python3"), None);
         assert_eq!(agent_from_process_name("codex"), Some("codex"));
+        assert_eq!(agent_from_process_name("Claude.EXE"), Some("claude"));
+        assert_eq!(agent_from_process_name("opencode"), Some("opencode"));
+        assert_eq!(agent_from_process_name("claude-helper"), None);
+        assert_eq!(agent_from_process_name("Cursor-Agent.EXE"), Some("cursor"));
         assert_eq!(agent_from_process_name("kimi-code"), Some("kimi"));
         assert_eq!(agent_from_process_name("copilot"), Some("copilot"));
         assert_eq!(agent_from_process_name(""), None);
@@ -186,7 +190,7 @@ mod tests_agent_cli_icon {
             agent_from_osc_title(Some("my-repo - amp - main")),
             Some("amp")
         );
-        assert_eq!(agent_from_osc_title(Some("dim")), None);
+        assert_eq!(agent_from_osc_title(Some("dim")), Some("dim"));
         assert_eq!(agent_from_osc_title(Some("San3an.local: tmp")), None);
         // Partial words must not match.
         assert_eq!(agent_from_osc_title(Some("grokking")), None);
@@ -256,18 +260,6 @@ mod tests_agent_cli_icon {
     }
 
     #[test]
-    fn next_agent_cli_reports_only_changes() {
-        assert_eq!(next_agent_cli(None, None), None);
-        assert_eq!(next_agent_cli(Some("codex"), Some("codex")), None);
-        assert_eq!(next_agent_cli(None, Some("codex")), Some(Some("codex")));
-        assert_eq!(next_agent_cli(Some("codex"), None), Some(None));
-        assert_eq!(
-            next_agent_cli(Some("codex"), Some("claude")),
-            Some(Some("claude"))
-        );
-    }
-
-    #[test]
     fn should_refresh_agent_cli_throttles_after_first_call() {
         let now = Instant::now();
         let interval = Duration::from_secs(1);
@@ -295,8 +287,12 @@ mod tests_agent_cli_icon {
         let mut state = AgentCliDetectionState::default();
 
         assert!(state.observe(observation));
-        assert!(!state.terminal_changed(7));
-        for _ in 0..AGENT_CLI_SCREEN_SCAN_ATTEMPTS {
+        for _ in 0..6 {
+            assert_eq!(state.scan_interval(), Duration::from_millis(300));
+            assert!(state.take_screen_scan_attempt());
+        }
+        for seconds in [2, 4, 8, 16, 32, 64] {
+            assert_eq!(state.scan_interval(), Duration::from_secs(seconds));
             assert!(state.take_screen_scan_attempt());
         }
         assert!(!state.take_screen_scan_attempt());
@@ -308,12 +304,11 @@ mod tests_agent_cli_icon {
             ..observation
         };
         assert!(state.observe(changed));
+        assert_eq!(state.scan_interval(), Duration::from_millis(300));
         assert!(state.take_screen_scan_attempt());
         state.finish();
         assert!(state.is_exhausted());
         assert!(!state.take_screen_scan_attempt());
-
-        assert!(state.terminal_changed(8));
     }
 }
 

@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 con-paths.workspace = true
+con-process.workspace = true
 anyhow.workspace = true
 log.workspace = true
 parking_lot.workspace = true
@@ -65,5 +66,6 @@ etagere = "0.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"
 portable-pty = "0.9"
+serde_json.workspace = true
 shell-words = "1.1"
 uuid.workspace = true

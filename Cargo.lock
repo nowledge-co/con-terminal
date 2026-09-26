@@ -1401,6 +1401,7 @@ dependencies = [
  "con-agent",
  "con-core",
  "con-paths",
+ "con-process",
  "libc",
  "portable-pty",
  "serde",
@@ -1436,6 +1437,7 @@ dependencies = [
  "anyhow",
  "cc",
  "con-paths",
+ "con-process",
  "core-foundation 0.10.0",
  "dispatch",
  "etagere",
@@ -1458,6 +1460,15 @@ name = "con-paths"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
+]
+
+[[package]]
+name = "con-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "windows 0.61.3",
 ]
 
 [[package]]

@@ -23,6 +23,7 @@ pub(in crate::workspace) fn agent_cli_icon(agent_cli: Option<&str>) -> Option<&'
         "amp" => Some("agents/amp.svg"),
         "kilo" => Some("agents/kilo.svg"),
         "goose" => Some("agents/goose.svg"),
+        "dim" => Some("agents/dim.svg"),
         _ => None,
     }
 }
@@ -38,11 +39,13 @@ pub(in crate::workspace) fn agent_cli_icon(agent_cli: Option<&str>) -> Option<&'
 /// `grok` is matched by prefix because its binary carries the version,
 /// e.g. `grok-1.0.34-macos-aarch64`.
 pub(in crate::workspace) fn agent_from_process_name(name: &str) -> Option<&'static str> {
-    let name = name.trim();
+    let normalized = name.trim().to_ascii_lowercase();
+    let name = normalized.strip_suffix(".exe").unwrap_or(&normalized);
     if name.starts_with("grok-") {
         return Some("grok");
     }
     match name {
+        "claude" => Some("claude"),
         "codex" => Some("codex"),
         "cursor-agent" => Some("cursor"),
         "opencode" => Some("opencode"),
@@ -57,7 +60,8 @@ pub(in crate::workspace) fn agent_from_process_name(name: &str) -> Option<&'stat
         "kiro-cli" | "kiro" => Some("kiro"),
         "crush" => Some("crush"),
         "goose" => Some("goose"),
-        "amp" | "amp.exe" => Some("amp"),
+        "amp" => Some("amp"),
+        "dim" => Some("dim"),
         _ => None,
     }
 }
@@ -118,6 +122,9 @@ pub(in crate::workspace) fn agent_from_osc_title(title: Option<&str>) -> Option<
     if lower.contains(" - amp - ") {
         return Some("amp");
     }
+    if lower == "dim" {
+        return Some("dim");
+    }
     None
 }
 
@@ -172,15 +179,7 @@ pub(in crate::workspace) fn agent_from_screen_text(lines: &[String]) -> Option<&
     None
 }
 
-/// Whether the cached classification should be replaced.
-pub(in crate::workspace) fn next_agent_cli(
-    previous: Option<&'static str>,
-    detected: Option<&'static str>,
-) -> Option<Option<&'static str>> {
-    (previous != detected).then_some(detected)
-}
-
-pub(super) const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 6;
+const AGENT_CLI_SCREEN_SCAN_ATTEMPTS: u8 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::workspace) struct AgentCliObservation {
@@ -194,8 +193,9 @@ pub(in crate::workspace) struct AgentCliObservation {
 ///
 /// Reading a terminal's visible screen is materially more expensive than
 /// observing its process, title, or input generation. A changed observation
-/// opens a short retry window so script-based TUIs can finish their initial
-/// paint; a stable tab performs no screen reads after that window closes.
+/// opens a retry window so script-based TUIs can finish their initial paint.
+/// Six fast attempts are followed by six exponentially spaced attempts for
+/// slow startup; a stable tab performs no reads after that bounded window.
 #[derive(Default)]
 pub(in crate::workspace) struct AgentCliDetectionState {
     observation: Option<AgentCliObservation>,
@@ -203,10 +203,12 @@ pub(in crate::workspace) struct AgentCliDetectionState {
 }
 
 impl AgentCliDetectionState {
-    pub(in crate::workspace) fn terminal_changed(&self, terminal_id: u64) -> bool {
-        self.observation
-            .as_ref()
-            .is_some_and(|previous| previous.terminal_id != terminal_id)
+    pub(in crate::workspace) fn scan_interval(&self) -> std::time::Duration {
+        if self.screen_scan_attempts_remaining > 6 {
+            std::time::Duration::from_millis(300)
+        } else {
+            std::time::Duration::from_secs(1 << (7 - self.screen_scan_attempts_remaining))
+        }
     }
 
     pub(in crate::workspace) fn observe(&mut self, observation: AgentCliObservation) -> bool {

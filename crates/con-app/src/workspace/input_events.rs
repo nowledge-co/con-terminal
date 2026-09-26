@@ -163,21 +163,19 @@ impl ConWorkspace {
                 args,
                 approval_tx,
             } => {
-                if self.harness.config().auto_approve_tools {
-                    // Auto-approved: send approval decision, show as regular tool call
-                    let _ = approval_tx.send(con_agent::ToolApprovalDecision {
-                        call_id: call_id.clone(),
-                        allowed: true,
-                        reason: Some("auto-approved".into()),
-                    });
-                    self.agent_panel.update(cx, |panel, cx| {
-                        panel.add_tool_call(&call_id, &tool_name, &args, cx);
-                    });
-                } else {
-                    self.agent_panel.update(cx, |panel, cx| {
-                        panel.add_pending_approval(&call_id, &tool_name, &args, approval_tx, cx);
-                    });
-                }
+                // The hook's request-time policy owns this decision. A later
+                // global config change must not bypass an approval already in flight.
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.add_pending_approval(&call_id, &tool_name, &args, approval_tx, cx);
+                });
+            }
+            HarnessEvent::ToolApprovalEnded {
+                call_id,
+                approval_tx,
+            } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.finish_approval(&approval_tx, &call_id, cx);
+                });
             }
             HarnessEvent::ToolCallComplete {
                 call_id,
@@ -186,6 +184,11 @@ impl ConWorkspace {
             } => {
                 self.agent_panel.update(cx, |panel, cx| {
                     panel.complete_tool_call(&call_id, &tool_name, &result, cx);
+                });
+            }
+            HarnessEvent::RequestFinished { approval_tx } => {
+                self.agent_panel.update(cx, |panel, cx| {
+                    panel.finish_request(&approval_tx, cx);
                 });
             }
             HarnessEvent::ResponseComplete(msg) => {
