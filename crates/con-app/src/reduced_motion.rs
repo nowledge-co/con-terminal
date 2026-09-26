@@ -120,7 +120,7 @@ mod platform {
 
     use gpui::{App, Global};
     use windows::Win32::{
-        Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
         UI::WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
             GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, MSG, PostMessageW, PostQuitMessage,
@@ -129,7 +129,7 @@ mod platform {
             WM_DESTROY, WM_NCCREATE, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
         },
     };
-    use windows::core::w;
+    use windows::core::{BOOL, w};
 
     struct Watcher {
         hwnd: HWND,
