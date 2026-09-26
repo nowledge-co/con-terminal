@@ -72,6 +72,17 @@ impl TerminalPane {
     }
 
     pub fn observation_support(&self, _cx: &App) -> PaneObservationSupport {
+        #[cfg(target_os = "linux")]
+        if self
+            .entity
+            .read(_cx)
+            .terminal()
+            .is_some_and(|terminal| terminal.uses_host_process_namespace())
+        {
+            // Host metadata is presentation-only; host PIDs and TTY names are
+            // not available to the sandbox's local control-plane observations.
+            return PaneObservationSupport::default();
+        }
         PaneObservationSupport {
             foreground_process_group_id: GhosttyTerminal::SUPPORTS_FOREGROUND_PROCESS_GROUP_ID,
             tty_name: GhosttyTerminal::SUPPORTS_TTY_NAME,

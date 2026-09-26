@@ -1088,18 +1088,17 @@ fn spawn_host_bridge(
     let host_cli_probe = con_paths::host_command("con-cli")
         .args(["pty-bridge", "--help"])
         .output();
-    let use_con_cli = host_cli_probe
-        .map(|output| {
-            bridge_help_supports_literal_commands(output.status.success(), &output.stdout)
-                && bridge_help_supports_process_metadata(output.status.success(), &output.stdout)
-        })
-        .unwrap_or(false);
+    let (use_con_cli, con_cli_process_metadata) = host_cli_probe
+        .map(|output| bridge_capabilities(output.status.success(), &output.stdout))
+        .unwrap_or((false, false));
 
     if use_con_cli {
         cmd.arg("con-cli");
         cmd.arg("pty-bridge");
         cmd.arg("--socket").arg(&socket_path);
-        cmd.arg("--process-metadata");
+        if con_cli_process_metadata {
+            cmd.arg("--process-metadata");
+        }
         cmd.arg("--cols")
             .arg(options.size.columns.max(1).to_string());
         cmd.arg("--rows").arg(options.size.rows.max(1).to_string());
@@ -1259,7 +1258,7 @@ fn spawn_host_bridge(
             stream_shutdown: stream,
             socket_path,
             child: Mutex::new(child),
-            process_metadata: true,
+            process_metadata: !use_con_cli || con_cli_process_metadata,
         },
         input,
         input_worker,
@@ -1290,6 +1289,13 @@ fn bridge_help_supports_process_metadata(status_success: bool, stdout: &[u8]) ->
         && stdout
             .windows(b"--process-metadata".len())
             .any(|w| w == b"--process-metadata")
+}
+
+fn bridge_capabilities(status_success: bool, stdout: &[u8]) -> (bool, bool) {
+    (
+        bridge_help_supports_literal_commands(status_success, stdout),
+        bridge_help_supports_process_metadata(status_success, stdout),
+    )
 }
 
 fn spawn_bridge_reader_thread(
@@ -1339,7 +1345,22 @@ fn spawn_bridge_reader_thread(
                         let mut len_bytes = [0u8; 4];
                         if stream_reader.read_exact(&mut len_bytes).is_err() { break; }
                         let len = u32::from_be_bytes(len_bytes) as usize;
-                        if len > MAX_BRIDGE_METADATA_BYTES { break; }
+                        if len > MAX_BRIDGE_METADATA_BYTES {
+                            // Metadata is optional. Discard an oversized frame in
+                            // bounded chunks so it cannot kill an otherwise healthy
+                            // terminal session or force a large allocation.
+                            let mut remaining = len;
+                            let mut discard = [0_u8; 8192];
+                            while remaining > 0 {
+                                let chunk = remaining.min(discard.len());
+                                if stream_reader.read_exact(&mut discard[..chunk]).is_err() {
+                                    break;
+                                }
+                                remaining -= chunk;
+                            }
+                            if remaining > 0 { break; }
+                            continue;
+                        }
                         let mut payload = vec![0; len];
                         if stream_reader.read_exact(&mut payload).is_err() { break; }
                         if let Ok((sequence, process_group_id, processes)) = serde_json::from_slice::<(u64, Option<u32>, Vec<crate::process::ProcessInfo>)>(&payload) {
@@ -1808,9 +1829,9 @@ mod tests {
 
     use super::{
         BRIDGE_READY, BRIDGE_STARTUP_ERROR, EMBEDDED_PYTHON_BRIDGE, LinuxPtyOptions,
-        LinuxPtySession, SessionShared, bridge_help_supports_literal_commands,
-        bridge_help_supports_process_metadata, duplicate_fd, host_bridge_option,
-        set_fd_nonblocking, write_all_cancellable,
+        LinuxPtySession, MAX_BRIDGE_METADATA_BYTES, SessionShared, bridge_capabilities,
+        bridge_help_supports_literal_commands, bridge_help_supports_process_metadata, duplicate_fd,
+        host_bridge_option, set_fd_nonblocking, spawn_bridge_reader_thread, write_all_cancellable,
     };
 
     fn unique_test_socket(name: &str) -> std::path::PathBuf {
@@ -1854,6 +1875,54 @@ mod tests {
             false,
             b"--process-metadata"
         ));
+    }
+
+    #[test]
+    fn host_bridge_uses_older_literal_capable_cli_without_metadata() {
+        assert_eq!(
+            bridge_capabilities(
+                true,
+                b"Usage: con-cli pty-bridge [OPTIONS]\n    --literal-command"
+            ),
+            (true, false)
+        );
+        assert_eq!(
+            bridge_capabilities(true, b"--literal-command\n--process-metadata"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn oversized_optional_metadata_does_not_tear_down_output_stream() {
+        let (mut writer, reader) = UnixStream::pair().expect("create bridge stream pair");
+        let shared = Arc::new(SessionShared::new(
+            Arc::new(VtScreen::new(80, 24, None).expect("create vt screen")),
+            None,
+            None,
+        ));
+        spawn_bridge_reader_thread(reader, shared.clone(), std::time::Instant::now());
+
+        let oversized = MAX_BRIDGE_METADATA_BYTES + 1;
+        writer.write_all(&[0x06]).unwrap();
+        writer.write_all(&(oversized as u32).to_be_bytes()).unwrap();
+        writer.write_all(&vec![b'x'; oversized]).unwrap();
+        writer
+            .write_all(&[0x00, 0, 0, 0, 6, b'm', b'a', b'r', b'k', b'e', b'r'])
+            .unwrap();
+        writer.write_all(&[0x02, 0, 0, 0, 0]).unwrap();
+        drop(writer);
+
+        for _ in 0..100 {
+            if !shared.alive.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*shared.last_exit_code.lock(), Some(0));
+        assert_eq!(
+            shared.transcript.lock().search("marker", 1),
+            vec![(0, "marker".to_string())]
+        );
     }
 
     #[test]
@@ -1993,9 +2062,22 @@ mod tests {
                         Vec<crate::process::ProcessInfo>,
                     ) = serde_json::from_slice(&payload).unwrap();
                     assert_eq!(sequence, 7301);
-                    // This test runs on macOS, where /proc is absent: the
-                    // Python fallback must report an unavailable observation.
-                    assert!(processes.is_empty());
+                    #[cfg(target_os = "linux")]
+                    {
+                        let pgid = _pgid.expect("shell should own a foreground process group");
+                        assert!(
+                            !processes.is_empty()
+                                && processes
+                                    .iter()
+                                    .all(|process| process.process_group_id == Some(pgid)),
+                            "Linux metadata should include the foreground process group: {processes:?}"
+                        );
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    assert!(
+                        processes.is_empty(),
+                        "hosts without /proc report an unavailable process observation"
+                    );
                     break;
                 }
                 tag => panic!("unexpected frame before metadata: {tag:#x}"),
