@@ -2104,11 +2104,7 @@ impl GhosttyView {
         };
 
         let (x, y) = self.view_local_pos(position);
-        terminal.send_mouse_pos(
-            x,
-            y,
-            pointer_mods_to_ghostty(modifiers, modifiers.platform && terminal.mouse_captured()),
-        );
+        terminal.send_mouse_pos(x, y, self.pointer_mods(modifiers));
     }
 
     /// Handle key input by forwarding to ghostty's key processing pipeline.
