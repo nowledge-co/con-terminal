@@ -211,7 +211,7 @@ fn osc8_link_preview_card(
     } else {
         theme.warning
     };
-    let status = if will_open { "Opens" } else { "Blocked" };
+    let status = if will_open { "⌘C Copy" } else { "Blocked" };
 
     div()
         .debug_selector(|| "osc8-link-preview-card".into())
@@ -257,6 +257,20 @@ fn osc8_link_preview_card(
                 .text_color(accent)
                 .child(status),
         )
+}
+
+fn copyable_terminal_text(
+    has_selection: bool,
+    selection: Option<String>,
+    hovered_link: Option<&Osc8UrlDecision>,
+) -> Option<String> {
+    if has_selection {
+        return selection;
+    }
+    match hovered_link? {
+        Osc8UrlDecision::Allow(url) => Some(url.clone()),
+        Osc8UrlDecision::Deny(_) => None,
+    }
 }
 
 /// GPUI view wrapping a ghostty terminal surface.
@@ -313,11 +327,11 @@ pub struct GhosttyView {
     process_exit_emitted: bool,
     /// Retry surface creation after transient libghostty initialization failures.
     next_surface_init_retry_at: Option<Instant>,
-    /// Last mouse position seen by GPUI. Ghostty link hover state depends on
-    /// both position and modifiers, but macOS sends modifier changes without a
-    /// mouse-move event when the pointer is stationary.
+    /// Last mouse position seen by GPUI, used for link previews and mouse input.
     #[cfg(target_os = "macos")]
     last_mouse_position: Option<Point<Pixels>>,
+    #[cfg(target_os = "macos")]
+    last_forwarded_modifiers: Cell<Modifiers>,
     /// Decision for the OSC 8 target under the pointer; shown while hovering.
     hovered_osc8_url: Option<Osc8UrlDecision>,
     /// The last OSC 8 target denied on click; shown until dismissed.
@@ -400,6 +414,8 @@ impl GhosttyView {
             next_surface_init_retry_at: None,
             #[cfg(target_os = "macos")]
             last_mouse_position: None,
+            #[cfg(target_os = "macos")]
+            last_forwarded_modifiers: Cell::new(Modifiers::default()),
             hovered_osc8_url: None,
             blocked_osc8_url: None,
             #[cfg(target_os = "macos")]
@@ -1319,6 +1335,7 @@ impl GhosttyView {
                 terminal.set_focus(self.surface_focused.get());
                 let terminal = Arc::new(terminal);
                 self.terminal = Some(terminal.clone());
+                self.last_forwarded_modifiers.set(Modifiers::default());
                 self.restored_screen_text = None;
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
@@ -2085,14 +2102,27 @@ impl GhosttyView {
     }
 
     #[cfg(target_os = "macos")]
-    fn refresh_mouse_modifiers(&self, modifiers: &Modifiers) {
-        let (Some(terminal), Some(position)) = (self.terminal.as_ref(), self.last_mouse_position)
-        else {
+    fn sync_modifiers(&self, modifiers: &Modifiers) {
+        let Some(terminal) = self.terminal.as_ref() else {
             return;
         };
-
-        let (x, y) = self.view_local_pos(position);
-        terminal.send_mouse_pos(x, y, gpui_mods_to_ghostty(modifiers));
+        let previous = self.last_forwarded_modifiers.replace(*modifiers);
+        let Some((keycode, pressed)) = changed_modifier_key(previous, *modifiers) else {
+            return;
+        };
+        terminal.send_key(ffi::ghostty_input_key_s {
+            action: if pressed {
+                ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
+            } else {
+                ffi::ghostty_input_action_e::GHOSTTY_ACTION_RELEASE
+            },
+            mods: gpui_mods_to_ghostty(modifiers),
+            consumed_mods: 0,
+            keycode,
+            text: std::ptr::null(),
+            unshifted_codepoint: 0,
+            composing: false,
+        });
     }
 
     /// Handle key input by forwarding to ghostty's key processing pipeline.
@@ -2117,10 +2147,14 @@ impl GhosttyView {
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 "c" => {
-                    if terminal.has_selection()
-                        && let Some(selection) = terminal.selection_text()
-                    {
-                        cx.write_to_clipboard(ClipboardItem::new_string(selection));
+                    let has_selection = terminal.has_selection();
+                    let selection = has_selection.then(|| terminal.selection_text()).flatten();
+                    if let Some(text) = copyable_terminal_text(
+                        has_selection,
+                        selection,
+                        self.hovered_osc8_url.as_ref(),
+                    ) {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                     return true;
                 }
@@ -2409,6 +2443,20 @@ fn gpui_mods_to_ghostty(mods: &Modifiers) -> i32 {
         m |= ffi::GHOSTTY_MODS_SUPER;
     }
     m
+}
+
+#[cfg(target_os = "macos")]
+fn changed_modifier_key(previous: Modifiers, current: Modifiers) -> Option<(u32, bool)> {
+    [
+        (previous.platform, current.platform, 0x37),
+        (previous.shift, current.shift, 0x38),
+        (previous.control, current.control, 0x3B),
+        (previous.alt, current.alt, 0x3A),
+    ]
+    .into_iter()
+    .find_map(|(was_pressed, is_pressed, keycode)| {
+        (was_pressed != is_pressed).then_some((keycode, is_pressed))
+    })
 }
 
 /// Return the Shift modifier safely inferred as consumed by text translation.
@@ -2735,6 +2783,7 @@ impl Render for GhosttyView {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
+                    this.sync_modifiers(&event.modifiers);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
                     this.begin_mouse_sequence(MouseButton::Left, event.position, mods);
                     cx.emit(GhosttyFocusChanged);
@@ -2746,6 +2795,7 @@ impl Render for GhosttyView {
                 cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                     this.scrollbar_drag = None;
                     this.last_mouse_position = Some(event.position);
+                    this.sync_modifiers(&event.modifiers);
                     let mods = gpui_mods_to_ghostty(&event.modifiers);
                     if this.release_left_mouse_sequence(event.position, Some(mods), cx)
                         && this.drain_surface_state(true, cx)
@@ -2817,8 +2867,11 @@ impl Render for GhosttyView {
                 }
             }))
             .on_modifiers_changed(cx.listener(
-                |this, event: &ModifiersChangedEvent, _window, _cx| {
-                    this.refresh_mouse_modifiers(&event.modifiers);
+                |this, event: &ModifiersChangedEvent, _window, cx| {
+                    this.sync_modifiers(&event.modifiers);
+                    if this.drain_surface_state(false, cx) {
+                        cx.notify();
+                    }
                 },
             ))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
@@ -2972,6 +3025,53 @@ mod tests {
         Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    #[test]
+    fn terminal_copy_prefers_selection_then_full_osc8_target() {
+        let link = Osc8UrlDecision::Allow("https://example.com/".to_string() + &"x".repeat(512));
+        assert_eq!(
+            super::copyable_terminal_text(true, Some("selected".into()), Some(&link)),
+            Some("selected".into())
+        );
+        assert_eq!(super::copyable_terminal_text(true, None, Some(&link)), None);
+        assert_eq!(
+            super::copyable_terminal_text(false, None, Some(&link)),
+            Some("https://example.com/".to_string() + &"x".repeat(512))
+        );
+        assert_eq!(super::copyable_terminal_text(false, None, None), None);
+        let blocked = crate::terminal_url::evaluate_osc8_url("file:///tmp/private");
+        assert_eq!(
+            super::copyable_terminal_text(false, None, Some(&blocked)),
+            None
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn modifier_changes_use_native_key_events_for_link_refresh() {
+        let plain = Modifiers::default();
+        let command = Modifiers {
+            platform: true,
+            ..plain
+        };
+        assert_eq!(
+            super::changed_modifier_key(plain, command),
+            Some((0x37, true))
+        );
+        assert_eq!(
+            super::changed_modifier_key(command, plain),
+            Some((0x37, false))
+        );
+        assert_eq!(super::changed_modifier_key(command, command), None);
+        let shift = Modifiers {
+            shift: true,
+            ..plain
+        };
+        assert_eq!(
+            super::changed_modifier_key(plain, shift),
+            Some((0x38, true))
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

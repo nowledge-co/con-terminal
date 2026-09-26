@@ -17,6 +17,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#401](https://github.com/nowledge-co/con-terminal/pull/401) by
   [@sunny0826](https://github.com/sunny0826))_
 
+### Fixed
+
+**Terminal · macOS**
+
+- Command-click now opens terminal links even when Command is pressed after
+  hovering. For long, wrapped links such as Codex sign-in URLs, hover and press
+  Command-C to copy the complete address without selecting every line. _(PR
+  [#404](https://github.com/nowledge-co/con-terminal/pull/404) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ---
 
 ## `v0.1.0-beta.111` - 2026-09-24

@@ -146,6 +146,10 @@ Use the platform modifier to open links from terminal output:
 - macOS: hold <kbd>⌘</kbd>, then click a URL.
 - Windows and Linux: hold <kbd>⌃</kbd>, then click a URL.
 
+On macOS, hover a terminal link and press <kbd>⌘</kbd><kbd>C</kbd> to copy its
+complete address, even if it wraps across several lines. A text selection
+takes priority over the hovered link.
+
 Paste text normally. Dragging files into the terminal sends their paths. When a
 TUI supports image/file paste protocols, con forwards compatible clipboard and
 drop payloads through the terminal path.
