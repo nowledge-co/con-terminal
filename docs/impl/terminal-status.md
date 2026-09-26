@@ -33,9 +33,9 @@ Brand icons remain still. Busy-without-percentage uses a rotating Phosphor
 circle-notch ring around the icon, with a 1.2-second period and full theme
 progress color even on inactive tabs. The icon slot stays the same size in all
 states to avoid layout shifts. Determinate progress, error and attention use
-static lines. Each chrome group
-has one `TabActivity` entity with a synchronized GPUI animation whose own timer
-is limited to 24 Hz. Other events can still render the entity more frequently.
+static lines. Each chrome group has one `TabActivity` entity with a synchronized
+GPUI animation driven by display frames. Do not apply a low-frequency timer cap
+to the rotating ring: coarse angular steps make continuous motion visibly jerky.
 Reduced motion leaves a static ring. Hidden windows and clipped markers do not
 qualify for continued animation.
 

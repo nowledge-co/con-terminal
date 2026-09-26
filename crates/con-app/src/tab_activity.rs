@@ -210,9 +210,7 @@ impl Render for TabActivity {
             moving
                 .with_animation(
                     "tab-activity",
-                    Animation::new(Duration::from_millis(1200))
-                        .repeat_synced()
-                        .with_max_fps(24.0),
+                    Animation::new(Duration::from_millis(1200)).repeat_synced(),
                     move |element, delta| {
                         angle.set(std::f32::consts::TAU * delta);
                         element
