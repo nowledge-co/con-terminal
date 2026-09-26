@@ -1124,9 +1124,9 @@ impl SessionSidebar {
                     div()
                         .absolute()
                         .left(px(2.0))
-                        .top(px((RAIL_ICON_SIZE - 14.0) / 2.0))
+                        .top(px(8.0))
+                        .bottom(px(8.0))
                         .w(px(2.0))
-                        .h(px(14.0))
                         .rounded(px(1.0))
                         .bg(dot_color),
                 );
