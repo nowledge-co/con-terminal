@@ -22,7 +22,9 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal · macOS**
 
 - Cmd-click now opens links inside mouse-aware terminal apps, including long
-  Codex sign-in URLs. Shift-drag still selects text for copying.
+  Codex sign-in URLs. Shift-drag still selects text for copying. _(PR
+  [#403](https://github.com/nowledge-co/con-terminal/pull/403) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ---
 
