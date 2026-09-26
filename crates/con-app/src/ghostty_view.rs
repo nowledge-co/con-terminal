@@ -2869,7 +2869,7 @@ impl Render for GhosttyView {
             .on_modifiers_changed(cx.listener(
                 |this, event: &ModifiersChangedEvent, _window, cx| {
                     this.sync_modifiers(&event.modifiers);
-                    if this.drain_surface_state(true, cx) {
+                    if this.drain_surface_state(false, cx) {
                         cx.notify();
                     }
                 },
