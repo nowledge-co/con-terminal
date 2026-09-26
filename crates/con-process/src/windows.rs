@@ -262,12 +262,23 @@ mod tests {
             resolve_descendants(&root.identity, &empty, 200, |_| Some(process(10, 101))).is_empty()
         );
         assert!(resolve_descendants(&root.identity, &empty, 200, |_| None).is_empty());
-        let children = BTreeMap::from([(10, (20..20 + MAX_PROCESS_CANDIDATES as u32).collect())]);
+        let mut children = BTreeMap::from([(
+            10,
+            (20..20 + MAX_PROCESS_CANDIDATES as u32).collect::<Vec<_>>(),
+        )]);
         assert!(
             resolve_descendants(&root.identity, &children, 200, |pid| Some(process(
                 pid, 100
             )))
             .is_empty()
+        );
+        children.get_mut(&10).unwrap().pop();
+        assert_eq!(
+            resolve_descendants(&root.identity, &children, 200, |pid| Some(process(
+                pid, 100
+            )))
+            .len(),
+            MAX_PROCESS_CANDIDATES
         );
     }
 }

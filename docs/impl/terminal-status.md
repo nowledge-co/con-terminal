@@ -14,7 +14,9 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   means unknown, not completion. OSC 9;4 expiry remains backend-owned.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous
   batches and tab aggregation. Closed/replaced surfaces and stale completions
-  cannot update a new surface. Batches have a 300 ms minimum interval and a
+  cannot update a new surface. Completions check revision as well as query and
+  incarnation, so an A→B→A query transition cannot accept old work.
+  Batches have a 300 ms minimum interval and a
   one-second backstop; screen fallback is bounded separately.
 - The host PTY bridge returns sequence-correlated process metadata through one
   bounded worker. Host PIDs must never be queried in the sandbox namespace.
@@ -29,7 +31,8 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
 
 Brand icons remain still. Busy-without-percentage uses a subtle activity line;
 determinate progress, error and attention use static lines. Each chrome group
-has one `TabActivity` entity with a synchronized, capped 24 Hz GPUI animation.
+has one `TabActivity` entity with a synchronized GPUI animation whose own timer
+is limited to 24 Hz. Other events can still render the entity more frequently.
 Reduced motion disables the pulse. Hidden windows and clipped markers do not
 qualify for continued animation.
 
@@ -45,6 +48,29 @@ inputs; focus changes also invalidate them. Input and agent panel view caches
 have externally constrained dimensions and are bypassed throughout transitions,
 including the final settling frame. New mutation paths must explicitly notify
 the appropriate entity rather than relying on an unrelated parent render.
+
+Focus changes reaggregate cached facts before rendering, rather than waiting
+for the collector's backstop. This path never scans terminal screens or queries
+processes. Identity changes invalidate direct-agent busy/idle reports only;
+attention and generic title motion survive, without renewing motion's lease.
+
+### GPUI snapshot contracts
+
+These contracts refer to the locked `gpui-pre 0.3.6` (Zed `bcf6582`) and
+`gpui-component 0.6.6`, not moving upstream main:
+
+- [`request_animation_frame`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/window.rs#L2609-L2633)
+  notifies the current view. Rendered ancestors become dirty too; this overlay
+  is not a paint-only invalidation mechanism. `observe_self` observes explicit
+  workspace notifications, not every ancestor redraw.
+- [`AnyView::cached`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/view.rs#L421-L525)
+  uses the supplied style as its layout contract. Bounds, mask and text style
+  participate in reuse; parent opacity does not. Keep both dimensions constrained
+  and bypass caching through the final transition frame. Do not cache the row
+  registration subtree: a cache hit skips its canvas prepaint callbacks.
+- [`with_max_fps`](https://github.com/zed-industries/zed/blob/bcf6582/crates/gpui/src/elements/animation.rs#L451-L469)
+  throttles animation notifications, not all renders. Synced repeating animations
+  share phase; reduced motion stops their continuation scheduling.
 
 ## Verification
 

@@ -214,6 +214,7 @@ impl Render for ConWorkspace {
             previous_focus != self.tabs[self.active_tab].pane_tree.focused_pane_id();
         if std::mem::take(&mut self.chrome_preparation_dirty) {
             log::trace!(target: "con::activity", "chrome_prepare");
+            self.refresh_cached_tab_presentation(cx);
             self.reconcile_runtime_trackers_for_tab(self.active_tab);
 
             // Sync pane info and CWD to input bar

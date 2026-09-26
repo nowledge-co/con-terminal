@@ -407,6 +407,7 @@ pub fn run_pty_bridge(_args: PtyBridgeArgs) -> Result<()> {
 mod tests {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime};
 
@@ -478,12 +479,14 @@ mod tests {
         completion_timeout: Duration,
         process_metadata: bool,
     ) -> (Vec<u8>, i32) {
+        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
+        let serial = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let unique = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("clock after unix epoch")
             .as_nanos();
         let socket = std::env::temp_dir().join(format!(
-            "con-pty-bridge-{}-{unique}-{iteration}.sock",
+            "con-pty-{}-{unique:x}-{serial:x}-{iteration}.sock",
             std::process::id(),
         ));
         let listener = UnixListener::bind(&socket).expect("bind bridge test socket");

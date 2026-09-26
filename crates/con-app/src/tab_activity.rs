@@ -1,5 +1,5 @@
-//! One paint-only activity layer per tab chrome group. Row markers supply their
-//! clipped bounds; only this small entity owns a repeating animation.
+//! One activity overlay per tab chrome group. Row markers supply clipped bounds;
+//! this entity owns the clock, but GPUI also invalidates its rendered ancestors.
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 

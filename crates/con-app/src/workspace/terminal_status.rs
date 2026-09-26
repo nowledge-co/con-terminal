@@ -143,6 +143,7 @@ pub(super) struct TerminalPresentation {
     in_flight: bool,
     last_query: Option<Instant>,
     sequence: u64,
+    presented_focus: Option<(u64, usize, Option<u64>)>,
 }
 
 impl ConWorkspace {
@@ -150,15 +151,8 @@ impl ConWorkspace {
     pub(super) fn refresh_terminal_presentation(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
         let mut live = HashSet::new();
-        let mut changed = false;
         let state = &mut self.terminal_presentation;
-        for (index, tab) in self.tabs.iter_mut().enumerate() {
-            let focused = tab
-                .pane_tree
-                .focused_terminal_entity_id()
-                .map(|id| id.as_u64());
-            let mut statuses = Vec::new();
-            let mut focused_agent = None;
+        for tab in &self.tabs {
             for terminal in tab.pane_tree.all_surface_terminals() {
                 let id = terminal.entity_id().as_u64();
                 let Some(instance) = terminal
@@ -320,13 +314,45 @@ impl ConWorkspace {
                         };
                         Progress { activity, percent }
                     }));
-                if let Some(status) = surface.status.status(now) {
-                    statuses.push(status);
-                }
-                if Some(id) == focused {
-                    focused_agent = surface.status.identity().map(|identity| identity.agent);
-                }
             }
+        }
+        state.sequence += 2;
+        state.surfaces.retain(|id, _| live.contains(id));
+        self.refresh_cached_tab_presentation(cx);
+    }
+
+    /// Reaggregate retained facts after focus/layout events, without terminal
+    /// reads, screen scans or process queries in GPUI's render path.
+    pub(super) fn refresh_cached_tab_presentation(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let state = &mut self.terminal_presentation;
+        let focus = self.tabs.get(self.active_tab).map(|tab| {
+            (
+                tab.summary_id,
+                tab.pane_tree.focused_pane_id(),
+                tab.pane_tree
+                    .focused_terminal_entity_id()
+                    .map(|id| id.as_u64()),
+            )
+        });
+        let mut changed = state.presented_focus != focus;
+        state.presented_focus = focus;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let focused = tab
+                .pane_tree
+                .focused_terminal_entity_id()
+                .map(|id| id.as_u64());
+            let mut statuses: Vec<_> = tab
+                .pane_tree
+                .all_surface_terminals()
+                .iter()
+                .filter_map(|terminal| state.surfaces.get(&terminal.entity_id().as_u64()))
+                .filter_map(|surface| surface.status.status(now))
+                .collect();
+            let focused_agent = focused
+                .and_then(|id| state.surfaces.get(&id))
+                .and_then(|surface| surface.status.identity())
+                .map(|identity| identity.agent);
             if tab.agent_cli != focused_agent {
                 tab.agent_cli = focused_agent;
                 changed = true;
@@ -352,8 +378,6 @@ impl ConWorkspace {
                 changed = true;
             }
         }
-        state.sequence += 2;
-        state.surfaces.retain(|id, _| live.contains(id));
         state
             .tabs
             .retain(|id, _| self.tabs.iter().any(|tab| tab.summary_id == *id));

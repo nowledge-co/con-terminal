@@ -465,8 +465,8 @@ impl ConWorkspace {
         .detach();
         cx.observe_window_activation(window, Self::on_window_activation_changed)
             .detach();
-        // Child paint animations invalidate their own entities, not workspace
-        // data. Retain prepared panel inputs until a workspace event changes them.
+        // Child animations dirty rendered ancestors too, but do not notify this
+        // entity's observers. Only workspace notifications invalidate these inputs.
         cx.observe_self(|this, _| this.chrome_preparation_dirty = true)
             .detach();
 
