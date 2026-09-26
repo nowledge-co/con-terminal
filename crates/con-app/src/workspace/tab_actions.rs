@@ -532,7 +532,7 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_title_changed(
         &mut self,
-        entity: &Entity<GhosttyView>,
+        _entity: &Entity<GhosttyView>,
         event: &GhosttyTitleChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -541,21 +541,11 @@ impl ConWorkspace {
         if event.content_changed {
             self.sync_sidebar(cx);
             self.request_tab_summaries(cx);
-        } else if self.vertical_tabs_enabled() {
-            // Do not rebuild every tab's names, paths and SSH metadata at the
-            // application's animation cadence. Update only the owning row.
-            if let Some(index) = self.tabs.iter().position(|tab| {
-                tab.pane_tree
-                    .pane_id_for_entity(entity.entity_id())
-                    .is_some()
-            }) {
-                let entry = self.sidebar_entry(index, cx);
-                self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.update_session(entry, cx);
-                });
-            }
+            cx.notify();
         }
-        cx.notify();
+        // Record title evidence immediately, but only a semantic status change
+        // invalidates chrome. Individual application spinner frames do not.
+        self.refresh_terminal_presentation(cx);
     }
 
     pub(crate) fn on_terminal_bell(

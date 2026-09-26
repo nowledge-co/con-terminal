@@ -99,6 +99,7 @@ impl ConWorkspace {
         elevated_ui_surface_opacity: f32,
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
+        self.tab_activity.read(cx).clear();
         let theme = cx.theme();
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
@@ -400,37 +401,16 @@ impl ConWorkspace {
                     .copied()
                     .flatten();
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
-                let is_editor_only = tab.pane_tree.pane_terminals().is_empty();
-                let (hostname_for_tab, title_for_tab, dir_for_tab) =
-                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
-                        (
-                            self.effective_remote_host_for_tab(index, terminal, cx),
-                            terminal.title_name(cx),
-                            terminal.current_dir(cx),
-                        )
-                    } else {
-                        (None, Some(tab.title.clone()), None)
-                    };
-                let presentation = smart_tab_presentation(
-                    tab.user_label.as_deref(),
-                    tab.ai_label.as_deref(),
-                    tab.ai_icon.map(|k| k.svg_path()),
-                    tab.agent_cli,
-                    hostname_for_tab.as_deref(),
-                    title_for_tab.as_deref(),
-                    dir_for_tab.as_deref(),
-                    index,
-                    is_editor_only,
-                );
-                let tab_icon = presentation.icon;
+                // Sidebar and strip consume the same retained names and icons.
+                // Paint-only ticks must not query terminal/runtime metadata.
+                let presentation = self.sidebar.read(cx).session(index);
+                let tab_icon = presentation.map_or("phosphor/terminal.svg", |entry| entry.icon);
+                let name = presentation.map_or(tab.title.as_str(), |entry| entry.name.as_str());
 
-                let display_title: String = if presentation.name.chars().count() > 24 {
-                    format!(
-                        "{}…",
-                        &presentation.name[..presentation.name.floor_char_boundary(22)]
-                    )
+                let display_title: String = if name.chars().count() > 24 {
+                    format!("{}…", &name[..name.floor_char_boundary(22)])
                 } else {
-                    presentation.name
+                    name.to_owned()
                 };
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
@@ -727,10 +707,14 @@ impl ConWorkspace {
                     );
                 }
 
-                if let Some(status) = terminal_status {
-                    tab_el = tab_el.child(crate::sidebar::tab_progress_indicator(
-                        theme, status, is_active, 0.0,
-                    ));
+                if let Some(status) =
+                    terminal_status.filter(|_| !is_dragged_source && tab_strip_progress > 0.01)
+                {
+                    tab_el = tab_el.child(
+                        self.tab_activity
+                            .read(cx)
+                            .marker(status, theme, is_active, 0.0),
+                    );
                 }
 
                 let mut tab_content = div()
@@ -1438,6 +1422,14 @@ impl ConWorkspace {
             }
         }
 
-        top_bar
+        top_bar.relative().child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .opacity(tab_strip_progress)
+                .child(self.tab_activity.clone()),
+        )
     }
 }

@@ -260,6 +260,7 @@ impl ConWorkspace {
                 {
                     surface.last_scan = Some(now);
                     scanned = true;
+                    log::trace!(target: "con::activity", "identity_screen_scan surface={id}");
                     let lines = terminal.content_lines(200, cx);
                     con_agent::context::classify_screen_agent_cli(title.as_deref(), &lines)
                         .or_else(|| agent_from_screen_text(&lines))
@@ -377,6 +378,7 @@ impl ConWorkspace {
         }
         state.in_flight = true;
         state.last_query = Some(now);
+        log::trace!(target: "con::activity", "process_batch surfaces={}", requests.len());
         let queries: Vec<_> = requests.iter().map(|(_, _, query)| query.clone()).collect();
         let task = cx
             .background_executor()

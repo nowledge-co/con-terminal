@@ -465,6 +465,10 @@ impl ConWorkspace {
         .detach();
         cx.observe_window_activation(window, Self::on_window_activation_changed)
             .detach();
+        // Child paint animations invalidate their own entities, not workspace
+        // data. Retain prepared panel inputs until a workspace event changes them.
+        cx.observe_self(|this, _| this.chrome_preparation_dirty = true)
+            .detach();
 
         // Activity bar: sync file/search drawer state back to workspace on click.
         let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
@@ -706,11 +710,6 @@ impl ConWorkspace {
 
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
-                        // Output flowed — ask the AI summarizer to
-                        // re-check. The engine's per-tab 5 s budget
-                        // and context-hash dedupe keep this from
-                        // firing more than once per real change.
-                        workspace.request_tab_summaries(cx);
                         let now = std::time::Instant::now();
                         if should_refresh_agent_cli(
                             last_agent_cli_refresh,
@@ -721,15 +720,11 @@ impl ConWorkspace {
                             last_agent_cli_refresh = Some(now);
                         }
                         cx.notify();
-                    } else if last_summary_poll.elapsed() >= summary_poll_interval {
-                        // Backstop for the pump-driven trigger
-                        // above. `pump_ghostty_views` only fires
-                        // while output is actively streaming, so a
-                        // tab whose context drifted while it sat
-                        // idle (user navigated away and back)
-                        // would never re-summarize. The engine's
-                        // per-tab cache + 5 s success budget keep
-                        // repeated calls cheap.
+                    }
+                    if last_summary_poll.elapsed() >= summary_poll_interval {
+                        // Title frames and metadata wakes are not terminal
+                        // content changes. Summary screen reads have their own
+                        // bounded cadence, never the presentation/animation rate.
                         workspace.request_tab_summaries(cx);
                         last_summary_poll = std::time::Instant::now();
                     }
@@ -797,6 +792,8 @@ impl ConWorkspace {
             sidebar,
             tabs,
             terminal_presentation: Default::default(),
+            tab_activity: cx.new(|_| crate::tab_activity::TabActivity::default()),
+            chrome_preparation_dirty: true,
             active_tab,
             last_editor_tab_id: None,
             is_quick_terminal: false,

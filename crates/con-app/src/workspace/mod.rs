@@ -149,6 +149,8 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     terminal_presentation: terminal_status::TerminalPresentation,
+    tab_activity: Entity<crate::tab_activity::TabActivity>,
+    chrome_preparation_dirty: bool,
     active_tab: usize,
     /// Stable summary id of the last activated editor-only tab.
     ///

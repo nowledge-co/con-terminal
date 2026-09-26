@@ -17,12 +17,12 @@
 use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
 use crate::ui_scale::ui_icon_px;
-use con_core::terminal_status::{Activity, Status};
+use con_core::terminal_status::Status;
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
     Render, SharedString, Size, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window,
-    div, point, prelude::*, px, relative, svg,
+    div, point, prelude::*, px, svg,
 };
 use gpui_component::{
     ActiveTheme, ElementExt, InteractiveElementExt, Sizable,
@@ -226,6 +226,7 @@ impl Render for DraggedTab {
 pub struct SessionSidebar {
     mode: PanelMode,
     sessions: Vec<SessionEntry>,
+    activity_layer: Option<Entity<crate::tab_activity::TabActivity>>,
     active_session: usize,
     leading_top_pad: f32,
     /// Smooth width animation between rail (0.0) and pinned (1.0).
@@ -347,6 +348,7 @@ impl SessionSidebar {
         Self {
             mode: PanelMode::Collapsed,
             sessions: Vec::new(),
+            activity_layer: None,
             active_session: 0,
             // The workspace top bar already reserves the macOS
             // traffic-light/titlebar area before the sidebar is
@@ -635,6 +637,11 @@ impl SessionSidebar {
         self.set_pinned(now_pinned, cx);
     }
 
+    /// Retained metadata also used by the horizontal tab strip.
+    pub(crate) fn session(&self, index: usize) -> Option<&SessionEntry> {
+        self.sessions.get(index)
+    }
+
     /// Update the session list from workspace state.
     pub fn sync_sessions(
         &mut self,
@@ -650,17 +657,6 @@ impl SessionSidebar {
         self.sessions = sessions;
         self.active_session = active;
         cx.notify();
-    }
-
-    pub fn update_session(&mut self, entry: SessionEntry, cx: &mut Context<Self>) {
-        if let Some(session) = self
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == entry.id)
-        {
-            *session = entry;
-            cx.notify();
-        }
     }
 
     fn begin_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1105,7 +1101,13 @@ impl SessionSidebar {
                 );
             }
             if let Some(status) = session.status {
-                pill = pill.child(tab_progress_indicator(theme, status, is_active, 4.0));
+                pill = pill.child(
+                    self.activity_layer
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .marker(status, theme, is_active, 4.0),
+                );
             }
             if is_active {
                 let dot_color = if let Some(color) = session.color {
@@ -1849,7 +1851,13 @@ impl SessionSidebar {
                     .child(close_btn),
             );
         if let Some(status) = session.status {
-            row = row.child(tab_progress_indicator(theme, status, is_active, 8.0));
+            row = row.child(
+                self.activity_layer
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .marker(status, theme, is_active, 8.0),
+            );
         }
         row.into_any_element()
     }
@@ -1857,6 +1865,11 @@ impl SessionSidebar {
 
 impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let activity_layer = self
+            .activity_layer
+            .get_or_insert_with(|| cx.new(|_| crate::tab_activity::TabActivity::default()))
+            .clone();
+        activity_layer.read(cx).clear();
         // Clear stale drop indicator after the drag completes — GPUI
         // doesn't expose an on_drag_end hook for the source element.
         let has_drag = cx.has_active_drag();
@@ -1884,6 +1897,7 @@ impl Render for SessionSidebar {
                 .w(px(RAIL_WIDTH))
                 .flex_shrink_0()
                 .child(self.render_rail(window, cx))
+                .child(activity_layer)
                 .into_any_element();
         }
 
@@ -1894,6 +1908,7 @@ impl Render for SessionSidebar {
                 let panel = self.render_panel_body(false, window, cx);
                 let panel_w = (visible_w - RAIL_WIDTH).max(0.0);
                 div()
+                    .relative()
                     .flex()
                     .h_full()
                     .w(px(visible_w))
@@ -1908,6 +1923,7 @@ impl Render for SessionSidebar {
                             .overflow_hidden()
                             .child(panel),
                     )
+                    .child(activity_layer)
                     .into_any_element()
             }
             PanelMode::Collapsed => div()
@@ -1916,6 +1932,7 @@ impl Render for SessionSidebar {
                 .w(px(RAIL_WIDTH))
                 .flex_shrink_0()
                 .child(self.render_rail(window, cx))
+                .child(activity_layer)
                 .into_any_element(),
         }
     }
@@ -1978,38 +1995,6 @@ pub(crate) fn tab_status_icon(icon: &'static str, size: Pixels, color: Hsla) -> 
         .flex_shrink_0()
         .text_color(color)
         .into_any_element()
-}
-
-pub(crate) fn tab_progress_indicator(
-    theme: &gpui_component::Theme,
-    status: Status,
-    is_active: bool,
-    inset: f32,
-) -> Div {
-    let color = match status.activity {
-        Activity::Busy => theme.progress_bar,
-        Activity::Error => theme.danger,
-        Activity::Paused | Activity::NeedsInput => theme.warning,
-        Activity::Idle | Activity::Unknown => return div(),
-    };
-    let indicator = div()
-        .absolute()
-        .left(px(inset))
-        .right(px(inset))
-        .bottom(px(1.0))
-        .h(px(2.0));
-    if let Some(percent) = status.percent {
-        indicator
-            .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
-            .child(
-                div()
-                    .h_full()
-                    .w(relative(f32::from(percent) / 100.0))
-                    .bg(color.opacity(if is_active { 0.82 } else { 0.58 })),
-            )
-    } else {
-        indicator.bg(color.opacity(if is_active { 0.62 } else { 0.42 }))
-    }
 }
 
 fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {

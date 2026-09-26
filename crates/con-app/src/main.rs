@@ -77,6 +77,7 @@ mod settings_panel;
 mod sidebar;
 mod sidebar_search_view;
 mod startup_args;
+mod tab_activity;
 mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
