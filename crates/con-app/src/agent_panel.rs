@@ -147,6 +147,18 @@ impl PanelState {
         self.messages.len()
     }
 
+    /// Presentation only. Approval decisions remain owned by the harness.
+    pub(crate) fn activity(&self) -> con_core::terminal_status::Activity {
+        use con_core::terminal_status::Activity;
+        if !self.pending_approvals.is_empty() {
+            Activity::NeedsInput
+        } else if self.status != AgentStatus::Idle || self.streaming {
+            Activity::Busy
+        } else {
+            Activity::Idle
+        }
+    }
+
     /// Populate from a loaded conversation, including persisted thinking and steps.
     pub fn from_conversation(conv: &con_agent::Conversation) -> Self {
         let mut state = Self::new();
@@ -5228,6 +5240,22 @@ fn humanize_model_name(model: &str) -> String {
 mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
     use con_agent::{AgentConfig, ProviderConfig, ProviderKind};
+
+    #[test]
+    fn presentation_attention_precedes_streaming_without_resolving_approval() {
+        use con_core::terminal_status::Activity;
+        let mut state = PanelState::new();
+        state.streaming = true;
+        assert_eq!(state.activity(), Activity::Busy);
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        state.add_pending_approval("call", "shell", "{}", tx);
+        assert_eq!(state.activity(), Activity::NeedsInput);
+        assert!(rx.try_recv().is_err());
+        state.pending_approvals.clear();
+        assert_eq!(state.activity(), Activity::Busy);
+        state.streaming = false;
+        assert_eq!(state.activity(), Activity::Idle);
+    }
 
     #[gpui::test]
     fn editing_shift_enter_preserves_draft_until_plain_enter(cx: &mut gpui::TestAppContext) {

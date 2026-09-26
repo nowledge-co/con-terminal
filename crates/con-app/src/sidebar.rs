@@ -17,8 +17,7 @@
 use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
 use crate::ui_scale::ui_icon_px;
-use con_core::terminal_title::TitleIndicator;
-use con_ghostty::TerminalProgress;
+use con_core::terminal_status::{Activity, Status};
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
@@ -74,8 +73,7 @@ pub struct SessionEntry {
     pub subtitle: Option<String>,
     pub is_ssh: bool,
     pub needs_attention: bool,
-    pub progress: Option<TerminalProgress>,
-    pub title_indicator: Option<TitleIndicator>,
+    pub status: Option<Status>,
     pub terminal_titles: Vec<String>,
     pub icon: &'static str,
     pub has_user_label: bool,
@@ -1087,14 +1085,12 @@ impl SessionSidebar {
                 })
                 .child(tab_status_icon(
                     session.icon,
-                    session.title_indicator,
                     ui_icon_px(theme, 16.0),
                     if is_active {
                         theme.foreground
                     } else {
                         theme.muted_foreground.opacity(0.78)
                     },
-                    theme,
                 ));
 
             if session.needs_attention && !is_active {
@@ -1108,8 +1104,8 @@ impl SessionSidebar {
                         .bg(theme.primary),
                 );
             }
-            if let Some(progress) = session.progress {
-                pill = pill.child(tab_progress_indicator(theme, progress, is_active, 4.0));
+            if let Some(status) = session.status {
+                pill = pill.child(tab_progress_indicator(theme, status, is_active, 4.0));
             }
             if is_active {
                 let dot_color = if let Some(color) = session.color {
@@ -1479,8 +1475,7 @@ impl SessionSidebar {
                 subtitle: self.sessions[i].subtitle.clone(),
                 is_ssh: self.sessions[i].is_ssh,
                 needs_attention: self.sessions[i].needs_attention,
-                progress: self.sessions[i].progress,
-                title_indicator: self.sessions[i].title_indicator,
+                status: self.sessions[i].status,
                 terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
@@ -1687,14 +1682,12 @@ impl SessionSidebar {
 
         let mut icon_stack = div().relative().flex_shrink_0().child(tab_status_icon(
             session.icon,
-            session.title_indicator,
             ui_icon_px(theme, 15.0),
             if is_active {
                 theme.foreground
             } else {
                 theme.muted_foreground.opacity(0.78)
             },
-            theme,
         ));
         if session.needs_attention && !is_active {
             icon_stack = icon_stack.child(
@@ -1855,8 +1848,8 @@ impl SessionSidebar {
                     .child(rename_btn)
                     .child(close_btn),
             );
-        if let Some(progress) = session.progress {
-            row = row.child(tab_progress_indicator(theme, progress, is_active, 8.0));
+        if let Some(status) = session.status {
+            row = row.child(tab_progress_indicator(theme, status, is_active, 8.0));
         }
         row.into_any_element()
     }
@@ -1977,55 +1970,27 @@ fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
     }
 }
 
-/// A source-owned frame shares the icon's fixed slot; there is deliberately no
-/// host animation clock. Paused/stale applications must not keep spinning here.
-pub(crate) fn tab_status_icon(
-    icon: &'static str,
-    indicator: Option<TitleIndicator>,
-    size: Pixels,
-    color: Hsla,
-    theme: &gpui_component::Theme,
-) -> AnyElement {
-    if let Some(indicator) = indicator {
-        div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(size)
-            .flex_shrink_0()
-            // Status glyphs are icons, not terminal text. Some user fonts map
-            // Braille to empty outlines, which also prevents font fallback.
-            .font_family(crate::file_icons::FILE_ICON_FONT_FAMILY)
-            .text_size(size)
-            .line_height(size)
-            .text_color(if matches!(indicator, TitleIndicator::Attention(_)) {
-                theme.warning
-            } else {
-                theme.foreground
-            })
-            .child(indicator.frame().to_string())
-            .into_any_element()
-    } else {
-        svg()
-            .path(icon)
-            .size(size)
-            .flex_shrink_0()
-            .text_color(color)
-            .into_any_element()
-    }
+/// Identity remains visible independently of activity and progress.
+pub(crate) fn tab_status_icon(icon: &'static str, size: Pixels, color: Hsla) -> AnyElement {
+    svg()
+        .path(icon)
+        .size(size)
+        .flex_shrink_0()
+        .text_color(color)
+        .into_any_element()
 }
 
-fn tab_progress_indicator(
+pub(crate) fn tab_progress_indicator(
     theme: &gpui_component::Theme,
-    progress: TerminalProgress,
+    status: Status,
     is_active: bool,
     inset: f32,
 ) -> Div {
-    let (color, percent) = match progress {
-        TerminalProgress::Running(percent) => (theme.progress_bar, percent),
-        TerminalProgress::Error(percent) => (theme.danger, percent),
-        TerminalProgress::Indeterminate => (theme.progress_bar, None),
-        TerminalProgress::Paused(percent) => (theme.warning, percent),
+    let color = match status.activity {
+        Activity::Busy => theme.progress_bar,
+        Activity::Error => theme.danger,
+        Activity::Paused | Activity::NeedsInput => theme.warning,
+        Activity::Idle | Activity::Unknown => return div(),
     };
     let indicator = div()
         .absolute()
@@ -2033,7 +1998,7 @@ fn tab_progress_indicator(
         .right(px(inset))
         .bottom(px(1.0))
         .h(px(2.0));
-    if let Some(percent) = percent {
+    if let Some(percent) = status.percent {
         indicator
             .bg(color.opacity(if is_active { 0.16 } else { 0.10 }))
             .child(
@@ -2453,33 +2418,6 @@ mod tests {
         vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
     use gpui::{Bounds, Point, Size, px};
-
-    #[gpui::test]
-    fn title_status_font_is_independent_of_user_fonts(_cx: &mut gpui::TestAppContext) {
-        use gpui::Styled;
-
-        let mut theme = gpui_component::Theme::default();
-        theme.mono_font_family = "BerkeleyMono Nerd Font Mono".into();
-        theme.font_family = "Other UI Font".into();
-        for indicator in [
-            super::TitleIndicator::Activity('⠋'),
-            super::TitleIndicator::Activity('✽'),
-            super::TitleIndicator::Attention('!'),
-        ] {
-            let mut element = super::tab_status_icon(
-                "phosphor/terminal.svg",
-                Some(indicator),
-                px(16.0),
-                theme.foreground,
-                &theme,
-            );
-            let text = element.downcast_mut::<gpui::Div>().unwrap().text_style();
-            assert_eq!(
-                text.font_family.as_ref().map(|font| font.as_ref()),
-                Some(crate::file_icons::FILE_ICON_FONT_FAMILY)
-            );
-        }
-    }
 
     #[test]
     fn bundled_font_has_visible_title_status_glyphs() {

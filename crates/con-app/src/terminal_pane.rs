@@ -38,13 +38,6 @@ impl TerminalPane {
         self.entity.read(cx).terminal_title.raw().map(str::to_owned)
     }
 
-    pub fn title_indicator(&self, cx: &App) -> Option<con_core::terminal_title::TitleIndicator> {
-        let view = self.entity.read(cx);
-        view.is_alive()
-            .then(|| view.terminal_title.indicator())
-            .flatten()
-    }
-
     pub fn current_dir(&self, cx: &App) -> Option<String> {
         self.entity.read(cx).current_dir()
     }

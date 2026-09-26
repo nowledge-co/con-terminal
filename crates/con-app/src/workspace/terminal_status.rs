@@ -10,6 +10,8 @@ use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Query {
+    #[cfg(target_os = "linux")]
+    Host,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Foreground(u32),
     #[cfg(target_os = "windows")]
@@ -19,6 +21,14 @@ enum Query {
 
 impl Query {
     fn for_terminal(terminal: &TerminalPane, cx: &App) -> Self {
+        #[cfg(target_os = "linux")]
+        if terminal
+            .surface_instance(cx)
+            .and_then(|instance| instance.upgrade())
+            .is_some_and(|terminal| terminal.uses_host_process_namespace())
+        {
+            return Self::Host;
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         return terminal
             .foreground_process_group_id(cx)
@@ -39,6 +49,8 @@ impl Query {
                 .iter()
                 .map(|query| match query {
                     Self::Foreground(pgid) => *pgid,
+                    #[cfg(target_os = "linux")]
+                    Self::Host => 0,
                     Self::Unavailable => 0,
                 })
                 .collect();
@@ -74,6 +86,10 @@ struct Surface {
     detection: AgentCliDetectionState,
     last_scan: Option<Instant>,
     status: SurfaceStatus,
+    #[cfg(target_os = "linux")]
+    host_request: Option<(u64, Instant)>,
+    #[cfg(target_os = "linux")]
+    host_observed: Option<(Option<u32>, Instant)>,
 }
 
 fn native_agent<'a>(
@@ -118,7 +134,7 @@ impl ConWorkspace {
         let mut live = HashSet::new();
         let mut changed = false;
         let state = &mut self.terminal_presentation;
-        for tab in &mut self.tabs {
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
             let focused = tab
                 .pane_tree
                 .focused_terminal_entity_id()
@@ -151,6 +167,10 @@ impl ConWorkspace {
                     detection: AgentCliDetectionState::default(),
                     last_scan: None,
                     status: SurfaceStatus::new(id),
+                    #[cfg(target_os = "linux")]
+                    host_request: None,
+                    #[cfg(target_os = "linux")]
+                    host_observed: None,
                 });
                 if surface.query != query {
                     surface.query = query;
@@ -160,6 +180,44 @@ impl ConWorkspace {
                     // Invalidate the old job immediately, before its replacement
                     // query finishes. The screen can still contain its banner.
                     surface.status.observe_identity(id, state.sequence, None);
+                }
+                #[cfg(target_os = "linux")]
+                if surface.query == Query::Host {
+                    // Host PIDs never enter local /proc queries. Accept only the
+                    // outstanding sequence on this exact surface incarnation.
+                    let timeout = Duration::from_secs(2);
+                    if let Some((sequence, sent)) = surface.host_request {
+                        if now.duration_since(sent) >= timeout {
+                            surface.host_request = None;
+                        } else if let Some(metadata) = surface
+                            .instance
+                            .upgrade()
+                            .and_then(|terminal| terminal.cached_process_metadata())
+                            .filter(|metadata| metadata.sequence == sequence)
+                        {
+                            if surface.host_observed.map(|(group, _)| group)
+                                != Some(metadata.process_group_id)
+                            {
+                                surface.revision += 1;
+                                surface.status.observe_identity(id, state.sequence, None);
+                            }
+                            surface.host_observed = Some((metadata.process_group_id, sent));
+                            surface.host_request = None;
+                            if surface.processes != metadata.processes {
+                                surface.processes = metadata.processes;
+                                surface.detection = AgentCliDetectionState::default();
+                            }
+                        }
+                    }
+                    if surface
+                        .host_observed
+                        .is_some_and(|(_, observed)| now.duration_since(observed) >= timeout)
+                    {
+                        surface.host_observed = None;
+                        surface.processes.clear();
+                        surface.revision += 1;
+                        surface.status.observe_identity(id, state.sequence, None);
+                    }
                 }
                 let title = terminal.cached_title(cx);
                 let title_agent = agent_from_osc_title(title.as_deref());
@@ -254,6 +312,21 @@ impl ConWorkspace {
                 tab.agent_cli = focused_agent;
                 changed = true;
             }
+            let activity = if index == self.active_tab {
+                self.agent_panel.read(cx).state().activity()
+            } else {
+                tab.panel_state.activity()
+            };
+            if activity > con_core::terminal_status::Activity::Idle {
+                statuses.push(con_core::terminal_status::Status {
+                    // GPUI entity IDs are nonzero. The built-in session is not
+                    // a terminal surface and never wins the focused-pane tie.
+                    surface_id: 0,
+                    activity,
+                    evidence: con_core::terminal_status::Evidence::BuiltinAgent,
+                    percent: None,
+                });
+            }
             let status = con_core::terminal_status::aggregate(statuses, focused);
             if state.tabs.get(&tab.summary_id) != Some(&status) {
                 state.tabs.insert(tab.summary_id, status);
@@ -282,6 +355,18 @@ impl ConWorkspace {
         {
             return;
         }
+        #[cfg(target_os = "linux")]
+        for surface in state.surfaces.values_mut() {
+            if surface.query == Query::Host
+                && surface.host_request.is_none()
+                && surface
+                    .instance
+                    .upgrade()
+                    .is_some_and(|terminal| terminal.request_process_metadata(state.sequence))
+            {
+                surface.host_request = Some((state.sequence, now));
+            }
+        }
         let requests: Vec<_> = state
             .surfaces
             .iter()
@@ -306,6 +391,10 @@ impl ConWorkspace {
                         continue;
                     };
                     if !surface.instance.ptr_eq(&instance) || surface.query != query {
+                        continue;
+                    }
+                    #[cfg(target_os = "linux")]
+                    if query == Query::Host {
                         continue;
                     }
                     if surface.processes != processes {
