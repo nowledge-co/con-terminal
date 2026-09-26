@@ -707,16 +707,6 @@ impl ConWorkspace {
                     );
                 }
 
-                if let Some(status) =
-                    terminal_status.filter(|_| !is_dragged_source && tab_strip_progress > 0.01)
-                {
-                    tab_el = tab_el.child(
-                        self.tab_activity
-                            .read(cx)
-                            .marker(status, theme, is_active, 0.0),
-                    );
-                }
-
                 let mut tab_content = div()
                     .flex()
                     .items_center()
@@ -759,6 +749,7 @@ impl ConWorkspace {
                                 terminal_status
                                     .filter(|_| !is_dragged_source && tab_strip_progress > 0.01),
                                 theme,
+                                false,
                             ),
                         )
                         .child(

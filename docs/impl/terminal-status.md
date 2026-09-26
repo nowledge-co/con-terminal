@@ -48,15 +48,23 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
 
 ## Rendering contract
 
-Brand icons remain still. Busy-without-percentage uses a rotating Phosphor
-circle-notch ring around the icon, with a 1.2-second period and full theme
-progress color even on inactive tabs. The icon slot stays the same size in all
-states to avoid layout shifts. Determinate progress, error and attention use
-static lines. Each chrome group has one `TabActivity` entity with a synchronized
-GPUI animation driven by display frames. Do not apply a low-frequency timer cap
-to the rotating ring: coarse angular steps make continuous motion visibly jerky.
-Reduced motion leaves a static ring. Hidden windows and clipped markers do not
-qualify for continued animation.
+Compact rail tiles keep a stationary brand icon (at most 14pt) inside a 28pt
+ring in a 32pt slot. Busy-without-percentage uses a 90-degree monochrome arc
+(75% foreground, faint track), with a two-second period. Determinate progress
+uses the same ring, with no underline. Attention, error and pause use static
+warning/danger rings with Phosphor badges; the badge quadrant has no stroke.
+Selection/tab color uses a left indicator and unread yields to semantic badges.
+Expanded/horizontal tabs replace the identity icon within the original-sized
+slot: busy/progress rings or a semantic glyph, without moving the title.
+
+Each chrome group has one `TabActivity` entity with a synchronized GPUI animation
+driven by display frames. Paths use actual arcs, not polygon approximations.
+Do not apply a low-frequency timer cap: coarse angular steps make continuous
+motion visibly jerky. Reduced motion uses a static full ring. Inactive windows
+retain a static arc; hidden windows and clipped markers do not qualify for
+continued animation. Window activation explicitly invalidates chrome. Status
+collection continues independently; removing a progress signal is not proof of
+successful completion and must not generate a completion/unread event.
 
 Rows register marker geometry during prepaint. Keep the previous geometry until
 the next prepaint: discarding it during parent rendering makes offscreen rows

@@ -1089,9 +1089,20 @@ impl SessionSidebar {
                     },
                     session.status,
                     theme,
+                    true,
                 ));
 
-            if session.needs_attention && !is_active {
+            if session.needs_attention
+                && !is_active
+                && !session.status.is_some_and(|status| {
+                    matches!(
+                        status.activity,
+                        con_core::terminal_status::Activity::Error
+                            | con_core::terminal_status::Activity::NeedsInput
+                            | con_core::terminal_status::Activity::Paused
+                    )
+                })
+            {
                 pill = pill.child(
                     div()
                         .absolute()
@@ -1100,15 +1111,6 @@ impl SessionSidebar {
                         .size(px(6.0))
                         .rounded_full()
                         .bg(theme.primary),
-                );
-            }
-            if let Some(status) = session.status {
-                pill = pill.child(
-                    self.activity_layer
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .marker(status, theme, is_active, 4.0),
                 );
             }
             if is_active {
@@ -1120,10 +1122,11 @@ impl SessionSidebar {
                 pill = pill.child(
                     div()
                         .absolute()
-                        .bottom(px(3.0))
-                        .right(px(3.0))
-                        .size(px(6.0))
-                        .rounded_full()
+                        .left(px(-2.0))
+                        .top(px(9.0))
+                        .w(px(2.0))
+                        .h(px(14.0))
+                        .rounded(px(1.0))
                         .bg(dot_color),
                 );
             }
@@ -1684,10 +1687,11 @@ impl SessionSidebar {
         };
         let tab_bounds = self.tab_bounds.clone();
 
+        let icon_size = ui_icon_px(theme, 15.0);
         let mut icon_stack = div().relative().flex_shrink_0().child(
             self.activity_layer.as_ref().unwrap().read(cx).icon(
                 session.icon,
-                ui_icon_px(theme, 15.0),
+                icon_size,
                 if is_active {
                     theme.foreground
                 } else {
@@ -1695,9 +1699,20 @@ impl SessionSidebar {
                 },
                 session.status,
                 theme,
+                false,
             ),
         );
-        if session.needs_attention && !is_active {
+        if session.needs_attention
+            && !is_active
+            && !session.status.is_some_and(|status| {
+                matches!(
+                    status.activity,
+                    con_core::terminal_status::Activity::Error
+                        | con_core::terminal_status::Activity::NeedsInput
+                        | con_core::terminal_status::Activity::Paused
+                )
+            })
+        {
             icon_stack = icon_stack.child(
                 div()
                     .absolute()
@@ -1717,15 +1732,16 @@ impl SessionSidebar {
             icon_stack = icon_stack.child(
                 div()
                     .absolute()
-                    .bottom(px(-2.0))
-                    .right(px(-2.0))
-                    .size(px(6.0))
-                    .rounded_full()
+                    .left(px(-4.0))
+                    .top((icon_size - px(12.0)) / 2.0)
+                    .w(px(2.0))
+                    .h(px(12.0))
+                    .rounded(px(1.0))
                     .bg(dot_color),
             );
         }
 
-        let mut row = div()
+        let row = div()
             .id(SharedString::from(format!("panel-tab-{i}")))
             .group(row_group.clone())
             .relative()
@@ -1856,15 +1872,6 @@ impl SessionSidebar {
                     .child(rename_btn)
                     .child(close_btn),
             );
-        if let Some(status) = session.status {
-            row = row.child(
-                self.activity_layer
-                    .as_ref()
-                    .unwrap()
-                    .read(cx)
-                    .marker(status, theme, is_active, 8.0),
-            );
-        }
         row.into_any_element()
     }
 }
