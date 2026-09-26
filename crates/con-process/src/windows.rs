@@ -121,9 +121,6 @@ pub(super) fn descendants_batch(roots: &[ProcessIdentity]) -> Vec<Vec<ProcessInf
                 read_process(root.pid)
                     .is_some_and(|process| process.identity.started_at == root.started_at)
             };
-            if !same_root() {
-                return Vec::new();
-            }
             let result = resolve_descendants(root, &children, cutoff, read_process);
             if same_root() { result } else { Vec::new() }
         })
@@ -175,9 +172,15 @@ fn resolve_descendants(
     cutoff: u64,
     mut read: impl FnMut(u32) -> Option<ProcessInfo>,
 ) -> Vec<ProcessInfo> {
+    let Some(root_process) = read(root.pid).filter(|process| {
+        process.identity.started_at == root.started_at && process.identity.started_at <= cutoff
+    }) else {
+        return Vec::new();
+    };
     let mut accepted = vec![(root.pid, root.started_at)];
     let mut seen = HashSet::from([root.pid]);
-    let mut result = Vec::new();
+    // The configured program can itself be an agent, without a shell parent.
+    let mut result = vec![root_process];
     let mut index = 0;
     while let Some(&(parent_pid, parent_started_at)) = accepted.get(index) {
         index += 1;
@@ -186,7 +189,7 @@ fn resolve_descendants(
                 continue;
             }
             // Query each reachable candidate once, including inaccessible ones.
-            if seen.len() > MAX_PROCESS_CANDIDATES + 1 {
+            if seen.len() > MAX_PROCESS_CANDIDATES {
                 return Vec::new();
             }
             let Some(mut process) = read(pid) else {
@@ -233,6 +236,7 @@ mod tests {
             Some(process(
                 pid,
                 match pid {
+                    10 => 100,
                     11 => 90,
                     14 => 201,
                     _ => 150,
@@ -241,8 +245,29 @@ mod tests {
         });
         assert_eq!(
             result.iter().map(|p| p.identity.pid).collect::<Vec<_>>(),
-            vec![12, 13]
+            vec![10, 12, 13]
         );
-        assert_eq!(result[1].parent_pid, 12);
+        assert_eq!(result[2].parent_pid, 12);
+    }
+
+    #[test]
+    fn includes_direct_root_but_rejects_reuse_and_excess_candidates() {
+        let root = process(10, 100);
+        let empty = BTreeMap::new();
+        assert_eq!(
+            resolve_descendants(&root.identity, &empty, 200, |_| Some(root.clone())),
+            vec![root.clone()]
+        );
+        assert!(
+            resolve_descendants(&root.identity, &empty, 200, |_| Some(process(10, 101))).is_empty()
+        );
+        assert!(resolve_descendants(&root.identity, &empty, 200, |_| None).is_empty());
+        let children = BTreeMap::from([(10, (20..20 + MAX_PROCESS_CANDIDATES as u32).collect())]);
+        assert!(
+            resolve_descendants(&root.identity, &children, 200, |pid| Some(process(
+                pid, 100
+            )))
+            .is_empty()
+        );
     }
 }

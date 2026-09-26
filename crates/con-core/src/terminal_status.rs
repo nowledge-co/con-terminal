@@ -119,7 +119,12 @@ impl SurfaceStatus {
             return false;
         }
         self.identity = identity;
-        self.reported = None;
+        // Only direct-agent busy/idle reports depend on executable identity.
+        // Attention and observed title motion are independent terminal facts;
+        // preserving them must not renew their original observation time.
+        self.reported = self.reported.filter(|report| {
+            report.evidence == Evidence::TitleMotion || report.activity == Activity::NeedsInput
+        });
         // Keep last_title: an old title must not be replayed as a new report
         // from a different executable that inherited the same terminal.
         true
@@ -350,6 +355,25 @@ mod tests {
         claude(&mut surface, 2, 3);
         surface.observe_title(Some("◐ task"), now);
         assert_eq!(surface.status(now), None);
+    }
+
+    #[test]
+    fn identity_changes_preserve_independent_attention_and_motion_leases() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        surface.observe_title(Some("[ ! ] Action Required | task"), now);
+        for generation in 1..=2 {
+            claude(&mut surface, generation, generation);
+            surface.observe_title(Some("[ ! ] Action Required | task"), now);
+            assert_eq!(surface.status(now).unwrap().activity, Activity::NeedsInput);
+        }
+        surface.observe_title(Some("task"), now);
+        assert_eq!(surface.status(now), None);
+        surface.observe_title(Some("⠋ task"), now);
+        surface.observe_title(Some("⠙ task"), now);
+        claude(&mut surface, 3, 3);
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::TitleMotion);
+        assert_eq!(surface.status(now + MOTION_LEASE), None);
     }
 
     #[test]

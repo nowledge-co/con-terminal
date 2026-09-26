@@ -92,6 +92,24 @@ struct Surface {
     host_observed: Option<(Option<u32>, Instant)>,
 }
 
+impl Surface {
+    fn accept_processes(
+        &mut self,
+        instance: &Weak<GhosttyTerminal>,
+        query: &Query,
+        revision: u64,
+        processes: Vec<ProcessInfo>,
+    ) {
+        if !self.instance.ptr_eq(instance) || self.query != *query || self.revision != revision {
+            return;
+        }
+        if self.processes != processes {
+            self.processes = processes;
+            self.detection = AgentCliDetectionState::default();
+        }
+    }
+}
+
 fn native_agent<'a>(
     processes: &'a [ProcessInfo],
     previous: Option<&con_ghostty::process::ProcessIdentity>,
@@ -371,7 +389,14 @@ impl ConWorkspace {
         let requests: Vec<_> = state
             .surfaces
             .iter()
-            .map(|(id, surface)| (*id, surface.instance.clone(), surface.query.clone()))
+            .map(|(id, surface)| {
+                (
+                    *id,
+                    surface.instance.clone(),
+                    surface.query.clone(),
+                    surface.revision,
+                )
+            })
             .collect();
         if requests.is_empty() {
             return;
@@ -379,7 +404,10 @@ impl ConWorkspace {
         state.in_flight = true;
         state.last_query = Some(now);
         log::trace!(target: "con::activity", "process_batch surfaces={}", requests.len());
-        let queries: Vec<_> = requests.iter().map(|(_, _, query)| query.clone()).collect();
+        let queries: Vec<_> = requests
+            .iter()
+            .map(|(_, _, query, _)| query.clone())
+            .collect();
         let task = cx
             .background_executor()
             .spawn(async move { Query::collect_batch(&queries) });
@@ -388,21 +416,17 @@ impl ConWorkspace {
             let _ = this.update(cx, |workspace, cx| {
                 let state = &mut workspace.terminal_presentation;
                 state.in_flight = false;
-                for ((id, instance, query), processes) in requests.into_iter().zip(results) {
+                for ((id, instance, query, revision), processes) in
+                    requests.into_iter().zip(results)
+                {
                     let Some(surface) = state.surfaces.get_mut(&id) else {
                         continue;
                     };
-                    if !surface.instance.ptr_eq(&instance) || surface.query != query {
-                        continue;
-                    }
                     #[cfg(target_os = "linux")]
                     if query == Query::Host {
                         continue;
                     }
-                    if surface.processes != processes {
-                        surface.processes = processes;
-                        surface.detection = AgentCliDetectionState::default();
-                    }
+                    surface.accept_processes(&instance, &query, revision, processes);
                 }
                 workspace.refresh_terminal_presentation(cx);
             });
@@ -413,7 +437,9 @@ impl ConWorkspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessInfo, Query, native_agent};
+    use super::{
+        AgentCliDetectionState, ProcessInfo, Query, Surface, SurfaceStatus, Weak, native_agent,
+    };
 
     fn process(pid: u32, name: &str) -> ProcessInfo {
         ProcessInfo {
@@ -439,6 +465,40 @@ mod tests {
         group.push(process(9, "codex"));
         assert_eq!(native_agent(&group, Some(&previous.identity)), None);
         assert_eq!(native_agent(&[process(4, "node")], None), None);
+    }
+
+    #[test]
+    fn process_completion_rejects_aba_revision_but_accepts_current_work() {
+        let instance = Weak::new();
+        let mut surface = Surface {
+            instance: instance.clone(),
+            query: Query::Unavailable,
+            processes: vec![process(9, "codex")],
+            identity_process: None,
+            revision: 3,
+            detection: AgentCliDetectionState::default(),
+            last_scan: None,
+            status: SurfaceStatus::new(7),
+            #[cfg(target_os = "linux")]
+            host_request: None,
+            #[cfg(target_os = "linux")]
+            host_observed: None,
+        };
+        // Query and surface pointer match again, but this work predates A→B→A.
+        surface.accept_processes(
+            &instance,
+            &Query::Unavailable,
+            1,
+            vec![process(8, "claude")],
+        );
+        assert_eq!(surface.processes, vec![process(9, "codex")]);
+        surface.accept_processes(
+            &instance,
+            &Query::Unavailable,
+            3,
+            vec![process(8, "claude")],
+        );
+        assert_eq!(surface.processes, vec![process(8, "claude")]);
     }
 
     #[test]
