@@ -1,3 +1,4 @@
+//! Linux process facts, with parser tests also compiled on other hosts.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use std::fs;

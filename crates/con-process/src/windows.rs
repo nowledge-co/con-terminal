@@ -1,4 +1,4 @@
-//! Windows process identity and descendant discovery.
+//! Windows process identity and bounded descendant discovery.
 
 use std::collections::{BTreeMap, HashSet};
 use std::mem::size_of;

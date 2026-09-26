@@ -466,7 +466,9 @@ impl ConPty {
     }
 
     pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
-        self.is_alive().then(|| self.root_identity.clone()).flatten()
+        self.is_alive()
+            .then(|| self.root_identity.clone())
+            .flatten()
     }
 
     /// `true` while the pseudo-console is still open. Flips to `false`

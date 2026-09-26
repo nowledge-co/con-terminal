@@ -1,3 +1,4 @@
+//! macOS libproc queries for foreground process groups.
 use std::mem::{size_of, zeroed};
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;

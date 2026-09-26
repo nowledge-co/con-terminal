@@ -549,6 +549,30 @@ impl LinuxGhosttyTerminal {
             .and_then(LinuxPtySession::foreground_process_group_id)
     }
 
+    pub fn uses_host_process_namespace(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::uses_host_process_namespace)
+    }
+
+    /// Request host-namespace facts without blocking. Returns false for local PTYs
+    /// and bridges that did not explicitly negotiate metadata support.
+    pub fn request_process_metadata(&self, sequence: u64) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(|session| session.request_process_metadata(sequence))
+    }
+
+    /// Latest asynchronous host response; match its sequence and apply caller timeout policy.
+    pub fn cached_process_metadata(&self) -> Option<super::pty::HostProcessMetadata> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::cached_process_metadata)
+    }
+
     pub fn tty_name(&self) -> Option<String> {
         None
     }
