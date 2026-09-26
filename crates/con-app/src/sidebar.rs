@@ -1882,7 +1882,7 @@ impl Render for SessionSidebar {
             }
         }
         // Drive the width-tween animation frame.
-        let _progress = self.width_motion.value(window);
+        let _progress = self.width_motion.value(window, cx);
 
         if self.tools_panel_open || self.rail_only_override {
             return div()

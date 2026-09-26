@@ -294,9 +294,9 @@ impl Render for ConWorkspace {
             panel.set_recent_inputs(self.recent_input_history(80));
         });
 
-        let agent_panel_progress = self.agent_panel_motion.value(window);
-        let input_bar_progress = self.input_bar_motion.value(window);
-        let tab_strip_progress = self.tab_strip_motion.value(window);
+        let agent_panel_progress = self.agent_panel_motion.value(window, cx);
+        let input_bar_progress = self.input_bar_motion.value(window, cx);
+        let tab_strip_progress = self.tab_strip_motion.value(window, cx);
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();

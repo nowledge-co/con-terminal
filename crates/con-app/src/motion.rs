@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gpui::{Window, px};
+use gpui::{App, Window, px};
 
 #[derive(Clone, Debug)]
 pub struct MotionValue {
@@ -67,7 +67,18 @@ impl MotionValue {
         self.from + ((self.target - self.from) * eased)
     }
 
-    pub fn value(&mut self, window: &mut Window) -> f32 {
+    pub fn value(&mut self, window: &mut Window, cx: &App) -> f32 {
+        self.update(cx.reduce_motion(), || window.request_animation_frame())
+    }
+
+    fn update(&mut self, reduce_motion: bool, request_frame: impl FnOnce()) -> f32 {
+        if reduce_motion {
+            self.current = self.target;
+            self.from = self.target;
+            self.started_at = None;
+            return self.target;
+        }
+
         let value = self.current();
         if let Some(started_at) = self.started_at {
             if started_at.elapsed() >= self.duration || self.duration.is_zero() {
@@ -76,7 +87,7 @@ impl MotionValue {
                 self.started_at = None;
             } else {
                 self.current = value;
-                window.request_animation_frame();
+                request_frame();
             }
         } else {
             self.current = self.target;
@@ -91,4 +102,33 @@ pub fn vertical_reveal_offset(progress: f32, distance: f32) -> gpui::Pixels {
 
 fn ease_out_quint(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(5)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MotionValue;
+    use std::{cell::Cell, time::Duration};
+
+    #[test]
+    fn enabling_reduced_motion_during_motion_snaps_without_another_frame() {
+        let mut motion = MotionValue::new(0.0);
+        motion.restart(0.0, 1.0, Duration::from_secs(10));
+        let requested = Cell::new(false);
+
+        assert_eq!(motion.update(true, || requested.set(true)), 1.0);
+        assert!(!motion.is_animating());
+        assert!(!requested.get());
+        assert_eq!(motion.current(), 1.0);
+    }
+
+    #[test]
+    fn reduced_motion_keeps_an_already_settled_value_settled() {
+        let mut motion = MotionValue::new(0.25);
+        motion.set_target(0.25, Duration::from_secs(1));
+        let requested = Cell::new(false);
+
+        assert_eq!(motion.update(true, || requested.set(true)), 0.25);
+        assert!(!motion.is_animating());
+        assert!(!requested.get());
+    }
 }

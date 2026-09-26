@@ -72,6 +72,7 @@ mod model_registry;
 mod motion;
 mod mouse_sequence;
 mod pane_tree;
+mod reduced_motion;
 mod settings_panel;
 mod sidebar;
 mod sidebar_search_view;
@@ -2691,6 +2692,7 @@ fn main() {
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)
         gpui_component::init(cx);
+        reduced_motion::init(cx);
         input_bar::InputBar::init(cx);
 
         // Load and activate con's design theme (synced to terminal theme)

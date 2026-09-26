@@ -81,6 +81,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Kernel",             # EXCEPTION_POINTERS definition
     "Win32_System_Pipes",              # WaitNamedPipeW
     "Win32_Graphics_Dwm",              # DwmSetWindowAttribute — Mica/Acrylic backdrop
+    "Win32_Graphics_Gdi",              # WNDCLASSW for accessibility settings listener
     "Win32_UI_WindowsAndMessaging",     # FlashWindowEx for terminal notifications
 ] }
 # Windows GhosttyView wraps D3D11-readback BGRA frames in a GPUI RenderImage.

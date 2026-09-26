@@ -4077,7 +4077,7 @@ impl Render for AgentPanel {
 
         let theme = cx.theme().clone();
         let theme = &theme;
-        let content_reveal = self.content_reveal.value(window);
+        let content_reveal = self.content_reveal.value(window, cx);
 
         // ── Messages ──────────────────────────────────────────────
         let total_messages = self.state.messages.len();
