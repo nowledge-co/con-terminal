@@ -1079,7 +1079,7 @@ impl SessionSidebar {
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
                 })
-                .child(tab_status_icon(
+                .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
                     session.icon,
                     ui_icon_px(theme, 16.0),
                     if is_active {
@@ -1087,6 +1087,8 @@ impl SessionSidebar {
                     } else {
                         theme.muted_foreground.opacity(0.78)
                     },
+                    session.status,
+                    theme,
                 ));
 
             if session.needs_attention && !is_active {
@@ -1682,15 +1684,19 @@ impl SessionSidebar {
         };
         let tab_bounds = self.tab_bounds.clone();
 
-        let mut icon_stack = div().relative().flex_shrink_0().child(tab_status_icon(
-            session.icon,
-            ui_icon_px(theme, 15.0),
-            if is_active {
-                theme.foreground
-            } else {
-                theme.muted_foreground.opacity(0.78)
-            },
-        ));
+        let mut icon_stack = div().relative().flex_shrink_0().child(
+            self.activity_layer.as_ref().unwrap().read(cx).icon(
+                session.icon,
+                ui_icon_px(theme, 15.0),
+                if is_active {
+                    theme.foreground
+                } else {
+                    theme.muted_foreground.opacity(0.78)
+                },
+                session.status,
+                theme,
+            ),
+        );
         if session.needs_attention && !is_active {
             icon_stack = icon_stack.child(
                 div()
@@ -1985,16 +1991,6 @@ fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
     } else {
         bar.bottom(px(-2.0))
     }
-}
-
-/// Identity remains visible independently of activity and progress.
-pub(crate) fn tab_status_icon(icon: &'static str, size: Pixels, color: Hsla) -> AnyElement {
-    svg()
-        .path(icon)
-        .size(size)
-        .flex_shrink_0()
-        .text_color(color)
-        .into_any_element()
 }
 
 fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {

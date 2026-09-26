@@ -29,11 +29,14 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
 
 ## Rendering contract
 
-Brand icons remain still. Busy-without-percentage uses a subtle activity line;
-determinate progress, error and attention use static lines. Each chrome group
+Brand icons remain still. Busy-without-percentage uses a rotating Phosphor
+circle-notch ring around the icon, with a 1.2-second period and full theme
+progress color even on inactive tabs. The icon slot stays the same size in all
+states to avoid layout shifts. Determinate progress, error and attention use
+static lines. Each chrome group
 has one `TabActivity` entity with a synchronized GPUI animation whose own timer
 is limited to 24 Hz. Other events can still render the entity more frequently.
-Reduced motion disables the pulse. Hidden windows and clipped markers do not
+Reduced motion leaves a static ring. Hidden windows and clipped markers do not
 qualify for continued animation.
 
 Rows register marker geometry during prepaint. Keep the previous geometry until

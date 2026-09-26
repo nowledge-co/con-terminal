@@ -743,19 +743,24 @@ impl ConWorkspace {
                         .min_w(px(0.0))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
-                        .child(crate::sidebar::tab_status_icon(
-                            tab_icon,
-                            mono_icon_px(theme, 12.5),
-                            if is_active {
-                                tab_color
-                                    .map(|color| {
-                                        crate::tab_colors::tab_accent_color_hsla(color, cx)
-                                    })
-                                    .unwrap_or_else(|| theme.foreground.opacity(0.68))
-                            } else {
-                                theme.muted_foreground.opacity(0.38)
-                            },
-                        ))
+                        .child(
+                            self.tab_activity.read(cx).icon(
+                                tab_icon,
+                                mono_icon_px(theme, 12.5),
+                                if is_active {
+                                    tab_color
+                                        .map(|color| {
+                                            crate::tab_colors::tab_accent_color_hsla(color, cx)
+                                        })
+                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
+                                } else {
+                                    theme.muted_foreground.opacity(0.38)
+                                },
+                                terminal_status
+                                    .filter(|_| !is_dragged_source && tab_strip_progress > 0.01),
+                                theme,
+                            ),
+                        )
                         .child(
                             div()
                                 .min_w_0()
