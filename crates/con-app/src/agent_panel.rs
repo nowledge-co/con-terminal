@@ -512,8 +512,6 @@ pub struct AgentPanel {
     follow_output: FollowOutputState,
     /// Currently highlighted skill in inline autocomplete
     inline_skill_selection: usize,
-    /// Tracks whether shift was held on the last enter keystroke (for inline input)
-    inline_shift_enter: bool,
     ui_opacity: f32,
 }
 
@@ -1035,7 +1033,6 @@ impl AgentPanel {
             inline_input_has_skills: false,
             follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
-            inline_shift_enter: false,
             ui_opacity: 0.90,
         };
         panel.message_list_state.set_follow_mode(FollowMode::Tail);
@@ -1165,7 +1162,6 @@ impl AgentPanel {
             inline_input_has_skills: false,
             follow_output: FollowOutputState::Auto,
             inline_skill_selection: 0,
-            inline_shift_enter: false,
             ui_opacity: 0.90,
         };
         panel.message_list_state.set_follow_mode(FollowMode::Tail);
@@ -1297,13 +1293,8 @@ impl AgentPanel {
             TextareaState::new(window, cx)
                 .placeholder("Ask anything…")
                 .auto_grow(1, 4)
+                .submit_on_enter(true)
         });
-        cx.observe_keystrokes(|this, event, _window, _cx| {
-            if event.keystroke.key == "enter" {
-                this.inline_shift_enter = event.keystroke.modifiers.shift;
-            }
-        })
-        .detach();
         cx.observe_keystrokes(|this, event, window, cx| {
             if !Self::should_fallback_handle_inline_history_key(event)
                 || !this.show_inline_input
@@ -1355,22 +1346,9 @@ impl AgentPanel {
                         cx.notify();
                     }
                 }
-                InputEvent::PressEnter { .. } => {
-                    if this.inline_shift_enter {
-                        this.inline_shift_enter = false;
+                InputEvent::PressEnter { shift, .. } => {
+                    if *shift {
                         return;
-                    }
-
-                    if let Some(ref input) = this.inline_input_state {
-                        input.update(cx, |s, cx| {
-                            let cursor = s.cursor();
-                            let val = s.value().to_string();
-                            if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
-                                let mut cleaned = val[..cursor - 1].to_string();
-                                cleaned.push_str(&val[cursor..]);
-                                s.set_value(&cleaned, window, cx);
-                            }
-                        });
                     }
 
                     let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -5293,6 +5271,8 @@ impl Render for AgentPanel {
                                     .min_w(mono_space_px(theme, 120.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(inline_input_text_size)
+                                    // PressEnter owns submission; prevent native newline fallback.
+                                    .on_action(|_: &gpui_component::input::Enter, _, _| {})
                                     .child(
                                         div().w_full().child(
                                             Textarea::new(&inline_input)
@@ -5453,6 +5433,48 @@ mod tests {
         assert!(!first_rx.try_recv().expect("first denial").allowed);
         assert!(!second_rx.try_recv().expect("second denial").allowed);
         assert_eq!(state.activity(), Activity::Idle);
+    }
+
+    #[gpui::test]
+    fn inline_composer_submits_without_inserting_or_removing_text(cx: &mut gpui::TestAppContext) {
+        use gpui::Focusable;
+        use std::{cell::RefCell, rc::Rc};
+
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let submissions = Rc::new(RefCell::new(Vec::new()));
+        let events = submissions.clone();
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = AgentPanel::new(window, cx);
+            panel.set_show_inline_input(true, cx);
+            panel
+                .inline_input_state
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+            panel
+        });
+        cx.update(|_, cx| {
+            cx.subscribe(&panel, move |_, event: &super::InlineInputSubmit, _| {
+                events.borrow_mut().push(event.text.clone());
+            })
+            .detach();
+        });
+        cx.simulate_input("first");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("second");
+        assert!(submissions.borrow().is_empty());
+        cx.simulate_keystrokes("enter");
+        cx.simulate_input("third");
+        cx.simulate_keystrokes("secondary-enter");
+        cx.update(|window, cx| {
+            assert_eq!(*submissions.borrow(), ["first\nsecond", "third"]);
+            let input = panel.read(cx).inline_input_state.as_ref().unwrap().read(cx);
+            assert_eq!(input.value(), "");
+            assert!(input.focus_handle(cx).is_focused(window));
+        });
     }
 
     #[gpui::test]

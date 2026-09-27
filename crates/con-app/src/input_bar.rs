@@ -1,8 +1,8 @@
 use gpui::*;
 use gpui_component::{
     ActiveTheme,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{InputEvent, Position, Textarea, TextareaState},
-    tooltip::Tooltip,
 };
 
 use crate::ui_scale::{mono_density_scale, mono_px, mono_space_px};
@@ -175,9 +175,6 @@ pub struct InputBar {
     inline_suggestion_source: Option<SuggestionSource>,
     path_completion_candidates: Vec<String>,
     path_completion_selection: usize,
-    /// Tracks whether shift was held on the last enter keystroke.
-    /// Set by observe_keystrokes (fires before PressEnter), consumed by PressEnter handler.
-    shift_enter: bool,
     ui_opacity: f32,
     _subscriptions: Vec<Subscription>,
 }
@@ -338,22 +335,10 @@ impl InputBar {
                         cx.emit(InputEdited);
                         cx.notify();
                     }
-                    InputEvent::PressEnter { .. } => {
-                        if this.shift_enter {
-                            this.shift_enter = false;
+                    InputEvent::PressEnter { shift, .. } => {
+                        if *shift {
                             return;
                         }
-
-                        let active_state = this.current_input_state();
-                        active_state.update(cx, |s, cx| {
-                            let cursor = s.cursor();
-                            let val = s.value().to_string();
-                            if cursor > 0 && val.as_bytes().get(cursor - 1) == Some(&b'\n') {
-                                let mut cleaned = val[..cursor - 1].to_string();
-                                cleaned.push_str(&val[cursor..]);
-                                s.set_value(&cleaned, window, cx);
-                            }
-                        });
 
                         let matches = this.filtered_skills(cx);
                         if !matches.is_empty() {
@@ -439,11 +424,13 @@ impl InputBar {
             TextareaState::new(window, cx)
                 .placeholder("Ask anything…")
                 .auto_grow(1, INPUT_BAR_MAX_ROWS)
+                .submit_on_enter(true)
         });
         let shell_input_state = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Type a command or ask AI…")
                 .auto_grow(1, INPUT_BAR_MAX_ROWS)
+                .submit_on_enter(true)
         });
         shell_input_state.update(cx, |state, cx| {
             state.set_highlighter("con-shell", cx);
@@ -454,12 +441,6 @@ impl InputBar {
             state.set_cursor_position(Position::new(0, 0), window, cx);
         });
         let _subscriptions = vec![
-            // Track shift state on enter keystrokes — fires BEFORE PressEnter
-            cx.observe_keystrokes(|this, event, _window, _cx| {
-                if event.keystroke.key == "enter" {
-                    this.shift_enter = event.keystroke.modifiers.shift;
-                }
-            }),
             cx.observe_keystrokes(|this, event, window, cx| {
                 if !Self::should_fallback_handle_history_key(event)
                     || !this.is_current_input_focused(window, cx)
@@ -494,7 +475,6 @@ impl InputBar {
             inline_suggestion_source: None,
             path_completion_candidates: Vec::new(),
             path_completion_selection: 0,
-            shift_enter: false,
             ui_opacity: 0.90,
             _subscriptions,
         }
@@ -1274,46 +1254,23 @@ impl Render for InputBar {
         let mode_tint = self.mode.tint(cx);
 
         // ── Mode prefix — icon-only, minimal ──
-        let mode_prefix = div()
-            .id("mode-toggle")
-            .flex()
-            .items_center()
-            .justify_center()
+        let mode_prefix = Button::new("mode-toggle")
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(mode_tint.opacity(0.075))
+                    .hover(mode_tint.opacity(0.12))
+                    .active(mode_tint.opacity(0.16)),
+            )
+            .accessibility_label(format!("{}; switch mode", self.mode.tooltip()))
+            .tooltip_with_action(self.mode.tooltip(), &crate::CycleInputMode, None)
+            .tab_stop(false)
             .size(control_size)
             .rounded(px(7.0 * mono_scale))
-            .cursor_pointer()
-            .bg(mode_tint.opacity(0.075))
-            .hover(|s| s.bg(mode_tint.opacity(0.12)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.cycle_mode(window, cx);
-                }),
-            )
-            .tooltip({
-                let mode_label = self.mode.tooltip().to_string();
-                move |window, cx| {
-                    let stroke =
-                        crate::keycaps::first_action_keystroke(&crate::CycleInputMode, window);
-                    let mode_label = mode_label.clone();
-                    Tooltip::element(move |_, cx| {
-                        let theme = cx.theme();
-                        let mut content = div().flex().items_center().gap(px(7.0)).child(
-                            div()
-                                .text_size(px(12.0))
-                                .line_height(px(16.0))
-                                .text_color(theme.popover_foreground)
-                                .child(format!("{} · switch mode", mode_label)),
-                        );
-                        if let Some(stroke) = stroke.as_ref() {
-                            content =
-                                content.child(crate::keycaps::keycaps_for_stroke(stroke, theme));
-                        }
-                        content
-                    })
-                    .build(window, cx)
-                }
-            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.cycle_mode(window, cx);
+                this.current_input_state()
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }))
             .child(
                 svg()
                     .path(self.mode.icon())
@@ -1397,34 +1354,36 @@ impl Render for InputBar {
         };
 
         // ── Send button — inside container, right edge ──
-        let send_button = div()
-            .id("send-button")
+        let send_button = Button::new("send-button")
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(if has_text {
+                        theme.primary
+                    } else {
+                        theme.foreground.opacity(0.055)
+                    })
+                    .hover(if has_text {
+                        theme.primary_hover
+                    } else {
+                        theme.foreground.opacity(0.075)
+                    })
+                    .active(if has_text {
+                        theme.primary_hover
+                    } else {
+                        theme.foreground.opacity(0.10)
+                    }),
+            )
+            .accessibility_label("Submit input")
+            .tooltip("Submit")
+            .tab_stop(false)
             .debug_selector(|| "command-send-button".into())
-            .flex()
-            .items_center()
-            .justify_center()
             .size(control_size)
             .rounded(px(8.0 * mono_scale))
-            .cursor_pointer()
-            .flex_shrink_0()
-            .bg(if has_text {
-                theme.primary
-            } else {
-                theme.foreground.opacity(0.055)
-            })
-            .hover(|s| {
-                if has_text {
-                    s.bg(theme.primary_hover)
-                } else {
-                    s.bg(theme.foreground.opacity(0.075))
-                }
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_this, _, _, cx| {
-                    cx.emit(SubmitInput);
-                }),
-            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.emit(SubmitInput);
+                this.current_input_state()
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }))
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
@@ -1492,6 +1451,9 @@ impl Render for InputBar {
             .min_h(control_size)
             .relative()
             .key_context("ConCommandInput")
+            // Submit mode bubbles Enter; consume it before native text fallback.
+            // The PressEnter subscription owns completion and submission.
+            .on_action(|_: &gpui_component::input::Enter, _, _| {})
             .on_action(cx.listener(|this, _: &AcceptSuggestion, window, cx| {
                 let _ = this.accept_inline_suggestion(window, cx);
             }))
@@ -1729,10 +1691,112 @@ impl Render for InputBar {
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_BAR_MAX_ROWS, InputBar, append_ask_ai_context, input_bar_content_rows,
-        input_bar_rendered_height_for_rows, text_end_position,
+        INPUT_BAR_MAX_ROWS, InputBar, SkillEntry, SubmitInput, append_ask_ai_context,
+        input_bar_content_rows, input_bar_rendered_height_for_rows, text_end_position,
     };
+    use gpui::{Entity, Focusable as _, VisualTestContext};
     use gpui_component::input::Position;
+    use std::{cell::Cell, rc::Rc};
+
+    fn test_input_bar(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<InputBar>, &mut VisualTestContext, Rc<Cell<usize>>) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let submit_count = Rc::new(Cell::new(0));
+        let observed_count = submit_count.clone();
+        let (bar, view) = cx.add_window_view(|window, cx| {
+            let bar = InputBar::new(window, cx);
+            bar.focus_handle(cx).focus(window, cx);
+            bar
+        });
+        view.update(|_, cx| {
+            cx.subscribe(&bar, move |_, _: &SubmitInput, _| {
+                observed_count.set(observed_count.get() + 1);
+            })
+            .detach();
+        });
+        (bar, view, submit_count)
+    }
+
+    #[gpui::test]
+    fn enter_submit_mode_preserves_shift_newline_and_submits_plain_and_secondary(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (bar, cx, submit_count) = test_input_bar(cx);
+        cx.simulate_input("echo one");
+        cx.simulate_keystrokes("shift-enter");
+        cx.update(|window, cx| {
+            assert_eq!(
+                bar.read(cx).current_input_state().read(cx).value(),
+                "echo one\n"
+            );
+            assert_eq!(submit_count.get(), 0);
+            assert!(bar.read(cx).focus_handle(cx).is_focused(window));
+        });
+
+        cx.simulate_input("echo two");
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("secondary-enter");
+        cx.update(|window, cx| {
+            assert_eq!(
+                bar.read(cx).current_input_state().read(cx).value(),
+                "echo one\necho two"
+            );
+            assert_eq!(submit_count.get(), 2);
+            assert!(bar.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn enter_completion_does_not_depend_on_newline_cleanup_at_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (bar, cx, submit_count) = test_input_bar(cx);
+        cx.update(|window, cx| {
+            bar.update(cx, |bar, cx| {
+                bar.set_skills(
+                    vec![SkillEntry {
+                        name: "build".into(),
+                        description: "Build the project".into(),
+                    }],
+                    cx,
+                );
+                bar.current_input_state().update(cx, |state, cx| {
+                    state.set_value("/bu", window, cx);
+                    state.set_cursor_position(Position::new(0, 1), window, cx);
+                });
+            });
+        });
+        cx.simulate_keystrokes("shift-right enter");
+        cx.update(|window, cx| {
+            assert_eq!(
+                bar.read(cx).current_input_state().read(cx).value(),
+                "/build "
+            );
+            assert_eq!(submit_count.get(), 0, "completion must win over submission");
+            assert!(bar.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn path_completion_rejects_a_middle_cursor_without_mutating_input(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (bar, cx, _) = test_input_bar(cx);
+        cx.update(|window, cx| {
+            bar.update(cx, |bar, cx| {
+                bar.current_input_state().update(cx, |state, cx| {
+                    state.set_value("cat src", window, cx);
+                    state.set_cursor_position(Position::new(0, 3), window, cx);
+                });
+                bar.set_path_completion_candidates("cat src", vec!["cat src/".into()]);
+                assert!(!bar.accept_selected_path_completion(window, cx));
+                assert_eq!(bar.current_input_state().read(cx).value(), "cat src");
+                assert!(bar.path_completion_candidates().is_empty());
+            });
+        });
+    }
 
     #[gpui::test]
     fn cached_input_bar_preserves_available_width(cx: &mut gpui::TestAppContext) {
