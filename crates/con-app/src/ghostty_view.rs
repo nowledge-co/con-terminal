@@ -193,12 +193,8 @@ impl TuiCopyGesture {
         self.dragged = false;
     }
 
-    fn take_pending(&mut self) -> bool {
-        std::mem::take(&mut self.pending)
-    }
-
-    fn clear_pending(&mut self) {
-        self.pending = false;
+    fn take_pending(&mut self, mouse_captured: bool) -> bool {
+        std::mem::take(&mut self.pending) && mouse_captured
     }
 
     fn cancel(&mut self) {
@@ -541,6 +537,7 @@ impl GhosttyView {
         let Some((_scrollbar, _, thumb_height, thumb_top)) = self.scrollbar_metrics() else {
             return false;
         };
+        self.tui_copy_gesture.cancel();
         let (_, local_y) = self.view_local_pos(position);
         let track_y = (local_y as f32 - SCROLLBAR_INSET_PX).clamp(0.0, f32::MAX);
         if (thumb_top..=thumb_top + thumb_height).contains(&track_y) {
@@ -2222,7 +2219,7 @@ impl GhosttyView {
             && !keystroke.modifiers.control
             && keystroke.key == "c";
         if !command_copy {
-            self.tui_copy_gesture.clear_pending();
+            self.tui_copy_gesture.cancel();
         }
 
         if keystroke.modifiers.platform {
@@ -2236,8 +2233,12 @@ impl GhosttyView {
                         {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                         }
-                        self.tui_copy_gesture.clear_pending();
-                    } else if command_copy && self.tui_copy_gesture.take_pending() {
+                        self.tui_copy_gesture.cancel();
+                    } else if command_copy
+                        && self
+                            .tui_copy_gesture
+                            .take_pending(terminal.mouse_captured())
+                    {
                         Self::send_tui_copy_key(terminal);
                     } else if let Some(text) =
                         copyable_terminal_text(false, None, self.hovered_osc8_url.as_ref())
@@ -2835,13 +2836,16 @@ impl Render for GhosttyView {
                 let has_selection = terminal.has_selection();
                 let selection = has_selection.then(|| terminal.selection_text()).flatten();
                 if has_selection {
-                    this.tui_copy_gesture.clear_pending();
+                    this.tui_copy_gesture.cancel();
                     if let Some(text) =
                         copyable_terminal_text(true, selection, this.hovered_osc8_url.as_ref())
                     {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
-                } else if this.tui_copy_gesture.take_pending() {
+                } else if this
+                    .tui_copy_gesture
+                    .take_pending(terminal.mouse_captured())
+                {
                     Self::send_tui_copy_key(terminal);
                 } else if let Some(text) =
                     copyable_terminal_text(false, None, this.hovered_osc8_url.as_ref())
@@ -2873,7 +2877,7 @@ impl Render for GhosttyView {
                     let right_click_consumed = right_click_consumed.clone();
                     move |this, event: &MouseDownEvent, window, cx| {
                         window.focus(&context_focus, cx);
-                        this.tui_copy_gesture.clear_pending();
+                        this.tui_copy_gesture.cancel();
                         // Reset first so a click without a terminal can't
                         // carry a stale consumed state into the menu gate.
                         right_click_consumed.set(false);
@@ -2997,7 +3001,7 @@ impl Render for GhosttyView {
                 },
             ))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
-                this.tui_copy_gesture.clear_pending();
+                this.tui_copy_gesture.cancel();
                 this.last_mouse_position = Some(event.position);
                 if let Some(ref terminal) = this.terminal {
                     let delta = match event.delta {
@@ -3234,13 +3238,16 @@ mod tests {
         gesture.begin(10.0, 10.0, false);
         gesture.observe_move(40.0, 10.0);
         gesture.finish(false);
-        assert!(!gesture.take_pending(), "ordinary shell drag stays in Con");
+        assert!(
+            !gesture.take_pending(false),
+            "ordinary shell drag stays in Con"
+        );
 
         gesture.begin(10.0, 10.0, true);
         gesture.observe_move(40.0, 10.0);
         gesture.finish(true);
         assert!(
-            !gesture.take_pending(),
+            !gesture.take_pending(true),
             "Ghostty-owned selection stays in Con"
         );
 
@@ -3248,11 +3255,11 @@ mod tests {
         gesture.observe_move(40.0, 10.0);
         gesture.finish(false);
         assert!(
-            gesture.take_pending(),
+            gesture.take_pending(true),
             "TUI-owned drag forwards its copy key"
         );
         assert!(
-            !gesture.take_pending(),
+            !gesture.take_pending(true),
             "the copy key is forwarded only once"
         );
     }
@@ -3263,16 +3270,29 @@ mod tests {
         gesture.begin(10.0, 10.0, true);
         gesture.observe_move(12.0, 11.0);
         gesture.finish(false);
-        assert!(!gesture.take_pending(), "a click must not arm Ctrl+C");
+        assert!(!gesture.take_pending(true), "a click must not arm Ctrl+C");
 
         gesture.begin(10.0, 10.0, true);
         gesture.observe_move(20.0, 10.0);
         gesture.finish(false);
-        gesture.clear_pending();
+        gesture.cancel();
         assert!(
-            !gesture.take_pending(),
+            !gesture.take_pending(true),
             "later input must not copy a stale drag"
         );
+    }
+
+    #[test]
+    fn tui_copy_does_not_forward_after_mouse_capture_ends() {
+        let mut gesture = TuiCopyGesture::default();
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(20.0, 10.0);
+        gesture.finish(false);
+        assert!(
+            !gesture.take_pending(false),
+            "an exited TUI must not receive a synthetic Ctrl+C"
+        );
+        assert!(!gesture.take_pending(true), "the stale gesture is consumed");
     }
 
     #[test]
@@ -3283,7 +3303,7 @@ mod tests {
         gesture.finish(false);
         gesture.cancel();
         assert!(
-            !gesture.take_pending(),
+            !gesture.take_pending(true),
             "a completed drag must not survive a tab switch"
         );
 
@@ -3292,7 +3312,7 @@ mod tests {
         gesture.cancel();
         gesture.finish(false);
         assert!(
-            !gesture.take_pending(),
+            !gesture.take_pending(true),
             "an active drag must not re-arm after focus loss"
         );
     }

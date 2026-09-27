@@ -10,7 +10,7 @@ Codex enables mouse reporting and owns the drag selection, so Ghostty has no ter
 
 ## Fix
 
-Con remembers a completed left-button drag captured by the TUI. If Ghostty has no selection, the next plain Cmd+C sends one Ctrl+C to the TUI. A new left- or right-button gesture, scroll, or other key clears the pending copy. Losing focus or closing the terminal cancels the entire gesture, so switching tabs cannot leave a stale copy intent. Shell and Ghostty-owned selections retain Con's normal copy path, and the Edit menu's Copy action uses the same fallback.
+Con remembers a completed left-button drag captured by the TUI. If Ghostty has no selection and the TUI still has mouse capture, the next plain Cmd+C sends one Ctrl+C to the TUI. A new left- or right-button gesture, scroll, or other key cancels the entire gesture, including a drag still in progress. Losing focus or closing the terminal does the same, so switching tabs cannot leave a stale copy intent. Shell and Ghostty-owned selections retain Con's normal copy path, and the Edit menu's Copy action uses the same fallback.
 
 After the change on `main` that copies hovered OSC 8 links, copy priority is: Ghostty text selection, a pending TUI drag selection, then a hovered OSC 8 link.
 

@@ -8,6 +8,13 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Terminal · macOS**
+
+- Cmd+C now copies text selected inside mouse-aware terminal apps such as
+  Codex, while preserving normal terminal selection and link copying. _(PR
+  [#412](https://github.com/nowledge-co/con-terminal/pull/412) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
 **Input**
 
 - Enter submits from the bottom input bar and compact agent composer without
