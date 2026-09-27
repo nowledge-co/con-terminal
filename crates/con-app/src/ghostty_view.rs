@@ -200,6 +200,10 @@ impl TuiCopyGesture {
     fn clear_pending(&mut self) {
         self.pending = false;
     }
+
+    fn cancel(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// Distance between the OSC 8 hover / blocked cards and the pane edges.
@@ -1225,6 +1229,7 @@ impl GhosttyView {
 
     pub fn shutdown_surface(&mut self, _window: Option<&mut Window>, cx: &mut App) {
         self.finish_active_mouse_sequences();
+        self.tui_copy_gesture.cancel();
         self.native_view_visible.set(false);
 
         if let Some(find) = self.terminal_find.take() {
@@ -1260,6 +1265,7 @@ impl GhosttyView {
     pub fn set_surface_focus_state(&mut self, focused: bool) {
         if !focused {
             self.finish_active_mouse_sequences();
+            self.tui_copy_gesture.cancel();
             #[cfg(target_os = "macos")]
             {
                 self.set_mouse_hidden_by_typing(false);
@@ -3266,6 +3272,28 @@ mod tests {
         assert!(
             !gesture.take_pending(),
             "later input must not copy a stale drag"
+        );
+    }
+
+    #[test]
+    fn tui_copy_is_cancelled_when_terminal_loses_focus() {
+        let mut gesture = TuiCopyGesture::default();
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(20.0, 10.0);
+        gesture.finish(false);
+        gesture.cancel();
+        assert!(
+            !gesture.take_pending(),
+            "a completed drag must not survive a tab switch"
+        );
+
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(20.0, 10.0);
+        gesture.cancel();
+        gesture.finish(false);
+        assert!(
+            !gesture.take_pending(),
+            "an active drag must not re-arm after focus loss"
         );
     }
 
