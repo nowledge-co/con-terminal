@@ -803,7 +803,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             terminal_presentation: Default::default(),
-            tab_activity: cx.new(|_| crate::tab_activity::TabActivity::default()),
+            tab_activity: cx.new(|cx| crate::tab_activity::TabActivity::new(window, cx)),
             chrome_preparation_dirty: true,
             active_tab,
             last_editor_tab_id: None,

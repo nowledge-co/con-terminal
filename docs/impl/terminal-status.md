@@ -62,11 +62,15 @@ slot: busy/progress rings or a semantic glyph, without moving the title.
 Each chrome group has one `TabActivity` entity with a synchronized GPUI animation
 driven by display frames. Paths use actual arcs, not polygon approximations.
 Do not apply a low-frequency timer cap: coarse angular steps make continuous
-motion visibly jerky. Reduced motion uses a static full ring. Inactive windows
-retain a static arc; hidden windows and clipped markers do not qualify for
-continued animation. Window activation explicitly invalidates chrome. Status
-collection continues independently; removing a progress signal is not proof of
-successful completion and must not generate a completion/unread event.
+motion visibly jerky. Reduced motion uses a static full ring. Visible windows
+continue animating even when inactive; hidden windows and clipped markers do not
+qualify for continued animation. On macOS, GPUI visibility includes full window
+occlusion, minimization and app hiding. Each activity layer observes visibility
+changes so uncovering restarts animation even if a hidden render retired its
+last frame callback, without activation or terminal output. Window activation
+still invalidates chrome for focus changes. Status collection continues
+independently; removing a progress signal is not proof of successful completion
+and must not generate a completion/unread event.
 
 Rows register marker geometry during prepaint. Keep the previous geometry until
 the next prepaint: discarding it during parent rendering makes offscreen rows

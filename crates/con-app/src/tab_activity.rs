@@ -69,6 +69,14 @@ pub(crate) struct TabActivity {
 }
 
 impl TabActivity {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // A hidden-window render can retire the last animation callback.
+        // Uncovering must restart it without activation or terminal output.
+        cx.observe_window_visibility(window, |_, _, _, cx| cx.notify())
+            .detach();
+        Self::default()
+    }
+
     pub(crate) fn clear(&self) {
         self.markers.borrow_mut().used = 0;
     }
@@ -300,7 +308,6 @@ impl Render for TabActivity {
         let used = markers.used;
         markers.rows.truncate(used);
         let animated = window.is_visible()
-            && window.is_window_active()
             && !cx.reduce_motion()
             && markers.rows.iter().any(|marker| {
                 marker.visual == ActivityVisual::Busy
@@ -339,6 +346,90 @@ impl Render for TabActivity {
 mod tests {
     use super::*;
     use con_core::terminal_status::Evidence;
+
+    #[gpui::test]
+    fn busy_animation_follows_visibility_not_activation(cx: &mut gpui::TestAppContext) {
+        let (layer, cx) = cx.add_window_view(|window, cx| {
+            let layer = TabActivity::new(window, cx);
+            let bounds = Bounds::new(point(px(8.0), px(8.0)), gpui::size(px(28.0), px(28.0)));
+            *layer.markers.borrow_mut() = Markers {
+                rows: vec![Marker {
+                    bounds: Some(bounds),
+                    mask: Some(ContentMask { bounds }),
+                    color: gpui::black(),
+                    visual: ActivityVisual::Busy,
+                    badge: None,
+                }],
+                used: 1,
+            };
+            layer
+        });
+        let next_frame = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, cx| window.simulate_next_frame(cx))
+        };
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.is_window_active());
+            layer.update(cx, |_, cx| cx.notify());
+        });
+        assert!(next_frame(cx) > 0, "visible Busy must schedule animation");
+
+        cx.deactivate_window();
+        cx.update(|window, cx| {
+            assert!(!window.is_window_active());
+            assert!(window.is_visible());
+            layer.update(cx, |_, cx| cx.notify());
+        });
+        next_frame(cx); // Drain any frame queued before deactivation.
+        assert!(
+            next_frame(cx) > 0,
+            "visible inactive Busy must keep animating"
+        );
+
+        cx.simulate_visibility_change(gpui::WindowVisibility::Hidden);
+        // A status update can render while hidden and retire the animation.
+        cx.update(|_, cx| layer.update(cx, |_, cx| cx.notify()));
+        next_frame(cx);
+        assert_eq!(next_frame(cx), 0, "hidden Busy must stop scheduling frames");
+
+        cx.simulate_visibility_change(gpui::WindowVisibility::Visible);
+        cx.run_until_parked();
+        assert!(
+            next_frame(cx) > 0,
+            "uncovering without activation must resume Busy"
+        );
+
+        cx.update(|_, cx| cx.set_reduce_motion(true));
+        next_frame(cx);
+        assert_eq!(next_frame(cx), 0, "reduced motion must stop animation");
+        cx.update(|_, cx| cx.set_reduce_motion(false));
+        assert!(next_frame(cx) > 0);
+
+        cx.update(|_, cx| {
+            layer.update(cx, |layer, cx| {
+                layer.markers.borrow_mut().rows[0].visual = ActivityVisual::Progress(37);
+                cx.notify();
+            });
+        });
+        next_frame(cx);
+        assert_eq!(next_frame(cx), 0, "determinate progress must not spin");
+
+        cx.update(|_, cx| {
+            layer.update(cx, |layer, cx| {
+                let mut markers = layer.markers.borrow_mut();
+                markers.rows[0].visual = ActivityVisual::Busy;
+                markers.rows[0].mask = Some(ContentMask {
+                    bounds: Bounds::new(
+                        point(px(100.0), px(100.0)),
+                        gpui::size(px(28.0), px(28.0)),
+                    ),
+                });
+                cx.notify();
+            });
+        });
+        assert_eq!(next_frame(cx), 0, "clipped Busy must not schedule frames");
+    }
 
     #[test]
     fn arc_geometry_preserves_progress_and_reduced_motion() {

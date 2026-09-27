@@ -1878,7 +1878,7 @@ impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let activity_layer = self
             .activity_layer
-            .get_or_insert_with(|| cx.new(|_| crate::tab_activity::TabActivity::default()))
+            .get_or_insert_with(|| cx.new(|cx| crate::tab_activity::TabActivity::new(window, cx)))
             .clone();
         activity_layer.read(cx).clear();
         // Clear stale drop indicator after the drag completes — GPUI
