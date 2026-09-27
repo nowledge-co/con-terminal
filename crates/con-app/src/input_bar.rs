@@ -1265,6 +1265,10 @@ impl Render for InputBar {
             .tooltip_with_action(self.mode.tooltip(), &crate::CycleInputMode, None)
             .tab_stop(false)
             .size(control_size)
+            .w(control_size)
+            .h(control_size)
+            .p_0()
+            .cursor_pointer()
             .rounded(px(7.0 * mono_scale))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cycle_mode(window, cx);
@@ -1378,6 +1382,10 @@ impl Render for InputBar {
             .tab_stop(false)
             .debug_selector(|| "command-send-button".into())
             .size(control_size)
+            .w(control_size)
+            .h(control_size)
+            .p_0()
+            .cursor_pointer()
             .rounded(px(8.0 * mono_scale))
             .on_click(cx.listener(|this, _, window, cx| {
                 cx.emit(SubmitInput);

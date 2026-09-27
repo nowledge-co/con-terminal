@@ -4,6 +4,24 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.113`
+
+### Fixed
+
+**Input**
+
+- Enter submits from the bottom input bar and compact agent composer without
+  inserting or removing text; Shift-Enter still adds a new line. _(PR
+  [#410](https://github.com/nowledge-co/con-terminal/pull/410) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Command palette**
+
+- Pressing Enter twice during the closing animation no longer runs the same
+  command twice. _(PR
+  [#410](https://github.com/nowledge-co/con-terminal/pull/410) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
 ## `v0.1.0-beta.112` - 2026-09-27
 
 ### Added
