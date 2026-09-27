@@ -82,3 +82,42 @@ Read these upstream or read-only reference sources when you need framework detai
 ## Dependency
 
 In our workspace manifest, GPUI resolves from exact-pinned `gpui-pre` crates.io snapshots of Zed rather than a local path dependency.
+
+## Migration contracts
+
+The `gpui-pre = 0.3.6` baseline corresponds to Zed revision
+`bcf6582ce3500df93a8a39366640173e6786cea6`. Its paired component release is
+`gpui-component = 0.6.6` from [GPUI Kit](https://github.com/longbridge/gpui-kit).
+Review the pinned sources before applying examples from either repository's
+default branch; upgrading a snapshot does not require adopting every wrapper.
+
+- **Composers:** use `TextareaState::submit_on_enter(true)` and the modifiers
+  delivered by `InputEvent::PressEnter`. Do not observe global keystrokes to
+  reconstruct those modifiers or remove an inserted newline with `set_value`.
+  In this release, submit mode propagates the `input::Enter` action; the
+  composer's parent consumes it so native text fallback cannot insert another
+  newline. Shift+Enter still inserts a newline. Historical message editing has
+  a different secondary-Enter contract and is intentionally separate.
+- **Buttons:** use `Button` for standard controls and `ButtonCustomVariant`
+  for Con's fills. Do not add a second `.hover(...)` style to a Button; its
+  implementation already installs one. Keep explicit SVG colors and restore
+  composer focus after mode switching or submission.
+- **Command palette:** retain Con's palette while the component's `Command`
+  treats the first Escape with a nonempty query as clear-search. Con requires
+  immediate dismissal, category/action-id search, and one dispatch even during
+  the closing animation. Test those contracts before replacing the owner.
+- **Message scrolling:** `ListState`, `FollowMode::Tail`, and targeted
+  `remeasure_items` are current GPUI APIs, not legacy substitutes. Con retains
+  its existing overscan, row geometry, and follow-output state. `MessageScroller`
+  owns additional state and uses different overscan/row spacing; replacing it
+  needs scrolling/resize measurements and anchor tests, not an assumed speedup.
+- **Rendering/cache:** keep `Render`/`RenderOnce` ownership and definite-size
+  cached views. A cache must not hide transition frames or child invalidation.
+  Asset loading and theme mutation must follow the pinned asset ownership and
+  base-theme synchronization contracts; APIs seen only on upstream main are
+  not migration requirements for this baseline.
+
+Verify actual keystrokes, completion at a selection, retained input focus,
+palette dismissal, and cached widths with `cargo test -p con --bin con`.
+Inspect a real native window for visual controls. macOS tests do not verify
+Windows/Linux rendering or IME integration on those platforms.
