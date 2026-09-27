@@ -163,6 +163,45 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+/// A mouse-reporting TUI can own a drag selection while Ghostty has none.
+/// Remember that gesture so Cmd+C can invoke the TUI's copy key once.
+#[derive(Default)]
+struct TuiCopyGesture {
+    press_origin: Option<(f32, f32)>,
+    dragged: bool,
+    pending: bool,
+}
+
+impl TuiCopyGesture {
+    fn begin(&mut self, x: f32, y: f32, mouse_reported: bool) {
+        self.press_origin = mouse_reported.then_some((x, y));
+        self.dragged = false;
+        self.pending = false;
+    }
+
+    fn observe_move(&mut self, x: f32, y: f32) {
+        const DRAG_THRESHOLD_PX: f32 = 4.0;
+        if let Some((start_x, start_y)) = self.press_origin {
+            self.dragged |= (x - start_x).abs() >= DRAG_THRESHOLD_PX
+                || (y - start_y).abs() >= DRAG_THRESHOLD_PX;
+        }
+    }
+
+    fn finish(&mut self, terminal_has_selection: bool) {
+        self.pending = self.press_origin.is_some() && self.dragged && !terminal_has_selection;
+        self.press_origin = None;
+        self.dragged = false;
+    }
+
+    fn take_pending(&mut self) -> bool {
+        std::mem::take(&mut self.pending)
+    }
+
+    fn clear_pending(&mut self) {
+        self.pending = false;
+    }
+}
+
 /// Distance between the OSC 8 hover / blocked cards and the pane edges.
 const OSC8_CARD_INSET_PX: f32 = 10.0;
 
@@ -345,6 +384,7 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_transition_underlay_owner_id: u64,
     left_mouse_sequence: MouseButtonSequence<i32>,
+    tui_copy_gesture: TuiCopyGesture,
     right_mouse_sequence: MouseButtonSequence<i32>,
     /// Whether the most recent right-button press was consumed by libghostty.
     right_click_consumed: Rc<Cell<bool>>,
@@ -428,6 +468,7 @@ impl GhosttyView {
             native_transition_underlay_owner_id: NEXT_NATIVE_TRANSITION_OWNER_ID
                 .fetch_add(1, Ordering::Relaxed),
             left_mouse_sequence: MouseButtonSequence::default(),
+            tui_copy_gesture: TuiCopyGesture::default(),
             right_mouse_sequence: MouseButtonSequence::default(),
             right_click_consumed: Rc::new(Cell::new(false)),
             handoff_menu_entry_enabled: Cell::new(false),
@@ -951,6 +992,18 @@ impl GhosttyView {
             }
             TerminalPastePayload::Text(_) => false,
         }
+    }
+
+    fn send_tui_copy_key(terminal: &GhosttyTerminal) {
+        terminal.send_key(ffi::ghostty_input_key_s {
+            action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
+            mods: ffi::GHOSTTY_MODS_CTRL,
+            consumed_mods: 0,
+            keycode: 0x08, // kVK_ANSI_C
+            text: std::ptr::null(),
+            unshifted_codepoint: 'c' as u32,
+            composing: false,
+        });
     }
 
     fn paste_from_clipboard(&self, cx: &mut Context<Self>) -> bool {
@@ -2088,7 +2141,11 @@ impl GhosttyView {
         if !self.finish_mouse_sequence(MouseButton::Left, position, mods) {
             return false;
         }
-        if let Some(selection) = self.terminal.as_ref().and_then(|t| t.selection_text()) {
+        self.tui_copy_gesture
+            .observe_move(f32::from(position.x), f32::from(position.y));
+        let selection = self.terminal.as_ref().and_then(|t| t.selection_text());
+        self.tui_copy_gesture.finish(selection.is_some());
+        if let Some(selection) = selection {
             cx.write_to_clipboard(ClipboardItem::new_string(selection));
         }
         true
@@ -2141,7 +2198,7 @@ impl GhosttyView {
     /// correctly. Falls back to `ghostty_surface_text` for composed/IME text
     /// when no keycode mapping exists.
     fn handle_key_down(
-        &self,
+        &mut self,
         event: &KeyDownEvent,
         window: &Window,
         cx: &mut Context<Self>,
@@ -2153,16 +2210,32 @@ impl GhosttyView {
 
         let keystroke = &event.keystroke;
 
+        let command_copy = keystroke.modifiers.platform
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.control
+            && keystroke.key == "c";
+        if !command_copy {
+            self.tui_copy_gesture.clear_pending();
+        }
+
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 "c" => {
                     let has_selection = terminal.has_selection();
                     let selection = has_selection.then(|| terminal.selection_text()).flatten();
-                    if let Some(text) = copyable_terminal_text(
-                        has_selection,
-                        selection,
-                        self.hovered_osc8_url.as_ref(),
-                    ) {
+                    if has_selection {
+                        if let Some(text) =
+                            copyable_terminal_text(true, selection, self.hovered_osc8_url.as_ref())
+                        {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        self.tui_copy_gesture.clear_pending();
+                    } else if command_copy && self.tui_copy_gesture.take_pending() {
+                        Self::send_tui_copy_key(terminal);
+                    } else if let Some(text) =
+                        copyable_terminal_text(false, None, self.hovered_osc8_url.as_ref())
+                    {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                     return true;
@@ -2755,8 +2828,17 @@ impl Render for GhosttyView {
                 };
                 let has_selection = terminal.has_selection();
                 let selection = has_selection.then(|| terminal.selection_text()).flatten();
-                if let Some(text) =
-                    copyable_terminal_text(has_selection, selection, this.hovered_osc8_url.as_ref())
+                if has_selection {
+                    this.tui_copy_gesture.clear_pending();
+                    if let Some(text) =
+                        copyable_terminal_text(true, selection, this.hovered_osc8_url.as_ref())
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                } else if this.tui_copy_gesture.take_pending() {
+                    Self::send_tui_copy_key(terminal);
+                } else if let Some(text) =
+                    copyable_terminal_text(false, None, this.hovered_osc8_url.as_ref())
                 {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
@@ -2785,6 +2867,7 @@ impl Render for GhosttyView {
                     let right_click_consumed = right_click_consumed.clone();
                     move |this, event: &MouseDownEvent, window, cx| {
                         window.focus(&context_focus, cx);
+                        this.tui_copy_gesture.clear_pending();
                         // Reset first so a click without a terminal can't
                         // carry a stale consumed state into the menu gate.
                         right_click_consumed.set(false);
@@ -2805,7 +2888,14 @@ impl Render for GhosttyView {
                     window.focus(&focus, cx);
                     let effective = this.sync_modifiers(&event.modifiers, true);
                     let mods = gpui_mods_to_ghostty(&effective);
-                    this.begin_mouse_sequence(MouseButton::Left, event.position, mods);
+                    let mouse_reported = this
+                        .begin_mouse_sequence(MouseButton::Left, event.position, mods)
+                        .unwrap_or(false);
+                    this.tui_copy_gesture.begin(
+                        f32::from(event.position.x),
+                        f32::from(event.position.y),
+                        mouse_reported,
+                    );
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -2872,6 +2962,10 @@ impl Render for GhosttyView {
                     cx.notify();
                     return;
                 }
+                if event.pressed_button == Some(gpui::MouseButton::Left) {
+                    this.tui_copy_gesture
+                        .observe_move(f32::from(event.position.x), f32::from(event.position.y));
+                }
                 this.last_mouse_position = Some(event.position);
                 let effective = this.sync_modifiers(&event.modifiers, false);
                 let mods = gpui_mods_to_ghostty(&effective);
@@ -2897,6 +2991,7 @@ impl Render for GhosttyView {
                 },
             ))
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, _cx| {
+                this.tui_copy_gesture.clear_pending();
                 this.last_mouse_position = Some(event.position);
                 if let Some(ref terminal) = this.terminal {
                     let delta = match event.delta {
@@ -3039,7 +3134,7 @@ fn claim_mouse_visibility(surface_id: u64, hidden: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        Osc8UrlDecision, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
+        Osc8UrlDecision, TuiCopyGesture, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
         should_send_ime_insert_as_key_event,
     };
     use con_ghostty::ffi;
@@ -3123,6 +3218,54 @@ mod tests {
         assert_eq!(
             super::changed_modifier_key(captured_command, command),
             Some((0x38, false))
+        );
+    }
+
+    #[test]
+    fn reported_tui_drag_allows_one_copy_without_affecting_shell_selection() {
+        let mut gesture = TuiCopyGesture::default();
+
+        gesture.begin(10.0, 10.0, false);
+        gesture.observe_move(40.0, 10.0);
+        gesture.finish(false);
+        assert!(!gesture.take_pending(), "ordinary shell drag stays in Con");
+
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(40.0, 10.0);
+        gesture.finish(true);
+        assert!(
+            !gesture.take_pending(),
+            "Ghostty-owned selection stays in Con"
+        );
+
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(40.0, 10.0);
+        gesture.finish(false);
+        assert!(
+            gesture.take_pending(),
+            "TUI-owned drag forwards its copy key"
+        );
+        assert!(
+            !gesture.take_pending(),
+            "the copy key is forwarded only once"
+        );
+    }
+
+    #[test]
+    fn tui_copy_requires_a_drag_and_clears_after_other_input() {
+        let mut gesture = TuiCopyGesture::default();
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(12.0, 11.0);
+        gesture.finish(false);
+        assert!(!gesture.take_pending(), "a click must not arm Ctrl+C");
+
+        gesture.begin(10.0, 10.0, true);
+        gesture.observe_move(20.0, 10.0);
+        gesture.finish(false);
+        gesture.clear_pending();
+        assert!(
+            !gesture.take_pending(),
+            "later input must not copy a stale drag"
         );
     }
 
