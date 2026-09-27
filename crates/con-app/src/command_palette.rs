@@ -405,6 +405,9 @@ impl CommandPalette {
     }
 
     fn select_action(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
         let actions = self.filtered_actions();
         if let Some(action) = actions.get(self.selected_index) {
             let id = action.id.to_string();
@@ -481,6 +484,8 @@ impl Render for CommandPalette {
             list_content = list_content.child(
                 div()
                     .id(SharedString::from(format!("palette-{}", action.id)))
+                    .role(Role::ListBoxOption)
+                    .aria_selected(is_selected)
                     .flex()
                     .items_center()
                     .justify_between()
@@ -589,6 +594,8 @@ impl Render for CommandPalette {
         }
 
         let list = div()
+            .id("palette-results")
+            .role(Role::ListBox)
             .relative()
             .max_h(px(360.0))
             .min_h_0()
@@ -626,25 +633,18 @@ impl Render for CommandPalette {
             .pt(vertical_reveal_offset(overlay_progress, 16.0))
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                let actions = this.filtered_actions();
-                let count = actions.len();
+                let count = this.filtered_actions().len();
                 match event.keystroke.key.as_str() {
-                    "escape" => {
-                        this.dismiss(cx);
-                    }
-                    "enter" => {
-                        this.select_action(cx);
-                    }
-                    "up" => {
-                        if count > 0 {
-                            this.selected_index = if this.selected_index == 0 {
-                                count - 1
-                            } else {
-                                this.selected_index - 1
-                            };
-                            this.reveal_selected = true;
-                            cx.notify();
-                        }
+                    "escape" => this.dismiss(cx),
+                    "enter" => this.select_action(cx),
+                    "up" if count > 0 => {
+                        this.selected_index = if this.selected_index == 0 {
+                            count - 1
+                        } else {
+                            this.selected_index - 1
+                        };
+                        this.reveal_selected = true;
+                        cx.notify();
                     }
                     "down" if count > 0 => {
                         this.selected_index = (this.selected_index + 1) % count;
@@ -690,5 +690,83 @@ impl Render for CommandPalette {
             .size_full()
             .child(backdrop)
             .child(card)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use super::{CommandPalette, PALETTE_ACTIONS, PaletteDismissed, PaletteSelect};
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn search_matches_category_and_action_id(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (palette, cx) = cx.add_window_view(|window, cx| CommandPalette::new(window, cx));
+
+        palette.update(cx, |palette, _| {
+            palette.query_text = "privacy".into();
+            let matches = palette.filtered_actions();
+            assert_eq!(matches.len(), 1);
+            let action = matches[0];
+            assert_eq!(action.id, "clear-restored-terminal-history");
+            let action_id = action.id;
+
+            palette.query_text = "clear-restored-terminal-history".into();
+            assert_eq!(palette.filtered_actions()[0].id, action_id);
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_wraps_and_confirm_dispatches_once(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let selected_for_event = selected.clone();
+        let (palette, cx) = cx.add_window_view(|window, cx| {
+            let mut palette = CommandPalette::new(window, cx);
+            palette.show(window, cx);
+            palette
+        });
+        cx.update(|_, cx| {
+            cx.subscribe(&palette, move |_, event: &PaletteSelect, _| {
+                selected_for_event
+                    .borrow_mut()
+                    .push(event.action_id.clone());
+            })
+            .detach();
+        });
+
+        cx.simulate_keystrokes("up enter enter");
+        cx.update(|_, cx| {
+            let expected = PALETTE_ACTIONS.last().unwrap().id;
+            assert_eq!(selected.borrow().as_slice(), &[expected]);
+            assert!(!palette.read(cx).visible);
+        });
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_immediately_with_nonempty_query(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let dismissed = Rc::new(RefCell::new(0));
+        let dismissed_for_event = dismissed.clone();
+        let (palette, cx) = cx.add_window_view(|window, cx| {
+            let mut palette = CommandPalette::new(window, cx);
+            palette.show(window, cx);
+            palette
+        });
+        cx.update(|_, cx| {
+            cx.subscribe(&palette, move |_, _: &PaletteDismissed, _| {
+                *dismissed_for_event.borrow_mut() += 1;
+            })
+            .detach();
+        });
+
+        cx.simulate_input("settings");
+        cx.simulate_keystrokes("escape escape");
+        cx.update(|_, cx| {
+            assert!(!palette.read(cx).visible);
+            assert_eq!(*dismissed.borrow(), 1);
+        });
     }
 }
