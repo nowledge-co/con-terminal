@@ -4,7 +4,25 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.113`
+## `v0.1.0-beta.114`
+
+### Fixed
+
+**Tabs**
+
+- Busy indicators keep moving while Con is visible but inactive, and resume
+  when its window is uncovered. _(PR
+  [#413](https://github.com/nowledge-co/con-terminal/pull/413) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
+
+**Window layout**
+
+- New windows keep your sidebar, input bar, and agent panel visibility choices
+  without bringing back the previous window's terminal tabs. _(PR
+  [#414](https://github.com/nowledge-co/con-terminal/pull/414) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
+## `v0.1.0-beta.113` - 2026-09-27
 
 ### Fixed
 
