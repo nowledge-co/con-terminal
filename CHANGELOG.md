@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.115`
+## `v0.1.0-beta.115` - 2026-09-28
+
+### Changed
+
+**Appearance**
+
+- The tab bar, sidebar, and input bar now share the terminal's background color
+  and transparency instead of appearing as separate tinted blocks. Selected
+  tabs and the input divider remain easy to distinguish. On macOS, window blur
+  follows the effective Ghostty setting without stacking a second blur layer.
+  _(PR [#417](https://github.com/nowledge-co/con-terminal/pull/417) by
+  [@yyhhyyyyyy](https://github.com/yyhhyyyyyy))_
 
 ### Fixed
 
