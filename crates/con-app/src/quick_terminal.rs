@@ -173,7 +173,7 @@ fn toggle_inner(pre_captured_pid: Option<i32>, cx: &mut App) {
         return;
     }
 
-    let Some(config) = crate::load_config_for_new_window() else {
+    let Some(config) = crate::load_config_for_new_window(cx) else {
         opening_failed();
         return;
     };

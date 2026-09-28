@@ -22,6 +22,16 @@ Both originals remain unchanged as read-only migration sources. Creation never
 clobbers a concurrently created primary file. A malformed higher-priority file is
 an error, not a reason to fall back to an older file.
 
+When loading fails, the app opens a settings recovery window rather than starting
+a terminal with silent defaults. It displays the actual selected source file,
+keeps the parse/validation error visible, and offers file opening, error copying,
+updating, and retry. Retry validates from disk; a cold-start recovery relaunches
+the app only after validation succeeds. The recovery path does not start a
+terminal session, restore windows, or rewrite the configuration. The error is
+also printed to stderr if the UI cannot open. An older binary encountering a
+new `con.*` key remains an error: users should update the binary or explicitly
+edit their configuration, never have settings silently dropped.
+
 Session restoration, authentication, and history remain separate JSON data. Cargo
 manifests and `.cargo/config.toml` are unrelated to this format.
 

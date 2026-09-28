@@ -8,6 +8,18 @@ Open Settings from the app menu on macOS, the gear button on Windows and Linux,
 or the Command Palette. Appearance changes apply as you tune them, so you can
 leave Settings open while checking opacity, blur, fonts, and background images.
 
+## If Con Cannot Start
+
+If Con cannot read your settings, it opens a recovery window instead of silently
+starting with defaults or changing your file. The window shows the file path and
+the error. Choose **Open Settings File** to correct it, then **Try Again**.
+
+This can happen after opening an older Con version with settings written by a
+newer one. In that case, use **Check for Updates** (or **Get Latest Con**) rather
+than deleting settings you still need. **Copy Details** gives you the exact
+error if you need help. Your terminal session is not started until settings
+validate successfully.
+
 ## General
 
 General contains app-level behavior:

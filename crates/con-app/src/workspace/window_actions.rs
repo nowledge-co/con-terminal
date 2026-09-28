@@ -389,7 +389,7 @@ impl ConWorkspace {
                     .and_then(|terminal| terminal.current_dir(cx))
             })
             .flatten();
-        let Some(config) = crate::load_config_for_new_window() else {
+        let Some(config) = crate::load_config_for_new_window(cx) else {
             return;
         };
         let session = crate::fresh_window_session_with_history_for_cwd(

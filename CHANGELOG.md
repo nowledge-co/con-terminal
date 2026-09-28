@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.114`
+## `v0.1.0-beta.115`
+
+### Fixed
+
+**Settings**
+
+- If Con cannot load its settings, it now shows the file and error with a way
+  to fix the file or update Con, then retry. It no longer silently ignores a
+  new-window request or exits without an in-app explanation. Your settings are
+  not reset.
+
+## `v0.1.0-beta.114` - 2026-09-28
 
 ### Fixed
 

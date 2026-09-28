@@ -18,6 +18,7 @@ mod chat_markdown;
 #[cfg(target_os = "macos")]
 mod cli_shim;
 mod command_palette;
+mod config_recovery;
 mod file_icons;
 #[cfg(target_os = "macos")]
 mod first_run;
@@ -1182,7 +1183,7 @@ fn has_open_windows(cx: &App) -> bool {
 /// window. Used when the process is alive with no windows so an edited
 /// `app_icon` takes effect instead of the stale in-process saved id.
 fn open_window_from_disk(cx: &mut App) {
-    let Some(config) = load_config_for_new_window() else {
+    let Some(config) = load_config_for_new_window(cx) else {
         return;
     };
     app_icon::apply_persisted(&config.appearance.app_icon);
@@ -1190,19 +1191,20 @@ fn open_window_from_disk(cx: &mut App) {
     open_con_window(config, fresh_window_session_with_history(), false, cx);
 }
 
-fn load_config_for_new_window() -> Option<con_core::Config> {
-    match con_core::Config::load() {
-        Ok(config) => {
-            #[cfg(target_os = "macos")]
-            if let Err(error) = ConWorkspace::validate_native_config_candidate(&config) {
-                log::error!("Cannot open window: {error}");
-                return None;
-            }
-            Some(config)
-        }
+fn load_validated_config() -> Result<con_core::Config, String> {
+    let config = con_core::Config::load().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    ConWorkspace::validate_native_config_candidate(&config)?;
+    Ok(config)
+}
+
+fn load_config_for_new_window(cx: &mut App) -> Option<con_core::Config> {
+    match load_validated_config() {
+        Ok(config) => Some(config),
         Err(error) => {
             log::error!("Cannot open a window because the configuration is invalid: {error}");
             eprintln!("con: invalid configuration (file was not modified): {error}");
+            config_recovery::open(error, false, cx);
             None
         }
     }
@@ -2710,22 +2712,18 @@ fn main() {
         }
     };
 
-    let config = match con_core::Config::load() {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("con: invalid configuration (file was not modified): {error}");
-            std::process::exit(2);
-        }
-    };
-    log::info!("config loaded");
-    #[cfg(target_os = "macos")]
-    if let Err(error) = ConWorkspace::validate_native_config_candidate(&config) {
-        eprintln!("con: invalid native configuration: {error}");
-        std::process::exit(2);
+    let config = load_validated_config();
+    if let Err(error) = &config {
+        eprintln!("con: invalid configuration (file was not modified): {error}");
+        log::error!("Cannot start with the current configuration: {error}");
+    } else {
+        log::info!("config loaded");
     }
     // Apply [network] proxy config — overrides any shell-inherited env vars.
     // SAFETY: single-threaded at this point in startup; no other threads spawned yet.
-    unsafe { config.network.apply_to_env() };
+    if let Ok(config) = &config {
+        unsafe { config.network.apply_to_env() };
+    }
 
     let quit_mode = if cfg!(target_os = "macos") {
         QuitMode::Explicit
@@ -2744,19 +2742,51 @@ fn main() {
                 .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
         ));
     log::info!("gpui application created");
-    app.on_reopen(|cx| {
+    let startup_error = config.as_ref().err().cloned();
+    app.on_reopen(move |cx| {
         if has_open_windows(cx) {
             cx.activate(true);
             return;
         }
 
-        open_window_from_disk(cx);
+        if startup_error.is_some() {
+            match load_validated_config() {
+                Ok(_) => match config_recovery::restart() {
+                    Ok(()) => cx.quit(),
+                    Err(error) => config_recovery::open(
+                        format!("Settings are valid, but Con could not restart: {error}"),
+                        true,
+                        cx,
+                    ),
+                },
+                Err(error) => config_recovery::open(error, true, cx),
+            }
+        } else {
+            open_window_from_disk(cx);
+        }
         cx.activate(true);
     });
     app.run(move |cx: &mut App| {
         // Detect release channel (stable/beta/dev) from bundle Info.plist
         let channel = con_core::release_channel::init();
         log::info!("Release channel: {}", channel.display_name());
+
+        let config = match config {
+            Ok(config) => config,
+            Err(error) => {
+                gpui_component::init(cx);
+                let defaults = con_core::Config::default();
+                theme::init_theme(
+                    cx,
+                    &defaults.terminal.theme,
+                    &defaults.terminal.font_family,
+                    &defaults.appearance.ui_font_family,
+                    defaults.appearance.ui_font_size,
+                );
+                config_recovery::open(error, true, cx);
+                return;
+            }
+        };
 
         // Set dock icon for development (`cargo run`) and any saved selection.
         app_icon::apply_persisted(&config.appearance.app_icon);
@@ -2793,7 +2823,7 @@ fn main() {
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
             if has_open_windows(cx) {
-                if let Some(config) = load_config_for_new_window() {
+                if let Some(config) = load_config_for_new_window(cx) {
                     open_con_window(config, fresh_window_session_with_history(), false, cx);
                 }
             } else {
@@ -2821,7 +2851,7 @@ fn main() {
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 if has_open_windows(cx) {
-                    if let Some(config) = load_config_for_new_window() {
+                    if let Some(config) = load_config_for_new_window(cx) {
                         open_con_window(config, fresh_window_session_with_history(), false, cx);
                     }
                 } else {
