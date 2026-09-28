@@ -13,7 +13,9 @@ con is still pre-release, so entries may group related beta work while the produ
 - If Con cannot load its settings, it now shows the file and error with a way
   to fix the file or update Con, then retry. It no longer silently ignores a
   new-window request or exits without an in-app explanation. Your settings are
-  not reset.
+  not reset. _(PR
+  [#416](https://github.com/nowledge-co/con-terminal/pull/416) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.114` - 2026-09-28
 
