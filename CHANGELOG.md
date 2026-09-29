@@ -11,7 +11,9 @@ con is still pre-release, so entries may group related beta work while the produ
 **Command Palette**
 
 - Search results remain fully visible and scrollable instead of collapsing below
-  the search field, including in shorter windows.
+  the search field, including in shorter windows. _(PR
+  [#421](https://github.com/nowledge-co/con-terminal/pull/421) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.115` - 2026-09-28
 
