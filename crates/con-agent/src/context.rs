@@ -1329,6 +1329,10 @@ pub fn ssh_target_from_recent_actions(actions: &[PaneActionRecord]) -> Option<St
 fn parse_workspace_cwd_from_command(command: &str) -> Option<String> {
     let mut search_end = command.len();
     while let Some(idx) = command[..search_end].rfind("cd ") {
+        if !is_command_position(&command[..idx]) {
+            search_end = idx;
+            continue;
+        }
         let after_cd = &command[idx + 3..];
         let mut cwd = String::new();
         for ch in after_cd.chars() {
@@ -1344,6 +1348,18 @@ fn parse_workspace_cwd_from_command(command: &str) -> Option<String> {
         search_end = idx;
     }
     None
+}
+
+/// Whether a word starting right after `before` sits in command position:
+/// the start of the line, or after a separator / opener such as `&&`, `;`,
+/// `(` or the quote of `sh -c "cd …"`. This keeps `etcd --version` and
+/// `echo abcd foo` from being read as a `cd`.
+fn is_command_position(before: &str) -> bool {
+    before
+        .trim_end()
+        .chars()
+        .next_back()
+        .is_none_or(|ch| matches!(ch, ';' | '&' | '|' | '(' | '{' | '"' | '\'' | '`'))
 }
 
 pub fn workspace_cwd_hint(
@@ -3557,6 +3573,29 @@ mod tests {
         assert_eq!(
             hint.as_deref(),
             Some("/Users/weyl/dev/temp/con-bench-twosum")
+        );
+    }
+
+    #[test]
+    fn workspace_cwd_hint_ignores_cd_inside_other_words() {
+        for command in ["etcd --version", "echo abcd foo", "echo cd foo"] {
+            assert_eq!(
+                super::parse_workspace_cwd_from_command(command),
+                None,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            super::parse_workspace_cwd_from_command("cd /a && etcd --version").as_deref(),
+            Some("/a")
+        );
+        assert_eq!(
+            super::parse_workspace_cwd_from_command("git pull;cd /b").as_deref(),
+            Some("/b")
+        );
+        assert_eq!(
+            super::parse_workspace_cwd_from_command("bash -lc \"cd /c && make\"").as_deref(),
+            Some("/c")
         );
     }
 
