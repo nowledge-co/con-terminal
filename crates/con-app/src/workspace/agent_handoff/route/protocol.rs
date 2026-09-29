@@ -325,10 +325,11 @@ mod tests {
         let _serial = serial();
         // The parent prints a valid report and exits at once, but a
         // background child inherits the output pipes: the gate must stop at
-        // the same deadline instead of waiting for the descendant.
+        // the same deadline instead of waiting for the descendant. Leave
+        // headroom for process startup on macOS; this is not the production timeout.
         let (_guard, cli) = fake_cli("echo '{\"launch_helper_protocol\":2}'\nsleep 30 &\nexit 0");
         let started = std::time::Instant::now();
-        let error = query_launch_helper_protocol_bounded(&cli, Duration::from_millis(300), 4096)
+        let error = query_launch_helper_protocol_bounded(&cli, Duration::from_secs(1), 4096)
             .unwrap_err();
         assert!(error.to_string().contains("descendant"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5), "gate stalled");
