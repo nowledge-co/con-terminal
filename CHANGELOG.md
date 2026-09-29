@@ -4,6 +4,15 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.116`
+
+### Fixed
+
+**Command Palette**
+
+- Search results remain fully visible and scrollable instead of collapsing below
+  the search field, including in shorter windows.
+
 ## `v0.1.0-beta.115` - 2026-09-28
 
 ### Changed

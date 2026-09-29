@@ -426,6 +426,19 @@ impl Focusable for CommandPalette {
     }
 }
 
+fn palette_results_height(action_count: usize, viewport_height: f32, top: f32) -> f32 {
+    const SEARCH_HEIGHT: f32 = 68.0;
+    const BOTTOM_INSET: f32 = 20.0;
+    const MAX_RESULTS_HEIGHT: f32 = 360.0;
+    let content_height = if action_count == 0 {
+        74.0
+    } else {
+        16.0 + action_count as f32 * 40.0
+    };
+    let available = (viewport_height - top - SEARCH_HEIGHT - BOTTOM_INSET).max(0.0);
+    content_height.min(MAX_RESULTS_HEIGHT).min(available)
+}
+
 impl Render for CommandPalette {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let overlay_progress = self.overlay_motion.value(window, cx);
@@ -441,6 +454,7 @@ impl Render for CommandPalette {
             self.reveal_selected = true;
         }
         let actions = self.filtered_actions();
+        let action_count = actions.len();
         let selected = if !actions.is_empty() {
             self.selected_index.min(actions.len().saturating_sub(1))
         } else {
@@ -593,12 +607,14 @@ impl Render for CommandPalette {
             self.reveal_selected = false;
         }
 
+        let viewport = window.viewport_size();
+        let top = (viewport.height.as_f32() * 0.08).clamp(12.0, 60.0);
+        let results_height = palette_results_height(action_count, viewport.height.as_f32(), top);
         let list = div()
             .id("palette-results")
             .role(Role::ListBox)
             .relative()
-            .max_h(px(360.0))
-            .min_h_0()
+            .h(px(results_height))
             .child(list_content)
             .vertical_scrollbar(&self.scroll_handle);
 
@@ -617,11 +633,12 @@ impl Render for CommandPalette {
 
         let card = div()
             .absolute()
-            .top(px(60.0))
+            .top(px(top))
             .left_0()
             .right_0()
             .mx_auto()
             .w(px(560.0))
+            .max_w((viewport.width - px(32.0)).max(px(0.0)))
             .rounded(px(16.0))
             .bg(theme.popover.opacity(self.ui_opacity))
             .opacity(overlay_progress)
@@ -697,8 +714,18 @@ impl Render for CommandPalette {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use super::{CommandPalette, PALETTE_ACTIONS, PaletteDismissed, PaletteSelect};
+    use super::{
+        CommandPalette, PALETTE_ACTIONS, PaletteDismissed, PaletteSelect, palette_results_height,
+    };
     use gpui::TestAppContext;
+
+    #[test]
+    fn results_have_a_definite_height_without_exceeding_the_viewport() {
+        assert_eq!(palette_results_height(40, 900.0, 60.0), 360.0);
+        assert_eq!(palette_results_height(1, 900.0, 60.0), 56.0);
+        assert_eq!(palette_results_height(0, 900.0, 60.0), 74.0);
+        assert_eq!(palette_results_height(40, 240.0, 20.0), 132.0);
+    }
 
     #[gpui::test]
     fn search_matches_category_and_action_id(cx: &mut TestAppContext) {
