@@ -1205,6 +1205,9 @@ fn render_agent_ask(value: &Value) -> Result<()> {
         .and_then(Value::as_str)
         .unwrap_or("");
     print!("{content}");
+    if !content.ends_with('\n') && !content.is_empty() {
+        println!();
+    }
     Ok(())
 }
 
