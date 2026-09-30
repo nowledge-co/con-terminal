@@ -4,7 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.117`
+## `v0.1.0-beta.118`
+
+### Fixed
+
+**Agent and CLI**
+
+- The agent no longer mistakes commands such as `etcd --version` for a change
+  of working directory. _(PR [#428](https://github.com/nowledge-co/con-terminal/pull/428)
+  by [@Fengzdadi](https://github.com/Fengzdadi))_
+- `con-cli agent ask` now ends plain-text replies with a newline, keeping the
+  next shell prompt on its own line. _(PR
+  [#429](https://github.com/nowledge-co/con-terminal/pull/429) by
+  [@Fengzdadi](https://github.com/Fengzdadi))_
+
+## `v0.1.0-beta.117` - 2026-09-29
 
 ### Changed
 
