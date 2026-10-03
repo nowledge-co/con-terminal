@@ -5045,7 +5045,7 @@ unsafe extern "C" fn vt_unknown_sequence_callback(
     }
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
-    let Ok(log_index) = state.unknown_sequence_log_count.fetch_update(
+    let Ok(log_index) = state.unknown_sequence_log_count.try_update(
         Ordering::Relaxed,
         Ordering::Relaxed,
         |count| (count <= UNKNOWN_SEQUENCE_LOG_LIMIT).then_some(count + 1),
