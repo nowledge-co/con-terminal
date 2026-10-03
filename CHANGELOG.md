@@ -18,6 +18,13 @@ con is still pre-release, so entries may group related beta work while the produ
   [#429](https://github.com/nowledge-co/con-terminal/pull/429) by
   [@Fengzdadi](https://github.com/Fengzdadi))_
 
+**Files**
+
+- The Files panel now updates as files and folders are created, renamed, or
+  removed, without losing expanded folders or the selected file. _(PR
+  [#431](https://github.com/nowledge-co/con-terminal/pull/431) by
+  [@adaiguoguo](https://github.com/adaiguoguo))_
+
 ## `v0.1.0-beta.117` - 2026-09-29
 
 ### Changed
