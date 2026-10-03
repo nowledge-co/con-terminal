@@ -1,202 +1,159 @@
-# con — Development Guide
+# con — Agent Guide
 
-## What is con?
+con is a Rust terminal emulator with a built-in AI agent harness, targeting
+macOS, Windows, and Linux. It uses GPUI for UI, Ghostty for terminals, and Rig
+for the agent. Use workspace manifests for current packages and versions.
 
-con is an open-source, GPU-accelerated terminal emulator with a built-in AI agent harness. Built in Rust.
+## Working agreements
 
-- **macOS** — primary target, shipped. Metal-backed libghostty, signed DMG, Sparkle auto-update.
-- **Windows** — first beta shipped as `v0.1.0-beta.25`. D3D11/DirectWrite renderer over ConPTY + libghostty-vt, unsigned ZIP distribution, notify-only update checker. Plan + open work: `docs/impl/windows-port.md`; status tracker: issue #34.
-- **Linux** — preview. Real PTY pane via `libghostty-vt`, styled-cell paint (SGR colors / bold / italic / underline / inverse + block cursor), client-side decorations with the same caption cluster Windows uses, transparent ARGB window with rounded corners, and KWin-Wayland backdrop blur via `org_kde_kwin_blur` where the compositor exposes it. Plan + open work: `docs/impl/linux-port.md`; tracker: issue #18.
+- For implementation requests, complete the change and relevant verification.
+  Resolve routine, reversible choices from project context without pausing for
+  approval at each step. Analysis and review requests stay read-only unless
+  implementation is requested.
+- Preserve unrelated work, including staged and untracked files. Do not stash,
+  discard, or overwrite it. Keep changes within the requested scope.
+- Commit when requested. Push, PR creation, merge, release, deployment, and
+  destructive actions require authorization for that action; carry existing
+  authorization forward without asking again.
+- Report checks performed, verification gaps, and the actual delivery state:
+  local, committed, pushed, merged, or released.
 
-## Stack
+## Git conventions
 
-- **UI**: Zed's GPUI (Apache 2.0), consumed as the `gpui-pre-*` crates.io snapshots that gpui-component releases are built against (`gpui-pre 0.3.7` = zed@`1a28cff`, paired with `gpui-component 0.7.0`). Pin `gpui-pre-*` and `gpui-component` exactly (`=`) and bump them together, including the app's `gpui-base` test dependency. Windows backend is D3D11/DirectComposition; HWND child-embedding is the known gap for the Windows port.
-- **Terminal runtime**: libghostty — full Ghostty terminal via C API, Metal GPU rendering, embedded as native NSView. macOS uses the full embedded libghostty; Windows and Linux consume the carved-out `libghostty-vt` parser instead and pair it with their own renderers (D3D11/DirectWrite on Windows, cached GPUI text spans painted on a fixed cell grid on Linux / a dedicated glyph-atlas renderer in the long term). Preserve native cell/grapheme boundaries through shaping; concatenating cells can incorrectly recombine emoji when DEC 2027 is off.
-- **Terminal FFI**: con-ghostty crate — thin Rust wrapper over libghostty C API on macOS (surface lifecycle, action callbacks, clipboard, key/mouse input). On Windows + Linux it wraps `libghostty-vt` plus per-platform PTY (`ConPTY` / Unix PTY) and renderer plumbing. Per-platform code lives in `con-ghostty/src/{terminal,windows,linux}/`; the workspace consumes the same `GhosttyApp` / `GhosttyTerminal` / `TerminalColors` type names from each.
-- **Terminal support crate**: con-terminal — theme and palette helpers only
-- **AI agent**: Rig v0.40.0 (from crates.io, multi-provider clients, Tool and AgentHook traits)
-- **Socket API**: JSON-RPC 2.0 with a platform-specific transport — Unix domain sockets on Unix, Windows Named Pipes (`\\.\pipe\con`) on Windows. Served by the app and consumed first by `con-cli`.
+- New branches use `<type>/<short-kebab-case>`, chosen by task purpose:
+  `feat` for features, `fix` for bugs, and `refactor`, `perf`, `docs`, `test`,
+  `build`, `ci`, `style`, `chore`, or `revert` for their respective changes.
+  Examples: `fix/terminal-focus`, `feat/session-search`, `docs/agent-guidance`.
+- Inspect the branch and worktree first. Reuse a branch for the same task;
+  when starting implementation on `main`, create a task branch from the intended
+  base. Do not switch an unrelated active branch or move existing work merely
+  to satisfy naming. Existing branches and published history need no renaming.
+- Authored commits and PR titles use Conventional Commits:
+  `type(scope): imperative description`. Use the types above and English;
+  scope is optional, preferably a subsystem such as `agent`, `cli`, or `ui`.
+  Example: `fix(cli): terminate plain output with a newline`.
+- Mark incompatible public changes with `!` and explain impact and migration
+  in a `BREAKING CHANGE:` footer. Generated merge/revert messages may retain
+  their tool-generated form; final squash titles follow the convention.
+- Keep commits focused; separate refactoring from behavior changes when practical.
+  Branch type describes the task, while commit type describes each commit.
+  Inspect the staged diff and stage only intended files, not the whole worktree
+  by default. Never invent issue references, author credits, or test results.
 
-## Repository Layout
+## Development and verification
 
-```
-kingston/
-├── DESIGN.md          # Architecture and design decisions
-├── AGENTS.md          # This file — development guide
-├── docs/
-│   ├── impl/          # Implementation notes per crate/subsystem
-│   └── study/         # Research notes on 3pp dependencies
-├── postmortem/        # Issue postmortems (YYYY-MM-DD-title.md)
-├── crates/
-│   ├── con/           # Main binary (GPUI app shell)
-│   ├── con-core/      # Shared logic (harness, config, session)
-│   ├── con-terminal/  # Terminal themes and palette helpers
-│   ├── con-ghostty/   # Ghostty FFI wrapper — primary macOS backend (libghostty C API)
-│   ├── con-agent/     # AI harness (Rig 0.40, tools, conversation)
-│   └── con-cli/       # CLI + socket client for the live local control plane
-├── assets/            # Themes, fonts, icons
-└── 3pp/               # Third-party source (READ-ONLY reference, .gitignored)
-```
+Use `HACKING.md` for setup and `mise.toml` for tool versions, including the exact
+Zig version. Select commands for the change; the pre-commit requirements below
+are mandatory where applicable. Run through `mise exec --` when the tools are
+not already on PATH.
 
-## 3pp Policy
+| Command | Purpose |
+|---------|---------|
+| `just build` / `just run` | Build the app and companion CLI / run from source |
+| `just check` | Platform-appropriate type checking |
+| `just test` | The local platform's configured test set |
+| `just lint` | Platform-appropriate Clippy checks |
+| `cargo fmt --all -- --check` | Rust formatting check |
 
-The `3pp/` directory contains third-party source checkouts for **read-only reference only**. It is `.gitignored` — never modify, commit, or depend on files in `3pp/`.
+The UI lives in `crates/con-app/`, but its Cargo package is `con`. Windows uses
+the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
+`CON` is reserved. Agent Handoff requires `con-cli` beside the app executable;
+`just build` and `just run` prepare it, unlike building only the app.
 
-- All third-party dependencies come from **crates.io** (or git URLs in Cargo.toml).
-- If a 3pp library has a bug, **upstream the fix** to the library's GitHub repo. Do not patch locally.
-- `3pp/` exists solely so you can read and study how dependencies work internally.
+### Before committing
 
-## Build
+- For Rust source changes, `cargo fmt --all -- --check` must pass.
+- For code, dependency, or build changes, run tests covering the affected crates
+  and behavior before committing. Start with the affected crate's tests, such as
+  `cargo test -p con-core`; use the platform-appropriate aliases on Windows.
+  Broaden to `just test` and affected-consumer tests for workspace-wide changes.
+  Type checking or Clippy alone does not replace tests.
+- Documentation-only changes may skip Rust formatting and tests; verify facts,
+  paths, and any changed command examples instead.
+- Results must cover the code being committed. Rerun checks affected by later
+  edits, not unchanged checks for every commit. If required checks fail or cannot
+  run, report the blocker and obtain an explicit waiver before committing;
+  do not silently skip them or claim they passed.
 
-```bash
-# Prerequisites: rust (stable, edition 2024), cmake, Zig 0.16.0 exactly (for libghostty / libghostty-vt)
-cargo build            # debug (macOS)
-cargo build --release  # release (macOS)
-cargo run -p con       # run the terminal (macOS)
-cargo test --workspace # test
-```
+### Verification scope
 
-The `con` UI binary builds on macOS, Linux, and Windows. macOS uses
-the embedded full libghostty + Metal renderer; Windows ships a
-ConPTY + libghostty-vt + D3D11/DirectWrite renderer; Linux ships a
-Unix PTY + libghostty-vt + GPUI-owned cached text-span paint path. The
-agent panel, settings, command palette, and control socket
-(`\\.\pipe\con` on Windows, `/tmp/con.sock` on Unix) are fully
-wired on every platform. See `docs/impl/windows-port.md` and
-`docs/impl/linux-port.md` for the per-platform porting plans and
-the path to the long-term GPU-accelerated grid renderer on each
-non-macOS target.
+- Match verification to risk: documentation changes need fact/path checks, local
+  logic needs focused unit tests, and shared behavior needs affected-consumer checks.
+  Use `con-test` for integration that needs a running session. Tests should catch
+  plausible mistakes, not mirror the implementation or cover trivial getters.
+- Once relevant checks pass, broaden or repeat them only for new changes,
+  failures, or unresolved concerns. Fix failures caused by the requested change.
+- Inspect rendered results for visual UI changes, including affected non-default
+  states. For interaction changes, exercise the changed behavior.
+- A macOS check does not validate Windows/Linux `cfg` paths. For Ghostty FFI,
+  run linked tests on the affected platform; `cargo check` alone misses link/ABI
+  problems. Report unavailable platform coverage explicitly.
+- Use isolated fixtures/sessions for tests that write data, not the user's live
+  configuration or session. Read the relevant `.github/workflows/` file for actual
+  CI coverage; local `just test` is not a substitute for all platform jobs.
 
-```bash
-# Windows (from a Developer Command Prompt for VS 2022; needs Zig 0.16.0 exactly on PATH
-# for libghostty-vt; the binary ships as `con-app.exe` because `CON` is a
-# reserved DOS device name):
-cargo wbuild -p con --release          # produces target\release\con-app.exe
-cargo wrun   -p con
-cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+## Project constraints
 
-# Linux (needs the GPUI linux runtime deps — see .github/workflows/ci-portable.yml):
-cargo build -p con --release
-```
+- `con-terminal` has no UI dependencies; `con-agent` has no terminal dependencies.
+  Keep platform terminal details behind `con-ghostty`'s shared interfaces.
+  `con-paths` owns application paths; OS observations from `con-process` are
+  presentation facts, not authority for agent control.
+- Pin `gpui-pre-*` and paired component packages exactly (`=`) and upgrade them
+  together, including assets and the app's `gpui-base` test dependency. Keep one
+  compatible GPUI package/source identity across the UI dependency graph.
+- Dependencies come from crates.io or declared Git dependencies pinned to a
+  revision. `3pp/` is optional, ignored, read-only reference: never modify,
+  commit, or depend on it. Upstream dependency fixes instead of patching locally.
+  Consult sources matching the resolved version; use upstream or installed
+  package sources when a reference checkout is absent or stale.
+- macOS embeds full libghostty; Windows/Linux use libghostty-vt with platform
+  PTY/rendering paths. Preserve cell/grapheme boundaries through shaping;
+  concatenating cells can recombine emoji incorrectly when DEC 2027 is off.
+- Use the real Rig integration and shared Tokio runtime, not a runtime/thread
+  per message. Commands run by Con's built-in agent must execute visibly through
+  its established execution and approval flow.
+- Config uses Ghostty line syntax with Con-owned dotted keys and Rust field names
+  in `snake_case`; keep `con.version = 1`. If the primary file is absent, copy
+  `config.ghostty` verbatim, or migrate `config.toml` only if neither native file
+  exists. Preserve originals; never fall back from a malformed higher-priority file.
+- Write workspace profiles as `.con/workspace.ghostty` v2; `.con/workspace.toml`
+  v1 is read-only compatibility input. Session, auth, and history JSON are separate.
 
-The `w*` aliases (declared in `.cargo/config.toml`) wrap the
-`--no-default-features --features con/bin-con-app` incantation the
-Windows-named binary requires.
+## UI constraints
 
-## Control Plane
+- Use `gpui-component` controls before custom buttons, inputs, selects, or switches;
+  consult the pinned API. Use IoskeleyMono for terminal/code contexts and the
+  system UI font for prose/settings. Terminal backends need concrete font families,
+  never GPUI aliases such as `.SystemUIFont`.
+- Default to Flexoki Light and support Flexoki Dark. Con-authored surfaces stay
+  borderless and shadowless, separated by opacity-based fills. Use typography for
+  hierarchy and color for semantic states. Match adjacent rounding and panel widths.
+- Con-authored icons use Phosphor assets in `assets/icons/phosphor/`; do not draw
+  replacements manually. Existing third-party internal icon fallbacks do not permit
+  new icon sets in Con's UI. Set `.text_color()` directly on every SVG.
+- Preserve input-bar focus after submission. Dialogs capture and restore focus;
+  `FocusInput` explicitly focuses the input bar. Keep labels compact, placeholders
+  action-oriented, and redundant context out of the UI.
 
-- `con-cli` is a real client for Con's local control socket, not a stub.
-- Implementation details live in `docs/impl/socket-api.md`.
-- The current live E2E workflow lives in `docs/impl/con-cli-e2e.md` and `docs/impl/con-test.md`.
+## Task-specific guidance
 
-## Local Skills
+Read only guidance relevant to the task; `docs/README.md` indexes other topics.
+These constraints take precedence over conflicting older examples in linked docs.
 
-- `skills/con-cli-e2e/SKILL.md` — use when validating the control plane from
-  an external agent, writing eval automation against a real running Con session,
-  or writing/fixing integration tests in `crates/con-test/testdata/`. Covers
-  both manual `con-cli` E2E and the `con-test` runner (test file format,
-  assertion types, common failure patterns).
-- `skills/gpui-cache-aware/SKILL.md` — use when reviewing or changing UI
-  performance, especially markdown/chat rendering, terminal-adjacent UI, or
-  resize/animation paths.
-- `skills/changelog-release-notes/SKILL.md` — use before editing
-  `CHANGELOG.md`, release notes, or PR descriptions that summarize
-  release-visible work. Always check the latest shipped beta and add PR +
-  GitHub author credit for every PR-derived changelog item.
+| Task | Guidance |
+|------|----------|
+| Architecture / boundaries | `DESIGN.md`, `docs/impl/workspace-modules.md` |
+| Build / packaging | `HACKING.md`, `docs/impl/build-system.md` |
+| Agent behavior / tools | `docs/impl/agent-harness.md`, `docs/impl/agent-tool-surface.md` |
+| Config loading / saving / migration | `docs/impl/configuration.md` |
+| Terminal rendering / ports | `docs/impl/terminal-rendering.md`, `docs/impl/windows-port.md`, `docs/impl/linux-port.md` |
+| UI design / macOS focus | `docs/design/con-design-language.md`, `docs/impl/macos-focus-and-first-responder.md` |
+| Socket API / live E2E / `con-test` tests | `docs/impl/socket-api.md`, `skills/con-cli-e2e/SKILL.md` |
+| UI rendering performance | `skills/gpui-cache-aware/SKILL.md` |
+| Changelog / release notes / release-visible PR descriptions | `skills/changelog-release-notes/SKILL.md` |
 
-## Design Language
-
-- **Font**: IoskeleyMono (embedded, all weights, Nerd-Font patched) for terminal chrome — tabs, sidebar, input bar. Patched TTFs carry ~10,400 PUA glyphs (Powerline, devicons, Font Awesome, Octicons, Codicons, Material Design) so oh-my-posh / Starship / Powerlevel10k prompts render out of the box. System font (`.SystemUIFont` GPUI virtual alias / SF Pro on macOS) for AI panel prose text, settings panel, and any non-terminal UI. Code blocks and terminal previews use IoskeleyMono via `mono_font.family` in theme JSON. Dot-prefixed GPUI virtual font aliases are valid for GPUI UI text only; terminal backends must receive concrete font families and sanitize pseudo families to the default terminal font.
-- **Default theme**: Flexoki Light. Dark available as Flexoki Dark.
-- **Icons**: Phosphor Icons only (phosphoricons.com). Copy SVGs from `3pp/phosphor-icons/SVGs/regular/` into `assets/icons/phosphor/`. Never draw icons manually — always use the Phosphor library. Reference as `"phosphor/icon-name.svg"` in code. **Critical**: always set `.text_color()` directly on every `svg()` element — parent container color does NOT propagate to SVG stroke colors in GPUI.
-- **Borderless**: No `border_1()`, `border_r_1()`, etc. Use opacity-based fills for surface separation.
-- **Shadowless**: No `shadow_sm()`, `shadow_lg()`, etc. Use bg opacity for elevation.
-- **Color by meaning only**: Monochrome surfaces by default. Accent color for semantic states (focus, active, warning, error).
-- **Typography as hierarchy**: Size, weight, and opacity create structure — not boxes and borders.
-
-See `docs/design/con-design-language.md` for full design system.
-
-## UI/UX Principles
-
-These principles govern all UI iteration. Follow them proactively — don't wait for the user to point out violations.
-
-### Use gpui-component library first
-
-Before building custom UI, check `3pp/gpui-component/` for an existing component. The library has 60+ components including:
-
-- **Select** (`select::Select`, `SelectState<SearchableVec<String>>`) — searchable dropdowns. Use for any list selection instead of hand-rolling clickable divs.
-- **Button** (`button::Button`) — use `.ghost()`, `.primary()`, `.small()`, `.icon()` variants. Never hand-roll clickable divs for buttons.
-- **Input** (`input::Input`, `InputState`) — single-line text fields with `.appearance(false)` for inline, `.cleanable()`, `.placeholder()`. Multi-line and auto-growing fields use `input::Textarea` with `TextareaState` (`.auto_grow(min, max)`).
-- **Switch** (`switch::Switch`) — toggles. Never hand-roll toggle divs.
-- **Icon** (`Icon::default().path("phosphor/name.svg")`) — use with Button via `.icon()`.
-- **Clipboard** (`clipboard::Clipboard`) — copy-to-clipboard with auto check-icon feedback.
-- **Sidebar** (`sidebar::Sidebar`) — collapsible sidebar with icon-only mode.
-- **Settings** (`setting::SettingPage`) — native settings layouts.
-
-Read the component's source in `3pp/gpui-component/crates/component/src/` (styled components) and `3pp/gpui-component/crates/base/src/` (unstyled `gpui-base` primitives such as input state) to understand its API before using it. The upstream `CLAUDE.md` in `3pp/gpui-component/` documents the full architecture.
-
-### Visual normalization
-
-- **Rounding consistency**: If one surface is flat (e.g., embedded terminal NSView), adjacent surfaces should also be flat. Don't mix rounded bubbles next to sharp-edged content.
-- **Uniform widths**: When multiple panels/cards share a container and the user switches between them, use the same width for all to prevent layout jumping.
-- **Icons over text labels** for mode indicators and compact controls. Text labels are for headings and settings fields.
-- **Font context-switching**: Use mono font (Ioskeley Mono) for shell/command contexts. Use system font (.SystemUIFont) for natural-language/agent contexts and settings UI.
-
-### Focus behavior
-
-- After submitting input from the input bar, keep focus on the input bar — the user is in a "command flow" and will likely type more. They can click the terminal to focus it.
-- Modal dialogs (settings, command palette) capture and return focus cleanly.
-- Use `FocusInput` action (keybinding) as the explicit "focus the input bar" gesture.
-
-### Density and wording
-
-- Prefer compact, terse UI labels. "Browse Themes" not "Open Theme Catalog". "Load from Clipboard" not "Load Clipboard Theme".
-- Remove anything the user can derive from context (e.g., don't show CWD when it's visible in the terminal).
-- Placeholders should be action-oriented and short: "Run a command…", "Ask anything…".
-- Avoid numbered step wizards for simple 2-3 step flows — inline everything flat.
-
-## Key Conventions
-
-- **Crate boundaries matter.** con-terminal has zero UI deps. con-agent has zero terminal deps. con-core glues them.
-- **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
-- **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
-- **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
-- **Config uses Ghostty syntax.** The primary file is `con.conf`: native terminal
-  keys use Ghostty's `key = value` form, while Con-owned settings use dotted
-  `con.appearance.*`, `con.agent.*`, `con.keybindings.*`, `con.skills.*`,
-  `con.network.*`, and `con.experimental.*` keys with Rust field names in
-  `snake_case`. Keep `con.version = 1`.
-  Paths are `~/Library/Application Support/con/con.conf` on macOS,
-  `$XDG_CONFIG_HOME/con/con.conf` (normally `~/.config/con/con.conf`)
-  on Linux, and `%APPDATA%\con-terminal\con-terminal.conf` on Windows (CON is
-  reserved even with an extension). See
-  `docs/impl/configuration.md` for ownership, migration, portability, and save rules.
-- **Older config names are migration-only.** When the primary file is absent, copy
-  `config.ghostty` verbatim, or migrate `config.toml` if neither native file exists.
-  Preserve originals and never fall back from a malformed higher-priority file.
-  Cargo manifests are unaffected.
-- **Workspace profiles use line syntax.** New writes target
-  `.con/workspace.ghostty` format v2. `.con/workspace.toml` v1 remains readable but
-  must never be a write target. Runtime session, auth, and history JSON are separate.
-- **GPUI patterns.** Use `cx.spawn(async move |this, cx| { ... })` for async work. Use if/else for conditional UI (FluentBuilder::when() is not re-exported).
-
-## Branching
-
-- `main` — stable
-- Feature branches: `wey-gu/<short-name>`
-
-## Testing Strategy
-
-After implementing a PR, write tests following this priority order:
-
-- **Unit tests first** — test functions and logic directly in the same crate using `#[cfg(test)]` modules. Cover non-trivial logic, edge cases, and error paths.
-- **con-test for integration** — use `con-test` only for integration and interactive behavior that requires a running session (e.g., pane lifecycle, socket API, agent interactions).
-- **No low-value tests** — don't write tests just to hit coverage. Skip tests for trivial getters, one-liner wrappers, or behavior already covered by the type system. Every test should catch a real bug or document a real contract.
-
-## Postmortems
-
-When solving a non-trivial bug or issue, create `postmortem/YYYY-MM-DD-title.md` with:
-- What happened
-- Root cause
-- Fix applied
-- What we learned
+Before editing release notes, check the latest shipped beta and include PR links
+and GitHub author credit for PR-derived items. For non-trivial bug fixes, create
+`postmortem/YYYY-MM-DD-title.md` covering what happened, root cause, fix, and lessons.
+Update guidance when a change establishes a durable constraint, rather than
+accumulating incident history here.
