@@ -14,6 +14,22 @@ extern void ghostty_surface_set_size(void *surface, uint32_t width, uint32_t hei
 static char kConGhosttySurfaceBackingObserverKey;
 static const int64_t kConDisplayWakeQuietPeriodMilliseconds = 250;
 
+// Only read the native event while its terminal window is handling keyDown.
+// Remote text injection can carry Unicode unrelated to the virtual keycode.
+const char *con_ghostty_surface_current_key_text(void *view_ptr, size_t *text_length) {
+    NSView *view = (__bridge NSView *)view_ptr;
+    NSEvent *event = NSApp.currentEvent;
+    if (view.window == nil || event.window != view.window || event.type != NSEventTypeKeyDown) {
+        return NULL;
+    }
+    if ((event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) != 0) {
+        return NULL;
+    }
+    NSString *text = event.characters;
+    *text_length = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    return text.UTF8String;
+}
+
 static double con_valid_scale(double scale, double fallback) {
     if (!isfinite(scale) || scale <= 0.0) {
         return fallback > 0.0 ? fallback : 1.0;
