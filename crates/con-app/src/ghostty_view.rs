@@ -102,6 +102,10 @@ unsafe extern "C" {
     fn con_ghostty_surface_install_backing_observer(view: *mut c_void, surface: *mut c_void);
     fn con_ghostty_surface_remove_backing_observer(view: *mut c_void);
     fn con_ghostty_surface_sync_occlusion(view: *mut c_void);
+    fn con_ghostty_surface_current_key_text(
+        view: *mut c_void,
+        text_length: *mut usize,
+    ) -> *const std::ffi::c_char;
     fn con_ghostty_surface_sync_backing(
         view: *mut c_void,
         surface: *mut c_void,
@@ -2276,6 +2280,22 @@ impl GhosttyView {
             self.tui_copy_gesture.cancel();
         }
 
+        // GPUI 0.3.7 reconstructs key_char from the virtual keycode. Remote
+        // clients can instead attach Unicode to a placeholder key (e.g. A).
+        // Treat a conflicting native payload as committed text, with no fake
+        // physical key identity, and consume it once to prevent insertText
+        // from delivering the same text again.
+        if self.ime_marked_text.is_none()
+            && let Some(text) = self.native_key_text_override(event)
+        {
+            if should_send_ime_insert_as_key_event(&text) {
+                send_ime_insert_as_key_events(terminal, &text);
+            } else {
+                terminal.send_text_as_key_event(&text);
+            }
+            return true;
+        }
+
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
                 "c" => {
@@ -2415,6 +2435,42 @@ impl GhosttyView {
         }
         false
     }
+
+    fn native_key_text_override(&self, event: &KeyDownEvent) -> Option<String> {
+        if event.prefer_character_input || event.keystroke.modifiers != Modifiers::default() {
+            return None;
+        }
+        let view = self.nsview?;
+        // The native NSString is owned by the current AppKit event. Copy its
+        // UTF-8 before returning; no pointer escapes this synchronous callback.
+        let text = unsafe {
+            let mut len = 0;
+            let ptr = con_ghostty_surface_current_key_text(view as *mut c_void, &mut len);
+            if ptr.is_null() {
+                return None;
+            }
+            std::str::from_utf8(std::slice::from_raw_parts(ptr.cast(), len)).ok()?
+        };
+        native_text_overrides_key_event(event, text).then(|| text.to_owned())
+    }
+}
+
+fn native_text_overrides_key_event(event: &KeyDownEvent, text: &str) -> bool {
+    !event.prefer_character_input
+        && event.keystroke.modifiers == Modifiers::default()
+        && event
+            .keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|translated| {
+                !translated.is_empty()
+                    && translated.chars().all(|ch| !ch.is_control())
+                    && translated != text
+            })
+        && !text.is_empty()
+        && text
+            .chars()
+            .all(|ch| !ch.is_control() && !('\u{f700}'..='\u{f8ff}').contains(&ch))
 }
 
 struct GhosttyInputHandler {
@@ -3198,12 +3254,14 @@ fn claim_mouse_visibility(surface_id: u64, hidden: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        Osc8UrlDecision, TuiCopyGesture, gpui_consumed_mods_to_ghostty, osc8_link_preview_card,
+        Osc8UrlDecision, TuiCopyGesture, gpui_consumed_mods_to_ghostty,
+        native_text_overrides_key_event, osc8_link_preview_card,
         should_send_ime_insert_as_key_event,
     };
     use con_ghostty::ffi;
     use gpui::{
-        Modifiers, Pixels, Render, SharedString, TextRun, Window, div, font, prelude::*, px,
+        KeyDownEvent, Keystroke, Modifiers, Pixels, Render, SharedString, TextRun, Window, div,
+        font, prelude::*, px,
     };
     use gpui_component::Theme;
 
@@ -3548,6 +3606,43 @@ mod tests {
         assert!(!should_send_ime_insert_as_key_event(""));
         assert!(!should_send_ime_insert_as_key_event("hello\n"));
         assert!(!should_send_ime_insert_as_key_event("你好"));
+    }
+
+    #[test]
+    fn native_text_preserves_remote_unicode_without_replacing_real_key_events() {
+        let mut event = KeyDownEvent {
+            keystroke: Keystroke {
+                key: "a".into(),
+                key_char: Some("a".into()),
+                modifiers: Modifiers::default(),
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        for text in ["b", "u", "1", "B", "你好", "😀", "abc"] {
+            assert!(native_text_overrides_key_event(&event, text), "{text:?}");
+        }
+        for text in ["a", "", "\n", "\t", "\u{f700}"] {
+            assert!(!native_text_overrides_key_event(&event, text), "{text:?}");
+        }
+        for modifiers in [
+            Modifiers::control(),
+            Modifiers::command(),
+            Modifiers::alt(),
+            Modifiers::shift(),
+            Modifiers::function(),
+        ] {
+            event.keystroke.modifiers = modifiers;
+            assert!(!native_text_overrides_key_event(&event, "b"));
+        }
+        event.keystroke.modifiers = Modifiers::default();
+        event.prefer_character_input = true;
+        assert!(!native_text_overrides_key_event(&event, "b"));
+        event.prefer_character_input = false;
+        event.keystroke.key_char = None;
+        assert!(!native_text_overrides_key_event(&event, "b"));
+        event.keystroke.key_char = Some("\n".into());
+        assert!(!native_text_overrides_key_event(&event, "b"));
     }
 
     #[test]
