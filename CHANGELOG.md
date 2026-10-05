@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.118`
+## `v0.1.0-beta.119`
+
+### Fixed
+
+**macOS terminal input**
+
+- Text entered through remote-control apps that send Unicode with a placeholder
+  keycode now appears correctly in terminal panes instead of repeating the same
+  letter. _(PR [#435](https://github.com/nowledge-co/con-terminal/pull/435)
+  by [@zerob13](https://github.com/zerob13))_
+
+## `v0.1.0-beta.118` - 2026-10-03
 
 ### Fixed
 
