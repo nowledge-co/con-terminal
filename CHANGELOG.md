@@ -14,6 +14,10 @@ con is still pre-release, so entries may group related beta work while the produ
   especially in dark themes, without fading the interiors of their glyphs.
   _(PR [#437](https://github.com/nowledge-co/con-terminal/pull/437) by
   [@wey-gu](https://github.com/wey-gu))_
+- Title-bar buttons have balanced vertical spacing and quieter panel-toggle
+  states, with consistent hover and press feedback. Shortcut hints and terminal
+  focus are preserved. _(PR [#438](https://github.com/nowledge-co/con-terminal/pull/438)
+  by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.119` - 2026-10-05
 

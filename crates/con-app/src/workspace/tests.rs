@@ -1180,32 +1180,31 @@ fn remap_drop_slot_preserves_current_order_for_live_drag_preview() {
 
 #[test]
 fn top_bar_clickables_explicitly_consume_left_mouse_down() {
-    let source = concat!(
-        include_str!("render.rs"),
-        "\n",
-        include_str!("render/top_bar.rs")
-    );
+    let source = include_str!("render/top_bar.rs");
+    let constructor = source
+        .split("fn chrome_button(")
+        .nth(1)
+        .expect("shared chrome button constructor")
+        .split("impl ConWorkspace")
+        .next()
+        .unwrap();
+    let normalized = constructor.split_whitespace().collect::<String>();
+    assert!(normalized.contains(".occlude()"));
+    assert!(normalized.contains(".on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())"));
     for control_id in [
+        "handoff-agent",
         "tab-new",
         "toggle-left-sidebar",
         "toggle-input-bar",
         "toggle-agent-panel",
         "toggle-settings",
     ] {
-        let marker = format!(".id(\"{control_id}\")");
-        let start = source
-            .find(&marker)
-            .unwrap_or_else(|| panic!("missing top bar control {control_id}"));
-        let snippet = &source[start..source.len().min(start + 1200)];
-        let normalized = snippet.split_whitespace().collect::<String>();
-        let has_mouse_down_handler = normalized
-            .contains(".on_mouse_down(MouseButton::Left,|_,_,cx|{")
-            || normalized.contains(".on_mouse_down(MouseButton::Left,cx.listener(");
-        let consumes_mouse_down =
-            has_mouse_down_handler && normalized.contains("cx.stop_propagation();");
         assert!(
-            consumes_mouse_down,
-            "top bar control {control_id} must consume left mouse-down before parent drag"
+            source
+                .split_whitespace()
+                .collect::<String>()
+                .contains(&format!("chrome_button(\"{control_id}\",")),
+            "top bar control {control_id} must use the drag-safe shared button"
         );
     }
 }

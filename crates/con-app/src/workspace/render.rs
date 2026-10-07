@@ -405,7 +405,6 @@ impl Render for ConWorkspace {
         let input_bar_content_progress = ((input_bar_progress - 0.08) / 0.92)
             .clamp(0.0, 1.0)
             .powf(0.92);
-        let compact_titlebar_progress = 1.0 - tab_strip_progress;
         let terminal_background = self.terminal_theme.background;
         let terminal_surface_color: Hsla = Rgba {
             r: f32::from(terminal_background.r) / 255.0,
@@ -966,14 +965,11 @@ impl Render for ConWorkspace {
 
         // Top bar — compact titlebar for one tab, full strip for many
         let top_bar_height = self.current_top_bar_height();
-        let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
         let top_bar = self.render_top_bar(
             window,
             cx,
             top_bar_height,
-            top_bar_controls_offset,
-            compact_titlebar_progress,
             tab_strip_progress,
             top_bar_surface_color,
         );

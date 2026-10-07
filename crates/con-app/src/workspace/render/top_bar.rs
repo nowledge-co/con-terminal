@@ -1,5 +1,17 @@
 use super::super::*;
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::menu::ContextMenuExt;
+
+const CHROME_CONTROL_SIZE: f32 = 22.0;
+
+fn chrome_controls_row(top_bar_height: f32) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .mb(px((top_bar_height - CHROME_CONTROL_SIZE).max(0.0) * 0.5))
+        .flex_shrink_0()
+}
 
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     if alpha.is_finite() {
@@ -56,35 +68,143 @@ fn top_bar_trailing_pad(window: &Window) -> f32 {
     }
 }
 
-fn chrome_icon_tone(theme: &gpui_component::Theme, compact_titlebar_progress: f32) -> Hsla {
-    let base = if theme.is_dark() { 0.62 } else { 0.52 };
-    theme
-        .foreground
-        .opacity(base + (0.08 * compact_titlebar_progress))
-}
-
-fn chrome_toggle_tone(
-    theme: &gpui_component::Theme,
-    active: bool,
-    compact_titlebar_progress: f32,
-) -> Hsla {
-    if active {
+fn chrome_button(
+    id: &'static str,
+    icon: &'static str,
+    toggled: Option<bool>,
+    label: &'static str,
+    action: Option<Box<dyn Action>>,
+    cx: &App,
+) -> Button {
+    let theme = cx.theme();
+    let active = toggled == Some(true);
+    let ink = if active {
         theme.primary
     } else {
-        chrome_icon_tone(theme, compact_titlebar_progress)
+        theme.muted_foreground
+    };
+    let surface = theme.foreground;
+    let mut button = Button::new(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(ink)
+                .color(surface.opacity(if active { 0.065 } else { 0.0 }))
+                .hover(surface.opacity(if active { 0.12 } else { 0.085 }))
+                .active(surface.opacity(0.16)),
+        )
+        .small()
+        .size(px(CHROME_CONTROL_SIZE))
+        .p_0()
+        .rounded(px(5.0))
+        .accessibility_label(label)
+        .when_some(toggled, |button, toggled| button.toggled(toggled))
+        // Keep title-bar dragging from swallowing controls on Windows, and
+        // preserve terminal focus on pointer activation on all platforms.
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            svg()
+                .path(icon)
+                .size(ui_icon_px(theme, 12.0))
+                .text_color(ink),
+        );
+    button.interactivity().tooltip(move |window, cx| {
+        chrome_tooltip(
+            label,
+            action
+                .as_deref()
+                .and_then(|action| crate::keycaps::first_action_keystroke(action, window)),
+            window,
+            cx,
+        )
+    });
+    button
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::{chrome_button, chrome_controls_row};
+    use gpui::{
+        Context, FocusHandle, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+        Styled, Window, div, px,
+    };
+
+    struct ChromeTestView {
+        height: f32,
+        focus: FocusHandle,
+        clicks: usize,
+        parent_mouse_downs: usize,
     }
-}
 
-fn chrome_control_hover_bg(theme: &gpui_component::Theme) -> Hsla {
-    theme
-        .foreground
-        .opacity(if theme.is_dark() { 0.12 } else { 0.075 })
-}
+    impl Render for ChromeTestView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("chrome-test-parent")
+                .debug_selector(|| "chrome-test-parent".into())
+                .flex()
+                .items_end()
+                .w(px(160.0))
+                .h(px(self.height))
+                .track_focus(&self.focus)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.parent_mouse_downs += 1),
+                )
+                .child(
+                    chrome_controls_row(self.height).children([false, true].map(|active| {
+                        chrome_button(
+                            if active { "chrome-on" } else { "chrome-off" },
+                            "phosphor/sidebar.svg",
+                            Some(active),
+                            "Toggle sidebar",
+                            None,
+                            cx,
+                        )
+                        .debug_selector(move || {
+                            if active { "chrome-on" } else { "chrome-off" }.into()
+                        })
+                        .on_click(cx.listener(|this, _, _, _| this.clicks += 1))
+                    })),
+                )
+        }
+    }
 
-fn chrome_control_active_bg(theme: &gpui_component::Theme) -> Hsla {
-    theme
-        .primary
-        .opacity(if theme.is_dark() { 0.14 } else { 0.09 })
+    #[gpui::test]
+    fn chrome_controls_center_and_preserve_focus_when_clicked(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let focus = cx.focus_handle();
+            focus.focus(window, cx);
+            ChromeTestView {
+                height: 28.0,
+                focus,
+                clicks: 0,
+                parent_mouse_downs: 0,
+            }
+        });
+        for height in [28.0, 36.0] {
+            view.update(cx, |view, cx| {
+                view.height = height;
+                cx.notify();
+            });
+            let parent = cx.debug_bounds("chrome-test-parent").unwrap();
+            for selector in ["chrome-off", "chrome-on"] {
+                let button = cx.debug_bounds(selector).unwrap();
+                assert_eq!(button.size, gpui::size(px(22.0), px(22.0)));
+                assert_eq!(
+                    button.top() - parent.top(),
+                    parent.bottom() - button.bottom()
+                );
+                cx.simulate_click(button.center(), gpui::Modifiers::default());
+                cx.update(|window, cx| {
+                    let state = view.read(cx);
+                    assert!(state.focus.is_focused(window));
+                    assert_eq!(state.parent_mouse_downs, 0);
+                });
+            }
+        }
+        cx.update(|_, cx| assert_eq!(view.read(cx).clicks, 4));
+    }
 }
 
 impl ConWorkspace {
@@ -94,8 +214,6 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         top_bar_height: f32,
-        top_bar_controls_offset: f32,
-        compact_titlebar_progress: f32,
         tab_strip_progress: f32,
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
@@ -1144,13 +1262,8 @@ impl ConWorkspace {
         top_bar = top_bar.child(leading_chrome);
 
         // Right-side controls — compact row
-        let mut tab_controls = div()
-            .flex()
-            .items_center()
-            .gap(px(3.0))
-            .mb(px(top_bar_controls_offset))
-            .ml(px(if show_horizontal_tabs { 8.0 } else { 0.0 }))
-            .flex_shrink_0();
+        let mut tab_controls = chrome_controls_row(top_bar_height)
+            .ml(px(if show_horizontal_tabs { 8.0 } else { 0.0 }));
         #[cfg(target_os = "linux")]
         {
             if linux_client_decorated(window) {
@@ -1158,72 +1271,34 @@ impl ConWorkspace {
             }
         }
 
-        let new_tab_icon_color = chrome_icon_tone(theme, compact_titlebar_progress);
-        let chrome_hover_bg = chrome_control_hover_bg(theme);
-        let chrome_active_bg = chrome_control_active_bg(theme);
         #[cfg(target_os = "macos")]
         if self.handoff_button_visible(cx) {
             tab_controls = tab_controls.child(
-                div()
-                    .id("handoff-agent")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(24.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .occlude()
-                    .hover(move |style| style.bg(chrome_hover_bg))
-                    .tooltip(|window, cx| chrome_tooltip("Handoff Agent", None, window, cx))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_agent_handoff(&crate::HandoffAgent, window, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path("phosphor/handshake.svg")
-                            .size(ui_icon_px(theme, 12.0))
-                            .text_color(new_tab_icon_color),
-                    ),
-            );
-        }
-        let new_tab_button = div()
-            .id("tab-new")
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(24.0))
-            .rounded(px(6.0))
-            .cursor_pointer()
-            // `.occlude()` is required on Windows so the parent
-            // top_bar's `WindowControlArea::Drag` hit-test doesn't
-            // swallow this button (the OS would return HTCAPTION and
-            // start a window-drag on click instead of firing the
-            // click listener). Same treatment as the Min/Max/Close
-            // caption buttons at the top of this file.
-            .occlude()
-            .hover(move |s| s.bg(chrome_hover_bg))
-            .tooltip(|window, cx| {
-                chrome_tooltip(
-                    "New tab",
-                    crate::keycaps::first_action_keystroke(&NewTab, window),
-                    window,
+                chrome_button(
+                    "handoff-agent",
+                    "phosphor/handshake.svg",
+                    None,
+                    "Handoff Agent",
+                    Some(Box::new(crate::HandoffAgent)),
                     cx,
                 )
-            });
-        let new_tab_button = new_tab_button
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_agent_handoff(&crate::HandoffAgent, window, cx);
+                })),
+            );
+        }
+        tab_controls = tab_controls.child(
+            chrome_button(
+                "tab-new",
+                "phosphor/plus.svg",
+                None,
+                "New tab",
+                Some(Box::new(NewTab)),
+                cx,
+            )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.new_tab(&NewTab, window, cx);
-            }));
-        tab_controls = tab_controls.child(
-            new_tab_button.child(
-                svg()
-                    .path("phosphor/plus.svg")
-                    .size(ui_icon_px(theme, 12.0))
-                    .text_color(new_tab_icon_color),
-            ),
+            })),
         );
 
         let left_sidebar_tooltip = if self.left_panel_open {
@@ -1232,45 +1307,17 @@ impl ConWorkspace {
             "Show left sidebar"
         };
         tab_controls = tab_controls.child(
-            div()
-                .id("toggle-left-sidebar")
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(5.0))
-                .cursor_pointer()
-                .occlude()
-                .bg(if self.left_panel_open {
-                    chrome_active_bg
-                } else {
-                    theme.transparent
-                })
-                .hover(move |s| s.bg(chrome_hover_bg))
-                .tooltip(move |window, cx| {
-                    chrome_tooltip(
-                        left_sidebar_tooltip,
-                        crate::keycaps::first_action_keystroke(&ToggleLeftPanel, window),
-                        window,
-                        cx,
-                    )
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_left_panel(&ToggleLeftPanel, window, cx);
-                }))
-                .child(
-                    svg()
-                        .path("phosphor/sidebar.svg")
-                        .size(ui_icon_px(theme, 12.0))
-                        .text_color(chrome_toggle_tone(
-                            theme,
-                            self.left_panel_open,
-                            compact_titlebar_progress,
-                        )),
-                ),
+            chrome_button(
+                "toggle-left-sidebar",
+                "phosphor/sidebar.svg",
+                Some(self.left_panel_open),
+                left_sidebar_tooltip,
+                Some(Box::new(ToggleLeftPanel)),
+                cx,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_left_panel(&ToggleLeftPanel, window, cx);
+            })),
         );
 
         // Input bar toggle
@@ -1280,45 +1327,17 @@ impl ConWorkspace {
             "Show input bar"
         };
         tab_controls = tab_controls.child(
-            div()
-                .id("toggle-input-bar")
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(5.0))
-                .cursor_pointer()
-                .occlude()
-                .bg(if self.input_bar_visible {
-                    chrome_active_bg
-                } else {
-                    theme.transparent
-                })
-                .hover(move |s| s.bg(chrome_hover_bg))
-                .tooltip(move |window, cx| {
-                    chrome_tooltip(
-                        input_bar_tooltip,
-                        crate::keycaps::first_action_keystroke(&crate::ToggleInputBar, window),
-                        window,
-                        cx,
-                    )
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
-                }))
-                .child(
-                    svg()
-                        .path("phosphor/square-half-bottom-fill.svg")
-                        .size(ui_icon_px(theme, 12.0))
-                        .text_color(chrome_toggle_tone(
-                            theme,
-                            self.input_bar_visible,
-                            compact_titlebar_progress,
-                        )),
-                ),
+            chrome_button(
+                "toggle-input-bar",
+                "phosphor/square-half-bottom-fill.svg",
+                Some(self.input_bar_visible),
+                input_bar_tooltip,
+                Some(Box::new(crate::ToggleInputBar)),
+                cx,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
+            })),
         );
 
         // Agent panel toggle
@@ -1328,45 +1347,17 @@ impl ConWorkspace {
             "Show agent panel"
         };
         tab_controls = tab_controls.child(
-            div()
-                .id("toggle-agent-panel")
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(5.0))
-                .cursor_pointer()
-                .occlude()
-                .bg(if self.agent_panel_open {
-                    chrome_active_bg
-                } else {
-                    theme.transparent
-                })
-                .hover(move |s| s.bg(chrome_hover_bg))
-                .tooltip(move |window, cx| {
-                    chrome_tooltip(
-                        agent_panel_tooltip,
-                        crate::keycaps::first_action_keystroke(&ToggleAgentPanel, window),
-                        window,
-                        cx,
-                    )
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
-                }))
-                .child(
-                    svg()
-                        .path("phosphor/square-half-fill.svg")
-                        .size(ui_icon_px(theme, 12.0))
-                        .text_color(chrome_toggle_tone(
-                            theme,
-                            self.agent_panel_open,
-                            compact_titlebar_progress,
-                        )),
-                ),
+            chrome_button(
+                "toggle-agent-panel",
+                "phosphor/square-half-fill.svg",
+                Some(self.agent_panel_open),
+                agent_panel_tooltip,
+                Some(Box::new(ToggleAgentPanel)),
+                cx,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
+            })),
         );
 
         // Settings button — only on platforms without a native menu
@@ -1377,39 +1368,17 @@ impl ConWorkspace {
         #[cfg(not(target_os = "macos"))]
         {
             tab_controls = tab_controls.child(
-                div()
-                    .id("toggle-settings")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(22.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .occlude()
-                    .hover(move |s| s.bg(chrome_hover_bg))
-                    .tooltip(|window, cx| {
-                        chrome_tooltip(
-                            "Settings",
-                            crate::keycaps::first_action_keystroke(
-                                &settings_panel::ToggleSettings,
-                                window,
-                            ),
-                            window,
-                            cx,
-                        )
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
-                    }))
-                    .child(
-                        svg()
-                            .path("phosphor/gear.svg")
-                            .size(ui_icon_px(theme, 12.0))
-                            .text_color(chrome_icon_tone(theme, compact_titlebar_progress)),
-                    ),
+                chrome_button(
+                    "toggle-settings",
+                    "phosphor/gear.svg",
+                    None,
+                    "Settings",
+                    Some(Box::new(settings_panel::ToggleSettings)),
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
+                })),
             );
         }
 
