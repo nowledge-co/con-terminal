@@ -92,6 +92,12 @@ con is light-first (Flexoki Light default) but must excel in both themes.
 - On transparent tab chrome, use solid foreground/muted foreground theme tokens
   for readable titles and identity icons. Do not further fade those glyphs with
   alpha; retain translucency on the surface instead.
+- Title-bar action buttons share a 22px square, 5px rounding and centered
+  vertical placement within the current title-bar height. Use component Button
+  controls; neutral translucent fills distinguish idle, hover and press, while
+  accent-colored icons indicate an open panel. Pointer activation must not
+  steal terminal focus or bubble into native title-bar dragging. Keep native
+  Windows/Linux caption buttons separate from this action row.
 - **No shadows** - Use opacity-based fills for elevation
 - **No borders by default** - Only for strong semantic separation
 - **Opacity-based system** - All neutrals derived from white/black with opacity

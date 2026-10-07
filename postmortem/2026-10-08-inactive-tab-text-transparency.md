@@ -9,7 +9,8 @@ remained around file-tree icons, search controls and search-result text.
 
 ## Root cause
 
-There were two separate contributors. The generated theme already supplies a solid `muted_foreground`, blended from
+There were two separate contributors. The generated theme already supplies a
+solid `muted_foreground`, blended from
 the theme's foreground and background and checked for contrast. Horizontal tabs
 then applied another 0.62 alpha to that text and 0.38 to inactive icons. Vertical
 tabs also applied extra alpha, though less aggressively.
@@ -68,6 +69,8 @@ It is not yet integrated into Con's published dependencies.
 
 - Obtain upstream review and a compatible published GPUI/component snapshot;
   preserve one GPUI package identity rather than introducing a local fork.
+- The upstream PR is draft pending its required human review confirmation;
+  Zed's CLA bot also requires the contributor to sign the CLA personally.
 - Upgrade the exactly pinned GPUI family and paired components together.
 - Validate Con's dark/light transparent and opaque chrome, text, SVGs, paths,
   menus and search results in a build that actually consumes the fix.
