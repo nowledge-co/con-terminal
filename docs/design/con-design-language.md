@@ -89,6 +89,9 @@ con is light-first (Flexoki Light default) but must excel in both themes.
 
 ### Key Rules
 
+- On transparent tab chrome, use solid foreground/muted foreground theme tokens
+  for readable titles and identity icons. Do not further fade those glyphs with
+  alpha; retain translucency on the surface instead.
 - **No shadows** - Use opacity-based fills for elevation
 - **No borders by default** - Only for strong semantic separation
 - **Opacity-based system** - All neutrals derived from white/black with opacity

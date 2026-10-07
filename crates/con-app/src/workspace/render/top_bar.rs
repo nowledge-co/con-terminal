@@ -671,10 +671,9 @@ impl ConWorkspace {
                     tab_el = tab_el
                         .rounded_t(px(6.0))
                         .bg(inactive_bg)
-                        .text_color(theme.muted_foreground.opacity(0.72))
+                        .text_color(theme.muted_foreground)
                         .hover(move |s: gpui::StyleRefinement| {
-                            s.bg(inactive_hover_bg)
-                                .text_color(theme.foreground.opacity(0.82))
+                            s.bg(inactive_hover_bg).text_color(theme.foreground)
                         });
                 }
 
@@ -740,9 +739,9 @@ impl ConWorkspace {
                                         .map(|color| {
                                             crate::tab_colors::tab_accent_color_hsla(color, cx)
                                         })
-                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
+                                        .unwrap_or(theme.muted_foreground)
                                 } else {
-                                    theme.muted_foreground.opacity(0.38)
+                                    theme.muted_foreground
                                 },
                                 terminal_status
                                     .filter(|_| !is_dragged_source && tab_strip_progress > 0.01),
@@ -763,10 +762,12 @@ impl ConWorkspace {
                                 } else {
                                     FontWeight::MEDIUM
                                 })
+                                // Mute with a solid theme color, not glyph alpha:
+                                // the title bar itself is already translucent.
                                 .text_color(if is_active {
-                                    theme.foreground.opacity(0.88)
+                                    theme.foreground
                                 } else {
-                                    theme.muted_foreground.opacity(0.62)
+                                    theme.muted_foreground
                                 })
                                 .child(display_title),
                         ),
