@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.119`
+## `v0.1.0-beta.120`
+
+### Fixed
+
+**Appearance**
+
+- Inactive tab titles and icons stay legible on transparent window chrome,
+  especially in dark themes, without fading the interiors of their glyphs.
+  _(PR [#437](https://github.com/nowledge-co/con-terminal/pull/437) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+## `v0.1.0-beta.119` - 2026-10-05
 
 ### Fixed
 
