@@ -1692,7 +1692,7 @@ impl SessionSidebar {
                 if is_active {
                     theme.foreground
                 } else {
-                    theme.muted_foreground.opacity(0.78)
+                    theme.muted_foreground
                 },
                 session.status,
                 theme,
@@ -1754,7 +1754,7 @@ impl SessionSidebar {
             .text_color(if is_active {
                 theme.foreground
             } else {
-                theme.muted_foreground.opacity(0.92)
+                theme.muted_foreground
             })
             .hover(move |s| {
                 if is_active {

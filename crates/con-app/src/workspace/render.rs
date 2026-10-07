@@ -783,11 +783,7 @@ impl Render for ConWorkspace {
             );
         }
 
-        let mut main_area = div()
-            .relative()
-            .flex()
-            .flex_1()
-            .min_h_0();
+        let mut main_area = div().relative().flex().flex_1().min_h_0();
 
         if show_left_panel {
             let mut left_sidebar = div()

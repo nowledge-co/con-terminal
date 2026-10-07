@@ -1016,9 +1016,11 @@ impl GhosttyApp {
         )?;
         let effective = effective_appearance(config.0)?;
         if effective.background_blur < 0
-            && self.effective_appearance.lock().as_ref().is_none_or(|previous| {
-                previous.background_blur != effective.background_blur
-            })
+            && self
+                .effective_appearance
+                .lock()
+                .as_ref()
+                .is_none_or(|previous| previous.background_blur != effective.background_blur)
         {
             log::warn!(
                 "Liquid Glass background-blur is not supported by Con; using unblurred \
