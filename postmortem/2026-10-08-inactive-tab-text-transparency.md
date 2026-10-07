@@ -37,6 +37,12 @@ revision `a34a062bb74159231af5d01cc01011f0276d9743`. Native GPU readback tests
 reproduced it for quads, glyph/SVG atlas coverage and paths. This is not evidence
 of a missing font or a terminal-cell shaping problem.
 
+These tests establish the blend-state defect, not complete visual causality for
+Con's screenshots. No Con build consuming the correction has yet been compared
+visually against the current renderer. Its contribution to the reported halos,
+and any remaining typography or pixel-alignment issues, still require that
+comparison before claiming the user-visible problem is fully resolved.
+
 ## Fix
 
 - Use the solid theme foreground for active titles and muted foreground for
