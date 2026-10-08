@@ -12,11 +12,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Expanded vertical tabs appear only in the labeled list, rather than repeating
   in the adjacent icon rail. Compact tab navigation remains available beside
-  Files and Search.
+  Files and Search. _(PR [#442](https://github.com/nowledge-co/con-terminal/pull/442) by [@wey-gu](https://github.com/wey-gu))_
 - Compact tab hover cards have balanced padding and clearer title, path and
   status spacing, without an extra strip along the left edge. Sidebar selection
   uses a single background cue instead of an additional green stripe; custom
-  tab colors remain available.
+  tab colors remain available. _(PR [#442](https://github.com/nowledge-co/con-terminal/pull/442) by [@wey-gu](https://github.com/wey-gu))_
+- Tab names remain readable when inactive. The list shows concise working
+  directory names; compact hover cards show the full path and omit redundant
+  single-pane titles. _(PR [#442](https://github.com/nowledge-co/con-terminal/pull/442) by [@wey-gu](https://github.com/wey-gu))_
 
 ### Fixed
 
@@ -32,6 +35,7 @@ con is still pre-release, so entries may group related beta work while the produ
   of extra transparency, improving readability on translucent windows. The
   underlying macOS edge-rendering issue remains tracked in
   [#439](https://github.com/nowledge-co/con-terminal/issues/439).
+  _(PR [#442](https://github.com/nowledge-co/con-terminal/pull/442) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.120` - 2026-10-08
 

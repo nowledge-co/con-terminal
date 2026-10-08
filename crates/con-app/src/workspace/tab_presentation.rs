@@ -250,25 +250,10 @@ pub(super) fn cwd_subtitle(current_dir: Option<&str>) -> Option<String> {
             && rest.starts_with('/')
         {
             let trimmed = format!("~{rest}");
-            return Some(shorten_path(&trimmed));
+            return Some(trimmed);
         }
     }
-    Some(shorten_path(dir))
-}
-
-pub(super) fn shorten_path(path: &str) -> String {
-    const MAX_LEN: usize = 32;
-    if path.chars().count() <= MAX_LEN {
-        return path.to_string();
-    }
-    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if parts.len() <= 2 {
-        return path.to_string();
-    }
-    let last = parts.last().copied().unwrap_or("");
-    let parent = parts.get(parts.len() - 2).copied().unwrap_or("");
-    let prefix = if path.starts_with('/') { "/" } else { "" };
-    format!("{prefix}…/{parent}/{last}")
+    Some(dir.to_string())
 }
 
 /// Parse a terminal title to extract the focused command and pick an

@@ -33,7 +33,9 @@ Expanded rows own their drag-reorder bounds; an empty controls-only rail is not
 a tab drop target. Activity and attention markers follow the visible list.
 
 Sidebar text and icons use solid semantic foreground/muted-foreground colors.
-Secondary information is distinguished by color, size and placement, not an
+Tab names retain foreground contrast even when inactive; selection uses the
+surface fill and title weight rather than fading the name. Secondary information
+is distinguished by color, size and placement, not an
 extra opacity multiplier over translucent chrome. Surface fills remain
 translucent. This is a contrast rule, not a replacement for the pending GPUI
 Metal compositing correction tracked in #439.
@@ -41,7 +43,11 @@ Metal compositing correction tracked in #439.
 Compact tab hover cards use one borderless surface with equal 12 px padding;
 there is no external edge strip. Names and pane/status metadata use the UI font,
 while paths and terminal titles use the mono font. Text follows UI font sizing,
-and cards clamp to the available window width and height. Expanded rows already
+and GPUI's anchored element fits the measured card to the available window,
+including wrapped paths. Expanded rows show only the working directory name;
+full home-abbreviated paths are preserved for the hover card, without synthetic
+middle ellipses. Single-pane cards omit redundant terminal titles; split-tab
+cards retain titles that differ from the tab name and path. Expanded rows already
 show tab identity, so they do not need a second floating identity card.
 
 ## Slots
