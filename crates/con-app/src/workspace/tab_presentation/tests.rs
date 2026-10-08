@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn tab_cwd_remains_complete_for_hover_details() {
+    let cwd = "/__con_sidebar_test__/long-parent-directory/another-directory/project";
+    let presentation = smart_tab_presentation(
+        Some("Server"),
+        None,
+        None,
+        None,
+        None,
+        Some("zsh"),
+        Some(cwd),
+        0,
+        false,
+    );
+    assert_eq!(presentation.subtitle.as_deref(), Some(cwd));
+}
+
 #[cfg(test)]
 mod tests_editor_tab_title {
     use super::*;

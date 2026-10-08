@@ -92,6 +92,11 @@ con is light-first (Flexoki Light default) but must excel in both themes.
 - On transparent tab chrome, use solid foreground/muted foreground theme tokens
   for readable titles and identity icons. Do not further fade those glyphs with
   alpha; retain translucency on the surface instead.
+- Apply the same rule throughout sidebar navigation, file trees and search,
+  including disclosure arrows, secondary paths and result line numbers.
+- Show each tab once: expanded vertical tabs live in the labeled list; compact
+  tabs live in the icon rail. Keep the rail's section controls available in
+  either state, and retain compact tab navigation beside Files/Search panels.
 - Title-bar action buttons share a 22px square, 5px rounding and centered
   vertical placement within the current title-bar height. Use component Button
   controls; neutral translucent fills distinguish idle, hover and press, while

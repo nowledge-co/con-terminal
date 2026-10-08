@@ -136,9 +136,13 @@ impl Render for ActivityBar {
             )
             .child(
                 Button::new("activity-close")
-                    .icon(Icon::default().path("phosphor/x.svg"))
+                    .icon(
+                        Icon::default()
+                            .path("phosphor/x.svg")
+                            .text_color(theme.muted_foreground),
+                    )
                     .ghost()
-                    .text_color(theme.foreground.opacity(0.62))
+                    .text_color(theme.muted_foreground)
                     .rounded(px(5.0))
                     .with_size(px(20.0))
                     .cursor_pointer()

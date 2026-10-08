@@ -30,8 +30,3 @@ pub(crate) fn tab_accent_surface_hsla(color: TabAccentColor, alpha: f32, cx: &Ap
     h.a = alpha;
     h
 }
-
-/// Green dot used to indicate the active tab when no explicit accent color is set.
-pub(crate) fn active_tab_indicator_color() -> Hsla {
-    gpui::hsla(142.0 / 360.0, 0.60, 0.42, 1.0)
-}
