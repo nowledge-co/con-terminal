@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.121`
+
+### Fixed
+
+**Keyboard focus**
+
+- Blank title-bar and sidebar/panel divider clicks preserve the active input,
+  so moving or adjusting the layout does not leave typing directed at window
+  chrome instead of the terminal or input field. _(PR [#441](https://github.com/nowledge-co/con-terminal/pull/441) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.120` - 2026-10-08
 
 ### Fixed

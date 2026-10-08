@@ -129,6 +129,14 @@ After the deferred `shutdown_surface` completes, re-assert `workspace_focus` in 
 
 ## Summary: checklist for focus correctness
 
+The workspace root tracks `workspace_focus` for shortcut ancestry and explicit
+editor-only fallback. GPUI's `track_focus` also enables default mouse-down focus.
+Suppress that default on the root: empty titlebar and layout-handle clicks must
+not move keyboard focus away from the terminal, editor, or input field. Child
+input targets still focus normally before the root's bubbling handler runs.
+Do not compensate by focusing a terminal on every resize; that would steal
+focus from other inputs and dialogs.
+
 When adding a new non-terminal pane type:
 
 1. **GPUI focus**: ensure clicking the pane calls `workspace_focus.focus(window, cx)`
