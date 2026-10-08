@@ -341,7 +341,7 @@ impl Render for SidebarSearchView {
                                     .path("phosphor/file-text.svg")
                                     .size(ui_icon_px(theme, 13.0))
                                     .flex_shrink_0()
-                                    .text_color(theme.muted_foreground.opacity(0.72)),
+                                    .text_color(theme.muted_foreground),
                             )
                             .child(
                                 div()
@@ -350,7 +350,7 @@ impl Render for SidebarSearchView {
                                     .truncate()
                                     .text_size(px(12.0))
                                     .font_family(theme.font_family.clone())
-                                    .text_color(theme.foreground.opacity(0.82))
+                                    .text_color(theme.foreground)
                                     .child(SharedString::from(display)),
                             )
                             .child(result_count_badge(match_count, theme))
@@ -386,7 +386,7 @@ impl Render for SidebarSearchView {
                                 .w(px(28.0))
                                 .text_size(px(10.0))
                                 .font_family(theme.mono_font_family.clone())
-                                .text_color(theme.muted_foreground.opacity(0.55))
+                                .text_color(theme.muted_foreground)
                                 .child(SharedString::from(line_number.to_string())),
                         )
                         .child(
@@ -396,7 +396,7 @@ impl Render for SidebarSearchView {
                                 .truncate()
                                 .text_size(px(12.0))
                                 .font_family(theme.mono_font_family.clone())
-                                .text_color(theme.foreground.opacity(0.78))
+                                .text_color(theme.foreground)
                                 .child(highlighted_result_text(
                                     &preview,
                                     match_start,
@@ -440,7 +440,7 @@ impl Render for SidebarSearchView {
                                     .path("phosphor/magnifying-glass.svg")
                                     .size(ui_icon_px(theme, 14.0))
                                     .flex_shrink_0()
-                                    .text_color(theme.foreground.opacity(0.58)),
+                                    .text_color(theme.muted_foreground),
                             )
                             .child(
                                 div().flex_1().min_w_0().child(
@@ -449,7 +449,7 @@ impl Render for SidebarSearchView {
                                         .font_family(theme.font_family.clone())
                                         .text_size(ui_px(theme, 13.0))
                                         .line_height(ui_px(theme, 18.0))
-                                        .text_color(theme.foreground.opacity(0.92)),
+                                        .text_color(theme.foreground),
                                 ),
                             )
                             .child(
@@ -542,7 +542,7 @@ fn highlighted_result_text(
 ) -> StyledText {
     let text = SharedString::from(preview.to_string());
     let base_style = TextStyle {
-        color: theme.foreground.opacity(0.78),
+        color: theme.foreground,
         font_family: theme.mono_font_family.clone(),
         font_size: px(12.0).into(),
         line_height: px(18.0).into(),
@@ -559,7 +559,7 @@ fn highlighted_result_text(
     }
     if match_len > 0 {
         let mut match_style = base_style.clone();
-        match_style.color = theme.foreground.opacity(0.96);
+        match_style.color = theme.foreground;
         match_style.background_color = Some(theme.warning.opacity(0.34));
         runs.push(match_style.to_run(match_len));
     }
@@ -585,7 +585,7 @@ fn result_count_badge(count: usize, theme: &gpui_component::Theme) -> Div {
         .bg(theme.primary.opacity(0.24))
         .text_size(px(11.0))
         .font_family(theme.mono_font_family.clone())
-        .text_color(theme.foreground.opacity(0.82))
+        .text_color(theme.foreground)
         .child(SharedString::from(count.to_string()))
 }
 

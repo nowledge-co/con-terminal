@@ -53,6 +53,15 @@ comparison before claiming the user-visible problem is fully resolved.
 - Keep the change in shared tab presentation; no platform-specific input,
   terminal, or window behavior changes.
 
+The follow-up sidebar audit found the same extra alpha on vertical-tab subtitles,
+rail icons, folder disclosure arrows, search controls and search-result runs.
+These now use solid semantic text/icon colors too; surface opacity is unchanged.
+The expanded tab list also duplicated its tabs in the adjacent rail. The rail
+now shows session tiles only while the labeled list is absent. The visible list
+owns drag bounds and activity markers, and controls-only rail space does not
+accept tab-reorder drops. A GPUI rendering regression test covers expanded,
+collapsed, file/search and temporary rail-only states.
+
 The renderer correction changes only two destination-alpha factors to
 `OneMinusSourceAlpha`. It adds no draw calls or per-frame work. The existing
 path-rasterization blend state is already correct and stays unchanged. The
@@ -75,8 +84,9 @@ It is not yet integrated into Con's published dependencies.
 
 - Obtain upstream review and a compatible published GPUI/component snapshot;
   preserve one GPUI package identity rather than introducing a local fork.
-- The upstream PR is draft pending its required human review confirmation;
-  Zed's CLA bot also requires the contributor to sign the CLA personally.
+- The upstream PR is open and no longer draft as of October 8; it has not been
+  merged into a compatible published dependency. Check its current review and
+  contributor requirements before integration.
 - Upgrade the exactly pinned GPUI family and paired components together.
 - Validate Con's dark/light transparent and opaque chrome, text, SVGs, paths,
   menus and search results in a build that actually consumes the fix.

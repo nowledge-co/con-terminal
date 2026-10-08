@@ -535,7 +535,7 @@ impl Render for FileTreeView {
                 .child(
                     div()
                         .text_size(px(11.0))
-                        .text_color(theme.muted_foreground.opacity(0.5))
+                        .text_color(theme.muted_foreground)
                         .font_family(theme.font_family.clone())
                         .child("No folder open"),
                 )
@@ -580,16 +580,12 @@ impl Render for FileTreeView {
                     let icon = icon_for_path(&path, is_dir, is_expanded);
 
                     let icon_color = if is_dir {
-                        list_theme.primary.opacity(0.75)
+                        list_theme.primary
                     } else {
-                        list_theme.muted_foreground.opacity(0.80)
+                        list_theme.muted_foreground
                     };
 
-                    let text_color = if is_active {
-                        list_theme.foreground
-                    } else {
-                        list_theme.foreground.opacity(0.85)
-                    };
+                    let text_color = list_theme.foreground;
 
                     let row_bg = if is_active {
                         accent_bg
@@ -621,7 +617,7 @@ impl Render for FileTreeView {
                                 .path(disclosure_icon)
                                 .size(ui_icon_px(&list_theme, 10.0))
                                 .flex_shrink_0()
-                                .text_color(list_theme.muted_foreground.opacity(0.62))
+                                .text_color(list_theme.muted_foreground)
                                 .into_any_element()
                         } else {
                             div().w(px(10.0)).flex_shrink_0().into_any_element()
@@ -655,7 +651,7 @@ impl Render for FileTreeView {
                                     .size(ui_icon_px(&list_theme, ICON_SIZE))
                                     .flex_shrink_0()
                                     .cursor_pointer()
-                                    .opacity(if is_active { 0.4 } else { 0.0 })
+                                    .opacity(if is_active { 1.0 } else { 0.0 })
                                     .hover(move |s| s.opacity(1.0))
                                     .tooltip(move |window, cx| {
                                         Tooltip::new("Open in Editor Tab").build(window, cx)
