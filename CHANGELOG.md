@@ -4,22 +4,33 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.122`
+## `v0.1.0-beta.122` - 2026-10-09
 
 ### Added
 
 **Terminal program status**
 
-- Added bounded, per-surface records and status details for OSC 7501, with
-  explicit completion acknowledgement and plain-text pane/surface provenance.
-  Programs can report activity, completion, or a request for attention on
-  macOS, Windows and Linux. Hover a tab to read its status message.
+- Programs that support OSC 7501 can report activity, completion, or a request
+  for attention on macOS, Windows and Linux. Hover a tab to read its status message.
   Running work uses a compact progress ring; waiting, errors and completion
   use a single centered icon without stacked badges or extra animation.
-  _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449) and
-  [#450](https://github.com/nowledge-co/con-terminal/pull/450), and
+  _(PRs [#449](https://github.com/nowledge-co/con-terminal/pull/449),
+  [#450](https://github.com/nowledge-co/con-terminal/pull/450) and
   [#451](https://github.com/nowledge-co/con-terminal/pull/451) by
   [@wey-gu](https://github.com/wey-gu))_
+- The [program-status guide](docs/program-status.md) covers capability
+  detection, shell examples and SSH/tmux forwarding. Applications need to emit
+  the protocol; Con does not automatically instrument every CLI. _(PR
+  [#452](https://github.com/nowledge-co/con-terminal/pull/452) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**HTML files**
+
+- Open the current HTML file in your default browser from its editor tab bar.
+  The action opens the saved file without changing unsaved edits, supports
+  `.html` and `.htm`, and reports launch errors in a notification. _(PR
+  [#453](https://github.com/nowledge-co/con-terminal/pull/453) by
+  [@sunny0826](https://github.com/sunny0826))_
 
 ### Fixed
 

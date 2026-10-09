@@ -79,6 +79,10 @@ If you want the cleanest possible terminal surface, hide pane title bars from
 Settings -> Appearance. The shortcuts and terminal context menu still expose the
 same pane actions.
 
+When editing an HTML file (`.html` or `.htm`), choose **Open in browser** in
+its tab bar to view the saved file in your default browser. Save your edits
+first if you want to see them; this action does not save the editor buffer.
+
 ## The input bar
 
 The input bar is one surface with three modes:
