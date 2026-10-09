@@ -436,6 +436,25 @@ impl ConWorkspace {
         }
     }
 
+    /// The winning program-status record, when that record owns the tab
+    /// indicator. Heuristic activity does not borrow this text.
+    pub(super) fn program_status_detail(&self, summary_id: u64) -> Option<String> {
+        let status = self
+            .terminal_presentation
+            .tabs
+            .get(&summary_id)
+            .copied()
+            .flatten()?;
+        if status.evidence != con_core::terminal_status::Evidence::ProgramStatus {
+            return None;
+        }
+        self.terminal_presentation
+            .surfaces
+            .get(&status.surface_id)?
+            .status
+            .program_detail()
+    }
+
     pub(super) fn refresh_agent_cli_detection(&mut self, cx: &mut Context<Self>) {
         self.refresh_terminal_presentation(cx);
         let state = &mut self.terminal_presentation;

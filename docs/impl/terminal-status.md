@@ -29,7 +29,12 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   the scope it describes, and an idle root does not hide a blocked child.
   The activity snapshot uses the most severe record; its percentage is the
   only one shown. A message that does not change that snapshot does not
-  require a redraw. These facts never authorize the harness or complete a
+  require a redraw. The rail hover card and the tab's tooltip show that
+  winning record as plain text: state, blocked kind, percentage, title,
+  and message. The words are the protocol values. The message is not
+  read as approval or failure. Bidirectional and other hidden formatting
+  characters are removed so they cannot reorder the label outside the
+  grid. No separate notification is posted for a report. These facts never authorize the harness or complete a
   control-plane wait. The workspace drops the set when the terminal entity
   is closed or replaced.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous
