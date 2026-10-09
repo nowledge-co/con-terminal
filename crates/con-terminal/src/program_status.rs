@@ -1058,4 +1058,27 @@ mod tests {
             "👩\u{200D}💻 ع\u{200C}رب"
         );
     }
+
+    #[test]
+    fn a_long_unicode_detail_stays_within_the_hover_budget() {
+        let mut surface = SurfaceProgramStatus::new();
+        let message = format!("👩\u{200D}💻\u{202E}{}", "测".repeat(400));
+        surface
+            .apply(Incoming {
+                state: State::Working,
+                id: "build/test",
+                kind: None,
+                progress: Some(40),
+                app: Some("cargo"),
+                title: Some("构建"),
+                message: Some(&message),
+            })
+            .unwrap();
+        let line = surface.detail_line().expect("detail");
+        assert!(line.contains("👩\u{200D}💻"));
+        assert!(line.contains("构建"));
+        assert!(!line.contains('\u{202E}'));
+        assert_eq!(line.chars().count(), 180);
+        assert!(line.ends_with('…'));
+    }
 }

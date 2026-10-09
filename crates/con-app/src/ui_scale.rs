@@ -93,7 +93,7 @@ fn icon_scale(font_scale: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{density_scale, font_scale, icon_scale};
+    use super::{density_scale, font_scale, icon_scale, ui_icon_px, ui_px};
 
     #[test]
     fn font_scale_preserves_default_and_clamps_extremes() {
@@ -114,6 +114,20 @@ mod tests {
         assert_eq!(density_scale(1.0), 1.0);
         assert!(density_scale(1.5) < 1.5);
         assert_eq!(density_scale(1.7), 1.25);
+    }
+
+    #[test]
+    fn theme_helpers_track_configured_ui_font_sizes() {
+        for (font_size, label_size, icon_size) in
+            [(12.0, 8.25, 14.4), (16.0, 11.0, 16.0), (24.0, 16.5, 21.6)]
+        {
+            let theme = gpui_component::Theme {
+                font_size: gpui::px(font_size),
+                ..Default::default()
+            };
+            assert_eq!(ui_px(&theme, 11.0), gpui::px(label_size));
+            assert!((ui_icon_px(&theme, 16.0).as_f32() - icon_size).abs() < 0.0001);
+        }
     }
 
     #[test]

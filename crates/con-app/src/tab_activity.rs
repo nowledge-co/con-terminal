@@ -555,6 +555,47 @@ mod tests {
     }
 
     #[test]
+    fn status_icons_register_rings_only_for_working_states_in_both_densities() {
+        let layer = TabActivity::default();
+        let theme = gpui_component::Theme::default();
+        for compact in [false, true] {
+            layer.clear();
+            for activity in [
+                Activity::NeedsInput,
+                Activity::Error,
+                Activity::Paused,
+                Activity::Done,
+            ] {
+                layer.icon(
+                    "phosphor/terminal.svg",
+                    px(24.0),
+                    theme.foreground,
+                    Some(status(activity, None)),
+                    &theme,
+                    compact,
+                );
+                assert_eq!(layer.markers.borrow().used, 0);
+            }
+            for (percent, visual) in [
+                (None, ActivityVisual::Busy),
+                (Some(40), ActivityVisual::Progress(40)),
+            ] {
+                layer.clear();
+                layer.icon(
+                    "phosphor/terminal.svg",
+                    px(24.0),
+                    theme.foreground,
+                    Some(status(Activity::Busy, percent)),
+                    &theme,
+                    compact,
+                );
+                assert_eq!(layer.markers.borrow().used, 1);
+                assert_eq!(layer.markers.borrow().rows[0].visual, visual);
+            }
+        }
+    }
+
+    #[test]
     fn status_maps_to_compact_visuals() {
         assert_eq!(
             ActivityVisual::from(status(Activity::Idle, None)),
