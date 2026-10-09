@@ -259,8 +259,8 @@ impl SurfaceProgramStatus {
 
     /// Plain text for the record that owns the activity indicator.
     ///
-    /// The words are the protocol's own state and kind. The message is
-    /// shown, not interpreted. Formatting characters that would reorder
+    /// State labels come from the protocol, never from message heuristics.
+    /// The message is shown, not interpreted. Formatting characters that would reorder
     /// text outside the terminal grid are removed. An acknowledged
     /// completion that no longer raises the indicator is omitted, and an
     /// idle root does not hide a blocked child.
@@ -276,42 +276,39 @@ impl SurfaceProgramStatus {
                 parts.push(id);
             }
         }
-        parts.push(
-            match record.state {
-                State::Idle => "idle",
-                State::Working => "working",
-                State::Done => "done",
-                State::Blocked => "blocked",
-                State::Error => "error",
-            }
-            .to_string(),
-        );
-        if let Some(kind) = record.kind {
-            parts.push(
-                match kind {
-                    BlockedKind::Permission => "permission",
-                    BlockedKind::Question => "question",
-                    BlockedKind::Auth => "auth",
-                }
-                .to_string(),
-            );
+        let mut line = parts.join(" · ");
+        if !line.is_empty() {
+            line.push('\n');
         }
+        line.push_str(match (record.state, record.kind) {
+            (State::Idle, _) => "Idle",
+            (State::Working, _) => "Working",
+            (State::Done, _) => "Completed",
+            (State::Blocked, Some(BlockedKind::Permission)) => "Waiting for permission",
+            (State::Blocked, Some(BlockedKind::Question)) => "Waiting for an answer",
+            (State::Blocked, Some(BlockedKind::Auth)) => "Waiting for sign-in",
+            (State::Blocked, None) => "Waiting for input",
+            (State::Error, _) => "Failed",
+        });
         if let Some(progress) = record.progress {
-            parts.push(format!("{progress}%"));
+            line.push_str(&format!(" · {progress}%"));
         }
+        let mut context = Vec::new();
         if let Some(title) = record.title.as_deref() {
             let title = present_text(title);
             if !title.is_empty() {
-                parts.push(title);
+                context.push(title);
             }
         }
-        let mut line = parts.join(" · ");
         if let Some(message) = record.message.as_deref() {
             let message = present_text(message);
             if !message.is_empty() {
-                line.push_str(" — ");
-                line.push_str(&message);
+                context.push(message);
             }
+        }
+        if !context.is_empty() {
+            line.push('\n');
+            line.push_str(&context.join(" — "));
         }
         let line = truncate_chars(&line, 180);
         (!line.is_empty()).then_some(line)
@@ -1022,7 +1019,7 @@ mod tests {
         assert_eq!(stored.message.as_deref(), Some(message));
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("cargo · working — error: not really, still working")
+            Some("cargo\nWorking\nerror: not really, still working")
         );
     }
 
@@ -1045,12 +1042,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
+            Some("cargo · build/test\nWaiting for permission · 40%\nPlan — Apply?hidden")
         );
         surface.acknowledge();
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
+            Some("cargo · build/test\nWaiting for permission · 40%\nPlan — Apply?hidden")
         );
     }
 

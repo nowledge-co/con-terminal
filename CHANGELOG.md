@@ -12,10 +12,13 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added bounded, per-surface records and status details for OSC 7501, with
   explicit completion acknowledgement and plain-text pane/surface provenance.
-  This is the model and presentation foundation; native transport is not yet
-  enabled on main and remains tracked in [#443](https://github.com/nowledge-co/con-terminal/issues/443).
+  Programs can report activity, completion, or a request for attention on
+  macOS, Windows and Linux. Hover a tab to read its status message.
+  Running work uses a compact progress ring; waiting, errors and completion
+  use a single centered icon without stacked badges or extra animation.
   _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449) and
-  [#450](https://github.com/nowledge-co/con-terminal/pull/450) by
+  [#450](https://github.com/nowledge-co/con-terminal/pull/450), and
+  [#451](https://github.com/nowledge-co/con-terminal/pull/451) by
   [@wey-gu](https://github.com/wey-gu))_
 
 ### Fixed

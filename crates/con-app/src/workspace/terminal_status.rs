@@ -454,10 +454,10 @@ impl ConWorkspace {
                         .surface_infos(None)
                         .into_iter()
                         .find(|source| source.terminal.entity_id().as_u64() == status.surface_id)?;
-                    Some(format!(
-                        "Pane {} · Surface {} · {detail}",
-                        source.pane_index + 1,
-                        source.surface_index + 1
+                    Some(program_detail_with_source(
+                        source.pane_index,
+                        source.surface_index,
+                        &detail,
                     ))
                 });
             changed |= retain_program_detail(&mut state.program_details, tab.summary_id, detail);
@@ -633,6 +633,11 @@ fn nonempty(text: &str) -> Option<&str> {
     (!text.is_empty()).then_some(text)
 }
 
+// PaneSurfaceInfo already uses the one-based indices shown by the UI/CLI.
+fn program_detail_with_source(pane_index: usize, surface_index: usize, detail: &str) -> String {
+    format!("{detail}\nPane {pane_index} · Surface {surface_index}")
+}
+
 fn retain_program_detail(
     details: &mut HashMap<u64, Option<String>>,
     tab: u64,
@@ -647,6 +652,13 @@ fn retain_program_detail(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_detail_preserves_one_based_surface_info_indices() {
+        assert_eq!(
+            super::program_detail_with_source(2, 1, "cargo · done"),
+            "cargo · done\nPane 2 · Surface 1"
+        );
+    }
     use std::time::Instant;
 
     use con_ghostty::ProgramStatusEvent;

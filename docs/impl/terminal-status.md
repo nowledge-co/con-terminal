@@ -29,7 +29,23 @@ is recorded.
   Ghostty parses and validates; Con does not keep a second parser. macOS
   receives the report, prompt start, and full reset as embedder actions from
   the pinned Ghostty fork. Windows and Linux receive the same facts from
-  libghostty-vt callbacks. The support query is answered only on those paths. Each
+  libghostty-vt callbacks. The support query is answered only on those paths.
+  The macOS bridge is an unmerged upstream proposal. On 2026-10-09 the
+  maintainer explicitly authorized a temporary, immutable pin of the public
+  `wey-gu/ghostty` fork for three-platform support. This is a scoped exception
+  to the official-source policy, not permission for local dependency patches.
+  #444 remains open until a compatible official revision replaces the fork.
+  Con uses the optional IO-thread ingress, not per-report UI mailbox actions:
+  it copies bounded borrowed fields into retained Rust state and schedules a
+  coalesced wake on the first pending update. The callback must not call
+  Ghostty or UI APIs. Surface teardown joins IO before freeing its userdata.
+  Callback ingress reduces reports and lifecycle events in order into at most
+  256 records, rather than evicting old events from a FIFO. The UI takes one
+  dirty snapshot per collection pass. Clear, prompt, reset and acknowledgement
+  cannot be lost during a report burst. Ordinary input with no accepted OSC
+  7501 reports creates no pending snapshot. Raw tool writes, failed writes,
+  empty input and key releases do not acknowledge a completion. Committed user
+  text does, including IME input. Each
   report replaces its record completely. `app` is read from the nearest
   ancestor id, and `build` does not cover `builder`. At most 256 records
   are kept, evicting the least recently updated. Nothing expires on a timer.
@@ -90,18 +106,24 @@ is recorded.
 
 ## Rendering contract
 
-Compact rail tiles keep a stationary brand icon (at most 14pt) inside a 28pt
+Compact rail tiles keep a stationary brand icon (at most 14pt) inside a 24pt
 ring in a 32pt slot. Busy-without-percentage uses a 90-degree monochrome arc
-(75% foreground, faint track), with a two-second period. Determinate progress
-uses the same ring, with no underline. Attention, error and pause use static
-warning/danger rings with Phosphor badges; the badge quadrant has no stroke.
+(solid foreground, faint track), with a two-second period. Determinate progress
+uses the same ring, with no underline. Attention, error, pause and completion
+replace the identity icon with one centered 18pt Phosphor glyph. They have no
+ring, corner badge, or animation: only running work gets a progress treatment.
 Selection/tab color uses an inset left indicator and unread yields to semantic
 badges. The compact tile fill is 40pt square, leaving room for the
-indicator inside the fill while the 28pt ring stays centered on the 44pt rail.
+indicator inside the fill while the 24pt ring stays centered on the 44pt rail.
 Expanded/horizontal tabs replace the identity icon within the original-sized
 slot: busy/progress rings or a semantic glyph, without moving the title.
-An unacknowledged program-status completion uses that same static badge
+An unacknowledged program-status completion uses that same static glyph
 slot with a check. It does not schedule an animation.
+
+Status hover text groups program identity, the readable protocol state and
+progress, and literal title/message on separate lines. Pane/surface provenance
+comes last. Build this bounded presentation only when retained facts change;
+never parse message text or collect terminal state on animation frames.
 
 Each chrome group has one `TabActivity` entity with a synchronized GPUI animation
 driven by display frames. Paths use actual arcs, not polygon approximations.
