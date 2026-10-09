@@ -436,7 +436,11 @@ impl LinuxGhosttyTerminal {
     }
 
     pub fn send_text(&self, text: &str) {
-        self.write_to_pty(text.as_bytes());
+        if let Some(session) = self.inner.lock().as_ref()
+            && let Err(err) = session.send_text(text)
+        {
+            log::debug!("linux terminal text write failed: {err:#}");
+        }
     }
 
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome, String> {

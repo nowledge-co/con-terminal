@@ -477,6 +477,18 @@ impl LinuxPtySession {
         Ok(())
     }
 
+    pub fn send_text(&self, text: &str) -> Result<()> {
+        self.shared
+            .screen
+            .write_user_input(text.as_bytes())
+            .context("failed to queue linux user input")?;
+        if !text.is_empty() {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
     pub fn set_focus(&self, focused: bool) -> Result<()> {
         self.shared.screen.set_focus(focused)
     }

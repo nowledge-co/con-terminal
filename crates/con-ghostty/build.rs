@@ -34,18 +34,22 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// only add option 41, its callback typedef, and render lifecycle docs.
 /// `include/ghostty.h` and existing public layouts/signatures are unchanged.
 ///
-/// 2026-10-09 bump: wey-gu/ghostty `4e48c76e04` (ghostty-org/ghostty main
+/// 2026-10-09 bump: wey-gu/ghostty `8b0ac6c4bc` (ghostty-org/ghostty main
 /// `b115e456` plus the embedder forward). `include/ghostty.h` appends
 /// resize-window, program status, shell prompt, and full reset. The action
 /// union stays 24 bytes. libghostty-vt adds program status (option 46),
 /// semantic prompt (42), and reset (43). Cell, style, and screen layouts
-/// are unchanged. The private initial_output anchors still match.
+/// are unchanged. The optional synchronous ingress appends a runtime callback
+/// at offset 72 (runtime config size 80). The initial_output anchors still match.
 ///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "4e48c76e04f20def67f86dc5376aa4f4ce34ba2d";
+// Temporary public-fork exception authorized on 2026-10-09; #444 tracks
+// replacement with official upstream. This revision includes IO-thread
+// ingress and close/shutdown/incarnation fixes, not just the initial bridge.
+const GHOSTTY_REV: &str = "8b0ac6c4bc2b0977ef81f80d0c189b2e540f4077";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";

@@ -666,6 +666,15 @@ pub type ghostty_runtime_write_clipboard_cb = Option<
 pub type ghostty_runtime_close_surface_cb =
     Option<unsafe extern "C" fn(userdata: *mut c_void, process_alive: bool)>;
 
+pub type ghostty_runtime_program_status_cb = Option<
+    unsafe extern "C" fn(
+        app_userdata: *mut c_void,
+        surface_userdata: *mut c_void,
+        event: c_int,
+        report: *const ghostty_action_program_status_s,
+    ),
+>;
+
 #[repr(C)]
 pub struct ghostty_runtime_config_s {
     pub userdata: *mut c_void,
@@ -678,9 +687,11 @@ pub struct ghostty_runtime_config_s {
     pub close_surface_cb: ghostty_runtime_close_surface_cb,
     /// Deliver OSC 7501 and answer the support query.
     pub program_status: bool,
+    /// Synchronous bounded ingress on the surface IO thread, not a UI callback.
+    pub program_status_cb: ghostty_runtime_program_status_cb,
 }
 
-const _: [(); 72] = [(); std::mem::size_of::<ghostty_runtime_config_s>()];
+const _: [(); 80] = [(); std::mem::size_of::<ghostty_runtime_config_s>()];
 
 // ── C API functions ─────────────────────────────────────────
 

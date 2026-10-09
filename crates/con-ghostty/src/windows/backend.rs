@@ -293,7 +293,7 @@ impl WindowsGhosttyTerminal {
 
     pub fn send_text(&self, text: &str) {
         if let Some(session) = self.inner.lock().as_ref()
-            && let Err(err) = session.write_input(text)
+            && let Err(err) = session.send_text(text)
         {
             log::debug!("windows terminal text write failed: {err:#}");
         }

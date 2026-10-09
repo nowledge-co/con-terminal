@@ -221,8 +221,10 @@ _Static_assert(sizeof(ghostty_clipboard_confirm_s) == 48,
                "ghostty clipboard confirmation changed layout");
 _Static_assert(offsetof(ghostty_clipboard_confirm_s, name) == 32,
                "ghostty clipboard confirmation name changed offset");
-_Static_assert(sizeof(ghostty_runtime_config_s) == 72,
+_Static_assert(sizeof(ghostty_runtime_config_s) == 80,
                "ghostty runtime config changed layout");
+_Static_assert(offsetof(ghostty_runtime_config_s, program_status_cb) == 72,
+               "ghostty program status ingress changed offset");
 _Static_assert(offsetof(ghostty_runtime_config_s, read_clipboard_cb) == 32,
                "ghostty runtime clipboard callback changed offset");
 _Static_assert(offsetof(ghostty_runtime_config_s, close_surface_cb) == 56,

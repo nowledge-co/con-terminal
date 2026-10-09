@@ -30,7 +30,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
@@ -1980,7 +1980,7 @@ struct VtCallbackState {
     progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
     capture: Mutex<RenderCapture>,
-    program_events: Mutex<VecDeque<ProgramStatusEvent>>,
+    program_events: Arc<Mutex<program_events::ProgramStatusBuffer>>,
 }
 
 #[derive(Default)]
@@ -2603,7 +2603,7 @@ impl VtScreen {
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
             capture: Mutex::new(RenderCapture::default()),
-            program_events: Mutex::new(VecDeque::new()),
+            program_events: Arc::new(Mutex::new(program_events::ProgramStatusBuffer::default())),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
         let rc =
@@ -3430,18 +3430,13 @@ impl VtScreen {
 
     pub fn take_program_events(&self) -> Vec<ProgramStatusEvent> {
         let inner = self.inner.lock();
-        inner
-            .callback_state
-            .program_events
-            .lock()
-            .drain(..)
-            .collect()
+        inner.callback_state.program_events.lock().take()
     }
 
     pub fn push_program_event(&self, event: ProgramStatusEvent) {
         let inner = self.inner.lock();
         let mut events = inner.callback_state.program_events.lock();
-        program_events::push_capped(&mut events, event);
+        program_events::reduce(&mut events, event);
     }
 
     pub fn progress(&self) -> Option<TerminalProgress> {
@@ -3473,13 +3468,19 @@ impl VtScreen {
     /// Enqueue raw user input through the same ordering boundary as encoded
     /// keys and parser replies.
     pub fn write_input(&self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write_bytes(bytes, PtyWriteClass::Regular)
+        self.write_bytes(bytes, PtyWriteClass::Regular, false)
+    }
+
+    /// Committed user text, unlike tool writes or protocol replies, acknowledges
+    /// this surface only after the host accepts the nonempty input.
+    pub fn write_user_input(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_bytes(bytes, PtyWriteClass::Regular, true)
     }
 
     /// Enqueue a state-balancing host report, such as a key or mouse release,
     /// using the queue capacity reserved for terminal control traffic.
     pub fn write_control(&self, bytes: &[u8]) -> std::io::Result<()> {
-        self.write_bytes(bytes, PtyWriteClass::ReservedControl)
+        self.write_bytes(bytes, PtyWriteClass::ReservedControl, false)
     }
 
     /// Report actual pane/window focus transitions, not input broadcast targets.
@@ -3535,7 +3536,12 @@ impl VtScreen {
         result.map_err(Into::into)
     }
 
-    fn write_bytes(&self, bytes: &[u8], class: PtyWriteClass) -> std::io::Result<()> {
+    fn write_bytes(
+        &self,
+        bytes: &[u8],
+        class: PtyWriteClass,
+        acknowledge: bool,
+    ) -> std::io::Result<()> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -3549,9 +3555,17 @@ impl VtScreen {
         };
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
+        let program_events = callback_state.program_events.clone();
         let write_guard = write_order.lock();
+        let mut events = acknowledge.then(|| program_events.lock());
         drop(inner);
         let result = write_pty(bytes, class);
+        if result.is_ok()
+            && let Some(events) = events.as_mut()
+        {
+            program_events::reduce(events, ProgramStatusEvent::Key);
+        }
+        drop(events);
         if let Err(err) = &result
             && class == PtyWriteClass::ReservedControl
         {
@@ -3791,6 +3805,7 @@ impl VtScreen {
         };
         let write_failed = callback_state.write_failed.clone();
         let write_order = callback_state.write_order.clone();
+        let program_events = callback_state.program_events.clone();
 
         let mut kitty_flags = 0_u8;
         let kitty_flags_rc = unsafe {
@@ -3870,17 +3885,15 @@ impl VtScreen {
             &inline[..len]
         };
 
-        if matches!(event.action, VtKeyAction::Press | VtKeyAction::Repeat) {
-            let mut events = callback_state.program_events.lock();
-            program_events::push_capped(&mut events, ProgramStatusEvent::Key);
-        }
-
         if !bytes.is_empty() {
             // Reserve the next host-write position before releasing the VT
             // state. PTY feeds may then parse concurrently, but any generated
             // reply waits behind this key instead of overtaking it. The real
             // host callbacks enqueue into a non-blocking bounded queue.
             let write_guard = write_order.lock();
+            // Keep newly generated reports behind acknowledgement of this
+            // accepted write. Rejection leaves completion state untouched.
+            let mut events = program_events.lock();
             drop(inner);
             let class = if event.action == VtKeyAction::Release {
                 PtyWriteClass::ReservedControl
@@ -3893,6 +3906,10 @@ impl VtScreen {
                 }
                 return Err(anyhow::anyhow!("failed to write encoded key: {err}"));
             }
+            if matches!(event.action, VtKeyAction::Press | VtKeyAction::Repeat) {
+                program_events::reduce(&mut events, ProgramStatusEvent::Key);
+            }
+            drop(events);
             drop(write_guard);
         }
 
@@ -5059,22 +5076,34 @@ unsafe extern "C" fn vt_program_status_callback(
     if userdata.is_null() || report.is_null() {
         return;
     }
-    let report = unsafe { &*report };
-    if report.size < std::mem::size_of::<GhosttyTerminalProgramStatus>() {
+    if unsafe { report.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalProgramStatus>()
+    {
         return;
     }
+    let report = unsafe { &*report };
+    let (Some(id), Some(app), Some(title), Some(message)) = (unsafe {
+        (
+            ghostty_string_owned(&report.id, 128),
+            ghostty_string_owned(&report.app, 32),
+            ghostty_string_owned(&report.title, 192),
+            ghostty_string_owned(&report.message, 2048),
+        )
+    }) else {
+        return;
+    };
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let mut events = state.program_events.lock();
-    program_events::push_capped(
+    program_events::reduce(
         &mut events,
         ProgramStatusEvent::Report {
             state: report.state,
             kind: report.kind,
             progress: report.progress,
-            id: ghostty_string_owned(&report.id),
-            app: ghostty_string_owned(&report.app),
-            title: ghostty_string_owned(&report.title),
-            message: ghostty_string_owned(&report.message),
+            id,
+            app,
+            title,
+            message,
         },
     );
 }
@@ -5087,6 +5116,11 @@ unsafe extern "C" fn vt_semantic_prompt_callback(
     if userdata.is_null() || event.is_null() {
         return;
     }
+    if unsafe { event.cast::<usize>().read_unaligned() }
+        < std::mem::size_of::<GhosttyTerminalSemanticPrompt>()
+    {
+        return;
+    }
     let event = unsafe { &*event };
     // Prompt start is the only step that drops in-flight program status.
     if event.size < std::mem::size_of::<i32>() * 2 + std::mem::size_of::<usize>() || event.kind != 1
@@ -5095,7 +5129,7 @@ unsafe extern "C" fn vt_semantic_prompt_callback(
     }
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let mut events = state.program_events.lock();
-    program_events::push_capped(&mut events, ProgramStatusEvent::Prompt);
+    program_events::reduce(&mut events, ProgramStatusEvent::Prompt);
 }
 
 unsafe extern "C" fn vt_reset_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
@@ -5104,13 +5138,18 @@ unsafe extern "C" fn vt_reset_callback(_terminal: GhosttyTerminal, userdata: *mu
     }
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let mut events = state.program_events.lock();
-    program_events::push_capped(&mut events, ProgramStatusEvent::FullReset);
+    program_events::reduce(&mut events, ProgramStatusEvent::FullReset);
 }
 
-fn ghostty_string_owned(value: &GhosttyString) -> String {
-    ghostty_string_bytes(value)
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-        .unwrap_or_default()
+unsafe fn ghostty_string_owned(value: &GhosttyString, limit: usize) -> Option<String> {
+    if value.len > limit || (value.len != 0 && value.ptr.is_null()) {
+        return None;
+    }
+    if value.len == 0 {
+        return Some(String::new());
+    }
+    unsafe { ghostty_string_bytes(value) }
+        .and_then(|bytes| std::str::from_utf8(bytes).ok().map(str::to_owned))
 }
 
 fn encode_terminal_progress(progress: Option<TerminalProgress>) -> u16 {
@@ -8842,42 +8881,81 @@ mod tests {
         );
 
         screen.feed(b"\x1b]7501;state=working:progress=40:id=build\x07");
-        assert_eq!(
-            screen.take_program_events(),
-            vec![ProgramStatusEvent::Report {
-                state: 1,
-                kind: 0,
-                progress: 40,
-                id: "build".into(),
-                app: String::new(),
-                title: String::new(),
-                message: String::new(),
-            }]
-        );
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(status.records().len(), 1);
+        assert_eq!(status.records()[0].id.path(), "build");
+        assert_eq!(status.records()[0].progress, Some(40));
 
         screen.feed(b"\x1b]133;A\x07");
-        assert_eq!(
-            screen.take_program_events(),
-            vec![ProgramStatusEvent::Prompt]
+        let events = screen.take_program_events();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records().is_empty() && status.protocol_seen())
         );
 
         screen.feed(b"\x1bc");
         let events = screen.take_program_events();
         assert!(
-            events.contains(&ProgramStatusEvent::Report {
-                state: 5,
-                kind: 0,
-                progress: -1,
-                id: String::new(),
-                app: String::new(),
-                title: String::new(),
-                message: String::new(),
-            }),
-            "RIS clears program status: {events:?}"
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records().is_empty() && !status.protocol_seen()),
+            "RIS clears records and protocol suppression: {events:?}"
         );
+    }
+
+    #[test]
+    fn program_status_fragmentation_and_rejected_input_preserve_records() {
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(|_, _| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "queue full",
+                ))
+            })),
+        )
+        .unwrap();
+        screen.feed(b"\x1b]7501;state=do");
+        assert!(screen.take_program_events().is_empty());
+        screen.feed(b"ne:id=job\x07");
+        let events = screen.take_program_events();
         assert!(
-            events.contains(&ProgramStatusEvent::FullReset),
-            "RIS is its own event: {events:?}"
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records()[0].unseen)
+        );
+        assert!(screen.write_user_input(b"x").is_err());
+        assert!(screen.take_program_events().is_empty());
+        screen.feed(b"\x1b]7501;state=done:id=job\x07");
+        let events = screen.take_program_events();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records()[0].unseen)
+        );
+    }
+
+    #[test]
+    fn program_status_user_text_acknowledges_only_its_own_surface() {
+        let make =
+            || VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();
+        let first = make();
+        let second = make();
+        for screen in [&first, &second] {
+            screen.feed(b"\x1b]7501;state=done:id=job\x07");
+            screen.take_program_events();
+        }
+        first.write_input(b"tool input").unwrap();
+        assert!(first.take_program_events().is_empty());
+        first.write_user_input(b"").unwrap();
+        assert!(first.take_program_events().is_empty());
+        first.write_user_input("中文".as_bytes()).unwrap();
+        let events = first.take_program_events();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if !status.records()[0].unseen)
+        );
+        second.feed(b"\x1b]7501;state=done:id=job\x07");
+        let events = second.take_program_events();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records()[0].unseen)
         );
     }
 

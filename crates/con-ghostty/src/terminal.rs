@@ -611,7 +611,7 @@ pub struct TerminalState {
     /// queued events: only the final shape/visibility in a tick matters.
     pub mouse_shape: Option<i32>,
     pub mouse_visible: Option<bool>,
-    program_events: VecDeque<ProgramStatusEvent>,
+    program_events: program_events::ProgramStatusBuffer,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -639,7 +639,7 @@ impl Default for TerminalState {
             hovered_osc8_link_url: None,
             scrollbar: None,
             mouse_shape: None,
-            program_events: VecDeque::new(),
+            program_events: program_events::ProgramStatusBuffer::default(),
             mouse_visible: None,
         }
     }
@@ -870,6 +870,7 @@ impl GhosttyApp {
             write_clipboard_cb: Some(write_clipboard_callback),
             close_surface_cb: Some(close_surface_callback),
             program_status: true,
+            program_status_cb: Some(program_status_callback),
         });
 
         let app = unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config.0) };
@@ -1186,11 +1187,11 @@ impl GhosttyTerminal {
 
     fn note_program_key(&self) {
         let mut state = self.state.lock();
-        program_events::push_capped(&mut state.program_events, ProgramStatusEvent::Key);
+        program_events::reduce(&mut state.program_events, ProgramStatusEvent::Key);
     }
 
     pub fn take_program_events(&self) -> Vec<ProgramStatusEvent> {
-        self.state.lock().program_events.drain(..).collect()
+        self.state.lock().program_events.take()
     }
 
     /// Trigger a draw (ghostty renders into its Metal layer).
@@ -1356,9 +1357,17 @@ impl GhosttyTerminal {
 
     /// Send a key event to the terminal. Returns true if ghostty consumed it.
     pub fn send_key(&self, key: ffi::ghostty_input_key_s) -> bool {
+        self.send_key_with_origin(key, true)
+    }
+
+    fn send_key_with_origin(&self, key: ffi::ghostty_input_key_s, user_input: bool) -> bool {
         self.mark_input_observed();
-        self.note_program_key();
-        unsafe { ffi::ghostty_surface_key(self.surface, key) }
+        let action = key.action;
+        let consumed = unsafe { ffi::ghostty_surface_key(self.surface, key) };
+        if program_key_acknowledges(user_input, consumed, action) {
+            self.note_program_key();
+        }
+        consumed
     }
 
     /// Send UTF-8 text input to the terminal (for composed/IME text).
@@ -1368,10 +1377,13 @@ impl GhosttyTerminal {
     /// For writing command strings with newlines, use `write_to_pty` instead.
     pub fn send_text(&self, text: &str) {
         self.mark_input_observed();
-        self.note_program_key();
         if let Ok(cstr) = CString::new(text) {
             let len = cstr.as_bytes().len(); // excludes NUL, matches original text
+            if len == 0 {
+                return;
+            }
             unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
+            self.note_program_key();
         }
         // If text contains NUL bytes, we silently drop it — this matches
         // terminal semantics where NUL in text input is meaningless.
@@ -1427,17 +1439,17 @@ impl GhosttyTerminal {
             if let Some(key_event) = char_to_key_event(ch) {
                 // Flush any pending printable text before sending a control char
                 if !pending_text.is_empty() {
-                    self.send_text_as_key_event(&pending_text);
+                    self.send_text_as_key_event_with_origin(&pending_text, false);
                     pending_text.clear();
                 }
-                self.send_key(key_event);
+                self.send_key_with_origin(key_event, false);
             } else {
                 pending_text.push(ch);
             }
         }
 
         if !pending_text.is_empty() {
-            self.send_text_as_key_event(&pending_text);
+            self.send_text_as_key_event_with_origin(&pending_text, false);
         }
     }
 
@@ -1447,6 +1459,10 @@ impl GhosttyTerminal {
     /// paste wrapping in mode 2004), this sends via `ghostty_surface_key` with the
     /// `text` field set. Ghostty writes the UTF-8 directly to the PTY.
     pub fn send_text_as_key_event(&self, text: &str) {
+        self.send_text_as_key_event_with_origin(text, true);
+    }
+
+    fn send_text_as_key_event_with_origin(&self, text: &str, user_input: bool) {
         if let Ok(cstr) = CString::new(text) {
             let key_event = ffi::ghostty_input_key_s {
                 action: ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS,
@@ -1457,7 +1473,7 @@ impl GhosttyTerminal {
                 unshifted_codepoint: 0,
                 composing: false,
             };
-            self.send_key(key_event);
+            self.send_key_with_origin(key_event, user_input);
         }
     }
 
@@ -1930,7 +1946,7 @@ fn mark_child_exited_state(state: &Mutex<TerminalState>) {
     s.needs_render = true;
     s.is_busy = false;
     s.last_command_finished_input_generation = s.input_generation;
-    program_events::push_capped(&mut s.program_events, ProgramStatusEvent::ProcessExit);
+    program_events::reduce(&mut s.program_events, ProgramStatusEvent::ProcessExit);
 }
 
 unsafe extern "C" fn action_callback(
@@ -1962,12 +1978,68 @@ unsafe extern "C" fn action_callback(
     }
 }
 
-fn copy_program_status_string(value: ffi::ghostty_action_program_status_string_s) -> String {
-    if value.ptr.is_null() || value.len == 0 {
-        return String::new();
+unsafe fn copy_program_status_string(
+    value: ffi::ghostty_action_program_status_string_s,
+    limit: usize,
+) -> Option<String> {
+    if value.len > limit || (value.len != 0 && value.ptr.is_null()) {
+        return None;
+    }
+    if value.len == 0 {
+        return Some(String::new());
     }
     let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
-    String::from_utf8_lossy(bytes).into_owned()
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+fn program_key_acknowledges(
+    user_input: bool,
+    consumed: bool,
+    action: ffi::ghostty_input_action_e,
+) -> bool {
+    user_input
+        && consumed
+        && matches!(
+            action,
+            ffi::ghostty_input_action_e::GHOSTTY_ACTION_PRESS
+                | ffi::ghostty_input_action_e::GHOSTTY_ACTION_REPEAT
+        )
+}
+
+/// Ghostty invokes this while surface IO is alive, with borrowed parser data.
+/// Only retained Rust state is touched; in particular, do not resolve a Ghostty
+/// surface, enter GPUI, or call back into Ghostty from its IO thread.
+unsafe extern "C" fn program_status_callback(
+    app_userdata: *mut c_void,
+    surface_userdata: *mut c_void,
+    event: i32,
+    report: *const ffi::ghostty_action_program_status_s,
+) {
+    if surface_userdata.is_null() {
+        return;
+    }
+    let tag = match event {
+        0 => ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PROGRAM_STATUS,
+        1 => ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHELL_PROMPT,
+        2 => ffi::ghostty_action_tag_e::GHOSTTY_ACTION_FULL_RESET,
+        _ => return,
+    };
+    let state = unsafe { &*surface_userdata.cast::<StateRef>() };
+    let pending = state.lock().program_events.is_pending();
+    let accepted = unsafe {
+        handle_surface_action(
+            state,
+            ffi::ghostty_action_s {
+                tag,
+                action: ffi::ghostty_action_u {
+                    program_status: report,
+                },
+            },
+        )
+    };
+    if accepted && !pending && state.lock().program_events.is_pending() {
+        unsafe { wakeup_callback(app_userdata) };
+    }
 }
 
 /// Decode surface actions separately from target resolution. Pointer actions
@@ -2170,36 +2242,43 @@ unsafe fn handle_surface_action(
                 if report.is_null() {
                     return false;
                 }
-                let report = &*report;
-                if report.size < std::mem::size_of::<ffi::ghostty_action_program_status_s>() {
+                if report.cast::<usize>().read_unaligned()
+                    < std::mem::size_of::<ffi::ghostty_action_program_status_s>()
+                {
                     return false;
                 }
+                let report = &*report;
+                let (Some(id), Some(app), Some(title), Some(message)) = (
+                    copy_program_status_string(report.id, 128),
+                    copy_program_status_string(report.app, 32),
+                    copy_program_status_string(report.title, 192),
+                    copy_program_status_string(report.message, 2048),
+                ) else {
+                    return false;
+                };
                 let mut state = state.lock();
-                program_events::push_capped(
+                program_events::reduce(
                     &mut state.program_events,
                     ProgramStatusEvent::Report {
                         state: report.state,
                         kind: report.kind,
                         progress: report.progress,
-                        id: copy_program_status_string(report.id),
-                        app: copy_program_status_string(report.app),
-                        title: copy_program_status_string(report.title),
-                        message: copy_program_status_string(report.message),
+                        id,
+                        app,
+                        title,
+                        message,
                     },
                 );
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHELL_PROMPT => {
                 let mut state = state.lock();
-                program_events::push_capped(&mut state.program_events, ProgramStatusEvent::Prompt);
+                program_events::reduce(&mut state.program_events, ProgramStatusEvent::Prompt);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_FULL_RESET => {
                 let mut state = state.lock();
-                program_events::push_capped(
-                    &mut state.program_events,
-                    ProgramStatusEvent::FullReset,
-                );
+                program_events::reduce(&mut state.program_events, ProgramStatusEvent::FullReset);
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PROGRESS_REPORT => {
@@ -2429,6 +2508,30 @@ unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_aliv
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_status_callback_text_is_bounded_and_strict_utf8() {
+        let bytes = "中文".as_bytes();
+        let value = super::ffi::ghostty_action_program_status_string_s {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        assert_eq!(
+            unsafe { super::copy_program_status_string(value, 6) }.as_deref(),
+            Some("中文")
+        );
+        assert!(unsafe { super::copy_program_status_string(value, 5) }.is_none());
+        let invalid = [0xff];
+        let value = super::ffi::ghostty_action_program_status_string_s {
+            ptr: invalid.as_ptr(),
+            len: 1,
+        };
+        assert!(unsafe { super::copy_program_status_string(value, 6) }.is_none());
+        let value = super::ffi::ghostty_action_program_status_string_s {
+            ptr: std::ptr::null(),
+            len: 1,
+        };
+        assert!(unsafe { super::copy_program_status_string(value, 6) }.is_none());
+    }
     use std::sync::Arc;
 
     use parking_lot::Mutex;
@@ -2438,6 +2541,99 @@ mod tests {
         build_ghostty_config, effective_appearance, ensure_ghostty_init,
         installed_app_ghostty_resources_dir_for_exe, mark_child_exited_state,
     };
+
+    #[test]
+    fn only_accepted_user_key_presses_acknowledge_program_completion() {
+        use super::ffi::ghostty_input_action_e::*;
+        for action in [
+            GHOSTTY_ACTION_PRESS,
+            GHOSTTY_ACTION_REPEAT,
+            GHOSTTY_ACTION_RELEASE,
+        ] {
+            assert!(!super::program_key_acknowledges(false, true, action));
+            assert!(!super::program_key_acknowledges(true, false, action));
+        }
+        assert!(super::program_key_acknowledges(
+            true,
+            true,
+            GHOSTTY_ACTION_PRESS
+        ));
+        assert!(super::program_key_acknowledges(
+            true,
+            true,
+            GHOSTTY_ACTION_REPEAT
+        ));
+        assert!(!super::program_key_acknowledges(
+            true,
+            true,
+            GHOSTTY_ACTION_RELEASE
+        ));
+    }
+
+    #[test]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn program_status_io_ingress_is_bounded_and_keeps_clear_reset_barriers() {
+        use super::ffi;
+        use crate::ProgramStatusEvent;
+        let state: super::StateRef = Arc::new(Mutex::new(TerminalState::default()));
+        // The production surface owns this box until Ghostty joins its IO
+        // thread. This fixture uses the same lifetime: join before freeing.
+        let userdata = Box::into_raw(Box::new(state.clone())) as usize;
+        std::thread::spawn(move || {
+            let text = |s: &'static str| ffi::ghostty_action_program_status_string_s {
+                ptr: s.as_ptr(),
+                len: s.len(),
+            };
+            let mut report = ffi::ghostty_action_program_status_s {
+                size: std::mem::size_of::<ffi::ghostty_action_program_status_s>(),
+                state: 1,
+                kind: 0,
+                progress: 40,
+                id: text("build"),
+                app: text("cargo"),
+                title: text("编译"),
+                message: text("Waiting for tests"),
+            };
+            for _ in 0..4096 {
+                unsafe {
+                    super::program_status_callback(
+                        std::ptr::null_mut(),
+                        userdata as *mut _,
+                        0,
+                        &report,
+                    );
+                }
+            }
+            report.state = 5;
+            unsafe {
+                super::program_status_callback(
+                    std::ptr::null_mut(),
+                    userdata as *mut _,
+                    0,
+                    &report,
+                );
+            }
+        })
+        .join()
+        .unwrap();
+        let events = state.lock().program_events.take();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.protocol_seen() && status.records().is_empty())
+        );
+        unsafe {
+            super::program_status_callback(
+                std::ptr::null_mut(),
+                userdata as *mut _,
+                2,
+                std::ptr::null(),
+            );
+            drop(Box::from_raw(userdata as *mut super::StateRef));
+        }
+        let events = state.lock().program_events.take();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if !status.protocol_seen() && status.records().is_empty())
+        );
+    }
 
     fn sample_colors(seed: u8) -> TerminalColors {
         TerminalColors {
@@ -2462,16 +2658,28 @@ mod tests {
             ..TerminalState::default()
         }));
 
+        crate::program_events::reduce(
+            &mut state.lock().program_events,
+            ProgramStatusEvent::Report {
+                state: 1,
+                kind: 0,
+                progress: -1,
+                id: "running".into(),
+                app: String::new(),
+                title: String::new(),
+                message: String::new(),
+            },
+        );
         mark_child_exited_state(&state);
 
-        let state = state.lock();
+        let mut state = state.lock();
         assert!(state.child_exited);
         assert!(state.needs_render);
         assert!(!state.is_busy);
         assert_eq!(state.last_command_finished_input_generation, 7);
-        assert_eq!(
-            state.program_events.iter().collect::<Vec<_>>(),
-            vec![&ProgramStatusEvent::ProcessExit]
+        let events = state.program_events.take();
+        assert!(
+            matches!(&events[..], [ProgramStatusEvent::Snapshot(status)] if status.records().is_empty() && status.protocol_seen())
         );
     }
 
