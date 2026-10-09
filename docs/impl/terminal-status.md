@@ -53,6 +53,24 @@ against a baseline, plus the rendered visual matrix and platform acceptance.
 #444 stays open until official Ghostty replaces the fork, and #443 stays
 open with it.
 
+Reproducible native lifecycle and equal-byte output fixtures live in
+[`scripts/terminal`](../../scripts/terminal/README.md), with a separate
+black-boxed reducer benchmark. On 2026-10-09, the native macOS app built from
+`9b645bcb` displayed the retained error after exit/alternate-screen return,
+kept it when input went to another pane, and displayed a working progress ring
+during sustained 120-report/second output. Typing into another pane and scrolling
+the emitting pane worked during that output. A real keypress in the emitting
+pane acknowledged the error; its glyph disappeared after status collection.
+The test used an isolated session,
+socket, configuration and `zsh -f`, not the user's saved workspace.
+
+One exploratory 10-second control-socket sample per condition measured baseline
+median/p95 6.77/8.76 ms (169 samples) and status median/p95 6.49/9.15 ms (168
+samples), with no reply errors. Maximums were 9.28 and 21.47 ms respectively.
+These are socket round-trip observations, not frame or keypress measurements;
+one pair is insufficient to establish a performance budget. Physical Windows/
+Linux GUI checks and native frame/input-latency profiling remain open in #447.
+
 ## Ownership
 
 - `con-process` reads bounded native process facts. Identity includes process

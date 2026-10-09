@@ -115,6 +115,13 @@ jobs:
         run: cargo check --locked -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
         run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: State presentation layout tests
+        run: |
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
+      - name: Program status acceptance fixture tests
+        run: |
+          python -m unittest discover -s scripts/terminal -p 'test_*.py'
+          cargo test --locked -p con-core --example program_status_bench
 
   linux:
     name: check (ubuntu-latest)
@@ -123,6 +130,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Docs manifest validation
         run: python3 scripts/docs/validate-manifest.py
+      - name: Program status acceptance fixture tests
+        run: python3 -m unittest discover -s scripts/terminal -p 'test_*.py'
       - name: Release script syntax checks
         shell: bash
         run: |
@@ -178,3 +187,8 @@ jobs:
         run: cargo check --locked -p con
       - name: cargo test — portable crates
         run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: State presentation layout tests
+        run: |
+          cargo test --locked -p con --bin con sidebar::
+      - name: Program status reducer benchmark correctness
+        run: cargo test --locked -p con-core --example program_status_bench

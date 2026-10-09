@@ -125,7 +125,7 @@ impl LiveReaderSlots {
         GLOBAL.get_or_init(Default::default)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn live(&self) -> usize {
         self.live.load(std::sync::atomic::Ordering::SeqCst)
     }
