@@ -20,7 +20,8 @@ pub(super) struct Reader {
 
 impl Reader {
     pub async fn open(executable: &Path, cwd: &Path) -> Result<Self> {
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg("acp")
             .current_dir(cwd)
             .env_clear()
@@ -30,8 +31,9 @@ impl Reader {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = spawn_reader(&mut command)
+            .await
             .context("Start ACP history reader")?;
         let input = child.stdin.take().context("ACP stdin unavailable")?;
         let output = BufReader::new(child.stdout.take().context("ACP stdout unavailable")?);
@@ -170,3 +172,21 @@ impl Reader {
 /// How long the replay stream may stay silent after the session/load result
 /// before the export is considered complete.
 const REPLAY_QUIESCENCE: Duration = Duration::from_millis(500);
+
+/// Linux returns `ETXTBSY` when a just-written executable is spawned before
+/// the kernel drops the writer's count. The failure is transient.
+async fn spawn_reader(command: &mut Command) -> std::io::Result<Child> {
+    let mut pause = Duration::from_millis(10);
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && pause <= Duration::from_millis(160) =>
+            {
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+            }
+            other => return other,
+        }
+    }
+}
