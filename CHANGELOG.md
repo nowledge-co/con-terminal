@@ -6,6 +6,27 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.122`
 
+### Added
+
+**Terminal program status**
+
+- Added bounded, per-surface records and status details for OSC 7501, with
+  explicit completion acknowledgement and plain-text pane/surface provenance.
+  This is the model and presentation foundation; native transport is not yet
+  enabled on main and remains tracked in [#443](https://github.com/nowledge-co/con-terminal/issues/443).
+  _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449) and
+  [#450](https://github.com/nowledge-co/con-terminal/pull/450) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Agent handoff**
+
+- Retry briefly when a newly installed ACP executable is temporarily busy,
+  rather than failing the launch immediately. Retries are bounded and do not
+  change tool approval or execution policy. _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449)
+  by [@wey-gu](https://github.com/wey-gu))_
+
 ### Changed
 
 **Panes**

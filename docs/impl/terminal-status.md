@@ -3,6 +3,18 @@
 Status is presentation, not control-plane authority. It must not authorize a
 tool, satisfy a shell wait, or replace the harness runtime tracker.
 
+## OSC 7501 delivery status
+
+The bounded model and retained details are merged in #449 and #450. Main does
+not yet receive native OSC 7501 reports. #451 is a draft transport integration,
+not a production dependency update: its proposed macOS Ghostty bridge is not
+merged upstream and needs queued-report cleanup when a surface closes, plus
+stable-incarnation validation before delivery. #444 tracks that upstream work.
+Native platform, SSH/tmux and performance acceptance remains in #447. Do not
+advertise capability support or describe the feature as shipped based only on
+the model, parser tests or a linked build. #443 stays open until that acceptance
+is recorded.
+
 ## Ownership
 
 - `con-process` reads bounded native process facts. Identity includes process
