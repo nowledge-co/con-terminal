@@ -2,6 +2,7 @@ pub mod config;
 pub mod control;
 pub mod handoff;
 pub mod harness;
+pub mod program_status;
 pub mod release_channel;
 pub mod session;
 pub mod suggestions;

@@ -85,6 +85,9 @@ struct Surface {
     revision: u64,
     detection: AgentCliDetectionState,
     last_scan: Option<Instant>,
+    /// Program-status records live in `status` and follow this terminal
+    /// entity across pane and tab moves. Replacing or closing the entity
+    /// drops them.
     status: SurfaceStatus,
     #[cfg(target_os = "linux")]
     host_request: Option<(u64, Instant)>,

@@ -20,6 +20,7 @@ enum ActivityVisual {
     NeedsInput,
     Error,
     Paused,
+    Done,
 }
 
 impl ActivityVisual {
@@ -30,7 +31,7 @@ impl ActivityVisual {
             Self::Busy => (phase * TAU, FRAC_PI_2),
             Self::Progress(percent) => (-FRAC_PI_2, TAU * f32::from(percent) / 100.0),
             // Leave the badge quadrant clear.
-            Self::NeedsInput | Self::Error | Self::Paused => (FRAC_PI_2, PI * 1.5),
+            Self::NeedsInput | Self::Error | Self::Paused | Self::Done => (FRAC_PI_2, PI * 1.5),
             Self::None => (0.0, 0.0),
         }
     }
@@ -44,6 +45,7 @@ impl From<Status> for ActivityVisual {
             (Activity::NeedsInput, _) => Self::NeedsInput,
             (Activity::Error, _) => Self::Error,
             (Activity::Paused, _) => Self::Paused,
+            (Activity::Done, _) => Self::Done,
             (Activity::Unknown | Activity::Idle, _) => Self::None,
         }
     }
@@ -119,6 +121,7 @@ impl TabActivity {
                 ActivityVisual::NeedsInput => (theme.warning, Some("phosphor/warning.svg")),
                 ActivityVisual::Error => (theme.danger, Some("phosphor/x.svg")),
                 ActivityVisual::Paused => (theme.warning, Some("phosphor/pause.svg")),
+                ActivityVisual::Done => (theme.foreground, Some("phosphor/check.svg")),
                 ActivityVisual::Progress(_) | ActivityVisual::Busy => {
                     (theme.foreground.opacity(0.75), None)
                 }
@@ -452,6 +455,10 @@ mod tests {
             (-FRAC_PI_2, TAU)
         );
         assert_eq!(
+            ActivityVisual::Done.arc(0.8, false),
+            ActivityVisual::Paused.arc(0.8, false)
+        );
+        assert_eq!(
             ActivityVisual::Paused.arc(0.8, false),
             (FRAC_PI_2, PI * 1.5)
         );
@@ -508,6 +515,7 @@ mod tests {
             Activity::NeedsInput,
             Activity::Error,
             Activity::Paused,
+            Activity::Done,
             Activity::Idle,
         ] {
             layer.icon(
@@ -568,6 +576,10 @@ mod tests {
         assert_eq!(
             ActivityVisual::from(status(Activity::Paused, None)),
             ActivityVisual::Paused
+        );
+        assert_eq!(
+            ActivityVisual::from(status(Activity::Done, None)),
+            ActivityVisual::Done
         );
     }
 }

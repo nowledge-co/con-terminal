@@ -13,6 +13,25 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   progress observations. Generic title motion has a three-second lease; expiry
   means unknown, not completion. OSC 9;4 expiry remains backend-owned.
   PTY writes and long-lived shell commands do not establish agent activity.
+- `con-core::program_status` stores OSC 7501 records for one surface.
+  Ghostty parses and validates; Con does not keep a second parser. Each
+  report replaces its record completely. `app` is read from the nearest
+  ancestor id, and `build` does not cover `builder`. At most 256 records
+  are kept, evicting the least recently updated. Nothing expires on a timer.
+  A shell prompt or attached-process exit removes `working` and `blocked`
+  records and keeps `idle`, `done`, and `error`. RIS clears the set and
+  allows OSC 9;4 to contribute again. DECSTR and alternate-screen changes
+  do not. `done` and `error` stay unseen until `acknowledge()` for that
+  surface, which is a key delivered to it. Window focus and another
+  surface becoming active are not acknowledgement. An identical completion
+  does not become unseen again. Any accepted report suppresses OSC 9;4
+  until RIS. An explicit record outranks title and progress heuristics for
+  the scope it describes, and an idle root does not hide a blocked child.
+  The activity snapshot uses the most severe record; its percentage is the
+  only one shown. A message that does not change that snapshot does not
+  require a redraw. These facts never authorize the harness or complete a
+  control-plane wait. The workspace drops the set when the terminal entity
+  is closed or replaced.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous
   batches and tab aggregation. Closed/replaced surfaces and stale completions
   cannot update a new surface. Completions check revision as well as query and
@@ -58,6 +77,8 @@ badges. The compact tile fill is 40pt square, leaving room for the
 indicator inside the fill while the 28pt ring stays centered on the 44pt rail.
 Expanded/horizontal tabs replace the identity icon within the original-sized
 slot: busy/progress rings or a semantic glyph, without moving the title.
+An unacknowledged program-status completion uses that same static badge
+slot with a check. It does not schedule an animation.
 
 Each chrome group has one `TabActivity` entity with a synchronized GPUI animation
 driven by display frames. Paths use actual arcs, not polygon approximations.

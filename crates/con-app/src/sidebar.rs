@@ -1131,6 +1131,7 @@ impl SessionSidebar {
                         con_core::terminal_status::Activity::Error
                             | con_core::terminal_status::Activity::NeedsInput
                             | con_core::terminal_status::Activity::Paused
+                            | con_core::terminal_status::Activity::Done
                     )
                 })
             {
@@ -1727,6 +1728,7 @@ impl SessionSidebar {
                     con_core::terminal_status::Activity::Error
                         | con_core::terminal_status::Activity::NeedsInput
                         | con_core::terminal_status::Activity::Paused
+                        | con_core::terminal_status::Activity::Done
                 )
             })
         {
