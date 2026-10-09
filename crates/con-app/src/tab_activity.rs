@@ -8,8 +8,9 @@ use std::{
 
 use con_core::terminal_status::{Activity, Status};
 use gpui::{
-    Animation, AnimationExt, AnyElement, Bounds, ContentMask, Context, Hsla, IntoElement,
-    ParentElement, PathBuilder, Pixels, Render, Styled, Window, canvas, div, point, px, svg,
+    Animation, AnimationExt, AnyElement, Bounds, ContentMask, Context, Hsla, InteractiveElement,
+    IntoElement, ParentElement, PathBuilder, Pixels, Render, Styled, Window, canvas, div, point,
+    px, svg,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +109,7 @@ impl TabActivity {
         let slot_size = if compact { px(32.0) } else { size };
         let icon_size = if compact { size.min(px(14.0)) } else { size };
         let mut slot = div()
+            .debug_selector(|| "tab-status-slot".into())
             .relative()
             .flex()
             .items_center()
@@ -116,11 +118,17 @@ impl TabActivity {
             .size(slot_size);
         if !active || (compact && visual.glyph().is_none()) {
             slot = slot.child(
-                svg()
-                    .path(icon)
-                    .size(icon_size)
+                div()
+                    .debug_selector(|| "tab-status-brand".into())
                     .flex_shrink_0()
-                    .text_color(color),
+                    .size(icon_size)
+                    .child(
+                        svg()
+                            .path(icon)
+                            .size_full()
+                            .flex_shrink_0()
+                            .text_color(color),
+                    ),
             );
         }
         if active {
@@ -132,12 +140,14 @@ impl TabActivity {
                 ActivityVisual::None => unreachable!(),
             };
             if let Some(glyph) = visual.glyph() {
+                let glyph_size = if compact { px(18.0) } else { size };
                 return slot
                     .child(
-                        svg()
-                            .path(glyph)
-                            .size(if compact { px(18.0) } else { size })
-                            .text_color(activity_color),
+                        div()
+                            .debug_selector(|| "tab-status-glyph".into())
+                            .flex_shrink_0()
+                            .size(glyph_size)
+                            .child(svg().path(glyph).size_full().text_color(activity_color)),
                     )
                     .into_any_element();
             }
@@ -147,9 +157,11 @@ impl TabActivity {
                 slot_size.min(px(18.0))
             };
             slot = slot.child(
-                self.register(activity_color, visual)
+                div()
+                    .debug_selector(|| "tab-status-ring".into())
                     .absolute()
-                    .size(ring_size),
+                    .size(ring_size)
+                    .child(self.register(activity_color, visual).size_full()),
             );
         }
         slot.into_any_element()
