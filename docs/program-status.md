@@ -87,16 +87,19 @@ sequence between the tmux introducer and a final `ST`:
 printf '\033Ptmux;\033\033]7501;state=working:id=build:progress=25\007\033\\'
 ```
 
-The capability query uses the same wrapping. On tmux 3.7c, a visible pane with
-`allow-passthrough on` delivered both the wrapped query and the wrapped report
-to the outer terminal as ordinary `OSC 7501`, and delivered the reply back to
-that pane. The same round trip worked when that tmux session was reached over
-SSH.
+The capability query uses the same wrapping. The reply comes back only to the
+pane that owns terminal input. On tmux 3.7c, with `allow-passthrough on`, that
+active pane's wrapped query and wrapped report reached the outer terminal as
+ordinary `OSC 7501`, and the reply returned to it. The same round trip worked
+when that tmux session was reached over SSH.
 
-A pane that is not on screen does not pass the envelope through while the
-option is `on`. `all` lets its report reach the outer terminal. The reply
-still goes to the pane that currently receives terminal input, so a program
-in a hidden pane must keep working when no reply comes back.
+A visible pane that is not the active one can still send the wrapped sequence
+out. The reply is delivered to the active pane, so discovery from the inactive
+pane times out. A pane that is not on screen also receives no reply. With
+`allow-passthrough on`, that hidden pane's envelope does not go out at all.
+`all` lets its report reach the outer terminal, and the reply still goes to
+the active pane. A program outside the active pane must keep working when no
+reply comes back.
 
 Seeing ordinary shell output does not show that this round trip works. A
 program should continue to work normally when status support is absent.
