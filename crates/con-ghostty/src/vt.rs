@@ -8934,7 +8934,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn program_status_sequence_survives_malformed_input_and_alternate_screen() {
         let screen =
             VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();
@@ -9029,6 +9028,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn program_status_user_text_acknowledges_only_its_own_surface() {
         let make =
             || VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();
