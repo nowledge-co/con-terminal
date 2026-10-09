@@ -162,6 +162,7 @@ fn native_agent<'a>(
 pub(super) struct TerminalPresentation {
     surfaces: HashMap<u64, Surface>,
     pub(super) tabs: HashMap<u64, Option<con_core::terminal_status::Status>>,
+    program_details: HashMap<u64, Option<String>>,
     in_flight: bool,
     last_query: Option<Instant>,
     sequence: u64,
@@ -422,6 +423,28 @@ impl ConWorkspace {
                 });
             }
             let status = con_core::terminal_status::aggregate(statuses, focused);
+            let detail = status
+                .filter(|status| {
+                    status.evidence == con_core::terminal_status::Evidence::ProgramStatus
+                })
+                .and_then(|status| {
+                    let detail = state
+                        .surfaces
+                        .get(&status.surface_id)?
+                        .status
+                        .program_detail()?;
+                    let source = tab
+                        .pane_tree
+                        .surface_infos(None)
+                        .into_iter()
+                        .find(|source| source.terminal.entity_id().as_u64() == status.surface_id)?;
+                    Some(format!(
+                        "Pane {} · Surface {} · {detail}",
+                        source.pane_index + 1,
+                        source.surface_index + 1
+                    ))
+                });
+            changed |= retain_program_detail(&mut state.program_details, tab.summary_id, detail);
             if state.tabs.get(&tab.summary_id) != Some(&status) {
                 state.tabs.insert(tab.summary_id, status);
                 changed = true;
@@ -429,6 +452,9 @@ impl ConWorkspace {
         }
         state
             .tabs
+            .retain(|id, _| self.tabs.iter().any(|tab| tab.summary_id == *id));
+        state
+            .program_details
             .retain(|id, _| self.tabs.iter().any(|tab| tab.summary_id == *id));
         if changed {
             self.sync_sidebar(cx);
@@ -439,20 +465,11 @@ impl ConWorkspace {
     /// The winning program-status record, when that record owns the tab
     /// indicator. Heuristic activity does not borrow this text.
     pub(super) fn program_status_detail(&self, summary_id: u64) -> Option<String> {
-        let status = self
-            .terminal_presentation
-            .tabs
-            .get(&summary_id)
-            .copied()
-            .flatten()?;
-        if status.evidence != con_core::terminal_status::Evidence::ProgramStatus {
-            return None;
-        }
         self.terminal_presentation
-            .surfaces
-            .get(&status.surface_id)?
-            .status
-            .program_detail()
+            .program_details
+            .get(&summary_id)
+            .cloned()
+            .flatten()
     }
 
     pub(super) fn refresh_agent_cli_detection(&mut self, cx: &mut Context<Self>) {
@@ -527,8 +544,42 @@ impl ConWorkspace {
     }
 }
 
+fn retain_program_detail(
+    details: &mut HashMap<u64, Option<String>>,
+    tab: u64,
+    detail: Option<String>,
+) -> bool {
+    if details.get(&tab) == Some(&detail) {
+        return false;
+    }
+    details.insert(tab, detail);
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_detail_changes_invalidate_without_activity_changes() {
+        let mut details = std::collections::HashMap::new();
+        assert!(super::retain_program_detail(
+            &mut details,
+            7,
+            Some("building".into())
+        ));
+        assert!(!super::retain_program_detail(
+            &mut details,
+            7,
+            Some("building".into())
+        ));
+        assert!(super::retain_program_detail(
+            &mut details,
+            7,
+            Some("testing".into())
+        ));
+        assert_eq!(details[&7].as_deref(), Some("testing"));
+        assert!(super::retain_program_detail(&mut details, 7, None));
+        assert!(!super::retain_program_detail(&mut details, 7, None));
+    }
     use super::{
         AgentCliDetectionState, ProcessInfo, Query, Surface, SurfaceStatus, Weak, native_agent,
     };
