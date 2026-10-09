@@ -4,6 +4,40 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.122`
+
+### Added
+
+**Terminal program status**
+
+- Added bounded, per-surface records and status details for OSC 7501, with
+  explicit completion acknowledgement and plain-text pane/surface provenance.
+  This is the model and presentation foundation; native transport is not yet
+  enabled on main and remains tracked in [#443](https://github.com/nowledge-co/con-terminal/issues/443).
+  _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449) and
+  [#450](https://github.com/nowledge-co/con-terminal/pull/450) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Agent handoff**
+
+- Retry briefly when a newly installed ACP executable is temporarily busy,
+  rather than failing the launch immediately. Retries are bounded and do not
+  change tool approval or execution policy. _(PR [#449](https://github.com/nowledge-co/con-terminal/pull/449)
+  by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Panes**
+
+- Editor panes show their files in one compact tab bar instead of a title bar
+  plus a separate tab row. The open file's name appears once, unsaved files
+  get a small dot, and unfocused panes use a quieter tab fill. File tabs scroll
+  horizontally when needed, while pane controls stay visible. _(PR
+  [#448](https://github.com/nowledge-co/con-terminal/pull/448) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ## `v0.1.0-beta.121` - 2026-10-08
 
 ### Changed

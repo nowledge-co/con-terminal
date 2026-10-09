@@ -267,6 +267,9 @@ impl SurfaceProgramStatus {
     pub fn detail_line(&self) -> Option<String> {
         let record = self.winning_record()?;
         let mut parts = Vec::new();
+        if let Some(app) = self.inherited_app(&record.id) {
+            parts.push(app.as_str().to_string());
+        }
         if !record.id.is_root() {
             let id = present_text(&record.id.path());
             if !id.is_empty() {
@@ -521,9 +524,9 @@ fn present_text(value: &str) -> String {
 fn is_hidden_format(ch: char) -> bool {
     let code = u32::from(ch);
     ch.is_control()
-        || (0x200B..=0x200F).contains(&code)
+        || matches!(code, 0x061C | 0x200B | 0x200E | 0x200F)
         || (0x202A..=0x202E).contains(&code)
-        || (0x2066..=0x2069).contains(&code)
+        || (0x2060..=0x206F).contains(&code)
         || code == 0xFEFF
 }
 
@@ -1019,7 +1022,7 @@ mod tests {
         assert_eq!(stored.message.as_deref(), Some(message));
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("working — error: not really, still working")
+            Some("cargo · working — error: not really, still working")
         );
     }
 
@@ -1042,12 +1045,20 @@ mod tests {
             .unwrap();
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("build/test · blocked · permission · 40% · Plan — Apply?hidden")
+            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
         );
         surface.acknowledge();
         assert_eq!(
             surface.detail_line().as_deref(),
-            Some("build/test · blocked · permission · 40% · Plan — Apply?hidden")
+            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
+        );
+    }
+
+    #[test]
+    fn detail_text_preserves_joiners_but_removes_direction_overrides() {
+        assert_eq!(
+            super::present_text("👩\u{200D}💻 ع\u{200C}رب\u{061C}\u{2060}\u{2067}"),
+            "👩\u{200D}💻 ع\u{200C}رب"
         );
     }
 }
