@@ -18,6 +18,11 @@ con is still pre-release, so entries may group related beta work while the produ
   [#450](https://github.com/nowledge-co/con-terminal/pull/450) and
   [#451](https://github.com/nowledge-co/con-terminal/pull/451) by
   [@wey-gu](https://github.com/wey-gu))_
+- The [program-status guide](docs/program-status.md) covers capability
+  detection, shell examples and SSH/tmux forwarding. Applications need to emit
+  the protocol; Con does not automatically instrument every CLI. _(PR
+  [#452](https://github.com/nowledge-co/con-terminal/pull/452) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 **HTML files**
 
