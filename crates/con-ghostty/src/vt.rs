@@ -9055,6 +9055,97 @@ mod tests {
     }
 
     #[test]
+    fn program_status_queries_and_key_releases_do_not_acknowledge_completion() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let captured = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes, _| {
+                captured.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .unwrap();
+        screen.feed(b"\x1b]7501;state=done:id=job\x07");
+        screen.take_program_events();
+        for query in [b"\x1b]7501;?\x07".as_slice(), b"\x1b]7501;?\x1b\\"] {
+            output.lock().clear();
+            // A query may be split across arbitrary PTY reads.
+            for byte in query {
+                screen.feed(std::slice::from_ref(byte));
+            }
+            assert_eq!(output.lock().as_slice(), query);
+            assert!(screen.take_program_events().is_empty());
+        }
+
+        screen.feed(b"\x1b[>3u");
+        let mut key = VtKeyEvent {
+            key: "a",
+            text: "a",
+            unshifted_codepoint: Some('a'),
+            action: VtKeyAction::Release,
+            modifiers: VtKeyModifiers::default(),
+            consumed_modifiers: VtKeyModifiers::default(),
+        };
+        assert!(screen.send_key(&key).unwrap().output_accepted);
+        assert!(screen.take_program_events().is_empty());
+        key.action = VtKeyAction::Press;
+        assert!(screen.send_key(&key).unwrap().output_accepted);
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert!(!status.records()[0].unseen);
+        assert!(status.contribution().attention.is_none());
+    }
+
+    #[test]
+    fn program_status_wire_burst_bounds_records_and_preserves_lifecycle_barriers() {
+        let screen =
+            VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();
+        for index in 0..4096 {
+            screen.feed(
+                format!("\x1b]7501;state=working:id=build/{index}:progress=40\x07").as_bytes(),
+            );
+        }
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        let records = status.records();
+        assert_eq!(records.len(), 256);
+        assert!(
+            records
+                .iter()
+                .any(|record| record.id.path() == "build/4095")
+        );
+        assert!(!records.iter().any(|record| record.id.path() == "build/0"));
+
+        // No UI collection between these barriers and the following reports.
+        screen.feed(b"\x1b]7501;state=clear:id=build\x07");
+        screen.feed(b"\x1b]7501;state=error:id=failed\x07");
+        screen.feed(b"\x1b]7501;state=working:id=running\x07");
+        screen.feed(b"\x1b]133;A\x07");
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(status.records().len(), 1);
+        assert_eq!(status.records()[0].id.path(), "failed");
+        assert!(status.records()[0].unseen);
+
+        screen.feed(b"\x1bc\x1b]7501;state=working:id=next\x07");
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(status.records().len(), 1);
+        assert_eq!(status.records()[0].id.path(), "next");
+    }
+
+    #[test]
     fn terminal_progress_expires_without_a_fresh_report() {
         let progress = Some(TerminalProgress::Running(Some(42)));
         let reported_at = 10;
