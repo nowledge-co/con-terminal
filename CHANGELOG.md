@@ -12,8 +12,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Editor panes show their files in one compact tab bar instead of a title bar
   plus a separate tab row. The open file's name appears once, unsaved files
-  get a small dot, and unfocused panes dim their tabs so the focused one is
-  clear at a glance. _(PR
+  get a small dot, and unfocused panes use a quieter tab fill. File tabs scroll
+  horizontally when needed, while pane controls stay visible. _(PR
   [#448](https://github.com/nowledge-co/con-terminal/pull/448) by
   [@sunny0826](https://github.com/sunny0826))_
 

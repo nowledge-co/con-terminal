@@ -521,6 +521,8 @@ pub struct EditorView {
     dirty_close_blocked_tab: Option<usize>,
     view_id: u64,
     preview_scroll_handle: ScrollHandle,
+    file_tab_scroll_handle: ScrollHandle,
+    file_tab_reveal_pending: bool,
     preview_parse_generation: u64,
     preview_parse_task: Option<Task<()>>,
     preview_parse_pending: Option<(PathBuf, u64)>,
@@ -588,6 +590,8 @@ impl EditorView {
             dirty_close_blocked_tab: None,
             view_id: NEXT_EDITOR_VIEW_ID.fetch_add(1, Ordering::Relaxed),
             preview_scroll_handle: ScrollHandle::new(),
+            file_tab_scroll_handle: ScrollHandle::new(),
+            file_tab_reveal_pending: false,
             preview_parse_generation: 0,
             preview_parse_task: None,
             preview_parse_pending: None,
@@ -621,6 +625,7 @@ impl EditorView {
             tab.path == path || tab.path.canonicalize().ok().as_ref() == Some(&path)
         }) {
             self.active_tab = index;
+            self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
             self.reveal_source_position(position);
@@ -720,6 +725,7 @@ impl EditorView {
             |path| EditorTab::new(path, EditorBuffer::from_text(content)),
         );
         if apply.activated {
+            self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
         }
@@ -741,6 +747,7 @@ impl EditorView {
             |path| EditorTab::image(path, metadata),
         );
         if apply.activated {
+            self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
         }
@@ -762,6 +769,7 @@ impl EditorView {
             |path| EditorTab::read_error(path, error),
         );
         if apply.activated {
+            self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
         }
@@ -851,10 +859,25 @@ impl EditorView {
         self.active_tab_ref().map(|tab| tab.path.as_path())
     }
 
+    pub fn file_tab_scroll_handle(&self) -> &ScrollHandle {
+        &self.file_tab_scroll_handle
+    }
+
+    pub fn reveal_active_file_tab_after_layout(&mut self, cx: &mut Context<Self>) {
+        if self.file_tab_reveal_pending {
+            self.file_tab_reveal_pending = false;
+            // The first prepaint initializes the handle's viewport and overflow.
+            // Reveal on the next frame, without resetting manually scrolled tabs.
+            self.file_tab_scroll_handle.scroll_to_item(self.active_tab);
+            cx.notify();
+        }
+    }
+
     pub fn activate_tab(&mut self, index: usize) {
         if index < self.tabs.len() && self.active_tab != index {
             self.open_generation = self.open_generation.wrapping_add(1);
             self.active_tab = index;
+            self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
             self.preview_scroll_handle = ScrollHandle::new();
@@ -1051,6 +1074,7 @@ impl EditorView {
             return true;
         }
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        self.file_tab_reveal_pending = true;
         self.scroll_handle = UniformListScrollHandle::new();
         false
     }

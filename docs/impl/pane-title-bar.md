@@ -16,6 +16,10 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 > `EditorView`'s public API. File name appears once (the active tab capsule);
 > ⛶/✕ pane controls and drag-to-tab promotion live in the merged row and only
 > appear with 2+ panes. An editor pane with no files open renders no chrome row.
+> File tabs retain their readable widths in a horizontal scroll area; pane
+> controls remain outside that area. Labels and icons use solid semantic theme
+> ink, with focus conveyed by the active fill rather than glyph opacity.
+> The merged bar and label metrics follow the UI mono-font size.
 
 ---
 

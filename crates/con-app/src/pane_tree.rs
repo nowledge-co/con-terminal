@@ -5,22 +5,20 @@ use gpui_component::{
     ActiveTheme, InteractiveElementExt, Sizable,
     input::{Input, InputState},
     menu::{ContextMenuExt, PopupMenuItem},
+    scroll::ScrollableElement,
     tooltip::Tooltip,
 };
 
 use crate::editor_view::EditorView;
 use crate::sidebar::{DraggedTab, DraggedTabOrigin};
 use crate::terminal_pane::TerminalPane;
-use crate::ui_scale::mono_icon_px;
+use crate::ui_scale::{mono_icon_px, mono_px};
 
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 const EDITOR_MERGED_BAR_HEIGHT: f32 = 28.0;
 
 struct EditorChromeState {
-    active_label_opacity: f32,
-    inactive_label_opacity: f32,
-    button_opacity: f32,
     show_pane_controls: bool,
     can_drag: bool,
     /// Unfocused panes dim the active capsule's fill too, matching the
@@ -31,9 +29,6 @@ struct EditorChromeState {
 impl EditorChromeState {
     fn new(is_focused: bool, tree_has_splits: bool, hide_pane_title_bar: bool) -> Self {
         Self {
-            active_label_opacity: if is_focused { 0.92 } else { 0.66 },
-            inactive_label_opacity: if is_focused { 1.0 } else { 0.7 },
-            button_opacity: if is_focused { 0.52 } else { 0.32 },
             show_pane_controls: tree_has_splits && !hide_pane_title_bar,
             // Only split panes can be dragged out into a new tab — the same
             // rule the terminal pane title bar follows (it only exists with
@@ -2401,16 +2396,18 @@ impl PaneTree {
         let tabs = editor.tab_summaries();
         let active_index = editor.active_tab_index();
         let chrome = EditorChromeState::new(is_focused, tree_has_splits, hide_pane_title_bar);
-        let button_color = theme.foreground.opacity(chrome.button_opacity);
+        let button_color = theme.muted_foreground;
+        let bar_height = mono_px(theme, EDITOR_MERGED_BAR_HEIGHT);
         let button_hover_bg = theme.foreground.opacity(0.08);
         let focus_cb_bar = focus_pane_cb.clone();
         let mut bar = div()
             .id(ElementId::Name(
                 format!("editor-merged-bar-{pane_id}").into(),
             ))
+            .debug_selector(|| "editor-merged-bar".into())
             .flex()
             .items_center()
-            .h(px(EDITOR_MERGED_BAR_HEIGHT))
+            .h(bar_height)
             .w_full()
             .min_w_0()
             .flex_shrink_0()
@@ -2447,14 +2444,29 @@ impl PaneTree {
             );
         }
 
+        let reveal_view = view.downgrade();
+        let mut tab_list = div()
+            .on_children_prepainted(move |_, _, cx| {
+                let _ = reveal_view.update(cx, |editor, cx| {
+                    editor.reveal_active_file_tab_after_layout(cx);
+                });
+            })
+            .id(("editor-file-tabs", pane_id))
+            .debug_selector(|| "editor-file-tabs".into())
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .gap(px(2.0))
+            .overflow_x_scroll()
+            .track_scroll(editor.file_tab_scroll_handle());
         for (index, (name, dirty)) in tabs.into_iter().enumerate() {
             let is_active = index == active_index;
             let label_color = if is_active {
-                theme.foreground.opacity(chrome.active_label_opacity)
+                theme.foreground
             } else {
-                theme
-                    .muted_foreground
-                    .opacity(chrome.inactive_label_opacity)
+                theme.muted_foreground
             };
             let tab_bg = if is_active {
                 if chrome.dim_active_fill {
@@ -2482,15 +2494,13 @@ impl PaneTree {
                 ))
                 .group("editor-file-tab")
                 .flex()
-                // Content-hugging width: tabs take their natural width (up to
-                // the 190px cap) when there is spare room, and shrink
-                // proportionally with label truncation when the bar is full.
-                // `flex_1` here stretched short names across half the pane
-                // (fix round 2).
-                .flex_shrink_1()
+                .debug_selector(|| "editor-file-tab".into())
+                // Preserve readable hit targets; overflow scrolls within the
+                // file list while pane controls remain outside it.
+                .flex_shrink_0()
                 .min_w_0()
                 .max_w(px(190.0))
-                .h(px(22.0))
+                .h(mono_px(theme, 22.0))
                 .items_center()
                 .gap(px(5.0))
                 .pl(px(8.0))
@@ -2520,14 +2530,14 @@ impl PaneTree {
             tab = tab.child(
                 div()
                     // No flex-grow on the label: the capsule hugs its content.
-                    // min_w_0 + ellipsis lets the label truncate when the bar
-                    // is full and the capsule shrinks.
+                    // Truncate long names at the capsule's maximum width;
+                    // additional tabs remain reachable through horizontal scrolling.
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_size(px(12.0))
-                    .line_height(px(14.0))
+                    .text_size(mono_px(theme, 12.0))
+                    .line_height(mono_px(theme, 14.0))
                     .font_family(theme.mono_font_family.clone())
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(label_color)
@@ -2572,11 +2582,10 @@ impl PaneTree {
                             .text_color(button_color),
                     ),
             );
-            bar = bar.child(tab);
+            tab_list = tab_list.child(tab);
         }
 
-        // Tabs shrink together; the remaining space is the pane drag target.
-        bar = bar.child(div().flex_1().min_w_0().h_full());
+        bar = bar.child(tab_list.horizontal_scrollbar(editor.file_tab_scroll_handle()));
 
         if editor.preview_available() {
             let preview_active = editor.preview_active();
@@ -2663,6 +2672,7 @@ impl PaneTree {
                 );
             let close = div()
                 .id(ElementId::Name(format!("pane-close-{pane_id}").into()))
+                .debug_selector(|| "editor-pane-close".into())
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3475,18 +3485,98 @@ impl PaneTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::core::prelude::v1::test;
+
+    struct EditorBarTestView(Entity<EditorView>);
+
+    impl Render for EditorBarTestView {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let no_op: PaneCallback = std::sync::Arc::new(|_, _, _| {});
+            div().w(px(260.0)).child(PaneTree::render_editor_merged_bar(
+                0,
+                0,
+                &self.0,
+                true,
+                true,
+                false,
+                0.08,
+                false,
+                no_op.clone(),
+                no_op.clone(),
+                no_op,
+                cx,
+            ))
+        }
+    }
+
+    #[gpui::test]
+    fn editor_many_file_tabs_preserve_hit_targets_and_fixed_pane_controls(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        for index in 0..12 {
+            let path = dir.path().join(format!("document-{index}.txt"));
+            std::fs::write(&path, "test").unwrap();
+            editor.update(cx, |editor, cx| editor.open_file(path, cx));
+            cx.run_until_parked();
+        }
+        let handle = editor.read_with(cx, |editor, _| editor.file_tab_scroll_handle().clone());
+        let (_, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone()));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let bar = cx.debug_bounds("editor-merged-bar").expect("bar");
+        let list = cx.debug_bounds("editor-file-tabs").expect("file list");
+        let tab = cx.debug_bounds("editor-file-tab").expect("last tab");
+        let close = cx.debug_bounds("editor-pane-close").expect("pane close");
+        assert!(
+            tab.size.width > px(50.0),
+            "tabs must not collapse into tiny close targets"
+        );
+        assert!(
+            handle.max_offset().x > px(0.0),
+            "extra tabs occupy horizontal scroll content"
+        );
+        assert!(
+            handle.offset().x < px(0.0),
+            "the active last tab is revealed"
+        );
+        assert!(close.left() >= list.right());
+        assert!(close.right() <= bar.right());
+        assert!(close.top() >= bar.top() && close.bottom() <= bar.bottom());
+
+        editor.update(cx, |editor, cx| editor.activate_tab_and_emit(0, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let _ = window.draw(cx);
+        });
+        assert_eq!(
+            handle.offset().x,
+            px(0.0),
+            "switching reveals the first tab"
+        );
+
+        handle.set_offset(point(-px(100.0), px(0.0)));
+        editor.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert_eq!(
+            handle.offset().x,
+            -px(100.0),
+            "repaints retain manual scrolling"
+        );
+    }
 
     #[::core::prelude::v1::test]
-    fn editor_chrome_dims_labels_and_controls_when_unfocused() {
+    fn editor_chrome_distinguishes_unfocused_panes_through_fill() {
         let focused = EditorChromeState::new(true, true, false);
-        assert_eq!(focused.active_label_opacity, 0.92);
-        assert_eq!(focused.inactive_label_opacity, 1.0);
-        assert_eq!(focused.button_opacity, 0.52);
-
         let unfocused = EditorChromeState::new(false, true, false);
-        assert_eq!(unfocused.active_label_opacity, 0.66);
-        assert_eq!(unfocused.inactive_label_opacity, 0.7);
-        assert_eq!(unfocused.button_opacity, 0.32);
         assert!(unfocused.dim_active_fill);
         assert!(!focused.dim_active_fill);
     }
