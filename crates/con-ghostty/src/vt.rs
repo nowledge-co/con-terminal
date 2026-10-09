@@ -8934,6 +8934,101 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn program_status_sequence_survives_malformed_input_and_alternate_screen() {
+        let screen =
+            VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();
+        let activity = |screen: &VtScreen| {
+            let events = screen.take_program_events();
+            let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+                panic!("{events:?}");
+            };
+            status
+                .contribution()
+                .attention
+                .map(|attention| attention.state)
+        };
+
+        screen.feed(b"\x1b]7501;state=working:progress=10:id=build\x07");
+        assert_eq!(
+            activity(&screen),
+            Some(con_terminal::program_status::State::Working)
+        );
+
+        screen.feed(b"\x1b]7501;state=blocked:kind=permission:progress=40:id=build\x07");
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert_eq!(status.records().len(), 1);
+        assert_eq!(
+            status.records()[0].state,
+            con_terminal::program_status::State::Blocked
+        );
+        assert_eq!(
+            status.records()[0].kind,
+            Some(con_terminal::program_status::BlockedKind::Permission)
+        );
+
+        screen.feed(b"\x1b]7501;garbage:=x:state=working:progress=80:id=build\x07");
+        assert_eq!(
+            activity(&screen),
+            Some(con_terminal::program_status::State::Working)
+        );
+
+        screen.feed(b"\x1b]7501;state=done:id=build\x07");
+        assert_eq!(
+            activity(&screen),
+            Some(con_terminal::program_status::State::Done)
+        );
+        screen.write_user_input("ok".as_bytes()).unwrap();
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert!(!status.records()[0].unseen);
+
+        screen.feed(b"\x1b]7501;state=error:id=build\x07");
+        assert_eq!(
+            activity(&screen),
+            Some(con_terminal::program_status::State::Error)
+        );
+
+        let mut oversized = Vec::from(&b"\x1b]7501;state=working:id=build/test:msg="[..]);
+        oversized.extend(std::iter::repeat(b'A').take(5000));
+        oversized.push(0x07);
+        screen.feed(&oversized);
+        assert!(
+            screen.take_program_events().is_empty(),
+            "an oversized report must leave the previous record in place"
+        );
+
+        screen.feed(b"\x1b[?1049h");
+        assert!(
+            screen.take_program_events().is_empty(),
+            "alternate screen must not clear program status"
+        );
+        assert!(screen.is_alternate_screen());
+
+        screen.feed(b"\x1b]133;A\x07");
+        let events = screen.take_program_events();
+        let [ProgramStatusEvent::Snapshot(status)] = &events[..] else {
+            panic!("{events:?}");
+        };
+        assert!(
+            status
+                .records()
+                .iter()
+                .any(|record| record.state == con_terminal::program_status::State::Error)
+        );
+        assert!(
+            status
+                .records()
+                .iter()
+                .all(|record| record.state != con_terminal::program_status::State::Working)
+        );
+    }
+
     fn program_status_user_text_acknowledges_only_its_own_surface() {
         let make =
             || VtScreen::new_with_write_pty(80, 24, None, Some(Arc::new(|_, _| Ok(())))).unwrap();

@@ -555,6 +555,39 @@ mod tests {
     }
 
     #[test]
+    fn larger_icons_keep_one_stationary_glyph_in_both_densities() {
+        let layer = TabActivity::default();
+        let theme = gpui_component::Theme::default();
+        for compact in [false, true] {
+            layer.clear();
+            for activity in [Activity::NeedsInput, Activity::Error, Activity::Done] {
+                layer.icon(
+                    "phosphor/terminal.svg",
+                    px(24.0),
+                    theme.foreground,
+                    Some(status(activity, None)),
+                    &theme,
+                    compact,
+                );
+            }
+            assert_eq!(layer.markers.borrow().used, 0);
+            layer.icon(
+                "phosphor/terminal.svg",
+                px(24.0),
+                theme.foreground,
+                Some(status(Activity::Busy, Some(40))),
+                &theme,
+                compact,
+            );
+            assert_eq!(layer.markers.borrow().used, 1);
+            assert_eq!(
+                layer.markers.borrow().rows[0].visual,
+                ActivityVisual::Progress(40)
+            );
+        }
+    }
+
+    #[test]
     fn status_maps_to_compact_visuals() {
         assert_eq!(
             ActivityVisual::from(status(Activity::Idle, None)),

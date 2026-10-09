@@ -27,9 +27,25 @@ report, and the reply did not return to that pane. Raw sequences were
 discarded in every tmux configuration tried, including `all`. The user-facing
 steps are in `docs/program-status.md`.
 
-Still open for #447: a physical Windows or Linux window, a performance
-comparison against the baseline, and the rest of the visual matrix. #443
-stays open until that acceptance is recorded.
+On this Mac the shared reducer covered working, blocked, working again,
+done, acknowledgement, and a later error that remains after process exit
+and an alternate-screen change. A 400-character Unicode message with an
+emoji joiner and a direction override is shown as at most 180 characters,
+keeps the joiner, and drops the override. Compact and expanded status
+icons at a 24px slot keep one stationary glyph; only working progress
+registers a ring. The hover label scales with the UI font from 12px to
+24px and the icon scale stays inside 0.90–1.35.
+
+Eight thousand progress-changing reports on one id took 4.7 ms in an
+optimized test build, against 59.5 µs for the same number of progress
+observations. The run kept one record. That measures the status reducer,
+not typing, scrolling, or painting in a window.
+
+Windows and Linux execute the same sequence from terminal bytes in
+`program_status_sequence_survives_malformed_input_and_alternate_screen`.
+That test is headless. A physical Windows or Linux window was not
+observed. #444 stays open until official Ghostty replaces the fork, and
+#443 stays open with it.
 
 ## Ownership
 

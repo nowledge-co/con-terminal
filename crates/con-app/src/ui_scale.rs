@@ -117,6 +117,20 @@ mod tests {
     }
 
     #[test]
+    fn program_status_label_tracks_ui_font_between_12_and_24() {
+        let min_scale = 12.0 / 16.0;
+        let max_scale = 24.0 / 16.0;
+        assert_eq!(font_scale(12.0, 16.0, min_scale, max_scale), min_scale);
+        assert_eq!(font_scale(16.0, 16.0, min_scale, max_scale), 1.0);
+        assert_eq!(font_scale(24.0, 16.0, min_scale, max_scale), max_scale);
+        let label = 11.0;
+        assert!(label * max_scale > label);
+        assert!(label * min_scale < label);
+        assert!(icon_scale(max_scale) <= 1.35);
+        assert!(icon_scale(min_scale) >= 0.90);
+    }
+
+    #[test]
     fn icon_scale_tracks_text_more_closely_than_layout_density() {
         assert_eq!(icon_scale(1.0), 1.0);
         assert!(icon_scale(1.5) > density_scale(1.5));

@@ -852,4 +852,114 @@ mod tests {
         apply_program_events(&mut status, vec![ProgramStatusEvent::FullReset], now);
         assert_eq!(status.program_records(), Vec::new());
     }
+
+    #[test]
+    fn program_events_cover_attention_then_completion() {
+        let now = Instant::now();
+        let mut status = SurfaceStatus::new(3);
+        let report = |state, kind, progress, id: &str, message: &str| ProgramStatusEvent::Report {
+            state,
+            kind,
+            progress,
+            id: id.into(),
+            app: "cargo".into(),
+            title: String::new(),
+            message: message.into(),
+        };
+        apply_program_events(&mut status, vec![report(1, 0, 10, "build", "")], now);
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Busy)
+        );
+        apply_program_events(&mut status, vec![report(3, 1, 40, "build", "Apply?")], now);
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::NeedsInput)
+        );
+        assert!(
+            status
+                .program_detail()
+                .unwrap()
+                .contains("Waiting for permission")
+        );
+        apply_program_events(&mut status, vec![report(1, 0, 80, "build", "")], now);
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Busy)
+        );
+        apply_program_events(&mut status, vec![report(2, 0, -1, "build", "ready")], now);
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Done)
+        );
+        apply_program_events(&mut status, vec![ProgramStatusEvent::Key], now);
+        assert_eq!(status.status(now), None);
+        assert!(!status.program_records()[0].unseen);
+        apply_program_events(
+            &mut status,
+            vec![report(4, 0, -1, "build/test", "failed")],
+            now,
+        );
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Error)
+        );
+        apply_program_events(&mut status, vec![ProgramStatusEvent::ProcessExit], now);
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Error)
+        );
+        assert!(!status.program_status_alternate_screen(true, now));
+        assert_eq!(status.program_records().len(), 2);
+    }
+
+    #[test]
+    fn rapid_program_status_stays_bounded_against_progress_updates() {
+        use std::time::Duration;
+
+        const UPDATES: u32 = 8_000;
+        let now = Instant::now();
+        let mut baseline = SurfaceStatus::new(1);
+        let started = Instant::now();
+        for step in 0..UPDATES {
+            baseline.observe_progress(Some(con_core::terminal_status::Progress {
+                activity: con_core::terminal_status::Activity::Busy,
+                percent: Some((step % 101) as u8),
+            }));
+            let _ = baseline.status(now);
+        }
+        let baseline_time = started.elapsed();
+
+        let mut surface = SurfaceStatus::new(1);
+        let started = Instant::now();
+        let mut redraws = 0u32;
+        for step in 0..UPDATES {
+            if surface
+                .observe_program_status(
+                    con_core::program_status::Incoming {
+                        state: con_core::program_status::State::Working,
+                        id: "build",
+                        kind: None,
+                        progress: Some((step % 101) as u8),
+                        app: Some("cargo"),
+                        title: None,
+                        message: None,
+                    },
+                    now,
+                )
+                .unwrap()
+            {
+                redraws += 1;
+            }
+            let _ = surface.status(now);
+            let _ = surface.program_detail();
+        }
+        let status_time = started.elapsed();
+        assert_eq!(surface.program_records().len(), 1);
+        assert_eq!(redraws, UPDATES);
+        assert!(
+            status_time < Duration::from_secs(2),
+            "program status {status_time:?}, progress baseline {baseline_time:?}"
+        );
+    }
 }
