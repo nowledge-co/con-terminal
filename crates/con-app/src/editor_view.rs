@@ -8,7 +8,6 @@ use crate::{
     editor_buffer::{CursorPosition, EditorBuffer},
     editor_lsp::{self, EditorDiagnostic, LspClient, LspClientEvent},
     editor_preview, editor_syntax,
-    ui_scale::ui_icon_px,
 };
 use crossbeam_channel::{Receiver, Sender};
 use gpui::{
@@ -16,12 +15,11 @@ use gpui::{
     FontWeight, Hsla, InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render,
     ScrollHandle, ScrollStrategy, SharedString, Styled, StyledImage, StyledText, Task,
-    UniformListScrollHandle, Window, div, img, px, svg, uniform_list,
+    UniformListScrollHandle, Window, div, img, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Sizable, Theme,
-    button::{Button, ButtonVariants as _},
-    scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarMode},
+    ActiveTheme, Theme,
+    scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode},
 };
 use std::{
     collections::HashMap,
@@ -41,7 +39,6 @@ const EDITOR_FONT_SIZE: f32 = 14.0;
 #[cfg_attr(not(test), allow(dead_code))]
 const LINE_HEIGHT: f32 = EDITOR_FONT_SIZE * 1.5;
 const GUTTER_WIDTH: f32 = 44.0;
-const TAB_BAR_HEIGHT: f32 = 28.0;
 const TEXT_IN_CONTENT_LEFT: f32 = 12.0;
 const ROW_TEXT_LEFT: f32 = GUTTER_WIDTH + TEXT_IN_CONTENT_LEFT;
 #[cfg_attr(not(test), allow(dead_code))]
@@ -825,6 +822,31 @@ impl EditorView {
         self.tabs.len()
     }
 
+    pub fn tab_summaries(&self) -> Vec<(String, bool)> {
+        self.tabs
+            .iter()
+            .map(|tab| {
+                let name = tab
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| tab.path.display().to_string());
+                (name, tab.buffer.is_dirty())
+            })
+            .collect()
+    }
+
+    pub fn active_tab_index(&self) -> usize {
+        self.active_tab
+    }
+
+    pub fn preview_available(&self) -> bool {
+        self.active_tab_ref().is_some_and(|tab| {
+            tab.kind != EditorTabKind::Image
+                && editor_syntax::language_for_path(&tab.path) == Some("markdown")
+        })
+    }
+
     pub fn active_path(&self) -> Option<&Path> {
         self.active_tab_ref().map(|tab| tab.path.as_path())
     }
@@ -842,7 +864,7 @@ impl EditorView {
         }
     }
 
-    fn preview_active(&self) -> bool {
+    pub fn preview_active(&self) -> bool {
         self.tabs
             .get(self.active_tab)
             .is_some_and(|tab| tab.preview)
@@ -997,7 +1019,7 @@ impl EditorView {
         }));
     }
 
-    fn activate_tab_and_emit(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn activate_tab_and_emit(&mut self, index: usize, cx: &mut Context<Self>) {
         self.activate_tab(index);
         if self.active_path().is_some() {
             cx.emit(ActiveFileChanged);
@@ -1033,7 +1055,7 @@ impl EditorView {
         false
     }
 
-    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
         }
@@ -1793,149 +1815,6 @@ impl Render for EditorView {
         } else {
             None
         };
-        let tabs = self
-            .tabs
-            .iter()
-            .map(|tab| (tab.path.clone(), tab.buffer.is_dirty()))
-            .collect::<Vec<_>>();
-
-        let mut tab_bar = div()
-            .h(px(TAB_BAR_HEIGHT))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .px(px(6.0))
-            .bg(theme.tab_bar_segmented.opacity(0.72))
-            .overflow_x_scrollbar();
-
-        for (index, (path, dirty)) in tabs.iter().enumerate() {
-            let is_active = index == active_index;
-            let title = path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.display().to_string());
-            let label = if *dirty {
-                format!("● {title}")
-            } else {
-                title
-            };
-            let activate_index = index;
-            let close_index = index;
-            let tab_active_bg = theme.tab_active;
-            let tab_transparent_bg = theme.transparent;
-            let hover_fg = fg;
-            let label_color = if is_active {
-                fg.opacity(0.92)
-            } else {
-                theme.muted_foreground
-            };
-            let mut tab_el = div()
-                .id(("editor-file-tab", index))
-                .h(px(22.0))
-                .max_w(px(180.0))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .pl(px(8.0))
-                .pr(px(3.0))
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .bg(if is_active {
-                    tab_active_bg
-                } else {
-                    tab_transparent_bg
-                })
-                .hover(move |s| {
-                    s.bg(if is_active {
-                        tab_active_bg
-                    } else {
-                        hover_fg.opacity(0.08)
-                    })
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _event, window, cx| {
-                        this.focus_handle.focus(window, cx);
-                        this.activate_tab_and_emit(activate_index, cx);
-                    }),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(px(12.0))
-                        .line_height(px(14.0))
-                        .font_family(ui_font.clone())
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(label_color)
-                        .child(SharedString::from(label)),
-                );
-
-            tab_el = tab_el.child(
-                div()
-                    .size(px(14.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .text_size(px(11.0))
-                    .text_color(fg.opacity(if is_active { 0.55 } else { 0.42 }))
-                    .hover(|s| s.bg(gpui::black().opacity(0.08)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, window, cx| {
-                            cx.stop_propagation();
-                            window.prevent_default();
-                            this.focus_handle.focus(window, cx);
-                            this.close_tab(close_index, cx);
-                        }),
-                    )
-                    .child(
-                        svg()
-                            .path("phosphor/x.svg")
-                            .size(ui_icon_px(&theme, 8.0))
-                            .text_color(fg.opacity(if is_active { 0.55 } else { 0.42 })),
-                    ),
-            );
-
-            tab_bar = tab_bar.child(tab_el);
-        }
-
-        let preview_available =
-            !image_tab && editor_syntax::language_for_path(&active.path) == Some("markdown");
-        let preview_toggle = preview_available.then(|| {
-            let icon = if preview_active {
-                "phosphor/code.svg"
-            } else {
-                "phosphor/eye.svg"
-            };
-            div()
-                .h(px(TAB_BAR_HEIGHT))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .px(px(6.0))
-                .bg(theme.tab_bar_segmented.opacity(0.72))
-                .child(
-                    Button::new(("editor-preview-toggle", self.view_id))
-                        .icon(Icon::default().path(icon))
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(|this, _event, window, cx| {
-                            this.focus_handle.focus(window, cx);
-                            this.toggle_preview(cx);
-                        })),
-                )
-        });
-
-        let header = div()
-            .h(px(TAB_BAR_HEIGHT))
-            .flex_shrink_0()
-            .flex()
-            .child(tab_bar.flex_1().min_w_0())
-            .children(preview_toggle);
-
         let diagnostic_count = diagnostics.len();
         let diagnostics_label = if diagnostic_count == 0 {
             String::new()
@@ -2295,7 +2174,9 @@ impl Render for EditorView {
             }))
             .key_context("EditorView")
             .on_children_prepainted(move |bounds_list, window, cx| {
-                let Some(bounds) = bounds_list.get(1).copied() else {
+                // Children are [body, status_bar] since the header moved to
+                // PaneTree's merged editor bar — body is index 0.
+                let Some(bounds) = bounds_list.first().copied() else {
                     return;
                 };
                 if let Some(view) = view_handle.upgrade() {
@@ -2358,7 +2239,6 @@ impl Render for EditorView {
                     cx.notify();
                 }),
             )
-            .child(header)
             .child(body)
             .child(status_bar)
             .into_any_element()
@@ -2370,6 +2250,73 @@ mod tests {
     use super::*;
     use gpui::AppContext as _;
     use std::path::Path;
+
+    #[gpui::test]
+    fn tab_summaries_follow_buffer_dirty_state_and_tab_lifecycle(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.tabs = vec![
+                EditorTab::new(
+                    PathBuf::from("src/main.rs"),
+                    EditorBuffer::from_text("fn main() {}"),
+                ),
+                EditorTab::new(
+                    PathBuf::from("docs/notes.md"),
+                    EditorBuffer::from_text("# Notes"),
+                ),
+            ];
+            assert_eq!(
+                view.tab_summaries(),
+                vec![("main.rs".into(), false), ("notes.md".into(), false)]
+            );
+            view.tabs[1].buffer.insert_text("changed");
+            view.activate_tab_and_emit(1, cx);
+            assert_eq!(view.active_tab_index(), 1);
+            assert_eq!(
+                view.tab_summaries(),
+                vec![("main.rs".into(), false), ("notes.md".into(), true)]
+            );
+
+            // Closing a dirty tab keeps its dot and exposes the existing save prompt.
+            view.close_tab(1, cx);
+            assert_eq!(view.tabs.len(), 2);
+            assert_eq!(view.dirty_close_blocked_tab, Some(1));
+            view.tabs[1].buffer.undo();
+            assert!(!view.tab_summaries()[1].1);
+            view.close_tab(1, cx);
+            assert_eq!(view.active_tab_index(), 0);
+            assert_eq!(view.tab_summaries(), vec![("main.rs".into(), false)]);
+        });
+    }
+
+    #[gpui::test]
+    fn preview_chrome_follows_active_file_and_excludes_image_tabs(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            assert!(!view.preview_available());
+            assert!(!view.preview_active());
+            view.tabs = vec![
+                EditorTab::new(
+                    PathBuf::from("notes.md"),
+                    EditorBuffer::from_text("# Notes"),
+                ),
+                EditorTab::new(
+                    PathBuf::from("main.rs"),
+                    EditorBuffer::from_text("fn main() {}"),
+                ),
+            ];
+            assert!(view.preview_available());
+            view.toggle_preview(cx);
+            assert!(view.preview_active());
+            view.activate_tab_and_emit(1, cx);
+            assert!(!view.preview_available());
+            assert!(!view.preview_active());
+            view.activate_tab_and_emit(0, cx);
+            assert!(view.preview_active());
+            view.tabs[0].kind = EditorTabKind::Image;
+            assert!(!view.preview_available());
+        });
+    }
 
     #[gpui::test]
     fn lsp_events_are_processed_without_rendering(cx: &mut gpui::TestAppContext) {

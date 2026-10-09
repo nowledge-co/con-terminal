@@ -9,6 +9,14 @@
 
 Add a persistent title bar to every pane when there are 2+ panes in the split tree. The bar shows the pane title, direct fullscreen/restore and close controls, and supports drag-to-tab promotion.
 
+> **Update (2026-10-09)**: terminal panes keep this design. **Editor panes no
+> longer render this title bar** — their file tab bar and pane controls are
+> merged into a single 28px chrome row (`render_editor_merged_bar` in
+> `crates/con-app/src/pane_tree.rs`), rendered by PaneTree with data from
+> `EditorView`'s public API. File name appears once (the active tab capsule);
+> ⛶/✕ pane controls and drag-to-tab promotion live in the merged row and only
+> appear with 2+ panes. An editor pane with no files open renders no chrome row.
+
 ---
 
 ## Scope

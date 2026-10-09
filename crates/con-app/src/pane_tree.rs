@@ -15,6 +15,34 @@ use crate::ui_scale::mono_icon_px;
 
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
+const EDITOR_MERGED_BAR_HEIGHT: f32 = 28.0;
+
+struct EditorChromeState {
+    active_label_opacity: f32,
+    inactive_label_opacity: f32,
+    button_opacity: f32,
+    show_pane_controls: bool,
+    can_drag: bool,
+    /// Unfocused panes dim the active capsule's fill too, matching the
+    /// approved prototype (tab_active composited at 70% over the bar bg).
+    dim_active_fill: bool,
+}
+
+impl EditorChromeState {
+    fn new(is_focused: bool, tree_has_splits: bool, hide_pane_title_bar: bool) -> Self {
+        Self {
+            active_label_opacity: if is_focused { 0.92 } else { 0.66 },
+            inactive_label_opacity: if is_focused { 1.0 } else { 0.7 },
+            button_opacity: if is_focused { 0.52 } else { 0.32 },
+            show_pane_controls: tree_has_splits && !hide_pane_title_bar,
+            // Only split panes can be dragged out into a new tab — the same
+            // rule the terminal pane title bar follows (it only exists with
+            // splits). Dragging the single pane of a tab out would empty it.
+            can_drag: tree_has_splits && !hide_pane_title_bar,
+            dim_active_fill: !is_focused,
+        }
+    }
+}
 
 /// Callback shapes threaded through the recursive pane renderer.
 type SplitDragCallback = std::sync::Arc<dyn Fn(SplitId, f32, &mut Window, &mut App) + 'static>;
@@ -2354,6 +2382,314 @@ impl PaneTree {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn render_editor_merged_bar(
+        pane_id: PaneId,
+        session_id: u64,
+        view: &Entity<EditorView>,
+        is_focused: bool,
+        tree_has_splits: bool,
+        is_zoomed: bool,
+        tab_accent_inactive_alpha: f32,
+        hide_pane_title_bar: bool,
+        close_pane_cb: PaneCallback,
+        toggle_zoom_cb: PaneCallback,
+        focus_pane_cb: PaneCallback,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let editor = view.read(cx);
+        let tabs = editor.tab_summaries();
+        let active_index = editor.active_tab_index();
+        let chrome = EditorChromeState::new(is_focused, tree_has_splits, hide_pane_title_bar);
+        let button_color = theme.foreground.opacity(chrome.button_opacity);
+        let button_hover_bg = theme.foreground.opacity(0.08);
+        let focus_cb_bar = focus_pane_cb.clone();
+        let mut bar = div()
+            .id(ElementId::Name(
+                format!("editor-merged-bar-{pane_id}").into(),
+            ))
+            .flex()
+            .items_center()
+            .h(px(EDITOR_MERGED_BAR_HEIGHT))
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .gap(px(2.0))
+            .px(px(6.0))
+            .bg(Self::pane_chrome_bg(
+                theme,
+                is_focused,
+                tab_accent_inactive_alpha,
+            ))
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                focus_cb_bar(pane_id, window, cx);
+            });
+
+        if chrome.can_drag {
+            let dragged = DraggedTab {
+                session_id,
+                label: tabs
+                    .get(active_index)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| "Editor".to_string())
+                    .into(),
+                icon: "phosphor/terminal.svg",
+                origin: DraggedTabOrigin::Pane,
+                preview_constraint: None,
+                pane_id: Some(pane_id),
+            };
+            bar = bar.cursor_grab().on_drag(
+                dragged,
+                move |dragged: &DraggedTab, _offset, _window, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| dragged.clone())
+                },
+            );
+        }
+
+        for (index, (name, dirty)) in tabs.into_iter().enumerate() {
+            let is_active = index == active_index;
+            let label_color = if is_active {
+                theme.foreground.opacity(chrome.active_label_opacity)
+            } else {
+                theme
+                    .muted_foreground
+                    .opacity(chrome.inactive_label_opacity)
+            };
+            let tab_bg = if is_active {
+                if chrome.dim_active_fill {
+                    // Match the approved prototype: unfocused panes dim the
+                    // active fill by compositing tab_active at 70% over the
+                    // opaque bar background.
+                    Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha)
+                        .blend(theme.tab_active.opacity(0.7))
+                } else {
+                    theme.tab_active
+                }
+            } else {
+                theme.transparent
+            };
+            let hover_bg = if is_active {
+                theme.tab_active
+            } else {
+                theme.foreground.opacity(0.08)
+            };
+            let activate_view = view.clone();
+            let focus_cb_tab = focus_pane_cb.clone();
+            let mut tab = div()
+                .id(ElementId::Name(
+                    format!("editor-file-tab-{pane_id}-{index}").into(),
+                ))
+                .group("editor-file-tab")
+                .flex()
+                // Content-hugging width: tabs take their natural width (up to
+                // the 190px cap) when there is spare room, and shrink
+                // proportionally with label truncation when the bar is full.
+                // `flex_1` here stretched short names across half the pane
+                // (fix round 2).
+                .flex_shrink_1()
+                .min_w_0()
+                .max_w(px(190.0))
+                .h(px(22.0))
+                .items_center()
+                .gap(px(5.0))
+                .pl(px(8.0))
+                .pr(px(6.0))
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .bg(tab_bg)
+                .hover(move |s| s.bg(hover_bg))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    cx.stop_propagation();
+                    focus_cb_tab(pane_id, window, cx);
+                    activate_view.update(cx, |editor, cx| {
+                        editor.focus_handle(cx).focus(window, cx);
+                        editor.activate_tab_and_emit(index, cx);
+                    });
+                });
+
+            if dirty {
+                tab = tab.child(
+                    div()
+                        .size(px(5.0))
+                        .rounded_full()
+                        .bg(theme.primary)
+                        .flex_shrink_0(),
+                );
+            }
+            tab = tab.child(
+                div()
+                    // No flex-grow on the label: the capsule hugs its content.
+                    // min_w_0 + ellipsis lets the label truncate when the bar
+                    // is full and the capsule shrinks.
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(px(12.0))
+                    .line_height(px(14.0))
+                    .font_family(theme.mono_font_family.clone())
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(label_color)
+                    .child(SharedString::from(name)),
+            );
+
+            let close_view = view.clone();
+            let focus_cb_close = focus_pane_cb.clone();
+            let close_hover_bg = theme.foreground.opacity(0.10);
+            let mut close = div()
+                .id(ElementId::Name(
+                    format!("editor-file-close-{pane_id}-{index}").into(),
+                ))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(14.0))
+                .flex_shrink_0()
+                .rounded(px(4.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(close_hover_bg));
+            if !is_active {
+                close = close
+                    .invisible()
+                    .group_hover("editor-file-tab", |s| s.visible());
+            }
+            tab = tab.child(
+                close
+                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        focus_cb_close(pane_id, window, cx);
+                        close_view.update(cx, |editor, cx| {
+                            editor.focus_handle(cx).focus(window, cx);
+                            editor.close_tab(index, cx);
+                        });
+                    })
+                    .child(
+                        svg()
+                            .path("phosphor/x.svg")
+                            .size(mono_icon_px(theme, 8.0))
+                            .text_color(button_color),
+                    ),
+            );
+            bar = bar.child(tab);
+        }
+
+        // Tabs shrink together; the remaining space is the pane drag target.
+        bar = bar.child(div().flex_1().min_w_0().h_full());
+
+        if editor.preview_available() {
+            let preview_active = editor.preview_active();
+            let preview_view = view.clone();
+            let focus_cb_preview = focus_pane_cb.clone();
+            bar = bar.child(
+                div()
+                    .id(ElementId::Name(
+                        format!("editor-preview-toggle-{pane_id}").into(),
+                    ))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(px(24.0))
+                    .h(px(20.0))
+                    .flex_shrink_0()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(button_hover_bg))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if preview_active {
+                            "Edit markdown"
+                        } else {
+                            "Preview markdown"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        focus_cb_preview(pane_id, window, cx);
+                        preview_view.update(cx, |editor, cx| {
+                            editor.focus_handle(cx).focus(window, cx);
+                            editor.toggle_preview(cx);
+                        });
+                    })
+                    .child(
+                        svg()
+                            .path(if preview_active {
+                                "phosphor/code.svg"
+                            } else {
+                                "phosphor/eye.svg"
+                            })
+                            .size(mono_icon_px(theme, 12.0))
+                            .text_color(button_color),
+                    ),
+            );
+        }
+
+        if chrome.show_pane_controls {
+            let focus_cb_zoom = focus_pane_cb.clone();
+            let zoom_tooltip: SharedString = if is_zoomed {
+                "Exit fullscreen"
+            } else {
+                "Fullscreen"
+            }
+            .into();
+            let zoom = div()
+                .id(ElementId::Name(format!("pane-zoom-{pane_id}").into()))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(20.0))
+                .flex_shrink_0()
+                .rounded(px(4.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(button_hover_bg))
+                .tooltip(move |window, cx| Tooltip::new(zoom_tooltip.clone()).build(window, cx))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    focus_cb_zoom(pane_id, window, cx);
+                    toggle_zoom_cb(pane_id, window, cx);
+                })
+                .child(
+                    svg()
+                        .path(if is_zoomed {
+                            "phosphor/frame-corners.svg"
+                        } else {
+                            "phosphor/corners-out.svg"
+                        })
+                        .size(mono_icon_px(theme, 11.0))
+                        .text_color(button_color),
+                );
+            let close = div()
+                .id(ElementId::Name(format!("pane-close-{pane_id}").into()))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(20.0))
+                .flex_shrink_0()
+                .rounded(px(4.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(button_hover_bg))
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    focus_pane_cb(pane_id, window, cx);
+                    close_pane_cb(pane_id, window, cx);
+                })
+                .child(
+                    svg()
+                        .path("phosphor/x.svg")
+                        .size(mono_icon_px(theme, 11.0))
+                        .text_color(button_color),
+                );
+            bar = bar.child(zoom).child(close);
+        }
+
+        bar.into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn render_leaf(
         pane_id: PaneId,
         surfaces: &[PaneSurface],
@@ -2375,16 +2711,10 @@ impl PaneTree {
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
-        // ── Editor pane — reuses the same title bar as terminal panes ─────
+        // ── Editor pane — file tabs and pane controls share one row ───────
         if let PaneContent::Editor { view } = content {
             let is_focused = pane_id == focused_id;
             let is_zoomed = zoomed_pane_id == Some(pane_id);
-            let title = view
-                .read(cx)
-                .active_path()
-                .and_then(|path| path.file_name())
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Editor".to_string());
 
             // Click anywhere on the editor body to focus this pane
             let focus_cb_click = focus_pane_cb.clone();
@@ -2416,22 +2746,23 @@ impl PaneTree {
                     )
                 });
 
-            if tree_has_splits && !hide_pane_title_bar {
-                let title_bar = Self::render_pane_title_bar(
+            // No files open → no chrome row at all; the editor body renders
+            // its centered "No file open" empty state (pre-merge behavior).
+            if view.read(cx).tab_count() > 0 {
+                col = col.child(Self::render_editor_merged_bar(
                     pane_id,
                     session_id,
-                    title,
+                    view,
                     is_focused,
                     tree_has_splits,
                     is_zoomed,
-                    tab_accent_color,
                     tab_accent_inactive_alpha,
+                    hide_pane_title_bar,
                     close_pane_cb,
                     toggle_zoom_cb,
                     focus_pane_cb.clone(),
                     cx,
-                );
-                col = col.child(title_bar);
+                ));
             }
 
             col = col.child(
@@ -3144,6 +3475,35 @@ impl PaneTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn editor_chrome_dims_labels_and_controls_when_unfocused() {
+        let focused = EditorChromeState::new(true, true, false);
+        assert_eq!(focused.active_label_opacity, 0.92);
+        assert_eq!(focused.inactive_label_opacity, 1.0);
+        assert_eq!(focused.button_opacity, 0.52);
+
+        let unfocused = EditorChromeState::new(false, true, false);
+        assert_eq!(unfocused.active_label_opacity, 0.66);
+        assert_eq!(unfocused.inactive_label_opacity, 0.7);
+        assert_eq!(unfocused.button_opacity, 0.32);
+        assert!(unfocused.dim_active_fill);
+        assert!(!focused.dim_active_fill);
+    }
+
+    #[::core::prelude::v1::test]
+    fn editor_chrome_controls_require_splits_and_drag_respects_hidden_title_bar() {
+        for (splits, hidden, controls, drag) in [
+            (false, false, false, false),
+            (true, false, true, true),
+            (false, true, false, false),
+            (true, true, false, false),
+        ] {
+            let chrome = EditorChromeState::new(true, splits, hidden);
+            assert_eq!(chrome.show_pane_controls, controls);
+            assert_eq!(chrome.can_drag, drag);
+        }
+    }
 
     fn empty_leaf(id: PaneId) -> PaneNode {
         PaneNode::Leaf {
