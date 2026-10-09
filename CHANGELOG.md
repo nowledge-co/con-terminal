@@ -4,6 +4,31 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.123` - 2026-10-10
+
+### Changed
+
+**Program-status guide**
+
+- Clarify how to forward program status through SSH and tmux, including
+  capability detection and passthrough examples. _(PR
+  [#455](https://github.com/nowledge-co/con-terminal/pull/455) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Developer Experience**
+
+- Add regression tests for program-status lifecycles, input acknowledgement,
+  bounded report storage and sidebar layout at different UI font sizes in
+  light and dark themes. _(PRs
+  [#456](https://github.com/nowledge-co/con-terminal/pull/456) and
+  [#457](https://github.com/nowledge-co/con-terminal/pull/457) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Add reproducible lifecycle and load fixtures, a retained reducer benchmark,
+  and native Windows/Linux CI coverage for sidebar layout. These checks do
+  not replace physical-window frame-rate or input-latency testing. _(PR
+  [#458](https://github.com/nowledge-co/con-terminal/pull/458) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.122` - 2026-10-09
 
 ### Added
