@@ -35,7 +35,10 @@ keeps the joiner, and drops the override. Tests construct compact and
 expanded status icons at a 24px slot and check that only working states
 register a ring. They do not inspect painted glyphs. Theme helper tests
 check label and icon sizes with configured UI fonts of 12px, 16px, and
-24px; they do not verify the rendered hover label.
+24px. A windowed layout test renders the real rail hover label at those
+sizes in light and dark, and renders the sidebar icon slot for a blocked
+glyph and a working ring in both densities. It does not measure typing,
+scrolling, or paint time.
 
 Eight thousand progress-changing reports on one id retain one record,
 expose each latest progress value, and signal each changed presentation.

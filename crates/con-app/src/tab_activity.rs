@@ -8,8 +8,9 @@ use std::{
 
 use con_core::terminal_status::{Activity, Status};
 use gpui::{
-    Animation, AnimationExt, AnyElement, Bounds, ContentMask, Context, Hsla, IntoElement,
-    ParentElement, PathBuilder, Pixels, Render, Styled, Window, canvas, div, point, px, svg,
+    Animation, AnimationExt, AnyElement, Bounds, ContentMask, Context, Hsla, InteractiveElement,
+    IntoElement, ParentElement, PathBuilder, Pixels, Render, Styled, Window, canvas, div, point,
+    px, svg,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +109,7 @@ impl TabActivity {
         let slot_size = if compact { px(32.0) } else { size };
         let icon_size = if compact { size.min(px(14.0)) } else { size };
         let mut slot = div()
+            .debug_selector(|| "tab-status-slot".into())
             .relative()
             .flex()
             .items_center()
@@ -117,6 +119,7 @@ impl TabActivity {
         if !active || (compact && visual.glyph().is_none()) {
             slot = slot.child(
                 svg()
+                    .debug_selector(|| "tab-status-brand".into())
                     .path(icon)
                     .size(icon_size)
                     .flex_shrink_0()
@@ -135,6 +138,7 @@ impl TabActivity {
                 return slot
                     .child(
                         svg()
+                            .debug_selector(|| "tab-status-glyph".into())
                             .path(glyph)
                             .size(if compact { px(18.0) } else { size })
                             .text_color(activity_color),
@@ -153,6 +157,15 @@ impl TabActivity {
             );
         }
         slot.into_any_element()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rendered_ring_bounds(&self) -> Vec<Bounds<Pixels>> {
+        let markers = self.markers.borrow();
+        markers.rows[..markers.used]
+            .iter()
+            .filter_map(|marker| marker.bounds)
+            .collect()
     }
 
     fn register(&self, color: Hsla, visual: ActivityVisual) -> impl Styled + IntoElement {

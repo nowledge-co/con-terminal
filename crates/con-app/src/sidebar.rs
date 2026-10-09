@@ -2497,6 +2497,157 @@ mod tests {
     }
 
     #[gpui::test]
+    fn hover_status_tracks_ui_font_in_light_and_dark(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            use gpui::AppContext;
+            HoverCardTestView(cx.new(|cx| {
+                let mut sidebar = SessionSidebar::new(cx);
+                sidebar.hovered_rail = Some(0);
+                sidebar.sessions = vec![session(None, Some("Ready".into()))];
+                sidebar
+            }))
+        });
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            cx.update(|_, cx| {
+                gpui_component::Theme::change(mode, None, cx);
+            });
+            let mut heights = Vec::new();
+            for (font_size, expected_height) in [(12.0, 12.0), (16.0, 16.0), (24.0, 24.0)] {
+                cx.update(|_, cx| {
+                    gpui_component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                });
+                view.update(cx, |_, cx| cx.notify());
+                let status = cx.debug_bounds("tab-hover-status").expect("status label");
+                assert!((status.size.height.as_f32() - expected_height).abs() < 0.5);
+                let path = cx.debug_bounds("tab-hover-path").expect("path");
+                let meta = cx.debug_bounds("tab-hover-meta").expect("metadata");
+                assert!(path.bottom() <= status.top());
+                assert!(status.bottom() <= meta.top());
+                heights.push(status.size.height.as_f32());
+            }
+            assert!(heights[0] < heights[1] && heights[1] < heights[2]);
+        }
+    }
+
+    #[gpui::test]
+    fn sidebar_status_icon_follows_density_and_font(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut sidebar = SessionSidebar::new(cx);
+            sidebar.sessions = vec![session(
+                Some(con_core::terminal_status::Status {
+                    surface_id: 1,
+                    activity: con_core::terminal_status::Activity::NeedsInput,
+                    evidence: con_core::terminal_status::Evidence::ProgramStatus,
+                    percent: None,
+                }),
+                Some("Waiting for permission".into()),
+            )];
+            sidebar
+        });
+
+        let slot = cx.debug_bounds("tab-status-slot").expect("compact slot");
+        assert_eq!(slot.size, Size::new(px(32.0), px(32.0)));
+        assert!(cx.debug_bounds("tab-status-glyph").is_some());
+        assert!(cx.debug_bounds("tab-status-brand").is_none());
+        assert!(rendered_rings(&view, cx).is_empty());
+
+        view.update(cx, |sidebar, cx| {
+            sidebar.set_pinned(true, cx);
+            sidebar
+                .width_motion
+                .set_target(1.0, std::time::Duration::ZERO);
+        });
+        for (font_size, expected) in [(12.0, 13.5), (16.0, 15.0), (24.0, 20.25)] {
+            cx.update(|_, cx| {
+                gpui_component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+            });
+            view.update(cx, |_, cx| cx.notify());
+            let slot = cx.debug_bounds("tab-status-slot").expect("expanded slot");
+            assert!(
+                (slot.size.width.as_f32() - expected).abs() < 0.5,
+                "font {font_size}: icon slot {} expected {}",
+                slot.size.width.as_f32(),
+                expected
+            );
+            assert!(cx.debug_bounds("tab-status-glyph").is_some());
+            assert!(rendered_rings(&view, cx).is_empty());
+        }
+
+        view.update(cx, |sidebar, cx| {
+            sidebar.sessions[0].status = Some(con_core::terminal_status::Status {
+                surface_id: 1,
+                activity: con_core::terminal_status::Activity::Busy,
+                evidence: con_core::terminal_status::Evidence::ProgramStatus,
+                percent: Some(40),
+            });
+            cx.notify();
+        });
+        let rings = rendered_rings(&view, cx);
+        assert_eq!(rings.len(), 1);
+        let slot = cx.debug_bounds("tab-status-slot").unwrap();
+        assert_eq!(rings[0].size, Size::new(px(18.0), px(18.0)));
+        assert!((slot.center().x - rings[0].center().x).abs() < px(0.5));
+        assert!((slot.center().y - rings[0].center().y).abs() < px(0.5));
+        assert!(cx.debug_bounds("tab-status-glyph").is_none());
+        assert!(cx.debug_bounds("tab-status-brand").is_none());
+
+        view.update(cx, |sidebar, cx| sidebar.set_pinned(false, cx));
+        assert_eq!(
+            cx.debug_bounds("tab-status-slot")
+                .expect("compact busy slot")
+                .size,
+            Size::new(px(32.0), px(32.0))
+        );
+        let rings = rendered_rings(&view, cx);
+        assert_eq!(rings.len(), 1);
+        assert_eq!(rings[0].size, Size::new(px(24.0), px(24.0)));
+        let slot = cx.debug_bounds("tab-status-slot").unwrap();
+        assert!((slot.center().x - rings[0].center().x).abs() < px(0.5));
+        assert!((slot.center().y - rings[0].center().y).abs() < px(0.5));
+        assert!(cx.debug_bounds("tab-status-brand").is_some());
+        assert!(cx.debug_bounds("tab-status-glyph").is_none());
+    }
+
+    fn rendered_rings(
+        view: &gpui::Entity<SessionSidebar>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> Vec<Bounds<gpui::Pixels>> {
+        view.update(cx, |sidebar, cx| {
+            sidebar
+                .activity_layer
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .rendered_ring_bounds()
+        })
+    }
+
+    fn session(
+        status: Option<con_core::terminal_status::Status>,
+        status_detail: Option<String>,
+    ) -> super::SessionEntry {
+        super::SessionEntry {
+            id: 0,
+            name: "Build".into(),
+            subtitle: Some("/project".into()),
+            is_ssh: false,
+            needs_attention: false,
+            status,
+            status_detail,
+            terminal_titles: Vec::new(),
+            icon: "phosphor/terminal.svg",
+            has_user_label: true,
+            pane_count: 1,
+            color: None,
+        }
+    }
+
+    #[gpui::test]
     fn sessions_have_one_navigation_list_and_keep_drag_bounds(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
         let (view, cx) = cx.add_window_view(|_, cx| {
