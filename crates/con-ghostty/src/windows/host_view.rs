@@ -249,8 +249,10 @@ impl RenderSession {
         accept_vt_replies.store(true, Ordering::Release);
 
         let vt_for_pty = vt.clone();
+        let vt_for_exit = vt.clone();
         let transcript_for_pty = transcript.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
+        let wake_for_exit = wake_for_pty.clone();
         let shell_cwd = resolve_shell_cwd(cwd);
         log::info!(
             "RenderSession: spawning ConPTY shell={shell} cwd={shell_cwd:?} \
@@ -266,6 +268,10 @@ impl RenderSession {
                     transcript_for_pty.lock().push(text.as_ref());
                     vt_for_pty.feed(bytes);
                     wake_for_pty();
+                },
+                move || {
+                    vt_for_exit.push_program_event(crate::ProgramStatusEvent::ProcessExit);
+                    wake_for_exit();
                 },
             )
             .context("ConPty::spawn failed")?;
@@ -531,6 +537,14 @@ impl RenderSession {
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) -> Result<()> {
+        self.write_text_input(text, false)
+    }
+
+    pub fn send_text(&self, text: &str) -> Result<()> {
+        self.write_text_input(text, true)
+    }
+
+    fn write_text_input(&self, text: &str, user_input: bool) -> Result<()> {
         self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
@@ -538,9 +552,12 @@ impl RenderSession {
         } else {
             std::borrow::Cow::Borrowed(text.as_bytes())
         };
-        self.vt
-            .write_input(&bytes)
-            .context("failed to queue ConPTY input")
+        if user_input {
+            self.vt.write_user_input(&bytes)
+        } else {
+            self.vt.write_input(&bytes)
+        }
+        .context("failed to queue ConPTY input")
     }
 
     pub fn send_key(&self, event: &VtKeyEvent<'_>) -> Result<VtKeyOutcome> {
@@ -920,6 +937,10 @@ impl RenderSession {
 
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.vt.progress()
+    }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.vt.take_program_events()
     }
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {

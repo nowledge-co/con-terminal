@@ -1440,6 +1440,7 @@ dependencies = [
  "cc",
  "con-paths",
  "con-process",
+ "con-terminal",
  "core-foundation 0.10.0",
  "dispatch",
  "etagere",

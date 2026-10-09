@@ -8,6 +8,7 @@ build = "build.rs"
 [dependencies]
 con-paths.workspace = true
 con-process.workspace = true
+con-terminal.workspace = true
 anyhow.workspace = true
 log.workspace = true
 parking_lot.workspace = true

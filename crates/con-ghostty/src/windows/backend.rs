@@ -293,7 +293,7 @@ impl WindowsGhosttyTerminal {
 
     pub fn send_text(&self, text: &str) {
         if let Some(session) = self.inner.lock().as_ref()
-            && let Err(err) = session.write_input(text)
+            && let Err(err) = session.send_text(text)
         {
             log::debug!("windows terminal text write failed: {err:#}");
         }
@@ -342,6 +342,14 @@ impl WindowsGhosttyTerminal {
     }
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.inner.lock().as_ref().and_then(RenderSession::progress)
+    }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(RenderSession::take_program_events)
+            .unwrap_or_default()
     }
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
         if let Some(session) = self.inner.lock().as_ref() {

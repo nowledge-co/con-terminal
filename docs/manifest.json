@@ -30,7 +30,8 @@
     {
       "label": "Build on con",
       "items": [
-        { "label": "con-cli and surfaces", "path": "docs/con-cli.md" }
+        { "label": "con-cli and surfaces", "path": "docs/con-cli.md" },
+        { "label": "Program status", "path": "docs/program-status.md" }
       ]
     }
   ]

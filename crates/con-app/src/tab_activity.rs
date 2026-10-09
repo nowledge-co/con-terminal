@@ -25,14 +25,22 @@ enum ActivityVisual {
 
 impl ActivityVisual {
     fn arc(self, phase: f32, reduced_motion: bool) -> (f32, f32) {
-        use std::f32::consts::{FRAC_PI_2, PI, TAU};
+        use std::f32::consts::{FRAC_PI_2, TAU};
         match self {
             Self::Busy if reduced_motion => (0.0, TAU),
             Self::Busy => (phase * TAU, FRAC_PI_2),
             Self::Progress(percent) => (-FRAC_PI_2, TAU * f32::from(percent) / 100.0),
-            // Leave the badge quadrant clear.
-            Self::NeedsInput | Self::Error | Self::Paused | Self::Done => (FRAC_PI_2, PI * 1.5),
-            Self::None => (0.0, 0.0),
+            Self::NeedsInput | Self::Error | Self::Paused | Self::Done | Self::None => (0.0, 0.0),
+        }
+    }
+
+    fn glyph(self) -> Option<&'static str> {
+        match self {
+            Self::NeedsInput => Some("phosphor/warning.svg"),
+            Self::Error => Some("phosphor/x.svg"),
+            Self::Paused => Some("phosphor/pause.svg"),
+            Self::Done => Some("phosphor/check.svg"),
+            Self::None | Self::Busy | Self::Progress(_) => None,
         }
     }
 }
@@ -56,7 +64,6 @@ struct Marker {
     mask: Option<ContentMask<Pixels>>,
     color: Hsla,
     visual: ActivityVisual,
-    badge: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -84,7 +91,7 @@ impl TabActivity {
     }
 
     /// Keeps the caller's original icon slot. Compact rail slots retain the
-    /// brand below a fixed 28pt ring; expanded tabs replace it with status.
+    /// brand below a progress ring; stationary states use one centered glyph.
     pub(crate) fn icon(
         &self,
         icon: &'static str,
@@ -107,7 +114,7 @@ impl TabActivity {
             .justify_center()
             .flex_shrink_0()
             .size(slot_size);
-        if compact || !active {
+        if !active || (compact && visual.glyph().is_none()) {
             slot = slot.child(
                 svg()
                     .path(icon)
@@ -117,28 +124,30 @@ impl TabActivity {
             );
         }
         if active {
-            let (activity_color, badge) = match visual {
-                ActivityVisual::NeedsInput => (theme.warning, Some("phosphor/warning.svg")),
-                ActivityVisual::Error => (theme.danger, Some("phosphor/x.svg")),
-                ActivityVisual::Paused => (theme.warning, Some("phosphor/pause.svg")),
-                ActivityVisual::Done => (theme.foreground, Some("phosphor/check.svg")),
-                ActivityVisual::Progress(_) | ActivityVisual::Busy => {
-                    (theme.foreground.opacity(0.75), None)
-                }
+            let activity_color = match visual {
+                ActivityVisual::NeedsInput | ActivityVisual::Paused => theme.warning,
+                ActivityVisual::Error => theme.danger,
+                ActivityVisual::Done => theme.foreground,
+                ActivityVisual::Progress(_) | ActivityVisual::Busy => theme.foreground,
                 ActivityVisual::None => unreachable!(),
             };
-            if !compact && let Some(badge) = badge {
+            if let Some(glyph) = visual.glyph() {
                 return slot
-                    .child(svg().path(badge).size(size).text_color(activity_color))
+                    .child(
+                        svg()
+                            .path(glyph)
+                            .size(if compact { px(18.0) } else { size })
+                            .text_color(activity_color),
+                    )
                     .into_any_element();
             }
             let ring_size = if compact {
-                px(28.0)
+                px(24.0)
             } else {
                 slot_size.min(px(18.0))
             };
             slot = slot.child(
-                self.register(activity_color, visual, badge)
+                self.register(activity_color, visual)
                     .absolute()
                     .size(ring_size),
             );
@@ -146,12 +155,7 @@ impl TabActivity {
         slot.into_any_element()
     }
 
-    fn register(
-        &self,
-        color: Hsla,
-        visual: ActivityVisual,
-        badge: Option<&'static str>,
-    ) -> impl Styled + IntoElement {
+    fn register(&self, color: Hsla, visual: ActivityVisual) -> impl Styled + IntoElement {
         let mut markers = self.markers.borrow_mut();
         let index = markers.used;
         let previous = markers.rows.get(index);
@@ -160,7 +164,6 @@ impl TabActivity {
             mask: previous.and_then(|marker| marker.mask),
             color,
             visual,
-            badge,
         };
         if index == markers.rows.len() {
             markers.rows.push(marker);
@@ -195,7 +198,7 @@ impl TabActivity {
         let markers = self.markers.clone();
         canvas(
             |_, _, _| {},
-            move |_, _, window, cx| {
+            move |_, _, window, _cx| {
                 let markers = markers.borrow();
                 for marker in &markers.rows[..markers.used] {
                     let Some(bounds) = marker.bounds else {
@@ -210,26 +213,6 @@ impl TabActivity {
                             phase.get(),
                             reduced_motion,
                         );
-                        if let Some(badge) = marker.badge {
-                            let badge_size = px(10.0);
-                            let badge_bounds = Bounds::new(
-                                point(
-                                    bounds.origin.x + bounds.size.width - badge_size,
-                                    bounds.origin.y + bounds.size.height - badge_size,
-                                ),
-                                gpui::size(badge_size, badge_size),
-                            );
-                            if let Err(error) = window.paint_svg(
-                                badge_bounds,
-                                badge.into(),
-                                None,
-                                Default::default(),
-                                marker.color,
-                                cx,
-                            ) {
-                                log::error!("activity badge: {error}");
-                            }
-                        }
                     });
                 }
             },
@@ -361,7 +344,6 @@ mod tests {
                     mask: Some(ContentMask { bounds }),
                     color: gpui::black(),
                     visual: ActivityVisual::Busy,
-                    badge: None,
                 }],
                 used: 1,
             };
@@ -436,7 +418,7 @@ mod tests {
 
     #[test]
     fn arc_geometry_preserves_progress_and_reduced_motion() {
-        use std::f32::consts::{FRAC_PI_2, PI, TAU};
+        use std::f32::consts::{FRAC_PI_2, TAU};
         assert_eq!(
             ActivityVisual::Busy.arc(0.25, false),
             (FRAC_PI_2, FRAC_PI_2)
@@ -458,10 +440,31 @@ mod tests {
             ActivityVisual::Done.arc(0.8, false),
             ActivityVisual::Paused.arc(0.8, false)
         );
-        assert_eq!(
-            ActivityVisual::Paused.arc(0.8, false),
-            (FRAC_PI_2, PI * 1.5)
-        );
+        assert_eq!(ActivityVisual::Paused.arc(0.8, false), (0.0, 0.0));
+    }
+
+    #[test]
+    fn stationary_states_do_not_register_progress_overlays() {
+        let layer = TabActivity::default();
+        let theme = gpui_component::Theme::default();
+        for compact in [false, true] {
+            for activity in [
+                Activity::NeedsInput,
+                Activity::Error,
+                Activity::Paused,
+                Activity::Done,
+            ] {
+                layer.icon(
+                    "phosphor/terminal.svg",
+                    px(16.0),
+                    theme.foreground,
+                    Some(status(activity, None)),
+                    &theme,
+                    compact,
+                );
+            }
+        }
+        assert_eq!(layer.markers.borrow().used, 0);
     }
 
     #[test]

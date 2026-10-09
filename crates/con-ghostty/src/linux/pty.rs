@@ -381,6 +381,8 @@ impl SessionShared {
             duration,
         });
         self.needs_render.store(true, Ordering::Release);
+        self.screen
+            .push_program_event(crate::ProgramStatusEvent::ProcessExit);
         self.wake();
     }
 }
@@ -472,6 +474,18 @@ impl LinuxPtySession {
             .write_input(data)
             .context("failed to queue linux pty input")?;
         self.input_generation.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn send_text(&self, text: &str) -> Result<()> {
+        self.shared
+            .screen
+            .write_user_input(text.as_bytes())
+            .context("failed to queue linux user input")?;
+        if !text.is_empty() {
+            self.scroll_viewport_to_bottom();
+            self.input_generation.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -598,6 +612,10 @@ impl LinuxPtySession {
 
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.shared.screen.progress()
+    }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.shared.screen.take_program_events()
     }
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {

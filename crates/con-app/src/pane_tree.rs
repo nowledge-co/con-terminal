@@ -140,8 +140,10 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
 #[derive(Clone)]
 pub struct PaneSurfaceInfo {
     pub pane_id: PaneId,
+    /// One-based position in the pane tree, not a stable pane ID.
     pub pane_index: usize,
     pub surface_id: SurfaceId,
+    /// One-based position within this pane, not a stable surface ID.
     pub surface_index: usize,
     pub is_active: bool,
     pub is_focused_pane: bool,

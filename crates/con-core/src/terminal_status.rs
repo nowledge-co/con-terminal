@@ -197,6 +197,12 @@ impl SurfaceStatus {
         self.program.detail_line()
     }
 
+    /// Replace a backend-reduced snapshot; intermediate lifecycle events have
+    /// already been applied in order before this bounded UI handoff.
+    pub fn replace_program_status(&mut self, program: SurfaceProgramStatus) {
+        self.program = program;
+    }
+
     /// Returns whether the aggregated activity snapshot changed.
     /// A stored message can change without that snapshot changing.
     pub fn observe_program_status(

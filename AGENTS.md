@@ -104,6 +104,10 @@ the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
 - Dependencies come from crates.io or declared Git dependencies pinned to a
   revision. `3pp/` is optional, ignored, read-only reference: never modify,
   commit, or depend on it. Upstream dependency fixes instead of patching locally.
+  OSC 7501 has a maintainer-authorized temporary exception (2026-10-09):
+  Ghostty may use the public `wey-gu/ghostty` fork at the immutable
+  revision in `con-ghostty/build.rs`. Track official replacement in #444;
+  this exception does not permit local patches or other fork dependencies.
   Consult sources matching the resolved version; use upstream or installed
   package sources when a reference checkout is absent or stale.
 - macOS embeds full libghostty; Windows/Linux use libghostty-vt with platform

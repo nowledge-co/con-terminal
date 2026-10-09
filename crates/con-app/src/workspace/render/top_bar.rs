@@ -1,6 +1,7 @@
 use super::super::*;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::menu::ContextMenuExt;
+use gpui_component::tooltip::Tooltip;
 
 const CHROME_CONTROL_SIZE: f32 = 22.0;
 
@@ -524,6 +525,7 @@ impl ConWorkspace {
                 let presentation = self.sidebar.read(cx).session(index);
                 let tab_icon = presentation.map_or("phosphor/terminal.svg", |entry| entry.icon);
                 let name = presentation.map_or(tab.title.as_str(), |entry| entry.name.as_str());
+                let status_detail = self.program_status_detail(tab.summary_id);
 
                 let display_title: String = if name.chars().count() > 24 {
                     format!("{}…", &name[..name.floor_char_boundary(22)])
@@ -753,6 +755,10 @@ impl ConWorkspace {
                         this.reorder_tab_by_id(dragged.session_id, to, cx);
                         cx.notify();
                     }));
+
+                tab_el = tab_el.when_some(status_detail, |el, detail| {
+                    el.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
+                });
 
                 if is_active {
                     tab_el = tab_el
