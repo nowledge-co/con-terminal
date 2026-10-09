@@ -116,7 +116,8 @@ jobs:
       - name: cargo test — portable crates
         run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: State presentation layout tests
-        run: cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
+        run: |
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
       - name: Program status acceptance fixture tests
         run: |
           python -m unittest discover -s scripts/terminal -p 'test_*.py'
@@ -187,6 +188,7 @@ jobs:
       - name: cargo test — portable crates
         run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: State presentation layout tests
-        run: cargo test --locked -p con --bin con sidebar::
+        run: |
+          cargo test --locked -p con --bin con sidebar::
       - name: Program status reducer benchmark correctness
         run: cargo test --locked -p con-core --example program_status_bench
