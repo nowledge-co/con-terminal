@@ -31,21 +31,24 @@ On this Mac the shared reducer covered working, blocked, working again,
 done, acknowledgement, and a later error that remains after process exit
 and an alternate-screen change. A 400-character Unicode message with an
 emoji joiner and a direction override is shown as at most 180 characters,
-keeps the joiner, and drops the override. Compact and expanded status
-icons at a 24px slot keep one stationary glyph; only working progress
-registers a ring. The hover label scales with the UI font from 12px to
-24px and the icon scale stays inside 0.90–1.35.
+keeps the joiner, and drops the override. Tests construct compact and
+expanded status icons at a 24px slot and check that only working states
+register a ring. They do not inspect painted glyphs. Theme helper tests
+check label and icon sizes with configured UI fonts of 12px, 16px, and
+24px; they do not verify the rendered hover label.
 
-Eight thousand progress-changing reports on one id took 4.7 ms in an
-optimized test build, against 59.5 µs for the same number of progress
-observations. The run kept one record. That measures the status reducer,
-not typing, scrolling, or painting in a window.
+Eight thousand progress-changing reports on one id retain one record,
+expose each latest progress value, and signal each changed presentation.
+Repeating the final report does not signal another presentation change.
+This is a deterministic reducer test, not a performance benchmark.
 
 Windows and Linux execute the same sequence from terminal bytes in
 `program_status_sequence_survives_malformed_input_and_alternate_screen`.
 That test is headless. A physical Windows or Linux window was not
-observed. #444 stays open until official Ghostty replaces the fork, and
-#443 stays open with it.
+observed. #447 still tracks live typing, scrolling, and painting performance
+against a baseline, plus the rendered visual matrix and platform acceptance.
+#444 stays open until official Ghostty replaces the fork, and #443 stays
+open with it.
 
 ## Ownership
 

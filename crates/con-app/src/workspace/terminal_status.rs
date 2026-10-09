@@ -914,24 +914,10 @@ mod tests {
     }
 
     #[test]
-    fn rapid_program_status_stays_bounded_against_progress_updates() {
-        use std::time::Duration;
-
+    fn program_status_burst_keeps_one_record_and_latest_progress() {
         const UPDATES: u32 = 8_000;
         let now = Instant::now();
-        let mut baseline = SurfaceStatus::new(1);
-        let started = Instant::now();
-        for step in 0..UPDATES {
-            baseline.observe_progress(Some(con_core::terminal_status::Progress {
-                activity: con_core::terminal_status::Activity::Busy,
-                percent: Some((step % 101) as u8),
-            }));
-            let _ = baseline.status(now);
-        }
-        let baseline_time = started.elapsed();
-
         let mut surface = SurfaceStatus::new(1);
-        let started = Instant::now();
         let mut redraws = 0u32;
         for step in 0..UPDATES {
             if surface
@@ -951,15 +937,29 @@ mod tests {
             {
                 redraws += 1;
             }
-            let _ = surface.status(now);
-            let _ = surface.program_detail();
+            let status = surface.status(now).unwrap();
+            assert_eq!(status.surface_id, 1);
+            assert_eq!(status.activity, con_core::terminal_status::Activity::Busy);
+            assert_eq!(status.percent, Some((step % 101) as u8));
         }
-        let status_time = started.elapsed();
         assert_eq!(surface.program_records().len(), 1);
         assert_eq!(redraws, UPDATES);
         assert!(
-            status_time < Duration::from_secs(2),
-            "program status {status_time:?}, progress baseline {baseline_time:?}"
+            !surface
+                .observe_program_status(
+                    con_core::program_status::Incoming {
+                        state: con_core::program_status::State::Working,
+                        id: "build",
+                        kind: None,
+                        progress: Some(((UPDATES - 1) % 101) as u8),
+                        app: Some("cargo"),
+                        title: None,
+                        message: None,
+                    },
+                    now,
+                )
+                .unwrap()
         );
+        assert_eq!(surface.program_records().len(), 1);
     }
 }

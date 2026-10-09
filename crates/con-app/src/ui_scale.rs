@@ -93,7 +93,7 @@ fn icon_scale(font_scale: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{density_scale, font_scale, icon_scale};
+    use super::{density_scale, font_scale, icon_scale, ui_icon_px, ui_px};
 
     #[test]
     fn font_scale_preserves_default_and_clamps_extremes() {
@@ -117,17 +117,17 @@ mod tests {
     }
 
     #[test]
-    fn program_status_label_tracks_ui_font_between_12_and_24() {
-        let min_scale = 12.0 / 16.0;
-        let max_scale = 24.0 / 16.0;
-        assert_eq!(font_scale(12.0, 16.0, min_scale, max_scale), min_scale);
-        assert_eq!(font_scale(16.0, 16.0, min_scale, max_scale), 1.0);
-        assert_eq!(font_scale(24.0, 16.0, min_scale, max_scale), max_scale);
-        let label = 11.0;
-        assert!(label * max_scale > label);
-        assert!(label * min_scale < label);
-        assert!(icon_scale(max_scale) <= 1.35);
-        assert!(icon_scale(min_scale) >= 0.90);
+    fn theme_helpers_track_configured_ui_font_sizes() {
+        for (font_size, label_size, icon_size) in
+            [(12.0, 8.25, 14.4), (16.0, 11.0, 16.0), (24.0, 16.5, 21.6)]
+        {
+            let theme = gpui_component::Theme {
+                font_size: gpui::px(font_size),
+                ..Default::default()
+            };
+            assert_eq!(ui_px(&theme, 11.0), gpui::px(label_size));
+            assert!((ui_icon_px(&theme, 16.0).as_f32() - icon_size).abs() < 0.0001);
+        }
     }
 
     #[test]
