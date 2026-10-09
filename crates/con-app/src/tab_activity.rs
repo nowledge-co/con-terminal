@@ -118,17 +118,12 @@ impl TabActivity {
             .size(slot_size);
         if !active || (compact && visual.glyph().is_none()) {
             slot = slot.child(
-                div()
+                svg()
                     .debug_selector(|| "tab-status-brand".into())
-                    .flex_shrink_0()
+                    .path(icon)
                     .size(icon_size)
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size_full()
-                            .flex_shrink_0()
-                            .text_color(color),
-                    ),
+                    .flex_shrink_0()
+                    .text_color(color),
             );
         }
         if active {
@@ -140,14 +135,13 @@ impl TabActivity {
                 ActivityVisual::None => unreachable!(),
             };
             if let Some(glyph) = visual.glyph() {
-                let glyph_size = if compact { px(18.0) } else { size };
                 return slot
                     .child(
-                        div()
+                        svg()
                             .debug_selector(|| "tab-status-glyph".into())
-                            .flex_shrink_0()
-                            .size(glyph_size)
-                            .child(svg().path(glyph).size_full().text_color(activity_color)),
+                            .path(glyph)
+                            .size(if compact { px(18.0) } else { size })
+                            .text_color(activity_color),
                     )
                     .into_any_element();
             }
@@ -157,14 +151,21 @@ impl TabActivity {
                 slot_size.min(px(18.0))
             };
             slot = slot.child(
-                div()
-                    .debug_selector(|| "tab-status-ring".into())
+                self.register(activity_color, visual)
                     .absolute()
-                    .size(ring_size)
-                    .child(self.register(activity_color, visual).size_full()),
+                    .size(ring_size),
             );
         }
         slot.into_any_element()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rendered_ring_bounds(&self) -> Vec<Bounds<Pixels>> {
+        let markers = self.markers.borrow();
+        markers.rows[..markers.used]
+            .iter()
+            .filter_map(|marker| marker.bounds)
+            .collect()
     }
 
     fn register(&self, color: Hsla, visual: ActivityVisual) -> impl Styled + IntoElement {
