@@ -133,6 +133,15 @@ editor tab bar (eye/code phosphor icon) and on `Cmd+Shift+V`
   `delete_*`, `cut_selection`, `undo`) no-op, and editor mouse hit-testing is
   skipped while a preview is showing.
 
+## HTML Browser Action
+
+HTML tabs (`.html` or `.htm`, case-insensitive) show an "Open in browser"
+button at the right end of the merged editor tab bar. It opens the active
+file on disk in the default web browser without saving or changing the editor
+buffer. The button stays available when pane title bars are hidden. Failed
+launches display a notification. See [the action contract](html-browser-action.md)
+for platform behavior and validation scope.
+
 ## Image Viewer
 
 Files with an image extension (`png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,

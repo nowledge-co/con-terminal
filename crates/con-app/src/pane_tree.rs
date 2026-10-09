@@ -2587,6 +2587,10 @@ impl PaneTree {
 
         bar = bar.child(tab_list.horizontal_scrollbar(editor.file_tab_scroll_handle()));
 
+        if let Some(button) = crate::editor_browser::render_button(pane_id, view, cx) {
+            bar = bar.child(button);
+        }
+
         if editor.preview_available() {
             let preview_active = editor.preview_active();
             let preview_view = view.clone();
@@ -3487,7 +3491,7 @@ mod tests {
     use super::*;
     use ::core::prelude::v1::test;
 
-    struct EditorBarTestView(Entity<EditorView>);
+    struct EditorBarTestView(Entity<EditorView>, bool);
 
     impl Render for EditorBarTestView {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3500,13 +3504,87 @@ mod tests {
                 true,
                 false,
                 0.08,
-                false,
+                self.1,
                 no_op.clone(),
                 no_op.clone(),
                 no_op,
                 cx,
             ))
         }
+    }
+
+    #[gpui::test]
+    fn editor_browser_action_tracks_active_file_without_starting_pane_drag(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        for name in ["index.HTML", "README.md"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "test").unwrap();
+            editor.update(cx, |editor, cx| editor.open_file(path, cx));
+            cx.run_until_parked();
+        }
+        let (root, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone(), false));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("editor-browser-action").is_none());
+
+        editor.update(cx, |editor, cx| editor.activate_tab_and_emit(0, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let button = cx
+            .debug_bounds("editor-browser-action")
+            .expect("HTML action");
+        let bar = cx.debug_bounds("editor-merged-bar").unwrap();
+        let list = cx.debug_bounds("editor-file-tabs").unwrap();
+        assert!(button.left() >= list.right());
+        assert!(button.right() <= bar.right());
+        assert!(button.top() >= bar.top() && button.bottom() <= bar.bottom());
+        cx.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
+        let outside = button.center() + point(px(0.0), px(40.0));
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::default());
+        cx.update(|_, cx| assert!(!cx.has_active_drag()));
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+
+        root.update(cx, |root, cx| {
+            root.1 = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("editor-browser-action").is_some());
+        assert!(cx.debug_bounds("editor-pane-close").is_none());
+
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            cx.update(|window, cx| {
+                gpui_component::Theme::change(mode, Some(window), cx);
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let button = cx.debug_bounds("editor-browser-action").unwrap();
+            let bar = cx.debug_bounds("editor-merged-bar").unwrap();
+            assert!(button.top() >= bar.top() && button.bottom() <= bar.bottom());
+        }
+
+        editor.update(cx, |editor, cx| editor.activate_tab_and_emit(1, cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(cx.debug_bounds("editor-browser-action").is_none());
     }
 
     #[gpui::test]
@@ -3523,7 +3601,7 @@ mod tests {
             cx.run_until_parked();
         }
         let handle = editor.read_with(cx, |editor, _| editor.file_tab_scroll_handle().clone());
-        let (_, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone()));
+        let (_, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone(), false));
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);

@@ -58,6 +58,7 @@ dirs.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 url.workspace = true
+webbrowser = "1.2.4"
 markdown = { version = "1.0.0", features = ["serde"] }
 html5ever.workspace = true
 markup5ever_rcdom.workspace = true
