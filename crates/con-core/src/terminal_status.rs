@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::program_status::{self, Attention, Contribution, State, SurfaceProgramStatus};
 use crate::terminal_title::{TitleIndicator, title_indicator, without_indicator};
 
 const MOTION_LEASE: Duration = Duration::from_secs(3);
@@ -23,11 +24,15 @@ pub struct AgentIdentity {
     pub generation: u64,
 }
 
+/// Presentation severity. Later variants outrank earlier ones: unknown, idle,
+/// an unseen completion, then in-flight and attention states.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Activity {
     #[default]
     Unknown,
     Idle,
+    /// Program status reported `done` and this surface has not acknowledged it.
+    Done,
     Busy,
     Paused,
     NeedsInput,
@@ -40,6 +45,8 @@ pub enum Evidence {
     AgentTitle,
     Progress,
     BuiltinAgent,
+    /// OSC 7501. Explicit reports outrank heuristics for the scope they describe.
+    ProgramStatus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,8 +80,12 @@ pub struct SurfaceStatus {
     last_title: Option<String>,
     reported: Option<Report>,
     /// OSC 9;4 timeout belongs to the terminal backend. Clearing it must not
-    /// clear independent title observations.
+    /// clear independent title observations. An accepted OSC 7501 report
+    /// suppresses this heuristic until a full reset.
     progress: Option<Progress>,
+    /// Dropped with this incarnation. Pane and tab moves keep the entity, so
+    /// the records move with the terminal; close and replacement do not.
+    program: SurfaceProgramStatus,
 }
 
 impl SurfaceStatus {
@@ -86,6 +97,7 @@ impl SurfaceStatus {
             last_title: None,
             reported: None,
             progress: None,
+            program: SurfaceProgramStatus::new(),
         }
     }
 
@@ -176,23 +188,130 @@ impl SurfaceStatus {
         self.progress = progress;
     }
 
+    pub fn program_records(&self) -> Vec<program_status::ProgramRecord> {
+        self.program.records()
+    }
+
+    /// Returns whether the aggregated activity snapshot changed.
+    /// A stored message can change without that snapshot changing.
+    pub fn observe_program_status(
+        &mut self,
+        report: program_status::Incoming<'_>,
+        now: Instant,
+    ) -> Result<bool, program_status::Reject> {
+        self.with_program(now, |program| program.apply(report))
+    }
+
+    pub fn clear_program_status(
+        &mut self,
+        id: &str,
+        now: Instant,
+    ) -> Result<bool, program_status::Reject> {
+        self.with_program(now, |program| program.clear(id))
+    }
+
+    pub fn program_status_prompt(&mut self, now: Instant) -> bool {
+        self.with_program_lifecycle(now, SurfaceProgramStatus::on_shell_prompt)
+    }
+
+    pub fn program_status_process_exit(&mut self, now: Instant) -> bool {
+        self.with_program_lifecycle(now, SurfaceProgramStatus::on_process_exit)
+    }
+
+    pub fn program_status_full_reset(&mut self, now: Instant) -> bool {
+        self.with_program_lifecycle(now, SurfaceProgramStatus::on_full_reset)
+    }
+
+    pub fn program_status_soft_reset(&mut self, now: Instant) -> bool {
+        self.with_program_lifecycle(now, SurfaceProgramStatus::on_soft_reset)
+    }
+
+    pub fn program_status_alternate_screen(&mut self, active: bool, now: Instant) -> bool {
+        self.with_program_lifecycle(now, |program| program.on_alternate_screen(active))
+    }
+
+    /// A key delivered to this surface. Window focus is not acknowledgement.
+    pub fn acknowledge_program_status(&mut self, now: Instant) -> bool {
+        self.with_program_lifecycle(now, SurfaceProgramStatus::acknowledge)
+    }
+
     pub fn status(&self, now: Instant) -> Option<Status> {
+        let contribution = self.program.contribution();
+        let heuristic =
+            self.heuristic_status(now, contribution.protocol_seen, contribution.root_described);
+        prefer_program(self.program_status(contribution), heuristic)
+    }
+
+    fn with_program(
+        &mut self,
+        now: Instant,
+        change: impl FnOnce(&mut SurfaceProgramStatus) -> Result<bool, program_status::Reject>,
+    ) -> Result<bool, program_status::Reject> {
+        let before = self.status(now);
+        change(&mut self.program)?;
+        Ok(self.status(now) != before)
+    }
+
+    fn with_program_lifecycle(
+        &mut self,
+        now: Instant,
+        change: impl FnOnce(&mut SurfaceProgramStatus) -> bool,
+    ) -> bool {
+        let before = self.status(now);
+        change(&mut self.program);
+        self.status(now) != before
+    }
+
+    fn program_status(&self, contribution: Contribution) -> Option<Status> {
+        let attention = contribution.attention.or_else(|| {
+            contribution.root_described.then_some(Attention {
+                state: State::Idle,
+                progress: None,
+            })
+        })?;
+        let (activity, percent) = match attention.state {
+            State::Idle => (Activity::Idle, None),
+            State::Working => (Activity::Busy, attention.progress),
+            State::Done => (Activity::Done, None),
+            State::Blocked => (Activity::NeedsInput, attention.progress),
+            State::Error => (Activity::Error, None),
+        };
+        Some(Status {
+            surface_id: self.surface_id,
+            activity,
+            evidence: Evidence::ProgramStatus,
+            percent,
+        })
+    }
+
+    fn heuristic_status(
+        &self,
+        now: Instant,
+        suppress_progress: bool,
+        root_described: bool,
+    ) -> Option<Status> {
         let reported = self.reported.filter(|report| {
             report.evidence != Evidence::TitleMotion
                 || now.saturating_duration_since(report.observed_at) < MOTION_LEASE
         });
-        let title = reported.map(|report| Status {
-            surface_id: self.surface_id,
-            activity: report.activity,
-            evidence: report.evidence,
-            percent: None,
-        });
-        let progress = self.progress.map(|progress| Status {
-            surface_id: self.surface_id,
-            activity: progress.activity,
-            evidence: Evidence::Progress,
-            percent: progress.percent,
-        });
+        let title = (!root_described)
+            .then_some(reported)
+            .flatten()
+            .map(|report| Status {
+                surface_id: self.surface_id,
+                activity: report.activity,
+                evidence: report.evidence,
+                percent: None,
+            });
+        let progress = (!suppress_progress)
+            .then_some(self.progress)
+            .flatten()
+            .map(|progress| Status {
+                surface_id: self.surface_id,
+                activity: progress.activity,
+                evidence: Evidence::Progress,
+                percent: progress.percent,
+            });
         // Prefer actual progress to a title at equal activity. PTY writes do
         // not establish agent activity: a resident shell/TUI may never finish.
         [progress, title]
@@ -202,6 +321,16 @@ impl SurfaceStatus {
                 Some(previous) if previous.activity >= next.activity => Some(previous),
                 _ => Some(next),
             })
+    }
+}
+
+fn prefer_program(program: Option<Status>, heuristic: Option<Status>) -> Option<Status> {
+    match (program, heuristic) {
+        (Some(program), Some(heuristic)) if heuristic.activity > program.activity => {
+            Some(heuristic)
+        }
+        (Some(program), _) => Some(program),
+        (None, heuristic) => heuristic,
     }
 }
 
@@ -225,6 +354,7 @@ pub fn aggregate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program_status;
 
     fn claude(surface: &mut SurfaceStatus, generation: u64, sequence: u64) {
         surface.observe_identity(
@@ -385,5 +515,161 @@ mod tests {
         let other_busy = make(4, Activity::Busy, Some(21));
         assert_eq!(aggregate([busy, other_busy], None), Some(busy));
         assert_eq!(aggregate([busy, other_busy], Some(4)), Some(other_busy));
+    }
+
+    fn program<'a>(
+        state: program_status::State,
+        id: &'a str,
+        progress: Option<u8>,
+        message: Option<&'a str>,
+    ) -> program_status::Incoming<'a> {
+        program_status::Incoming {
+            state,
+            id,
+            kind: None,
+            progress,
+            app: None,
+            title: None,
+            message,
+        }
+    }
+
+    #[test]
+    fn explicit_program_status_outranks_heuristics_without_hiding_a_blocked_child() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        surface.observe_title(Some("⠋ task"), now);
+        surface.observe_title(Some("⠙ task"), now);
+        surface.observe_progress(Some(Progress {
+            activity: Activity::Error,
+            percent: Some(9),
+        }));
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::Progress);
+        assert!(
+            surface
+                .observe_program_status(program(program_status::State::Idle, "", None, None), now)
+                .unwrap()
+        );
+        let idle = surface.status(now).unwrap();
+        assert_eq!(idle.activity, Activity::Idle);
+        assert_eq!(idle.evidence, Evidence::ProgramStatus);
+        assert_eq!(idle.percent, None);
+        assert!(
+            surface
+                .observe_program_status(
+                    program(program_status::State::Blocked, "worker", Some(12), None),
+                    now,
+                )
+                .unwrap()
+        );
+        let blocked = surface.status(now).unwrap();
+        assert_eq!(blocked.activity, Activity::NeedsInput);
+        assert_eq!(blocked.percent, Some(12));
+        assert!(
+            !surface
+                .observe_program_status(
+                    program(
+                        program_status::State::Blocked,
+                        "worker",
+                        Some(12),
+                        Some("still")
+                    ),
+                    now,
+                )
+                .unwrap()
+        );
+        assert_eq!(surface.program_records().len(), 2);
+    }
+
+    #[test]
+    fn a_child_report_leaves_root_heuristics_until_the_root_is_described() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        surface.observe_title(Some("[ ! ] Action Required | task"), now);
+        surface
+            .observe_program_status(
+                program(program_status::State::Working, "job", Some(40), None),
+                now,
+            )
+            .unwrap();
+        assert_eq!(surface.status(now).unwrap().activity, Activity::NeedsInput);
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::AgentTitle);
+        surface
+            .observe_program_status(program(program_status::State::Idle, "", None, None), now)
+            .unwrap();
+        let described = surface.status(now).unwrap();
+        assert_eq!(described.activity, Activity::Busy);
+        assert_eq!(described.evidence, Evidence::ProgramStatus);
+        assert_eq!(described.percent, Some(40));
+    }
+
+    #[test]
+    fn an_explicit_record_wins_a_tie_with_title_motion() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        surface.observe_title(Some("⠋ task"), now);
+        surface.observe_title(Some("⠙ task"), now);
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::TitleMotion);
+        surface
+            .observe_program_status(
+                program(program_status::State::Working, "job", Some(40), None),
+                now,
+            )
+            .unwrap();
+        let status = surface.status(now).unwrap();
+        assert_eq!(status.activity, Activity::Busy);
+        assert_eq!(status.evidence, Evidence::ProgramStatus);
+        assert_eq!(status.percent, Some(40));
+    }
+
+    #[test]
+    fn full_reset_restores_progress_and_acknowledgement_stays_on_one_surface() {
+        let now = Instant::now();
+        let mut surface = SurfaceStatus::new(7);
+        let mut other = SurfaceStatus::new(8);
+        surface.observe_progress(Some(Progress {
+            activity: Activity::Busy,
+            percent: Some(50),
+        }));
+        assert!(surface.clear_program_status("", now).unwrap());
+        assert_eq!(surface.status(now), None);
+        surface
+            .observe_program_status(
+                program(program_status::State::Done, "", None, Some("ok")),
+                now,
+            )
+            .unwrap();
+        assert_eq!(surface.status(now).unwrap().activity, Activity::Done);
+        assert!(surface.acknowledge_program_status(now));
+        assert_eq!(surface.status(now).unwrap().activity, Activity::Idle);
+        assert!(!surface.program_records()[0].unseen);
+        other
+            .observe_program_status(
+                program(program_status::State::Error, "", None, Some("no")),
+                now,
+            )
+            .unwrap();
+        assert!(!other.program_status_soft_reset(now));
+        assert!(!other.program_status_alternate_screen(true, now));
+        assert_eq!(other.status(now).unwrap().activity, Activity::Error);
+        assert!(surface.program_status_full_reset(now));
+        assert_eq!(surface.status(now).unwrap().percent, Some(50));
+        assert_eq!(surface.status(now).unwrap().evidence, Evidence::Progress);
+        assert!(surface.program_records().is_empty());
+        assert_eq!(other.program_records().len(), 1);
+        other.observe_identity(
+            8,
+            1,
+            Some(AgentIdentity {
+                agent: "claude",
+                scope: IdentityScope::ForegroundJob,
+                generation: 1,
+            }),
+        );
+        assert_eq!(other.program_records().len(), 1);
+        drop(surface);
+        assert_eq!(other.status(now).unwrap().activity, Activity::Error);
+        let replaced = SurfaceStatus::new(8);
+        assert!(replaced.program_records().is_empty());
     }
 }
