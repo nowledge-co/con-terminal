@@ -28,6 +28,7 @@ use gpui_component::{
     ActiveTheme, ElementExt, InteractiveElementExt, Sizable,
     input::{Escape as InputEscape, Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu},
+    tooltip::Tooltip,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -74,6 +75,9 @@ pub struct SessionEntry {
     pub is_ssh: bool,
     pub needs_attention: bool,
     pub status: Option<Status>,
+    /// Plain text for the program-status record that owns `status`.
+    /// Empty when the indicator comes from a heuristic.
+    pub status_detail: Option<String>,
     pub terminal_titles: Vec<String>,
     pub icon: &'static str,
     pub has_user_label: bool,
@@ -1258,6 +1262,20 @@ impl SessionSidebar {
             card_inner = card_inner.child(titles);
         }
 
+        if let Some(detail) = session.status_detail.as_ref() {
+            card_inner = card_inner.child(
+                div()
+                    .debug_selector(|| "tab-hover-status".into())
+                    .flex_shrink_0()
+                    .mt(px(8.0))
+                    .text_size(ui_px(theme, 11.0))
+                    .line_height(ui_px(theme, 16.0))
+                    .text_color(theme.foreground)
+                    .w_full()
+                    .child(detail.clone()),
+            );
+        }
+
         let mut meta = div()
             .debug_selector(|| "tab-hover-meta".into())
             .flex_shrink_0()
@@ -1506,6 +1524,7 @@ impl SessionSidebar {
                 is_ssh: self.sessions[i].is_ssh,
                 needs_attention: self.sessions[i].needs_attention,
                 status: self.sessions[i].status,
+                status_detail: self.sessions[i].status_detail.clone(),
                 terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
@@ -1768,6 +1787,9 @@ impl SessionSidebar {
                 } else {
                     s.bg(inactive_hover_bg)
                 }
+            })
+            .when_some(session.status_detail.clone(), |row, detail| {
+                row.tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx))
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -2445,6 +2467,7 @@ mod tests {
                     is_ssh: true,
                     needs_attention: true,
                     status: None,
+                    status_detail: Some("build/test · blocked · permission · 40% — Apply?".into()),
                     terminal_titles: vec!["build".into(), "logs".into()],
                     icon: "phosphor/terminal.svg",
                     has_user_label: true,
@@ -2457,13 +2480,16 @@ mod tests {
         let card = cx.debug_bounds("tab-hover-card").expect("hover card");
         let name = cx.debug_bounds("tab-hover-name").expect("name");
         let path = cx.debug_bounds("tab-hover-path").expect("path");
+        let status = cx.debug_bounds("tab-hover-status").expect("status");
         let meta = cx.debug_bounds("tab-hover-meta").expect("metadata");
         assert_eq!(name.left() - card.left(), px(12.0));
         assert_eq!(card.right() - name.right(), px(12.0));
         assert_eq!(name.top() - card.top(), px(12.0));
         assert_eq!(card.bottom() - meta.bottom(), px(12.0));
         assert!(name.bottom() <= path.top());
-        assert!(path.bottom() < meta.top());
+        assert!(path.bottom() <= status.top());
+        assert!(status.bottom() <= meta.top());
+        assert_eq!(status.left() - card.left(), px(12.0));
         assert!(
             path.size.height > px(16.0),
             "long paths wrap instead of losing their tail"
@@ -2483,6 +2509,7 @@ mod tests {
                     is_ssh: false,
                     needs_attention: false,
                     status: None,
+                    status_detail: None,
                     terminal_titles: Vec::new(),
                     icon: "phosphor/terminal.svg",
                     has_user_label: false,

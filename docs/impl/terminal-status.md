@@ -28,8 +28,16 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   until RIS. An explicit record outranks title and progress heuristics for
   the scope it describes, and an idle root does not hide a blocked child.
   The activity snapshot uses the most severe record; its percentage is the
-  only one shown. A message that does not change that snapshot does not
-  require a redraw. These facts never authorize the harness or complete a
+  only one shown. Activity and detail text are retained separately: a changed
+  message invalidates the tooltip even when severity and percentage stay the
+  same; an identical detail does not invalidate it. The rail hover card and
+  the tab's tooltip identify the source pane and surface, and show the
+  winning record as plain text: inherited app, state, blocked kind, percentage, title,
+  and message. The words are the protocol values. The message is not
+  read as approval or failure. Bidirectional and other hidden formatting
+  characters are removed so they cannot reorder the label outside the
+  grid. Joiners needed for emoji and script shaping are preserved. No separate
+  notification is posted for a report. These facts never authorize the harness or complete a
   control-plane wait. The workspace drops the set when the terminal entity
   is closed or replaced.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous

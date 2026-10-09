@@ -192,6 +192,11 @@ impl SurfaceStatus {
         self.program.records()
     }
 
+    /// Text for the record that owns this surface's program-status indicator.
+    pub fn program_detail(&self) -> Option<String> {
+        self.program.detail_line()
+    }
+
     /// Returns whether the aggregated activity snapshot changed.
     /// A stored message can change without that snapshot changing.
     pub fn observe_program_status(

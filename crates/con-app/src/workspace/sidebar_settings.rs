@@ -647,6 +647,7 @@ impl ConWorkspace {
                 .get(&tab.summary_id)
                 .copied()
                 .flatten(),
+            status_detail: self.program_status_detail(tab.summary_id),
             terminal_titles: tab
                 .pane_tree
                 .all_surface_terminals()

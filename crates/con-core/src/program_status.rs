@@ -257,6 +257,80 @@ impl SurfaceProgramStatus {
         records
     }
 
+    /// Plain text for the record that owns the activity indicator.
+    ///
+    /// The words are the protocol's own state and kind. The message is
+    /// shown, not interpreted. Formatting characters that would reorder
+    /// text outside the terminal grid are removed. An acknowledged
+    /// completion that no longer raises the indicator is omitted, and an
+    /// idle root does not hide a blocked child.
+    pub fn detail_line(&self) -> Option<String> {
+        let record = self.winning_record()?;
+        let mut parts = Vec::new();
+        if let Some(app) = self.inherited_app(&record.id) {
+            parts.push(app.as_str().to_string());
+        }
+        if !record.id.is_root() {
+            let id = present_text(&record.id.path());
+            if !id.is_empty() {
+                parts.push(id);
+            }
+        }
+        parts.push(
+            match record.state {
+                State::Idle => "idle",
+                State::Working => "working",
+                State::Done => "done",
+                State::Blocked => "blocked",
+                State::Error => "error",
+            }
+            .to_string(),
+        );
+        if let Some(kind) = record.kind {
+            parts.push(
+                match kind {
+                    BlockedKind::Permission => "permission",
+                    BlockedKind::Question => "question",
+                    BlockedKind::Auth => "auth",
+                }
+                .to_string(),
+            );
+        }
+        if let Some(progress) = record.progress {
+            parts.push(format!("{progress}%"));
+        }
+        if let Some(title) = record.title.as_deref() {
+            let title = present_text(title);
+            if !title.is_empty() {
+                parts.push(title);
+            }
+        }
+        let mut line = parts.join(" · ");
+        if let Some(message) = record.message.as_deref() {
+            let message = present_text(message);
+            if !message.is_empty() {
+                line.push_str(" — ");
+                line.push_str(&message);
+            }
+        }
+        let line = truncate_chars(&line, 180);
+        (!line.is_empty()).then_some(line)
+    }
+
+    fn winning_record(&self) -> Option<&Record> {
+        let mut best: Option<(u8, u64, usize)> = None;
+        for (index, record) in self.records.iter().enumerate() {
+            let Some(rank) = attention_rank(record.state, record.unseen) else {
+                continue;
+            };
+            let candidate = (rank, record.updated, index);
+            if best.is_none_or(|current| (candidate.0, candidate.1) > (current.0, current.1)) {
+                best = Some(candidate);
+            }
+        }
+        best.map(|(_, _, index)| &self.records[index])
+    }
+
     /// Replace one record completely.
     ///
     /// Returns whether the activity contribution changed. An identical
@@ -425,6 +499,46 @@ fn attention_rank(state: State, unseen: bool) -> Option<u8> {
 
 fn is_token_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'+' | b'-')
+}
+
+fn present_text(value: &str) -> String {
+    let mut out = String::new();
+    let mut pending_space = false;
+    for ch in value.chars() {
+        if is_hidden_format(ch) {
+            continue;
+        }
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn is_hidden_format(ch: char) -> bool {
+    let code = u32::from(ch);
+    ch.is_control()
+        || matches!(code, 0x061C | 0x200B | 0x200E | 0x200F)
+        || (0x202A..=0x202E).contains(&code)
+        || (0x2060..=0x206F).contains(&code)
+        || code == 0xFEFF
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let count = value.chars().count();
+    if count <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 fn has_control(text: &str) -> bool {
@@ -906,5 +1020,45 @@ mod tests {
         let stored = &surface.records()[0];
         assert_eq!(stored.state, State::Working);
         assert_eq!(stored.message.as_deref(), Some(message));
+        assert_eq!(
+            surface.detail_line().as_deref(),
+            Some("cargo · working — error: not really, still working")
+        );
+    }
+
+    #[test]
+    fn the_detail_line_names_the_blocked_child_and_drops_hidden_formatting() {
+        let mut surface = SurfaceProgramStatus::new();
+        surface
+            .apply(incoming(State::Idle, "", None, None, Some("idle root")))
+            .unwrap();
+        surface
+            .apply(Incoming {
+                state: State::Blocked,
+                id: "build/test",
+                kind: Some(BlockedKind::Permission),
+                progress: Some(40),
+                app: Some("cargo"),
+                title: Some("Plan"),
+                message: Some("Apply?\u{202E}hidden"),
+            })
+            .unwrap();
+        assert_eq!(
+            surface.detail_line().as_deref(),
+            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
+        );
+        surface.acknowledge();
+        assert_eq!(
+            surface.detail_line().as_deref(),
+            Some("cargo · build/test · blocked · permission · 40% · Plan — Apply?hidden")
+        );
+    }
+
+    #[test]
+    fn detail_text_preserves_joiners_but_removes_direction_overrides() {
+        assert_eq!(
+            super::present_text("👩\u{200D}💻 ع\u{200C}رب\u{061C}\u{2060}\u{2067}"),
+            "👩\u{200D}💻 ع\u{200C}رب"
+        );
     }
 }
