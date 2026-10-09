@@ -4,6 +4,19 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.122`
+
+### Changed
+
+**Panes**
+
+- Editor panes show their files in one compact tab bar instead of a title bar
+  plus a separate tab row. The open file's name appears once, unsaved files
+  get a small dot, and unfocused panes dim their tabs so the focused one is
+  clear at a glance. _(PR
+  [#448](https://github.com/nowledge-co/con-terminal/pull/448) by
+  [@sunny0826](https://github.com/sunny0826))_
+
 ## `v0.1.0-beta.121` - 2026-10-08
 
 ### Changed
