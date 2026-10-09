@@ -6,7 +6,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
+/// Fork of ghostty-org/ghostty. Official main parses OSC 7501 inside
+/// libghostty-vt and then drops it in the full embedded runtime. This
+/// revision forwards those reports, prompt starts, and full resets when
+/// the embedder opts in. Replace this with ghostty-org/ghostty once that
+/// forward is merged upstream.
+const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// Pinned Ghostty revision. Bump together when updating either the
 /// macOS full-libghostty build or the Windows libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
@@ -29,11 +34,18 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// only add option 41, its callback typedef, and render lifecycle docs.
 /// `include/ghostty.h` and existing public layouts/signatures are unchanged.
 ///
+/// 2026-10-09 bump: wey-gu/ghostty `4e48c76e04` (ghostty-org/ghostty main
+/// `b115e456` plus the embedder forward). `include/ghostty.h` appends
+/// resize-window, program status, shell prompt, and full reset. The action
+/// union stays 24 bytes. libghostty-vt adds program status (option 46),
+/// semantic prompt (42), and reset (43). Cell, style, and screen layouts
+/// are unchanged. The private initial_output anchors still match.
+///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-const GHOSTTY_REV: &str = "e5077949834c3291a9434f88b38a381d8f5fedfc";
+const GHOSTTY_REV: &str = "4e48c76e04f20def67f86dc5376aa4f4ce34ba2d";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";

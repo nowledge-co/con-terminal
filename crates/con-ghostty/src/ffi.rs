@@ -386,6 +386,10 @@ pub enum ghostty_action_tag_e {
     GHOSTTY_ACTION_READONLY = 66,
     GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD = 67,
     GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW = 68,
+    GHOSTTY_ACTION_RESIZE_WINDOW = 69,
+    GHOSTTY_ACTION_PROGRAM_STATUS = 70,
+    GHOSTTY_ACTION_SHELL_PROMPT = 71,
+    GHOSTTY_ACTION_FULL_RESET = 72,
 }
 
 /// Action payload for DESKTOP_NOTIFICATION (OSC 9 and OSC 777).
@@ -415,6 +419,29 @@ pub struct ghostty_action_pwd_s {
 pub struct ghostty_action_progress_report_s {
     pub state: c_int,
     pub progress: i8,
+}
+
+/// Borrowed during `GHOSTTY_ACTION_PROGRAM_STATUS` only. Empty text has a
+/// non-NULL pointer and a length of 0.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_program_status_string_s {
+    pub ptr: *const u8,
+    pub len: usize,
+}
+
+/// Layout-compatible with `GhosttyTerminalProgramStatus`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ghostty_action_program_status_s {
+    pub size: usize,
+    pub state: c_int,
+    pub kind: c_int,
+    pub progress: i8,
+    pub id: ghostty_action_program_status_string_s,
+    pub app: ghostty_action_program_status_string_s,
+    pub title: ghostty_action_program_status_string_s,
+    pub message: ghostty_action_program_status_string_s,
 }
 
 #[repr(C)]
@@ -503,6 +530,7 @@ pub union ghostty_action_u {
     pub set_title: ghostty_action_set_title_s,
     pub pwd: ghostty_action_pwd_s,
     pub progress_report: ghostty_action_progress_report_s,
+    pub program_status: *const ghostty_action_program_status_s,
     pub command_finished: ghostty_action_command_finished_s,
     pub config_change: ghostty_action_config_change_s,
     pub start_search: ghostty_action_start_search_s,
@@ -524,6 +552,7 @@ pub struct ghostty_action_s {
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_action_desktop_notification_s>()];
 const _: [(); 16] = [(); std::mem::size_of::<ghostty_surface_message_childexited_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_progress_report_s>()];
+const _: [(); 88] = [(); std::mem::size_of::<ghostty_action_program_status_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_start_search_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_total_s>()];
 const _: [(); 8] = [(); std::mem::size_of::<ghostty_action_search_selected_s>()];
@@ -647,9 +676,11 @@ pub struct ghostty_runtime_config_s {
     pub confirm_read_clipboard_cb: ghostty_runtime_confirm_read_clipboard_cb,
     pub write_clipboard_cb: ghostty_runtime_write_clipboard_cb,
     pub close_surface_cb: ghostty_runtime_close_surface_cb,
+    /// Deliver OSC 7501 and answer the support query.
+    pub program_status: bool,
 }
 
-const _: [(); 64] = [(); std::mem::size_of::<ghostty_runtime_config_s>()];
+const _: [(); 72] = [(); std::mem::size_of::<ghostty_runtime_config_s>()];
 
 // ── C API functions ─────────────────────────────────────────
 

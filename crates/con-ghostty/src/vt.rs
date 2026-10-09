@@ -30,7 +30,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Cursor as IoCursor;
 use std::os::raw::{c_char, c_int, c_void};
 use std::sync::Arc;
@@ -39,6 +39,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, O
 use std::time::Instant;
 
 pub use crate::cursor::{Cursor, CursorStyle};
+use crate::program_events::{self, ProgramStatusEvent};
 use crate::stub::GhosttyScrollbar;
 use crate::{
     CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, DesktopNotification,
@@ -235,6 +236,9 @@ pub enum GhosttyTerminalOption {
     ClipboardWriteMaxBytes = 39,
     ResizePullScrollback = 40,
     RenderHold = 41,
+    SemanticPrompt = 42,
+    Reset = 43,
+    ProgramStatus = 46,
 }
 
 #[repr(C)]
@@ -744,6 +748,36 @@ pub struct GhosttyTerminalProgressReport {
     pub state: i32,
     pub progress: i8,
 }
+
+/// OSC 7501 report. Strings are borrowed for the callback only.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalProgramStatus {
+    pub size: usize,
+    pub state: i32,
+    pub kind: i32,
+    pub progress: i8,
+    pub id: GhosttyString,
+    pub app: GhosttyString,
+    pub title: GhosttyString,
+    pub message: GhosttyString,
+}
+
+/// OSC 133 event. Only `kind == 1` (prompt start) affects program status.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyTerminalSemanticPrompt {
+    pub size: usize,
+    pub kind: i32,
+    pub prompt_kind: i32,
+    pub has_exit_code: bool,
+    pub exit_code: i32,
+    pub command: GhosttyString,
+    pub error: GhosttyString,
+}
+
+const _: [(); 88] = [(); std::mem::size_of::<GhosttyTerminalProgramStatus>()];
+const _: [(); 56] = [(); std::mem::size_of::<GhosttyTerminalSemanticPrompt>()];
 
 const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: i32 = 0;
 
@@ -1946,6 +1980,7 @@ struct VtCallbackState {
     progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
     capture: Mutex<RenderCapture>,
+    program_events: Mutex<VecDeque<ProgramStatusEvent>>,
 }
 
 #[derive(Default)]
@@ -2568,6 +2603,7 @@ impl VtScreen {
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
             capture: Mutex::new(RenderCapture::default()),
+            program_events: Mutex::new(VecDeque::new()),
         });
         let userdata = callback_state.as_mut() as *mut VtCallbackState as *mut c_void;
         let rc =
@@ -2669,6 +2705,21 @@ impl VtScreen {
                 GhosttyTerminalOption::ProgressReport,
                 vt_progress_report_callback as *const c_void,
                 "PROGRESS_REPORT",
+            ),
+            (
+                GhosttyTerminalOption::ProgramStatus,
+                vt_program_status_callback as *const c_void,
+                "PROGRAM_STATUS",
+            ),
+            (
+                GhosttyTerminalOption::SemanticPrompt,
+                vt_semantic_prompt_callback as *const c_void,
+                "SEMANTIC_PROMPT",
+            ),
+            (
+                GhosttyTerminalOption::Reset,
+                vt_reset_callback as *const c_void,
+                "RESET",
             ),
         ];
         for (option, callback, label) in effect_callbacks {
@@ -3377,6 +3428,22 @@ impl VtScreen {
             .swap(false, Ordering::Relaxed)
     }
 
+    pub fn take_program_events(&self) -> Vec<ProgramStatusEvent> {
+        let inner = self.inner.lock();
+        inner
+            .callback_state
+            .program_events
+            .lock()
+            .drain(..)
+            .collect()
+    }
+
+    pub fn push_program_event(&self, event: ProgramStatusEvent) {
+        let inner = self.inner.lock();
+        let mut events = inner.callback_state.program_events.lock();
+        program_events::push_capped(&mut events, event);
+    }
+
     pub fn progress(&self) -> Option<TerminalProgress> {
         let inner = self.inner.lock();
         let state = &inner.callback_state;
@@ -3802,6 +3869,11 @@ impl VtScreen {
             }
             &inline[..len]
         };
+
+        if matches!(event.action, VtKeyAction::Press | VtKeyAction::Repeat) {
+            let mut events = callback_state.program_events.lock();
+            program_events::push_capped(&mut events, ProgramStatusEvent::Key);
+        }
 
         if !bytes.is_empty() {
             // Reserve the next host-write position before releasing the VT
@@ -4977,6 +5049,68 @@ unsafe extern "C" fn vt_progress_report_callback(
         encode_timed_terminal_progress(progress, terminal_progress_tick(&state.progress_epoch)),
         Ordering::Relaxed,
     );
+}
+
+unsafe extern "C" fn vt_program_status_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    report: *const GhosttyTerminalProgramStatus,
+) {
+    if userdata.is_null() || report.is_null() {
+        return;
+    }
+    let report = unsafe { &*report };
+    if report.size < std::mem::size_of::<GhosttyTerminalProgramStatus>() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let mut events = state.program_events.lock();
+    program_events::push_capped(
+        &mut events,
+        ProgramStatusEvent::Report {
+            state: report.state,
+            kind: report.kind,
+            progress: report.progress,
+            id: ghostty_string_owned(&report.id),
+            app: ghostty_string_owned(&report.app),
+            title: ghostty_string_owned(&report.title),
+            message: ghostty_string_owned(&report.message),
+        },
+    );
+}
+
+unsafe extern "C" fn vt_semantic_prompt_callback(
+    _terminal: GhosttyTerminal,
+    userdata: *mut c_void,
+    event: *const GhosttyTerminalSemanticPrompt,
+) {
+    if userdata.is_null() || event.is_null() {
+        return;
+    }
+    let event = unsafe { &*event };
+    // Prompt start is the only step that drops in-flight program status.
+    if event.size < std::mem::size_of::<i32>() * 2 + std::mem::size_of::<usize>() || event.kind != 1
+    {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let mut events = state.program_events.lock();
+    program_events::push_capped(&mut events, ProgramStatusEvent::Prompt);
+}
+
+unsafe extern "C" fn vt_reset_callback(_terminal: GhosttyTerminal, userdata: *mut c_void) {
+    if userdata.is_null() {
+        return;
+    }
+    let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let mut events = state.program_events.lock();
+    program_events::push_capped(&mut events, ProgramStatusEvent::FullReset);
+}
+
+fn ghostty_string_owned(value: &GhosttyString) -> String {
+    ghostty_string_bytes(value)
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .unwrap_or_default()
 }
 
 fn encode_terminal_progress(progress: Option<TerminalProgress>) -> u16 {
@@ -6295,6 +6429,22 @@ mod tests {
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["PROGRESS_REPORT"].as_i64(),
             Some(GhosttyTerminalOption::ProgressReport as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["SEMANTIC_PROMPT"].as_i64(),
+            Some(GhosttyTerminalOption::SemanticPrompt as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["RESET"].as_i64(),
+            Some(GhosttyTerminalOption::Reset as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalOption"]["values"]["PROGRAM_STATUS"].as_i64(),
+            Some(GhosttyTerminalOption::ProgramStatus as i64)
+        );
+        assert_eq!(
+            types["GhosttyTerminalProgramStatus"]["size"].as_u64(),
+            Some(std::mem::size_of::<GhosttyTerminalProgramStatus>() as u64)
         );
         assert_eq!(
             types["GhosttyTerminalOption"]["values"]["UNKNOWN_SEQUENCE"].as_i64(),
@@ -8667,6 +8817,68 @@ mod tests {
 
         screen.feed(b"\x1b]9;4;0\x07");
         assert_eq!(screen.progress(), None);
+    }
+
+    #[test]
+    fn vt_screen_delivers_program_status_prompt_and_reset() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let output_for_callback = output.clone();
+        let screen = VtScreen::new_with_write_pty(
+            80,
+            24,
+            None,
+            Some(Arc::new(move |bytes, _| {
+                output_for_callback.lock().extend_from_slice(bytes);
+                Ok(())
+            })),
+        )
+        .expect("create vt screen");
+
+        screen.feed(b"\x1b]7501;?\x07");
+        assert!(
+            output.lock().windows(6).any(|window| window == b"7501;?"),
+            "support query must be answered: {:?}",
+            String::from_utf8_lossy(&output.lock())
+        );
+
+        screen.feed(b"\x1b]7501;state=working:progress=40:id=build\x07");
+        assert_eq!(
+            screen.take_program_events(),
+            vec![ProgramStatusEvent::Report {
+                state: 1,
+                kind: 0,
+                progress: 40,
+                id: "build".into(),
+                app: String::new(),
+                title: String::new(),
+                message: String::new(),
+            }]
+        );
+
+        screen.feed(b"\x1b]133;A\x07");
+        assert_eq!(
+            screen.take_program_events(),
+            vec![ProgramStatusEvent::Prompt]
+        );
+
+        screen.feed(b"\x1bc");
+        let events = screen.take_program_events();
+        assert!(
+            events.contains(&ProgramStatusEvent::Report {
+                state: 5,
+                kind: 0,
+                progress: -1,
+                id: String::new(),
+                app: String::new(),
+                title: String::new(),
+                message: String::new(),
+            }),
+            "RIS clears program status: {events:?}"
+        );
+        assert!(
+            events.contains(&ProgramStatusEvent::FullReset),
+            "RIS is its own event: {events:?}"
+        );
     }
 
     #[test]

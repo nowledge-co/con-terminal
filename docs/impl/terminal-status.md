@@ -14,7 +14,10 @@ tool, satisfy a shell wait, or replace the harness runtime tracker.
   means unknown, not completion. OSC 9;4 expiry remains backend-owned.
   PTY writes and long-lived shell commands do not establish agent activity.
 - `con-core::program_status` stores OSC 7501 records for one surface.
-  Ghostty parses and validates; Con does not keep a second parser. Each
+  Ghostty parses and validates; Con does not keep a second parser. macOS
+  receives the report, prompt start, and full reset as embedder actions from
+  the pinned Ghostty fork. Windows and Linux receive the same facts from
+  libghostty-vt callbacks. The support query is answered only on those paths. Each
   report replaces its record completely. `app` is read from the nearest
   ancestor id, and `build` does not cover `builder`. At most 256 records
   are kept, evicting the least recently updated. Nothing expires on a timer.

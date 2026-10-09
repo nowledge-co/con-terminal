@@ -381,6 +381,8 @@ impl SessionShared {
             duration,
         });
         self.needs_render.store(true, Ordering::Release);
+        self.screen
+            .push_program_event(crate::ProgramStatusEvent::ProcessExit);
         self.wake();
     }
 }
@@ -598,6 +600,10 @@ impl LinuxPtySession {
 
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.shared.screen.progress()
+    }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.shared.screen.take_program_events()
     }
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {

@@ -260,6 +260,9 @@ impl GhosttyTerminal {
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         None
     }
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        Vec::new()
+    }
     pub fn is_alive(&self) -> bool {
         false
     }

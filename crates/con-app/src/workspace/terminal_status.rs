@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Weak;
 use std::time::{Duration, Instant};
 
+use con_core::program_status::{self, Incoming};
 use con_core::terminal_status::{AgentIdentity, IdentityScope, SurfaceStatus};
-use con_ghostty::GhosttyTerminal;
 use con_ghostty::process::ProcessInfo;
+use con_ghostty::{GhosttyTerminal, ProgramStatusEvent};
 
 use super::*;
 
@@ -196,12 +197,21 @@ impl ConWorkspace {
         for tab in &self.tabs {
             for terminal in tab.pane_tree.all_surface_terminals() {
                 let id = terminal.entity_id().as_u64();
-                let Some(instance) = terminal
-                    .surface_instance(cx)
-                    .filter(|_| terminal.is_alive(cx))
-                else {
+                let Some(instance) = terminal.surface_instance(cx) else {
                     continue;
                 };
+                if !terminal.is_alive(cx) {
+                    if let Some(surface) = state.surfaces.get_mut(&id) {
+                        let events = surface
+                            .instance
+                            .upgrade()
+                            .map(|terminal| terminal.take_program_events())
+                            .unwrap_or_default();
+                        apply_program_events(&mut surface.status, events, now);
+                        live.insert(id);
+                    }
+                    continue;
+                }
                 live.insert(id);
                 let query = Query::for_terminal(&terminal, cx);
                 if state
@@ -350,6 +360,12 @@ impl ConWorkspace {
                 surface
                     .status
                     .observe_identity(id, state.sequence + 1, identity);
+                let events = surface
+                    .instance
+                    .upgrade()
+                    .map(|terminal| terminal.take_program_events())
+                    .unwrap_or_default();
+                apply_program_events(&mut surface.status, events, now);
                 surface.status.observe_title(title.as_deref(), now);
                 surface
                     .status
@@ -527,10 +543,87 @@ impl ConWorkspace {
     }
 }
 
+fn apply_program_events(status: &mut SurfaceStatus, events: Vec<ProgramStatusEvent>, now: Instant) {
+    for event in events {
+        match event {
+            ProgramStatusEvent::Report {
+                state,
+                kind,
+                progress,
+                id,
+                app,
+                title,
+                message,
+            } => {
+                if state == 5 {
+                    let _ = status.clear_program_status(&id, now);
+                    continue;
+                }
+                let Some(state) = program_state(state) else {
+                    continue;
+                };
+                let _ = status.observe_program_status(
+                    Incoming {
+                        state,
+                        id: &id,
+                        kind: program_kind(kind),
+                        progress: (progress >= 0).then_some(progress as u8),
+                        app: nonempty(&app),
+                        title: nonempty(&title),
+                        message: nonempty(&message),
+                    },
+                    now,
+                );
+            }
+            ProgramStatusEvent::Prompt => {
+                status.program_status_prompt(now);
+            }
+            ProgramStatusEvent::ProcessExit => {
+                status.program_status_process_exit(now);
+            }
+            ProgramStatusEvent::FullReset => {
+                status.program_status_full_reset(now);
+            }
+            ProgramStatusEvent::Key => {
+                status.acknowledge_program_status(now);
+            }
+        }
+    }
+}
+
+fn program_state(state: i32) -> Option<program_status::State> {
+    Some(match state {
+        0 => program_status::State::Idle,
+        1 => program_status::State::Working,
+        2 => program_status::State::Done,
+        3 => program_status::State::Blocked,
+        4 => program_status::State::Error,
+        _ => return None,
+    })
+}
+
+fn program_kind(kind: i32) -> Option<program_status::BlockedKind> {
+    Some(match kind {
+        1 => program_status::BlockedKind::Permission,
+        2 => program_status::BlockedKind::Question,
+        3 => program_status::BlockedKind::Auth,
+        _ => return None,
+    })
+}
+
+fn nonempty(text: &str) -> Option<&str> {
+    (!text.is_empty()).then_some(text)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use con_ghostty::ProgramStatusEvent;
+
     use super::{
-        AgentCliDetectionState, ProcessInfo, Query, Surface, SurfaceStatus, Weak, native_agent,
+        AgentCliDetectionState, ProcessInfo, Query, Surface, SurfaceStatus, Weak,
+        apply_program_events, native_agent,
     };
 
     fn process(pid: u32, name: &str) -> ProcessInfo {
@@ -640,5 +733,59 @@ mod tests {
         assert!(results[0].is_empty());
         assert!(results[1].contains(&process));
         assert!(results[2].contains(&process));
+    }
+
+    #[test]
+    fn program_events_follow_the_protocol_lifetime() {
+        let now = Instant::now();
+        let mut status = SurfaceStatus::new(3);
+        apply_program_events(
+            &mut status,
+            vec![ProgramStatusEvent::Report {
+                state: 1,
+                kind: 0,
+                progress: 40,
+                id: "build".into(),
+                app: String::new(),
+                title: String::new(),
+                message: String::new(),
+            }],
+            now,
+        );
+        assert_eq!(
+            status.status(now).map(|status| status.activity),
+            Some(con_core::terminal_status::Activity::Busy)
+        );
+        apply_program_events(&mut status, vec![ProgramStatusEvent::Prompt], now);
+        assert_eq!(status.status(now), None);
+        apply_program_events(
+            &mut status,
+            vec![ProgramStatusEvent::Report {
+                state: 2,
+                kind: 0,
+                progress: -1,
+                id: String::new(),
+                app: String::new(),
+                title: String::new(),
+                message: "ready".into(),
+            }],
+            now,
+        );
+        assert_eq!(
+            status.status(now).map(|status| status.evidence),
+            Some(con_core::terminal_status::Evidence::ProgramStatus)
+        );
+        apply_program_events(&mut status, vec![ProgramStatusEvent::Key], now);
+        let acknowledged = status.status(now).expect("acknowledged root stays idle");
+        assert_eq!(
+            acknowledged.activity,
+            con_core::terminal_status::Activity::Idle
+        );
+        assert_eq!(
+            acknowledged.evidence,
+            con_core::terminal_status::Evidence::ProgramStatus
+        );
+        apply_program_events(&mut status, vec![ProgramStatusEvent::FullReset], now);
+        assert_eq!(status.program_records(), Vec::new());
     }
 }

@@ -249,6 +249,7 @@ impl RenderSession {
         accept_vt_replies.store(true, Ordering::Release);
 
         let vt_for_pty = vt.clone();
+        let vt_for_exit = vt.clone();
         let transcript_for_pty = transcript.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell_cwd = resolve_shell_cwd(cwd);
@@ -266,6 +267,9 @@ impl RenderSession {
                     transcript_for_pty.lock().push(text.as_ref());
                     vt_for_pty.feed(bytes);
                     wake_for_pty();
+                },
+                move || {
+                    vt_for_exit.push_program_event(crate::ProgramStatusEvent::ProcessExit);
                 },
             )
             .context("ConPty::spawn failed")?;
@@ -920,6 +924,10 @@ impl RenderSession {
 
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.vt.progress()
+    }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.vt.take_program_events()
     }
 
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {

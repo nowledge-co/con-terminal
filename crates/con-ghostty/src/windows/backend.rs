@@ -343,6 +343,14 @@ impl WindowsGhosttyTerminal {
     pub fn progress(&self) -> Option<crate::TerminalProgress> {
         self.inner.lock().as_ref().and_then(RenderSession::progress)
     }
+
+    pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(RenderSession::take_program_events)
+            .unwrap_or_default()
+    }
     pub fn set_clipboard_write_enabled(&self, enabled: bool) -> Result<(), String> {
         if let Some(session) = self.inner.lock().as_ref() {
             session.set_clipboard_write_enabled(enabled)?;

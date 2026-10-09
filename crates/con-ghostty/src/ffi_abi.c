@@ -81,6 +81,10 @@ ASSERT_ACTION(GHOSTTY_ACTION_SEARCH_SELECTED, 65);
 ASSERT_ACTION(GHOSTTY_ACTION_READONLY, 66);
 ASSERT_ACTION(GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD, 67);
 ASSERT_ACTION(GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW, 68);
+ASSERT_ACTION(GHOSTTY_ACTION_RESIZE_WINDOW, 69);
+ASSERT_ACTION(GHOSTTY_ACTION_PROGRAM_STATUS, 70);
+ASSERT_ACTION(GHOSTTY_ACTION_SHELL_PROMPT, 71);
+ASSERT_ACTION(GHOSTTY_ACTION_FULL_RESET, 72);
 
 /* Integer payloads decoded by terminal.rs and ghostty_view.rs. */
 ASSERT_ACTION(GHOSTTY_MOUSE_VISIBLE, 0);
@@ -127,6 +131,10 @@ _Static_assert(sizeof(((ghostty_action_u *)0)->mouse_shape) == sizeof(int),
 _Static_assert(sizeof(((ghostty_action_u *)0)->mouse_visibility) == sizeof(int),
                "ghostty mouse-visibility payload changed layout");
 _Static_assert(sizeof(ghostty_action_u) == 24, "ghostty_action_u changed layout");
+_Static_assert(offsetof(ghostty_runtime_config_s, program_status) == 64,
+               "ghostty program_status flag changed offset");
+_Static_assert(sizeof(ghostty_action_program_status_s) == 88,
+               "ghostty program status report changed layout");
 _Static_assert(sizeof(ghostty_action_s) == 32, "ghostty_action_s changed layout");
 _Static_assert(sizeof(ghostty_string_s) == 24, "ghostty_string_s changed layout");
 _Static_assert(offsetof(ghostty_string_s, ptr) == 0,
@@ -213,7 +221,7 @@ _Static_assert(sizeof(ghostty_clipboard_confirm_s) == 48,
                "ghostty clipboard confirmation changed layout");
 _Static_assert(offsetof(ghostty_clipboard_confirm_s, name) == 32,
                "ghostty clipboard confirmation name changed offset");
-_Static_assert(sizeof(ghostty_runtime_config_s) == 64,
+_Static_assert(sizeof(ghostty_runtime_config_s) == 72,
                "ghostty runtime config changed layout");
 _Static_assert(offsetof(ghostty_runtime_config_s, read_clipboard_cb) == 32,
                "ghostty runtime clipboard callback changed offset");

@@ -22,6 +22,7 @@ use std::time::Instant;
 use dispatch::Queue;
 use parking_lot::Mutex;
 
+use crate::program_events::{self, ProgramStatusEvent};
 use crate::{
     CLIPBOARD_WRITE_LIMIT_BYTES, ClipboardWritePolicy, TERMINAL_PROGRESS_TIMEOUT, TerminalProgress,
     clipboard_write_policy, ffi,
@@ -610,6 +611,7 @@ pub struct TerminalState {
     /// queued events: only the final shape/visibility in a tick matters.
     pub mouse_shape: Option<i32>,
     pub mouse_visible: Option<bool>,
+    program_events: VecDeque<ProgramStatusEvent>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -637,6 +639,7 @@ impl Default for TerminalState {
             hovered_osc8_link_url: None,
             scrollbar: None,
             mouse_shape: None,
+            program_events: VecDeque::new(),
             mouse_visible: None,
         }
     }
@@ -866,6 +869,7 @@ impl GhosttyApp {
             confirm_read_clipboard_cb: Some(confirm_read_clipboard_callback),
             write_clipboard_cb: Some(write_clipboard_callback),
             close_surface_cb: Some(close_surface_callback),
+            program_status: true,
         });
 
         let app = unsafe { ffi::ghostty_app_new(&*runtime_config as *const _, config.0) };
@@ -1180,6 +1184,15 @@ impl GhosttyTerminal {
         state.input_generation = state.input_generation.saturating_add(1);
     }
 
+    fn note_program_key(&self) {
+        let mut state = self.state.lock();
+        program_events::push_capped(&mut state.program_events, ProgramStatusEvent::Key);
+    }
+
+    pub fn take_program_events(&self) -> Vec<ProgramStatusEvent> {
+        self.state.lock().program_events.drain(..).collect()
+    }
+
     /// Trigger a draw (ghostty renders into its Metal layer).
     pub fn draw(&self) {
         unsafe { ffi::ghostty_surface_draw(self.surface) }
@@ -1344,6 +1357,7 @@ impl GhosttyTerminal {
     /// Send a key event to the terminal. Returns true if ghostty consumed it.
     pub fn send_key(&self, key: ffi::ghostty_input_key_s) -> bool {
         self.mark_input_observed();
+        self.note_program_key();
         unsafe { ffi::ghostty_surface_key(self.surface, key) }
     }
 
@@ -1354,6 +1368,7 @@ impl GhosttyTerminal {
     /// For writing command strings with newlines, use `write_to_pty` instead.
     pub fn send_text(&self, text: &str) {
         self.mark_input_observed();
+        self.note_program_key();
         if let Ok(cstr) = CString::new(text) {
             let len = cstr.as_bytes().len(); // excludes NUL, matches original text
             unsafe { ffi::ghostty_surface_text(self.surface, cstr.as_ptr(), len) }
@@ -1915,6 +1930,7 @@ fn mark_child_exited_state(state: &Mutex<TerminalState>) {
     s.needs_render = true;
     s.is_busy = false;
     s.last_command_finished_input_generation = s.input_generation;
+    program_events::push_capped(&mut s.program_events, ProgramStatusEvent::ProcessExit);
 }
 
 unsafe extern "C" fn action_callback(
@@ -1944,6 +1960,14 @@ unsafe extern "C" fn action_callback(
 
         handle_surface_action(&state, action)
     }
+}
+
+fn copy_program_status_string(value: ffi::ghostty_action_program_status_string_s) -> String {
+    if value.ptr.is_null() || value.len == 0 {
+        return String::new();
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// Decode surface actions separately from target resolution. Pointer actions
@@ -2139,6 +2163,43 @@ unsafe fn handle_surface_action(
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_RING_BELL => {
                 state.lock().bell_pending = true;
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PROGRAM_STATUS => {
+                let report = action.action.program_status;
+                if report.is_null() {
+                    return false;
+                }
+                let report = &*report;
+                if report.size < std::mem::size_of::<ffi::ghostty_action_program_status_s>() {
+                    return false;
+                }
+                let mut state = state.lock();
+                program_events::push_capped(
+                    &mut state.program_events,
+                    ProgramStatusEvent::Report {
+                        state: report.state,
+                        kind: report.kind,
+                        progress: report.progress,
+                        id: copy_program_status_string(report.id),
+                        app: copy_program_status_string(report.app),
+                        title: copy_program_status_string(report.title),
+                        message: copy_program_status_string(report.message),
+                    },
+                );
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_SHELL_PROMPT => {
+                let mut state = state.lock();
+                program_events::push_capped(&mut state.program_events, ProgramStatusEvent::Prompt);
+                true
+            }
+            ffi::ghostty_action_tag_e::GHOSTTY_ACTION_FULL_RESET => {
+                let mut state = state.lock();
+                program_events::push_capped(
+                    &mut state.program_events,
+                    ProgramStatusEvent::FullReset,
+                );
                 true
             }
             ffi::ghostty_action_tag_e::GHOSTTY_ACTION_PROGRESS_REPORT => {
@@ -2393,6 +2454,7 @@ mod tests {
     #[test]
     #[allow(clippy::arc_with_non_send_sync)] // Match the UI-thread-only production API.
     fn mark_child_exited_state_clears_busy_and_marks_input_finished() {
+        use crate::ProgramStatusEvent;
         let state = Arc::new(Mutex::new(TerminalState {
             is_busy: true,
             input_generation: 7,
@@ -2407,6 +2469,10 @@ mod tests {
         assert!(state.needs_render);
         assert!(!state.is_busy);
         assert_eq!(state.last_command_finished_input_generation, 7);
+        assert_eq!(
+            state.program_events.iter().collect::<Vec<_>>(),
+            vec![&ProgramStatusEvent::ProcessExit]
+        );
     }
 
     #[test]

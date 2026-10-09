@@ -233,6 +233,10 @@ impl TerminalProgress {
     }
 }
 
+mod program_events;
+
+pub use program_events::ProgramStatusEvent;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod transcript;
 

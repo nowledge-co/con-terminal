@@ -188,17 +188,19 @@ impl PreparedConPty {
         self.input_writer.clone()
     }
 
-    pub(crate) fn spawn<F>(
+    pub(crate) fn spawn<F, E>(
         self,
         command_line: &str,
         cwd: Option<&Path>,
         size: PtySize,
         on_output: F,
+        on_eof: E,
     ) -> Result<ConPty>
     where
         F: FnMut(&[u8]) + Send + 'static,
+        E: FnOnce() + Send + 'static,
     {
-        ConPty::spawn_prepared(self, command_line, cwd, size, on_output)
+        ConPty::spawn_prepared(self, command_line, cwd, size, on_output, on_eof)
     }
 }
 
@@ -255,27 +257,31 @@ impl ConPty {
 
     /// Spawn a child shell, wire up ConPTY, and start a background reader
     /// that calls `on_output` for each chunk of bytes the shell writes.
-    pub fn spawn<F>(
+    pub fn spawn<F, E>(
         command_line: &str,
         cwd: Option<&Path>,
         size: PtySize,
         on_output: F,
+        on_eof: E,
     ) -> Result<Self>
     where
         F: FnMut(&[u8]) + Send + 'static,
+        E: FnOnce() + Send + 'static,
     {
-        Self::prepare()?.spawn(command_line, cwd, size, on_output)
+        Self::prepare()?.spawn(command_line, cwd, size, on_output, on_eof)
     }
 
-    fn spawn_prepared<F>(
+    fn spawn_prepared<F, E>(
         prepared: PreparedConPty,
         command_line: &str,
         cwd: Option<&Path>,
         size: PtySize,
         on_output: F,
+        on_eof: E,
     ) -> Result<Self>
     where
         F: FnMut(&[u8]) + Send + 'static,
+        E: FnOnce() + Send + 'static,
     {
         let PreparedConPty {
             input_read,
@@ -375,7 +381,7 @@ impl ConPty {
         let thread = OwnedHandle::from_handle(process_info.hThread);
 
         let pcon = Arc::new(Mutex::new(Some(pending_pcon.take())));
-        let output_thread = spawn_output_reader(output_read, on_output);
+        let output_thread = spawn_output_reader(output_read, on_output, on_eof);
 
         // Duplicate the process handle so the watcher thread can wait
         // on it independently of the `OwnedHandle` stored on `Self`.
@@ -607,9 +613,14 @@ fn build_startup_info(hpcon: HPCON) -> Result<(STARTUPINFOEXW, Vec<u8>)> {
     Ok((startup_info, buffer))
 }
 
-fn spawn_output_reader<F>(read_handle: OwnedHandle, mut on_output: F) -> JoinHandle<()>
+fn spawn_output_reader<F, E>(
+    read_handle: OwnedHandle,
+    mut on_output: F,
+    on_eof: E,
+) -> JoinHandle<()>
 where
     F: FnMut(&[u8]) + Send + 'static,
+    E: FnOnce() + Send + 'static,
 {
     thread::Builder::new()
         .name("conpty-output-reader".into())
@@ -658,6 +669,7 @@ where
                 );
                 on_output(&buf[..bytes_read as usize]);
             }
+            on_eof();
             // OwnedHandle::Drop closes the handle.
         })
         .expect("conpty reader thread spawn failed")
