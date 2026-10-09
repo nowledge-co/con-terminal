@@ -83,7 +83,6 @@ async fn acp_empty_error_and_timeout_preserve_original_reason_in_display() {
 #[cfg(unix)]
 #[tokio::test]
 async fn acp_load_uses_verified_local_identity_without_requiring_list_membership() {
-    use std::os::unix::fs::PermissionsExt;
     let root = std::env::temp_dir().join(format!("cursor-acp-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let exe = root.join("cursor-agent");
@@ -93,7 +92,10 @@ async fn acp_load_uses_verified_local_identity_without_requiring_list_membership
         } else {
             ""
         };
-        std::fs::write(&exe, format!(r##"#!/bin/sh
+        install_script(
+            &exe,
+            &format!(
+                r##"#!/bin/sh
 read -r init
 echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{"loadSession":true}}}}}}'
 read -r load
@@ -104,8 +106,9 @@ case "$load" in
     ;;
   *) exit 1 ;;
 esac
-"##)).unwrap();
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+"##
+            ),
+        );
         let result = with_acp_fallback(
             Some(Err(anyhow::anyhow!("Interrupted — no completed turns"))),
             || {
@@ -133,22 +136,23 @@ esac
 #[cfg(unix)]
 #[tokio::test]
 async fn acp_replay_updates_arriving_after_the_result_are_drained() {
-    use std::os::unix::fs::PermissionsExt;
     let root = std::env::temp_dir().join(format!("cursor-acp-drain-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let exe = root.join("cursor-agent");
     // The server answers session/load first, then keeps streaming the replay:
     // the export must collect the late update instead of truncating at the
     // result.
-    std::fs::write(&exe, r##"#!/bin/sh
+    install_script(
+        &exe,
+        r##"#!/bin/sh
 read -r init
 echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
 read -r load
 echo '{"jsonrpc":"2.0","id":2,"result":{}}'
 sleep 0.1
 echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Late turn"}}}}'
-"##).unwrap();
-    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+"##,
+    );
     let export = export_acp(
         &exe,
         &root,
@@ -167,4 +171,29 @@ echo '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fixture"
         export.records
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+fn install_script(path: &std::path::Path, contents: &str) {
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::fs::PermissionsExt;
+    for attempt in 0..6 {
+        let write = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(path)?;
+            file.write_all(contents.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+            Ok(())
+        })();
+        match write {
+            Ok(()) => return,
+            Err(error) if error.kind() == ErrorKind::ExecutableFileBusy && attempt < 5 => {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    20 * u64::try_from(attempt + 1).unwrap(),
+                ));
+            }
+            Err(error) => panic!("install script: {error}"),
+        }
+    }
 }
