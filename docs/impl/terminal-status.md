@@ -10,10 +10,26 @@ native delivery on all three backends, using the maintainer-authorized public
 Ghostty pin on macOS. That bridge includes queued-report cleanup and stable
 surface-incarnation validation; Con uses bounded synchronous IO ingress.
 The bridge is not yet in official Ghostty; #444 tracks its replacement.
-Native platform, SSH/tmux and performance acceptance remains in #447. A linked
-build or parser test alone is not live protocol acceptance. #443 stays open
-until the remaining acceptance is recorded; support is not shipped until the
-transport is merged and released.
+#451 is merged and the beta.122 notes include the feature. A linked build or
+parser test alone is not live protocol acceptance.
+
+SSH and tmux forwarding was exercised on 2026-10-09 on this macOS workstation
+(OpenSSH 9.9, tmux 3.7c). A local pty master answered `OSC 7501 ; ?` and
+recorded the bytes. OpenSSH carried the query, the report, and the reply with
+`BEL` and `ST`, with and without a remote pty. tmux delivered a wrapped
+sequence from a visible pane while `allow-passthrough` was `on`, including
+when tmux ran on the far side of SSH. The capability reply returned only to
+the pane that owned terminal input. With two panes on screen together, the
+inactive pane's wrapped query reached the outer terminal and the reply arrived
+in the active pane; the inactive pane timed out. A hidden pane with `on`
+delivered nothing. A hidden pane with `all` delivered the query and the
+report, and the reply did not return to that pane. Raw sequences were
+discarded in every tmux configuration tried, including `all`. The user-facing
+steps are in `docs/program-status.md`.
+
+Still open for #447: a physical Windows or Linux window, a performance
+comparison against the baseline, and the rest of the visual matrix. #443
+stays open until that acceptance is recorded.
 
 ## Ownership
 

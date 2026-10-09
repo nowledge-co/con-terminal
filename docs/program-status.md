@@ -68,12 +68,41 @@ Reports belong to the surface that receives them, regardless of whether the
 program runs locally or over SSH. They are presentation hints, not proof of
 which remote process is running.
 
-SSH carries terminal bytes, but a multiplexer can consume escape sequences.
-Inside tmux, use its supported terminal-passthrough mechanism and enable
-passthrough only if you trust the programs running there. Both reports and
-capability replies must reach the right program; merely seeing shell output
-does not verify this round trip. A program should continue to work normally
-when status support is absent.
+OpenSSH forwards a report and the capability reply in both directions. No
+extra SSH option is required. On OpenSSH 9.9 this held for `BEL` and `ST`,
+on a remote pty and on a pipe-only session.
+
+tmux discards a raw `OSC 7501` sequence. In tmux 3.7, `allow-passthrough all`
+still discards it: that value only means the passthrough envelope is allowed
+from a pane that is not on screen. For panes you trust, enable the envelope:
+
+```
+set -g allow-passthrough on
+```
+
+Wrap every sequence. Write each `ESC` inside the sequence twice, and place the
+sequence between the tmux introducer and a final `ST`:
+
+```sh
+printf '\033Ptmux;\033\033]7501;state=working:id=build:progress=25\007\033\\'
+```
+
+The capability query uses the same wrapping. The reply comes back only to the
+pane that owns terminal input. On tmux 3.7c, with `allow-passthrough on`, that
+active pane's wrapped query and wrapped report reached the outer terminal as
+ordinary `OSC 7501`, and the reply returned to it. The same round trip worked
+when that tmux session was reached over SSH.
+
+A visible pane that is not the active one can still send the wrapped sequence
+out. The reply is delivered to the active pane, so discovery from the inactive
+pane times out. A pane that is not on screen also receives no reply. With
+`allow-passthrough on`, that hidden pane's envelope does not go out at all.
+`all` lets its report reach the outer terminal, and the reply still goes to
+the active pane. A program outside the active pane must keep working when no
+reply comes back.
+
+Seeing ordinary shell output does not show that this round trip works. A
+program should continue to work normally when status support is absent.
 
 For implementation details and acceptance coverage, see
 [Terminal status presentation](impl/terminal-status.md).
