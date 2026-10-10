@@ -107,3 +107,10 @@ opt-level = 1
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Temporary reviewed presentation fix; remove after a compatible official release.
+# See docs/design/native-terminal-presentation.md for provenance and exit criteria.
+[patch.crates-io]
+gpui-pre = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }
+gpui-pre-apple = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }
+gpui-pre-macos = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }

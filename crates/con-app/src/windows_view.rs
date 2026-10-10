@@ -969,34 +969,15 @@ impl GhosttyView {
                 let scale_factor = self.scale_factor.max(f32::EPSILON);
                 let image_width = frame_width as f32 / scale_factor;
                 let image_height = frame_height as f32 / scale_factor;
-                if let (Some(bounds), Some(background)) = (self.pane_bounds, gap_background) {
-                    let content_width = f32::from(bounds.size.width);
-                    let content_height = f32::from(bounds.size.height);
-                    if image_width + 0.5 < content_width {
-                        children.push(
-                            div()
-                                .absolute()
-                                .left(px(image_width))
-                                .right_0()
-                                .top_0()
-                                .bottom_0()
-                                .bg(background)
-                                .into_any_element(),
-                        );
-                    }
-                    if image_height + 0.5 < content_height {
-                        children.push(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .w(px(image_width.min(content_width).max(0.0)))
-                                .top(px(image_height))
-                                .bottom_0()
-                                .bg(background)
-                                .into_any_element(),
-                        );
-                    }
-                }
+                children.push(
+                    crate::terminal_geometry::retained_frame_gaps(
+                        size(px(image_width), px(image_height)),
+                        gap_background,
+                    )
+                    .absolute()
+                    .size_full()
+                    .into_any_element(),
+                );
                 image.w(px(image_width)).h(px(image_height))
             } else {
                 // `ObjectFit::Fill` keeps each image quad exactly equal

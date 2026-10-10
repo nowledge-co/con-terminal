@@ -1676,6 +1676,7 @@ impl GhosttyView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         let showed_layout_fallback = self.show_layout_fallback();
         self.ensure_initialized(bounds, window, cx);
         self.update_frame(bounds, window);
@@ -1802,6 +1803,7 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>, window: &Window) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         // `last_bounds` is Con's layout cache, not Ghostty's protocol state.
         // Pane-local surfaces can be hidden, focused, and resized without
         // repainting every sibling; always verify the embedded surface still
@@ -1816,6 +1818,7 @@ impl GhosttyView {
         }
         let started = perf_trace_enabled().then(Instant::now);
         self.last_bounds = Some(bounds);
+        window.request_native_surface_presentation_sync();
         self.sync_native_backing_background();
 
         // Keep libghostty's framebuffer/PTY metadata ahead of every AppKit
@@ -1973,6 +1976,7 @@ impl GhosttyView {
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         let showed_layout_fallback = self.show_layout_fallback();
         #[cfg(target_os = "macos")]
         {

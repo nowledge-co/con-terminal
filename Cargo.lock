@@ -2975,8 +2975,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e87a42bb37c7cb4e76dd1ac0ce88851e46e976e0373a47ab3e0757abffee54d"
+source = "git+https://github.com/wey-gu/zed?rev=655ce8bbc10e1f1ef3d1d5bdf5a3405008157792#655ce8bbc10e1f1ef3d1d5bdf5a3405008157792"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3047,8 +3046,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00053551517815ab169fda28fff78dbebf2712722593c7671c511785cb3f79d5"
+source = "git+https://github.com/wey-gu/zed?rev=655ce8bbc10e1f1ef3d1d5bdf5a3405008157792#655ce8bbc10e1f1ef3d1d5bdf5a3405008157792"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -3173,8 +3171,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-macos"
 version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a43af845b260b09393e923c4f1e1a67a10fcfc847b4815192bbfd02ed9fe725"
+source = "git+https://github.com/wey-gu/zed?rev=655ce8bbc10e1f1ef3d1d5bdf5a3405008157792#655ce8bbc10e1f1ef3d1d5bdf5a3405008157792"
 dependencies = [
  "accesskit",
  "accesskit_macos",

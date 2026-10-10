@@ -87,6 +87,8 @@ mod terminal_context_menu;
 mod terminal_env;
 #[cfg(any(target_os = "macos", test))]
 mod terminal_file_link;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod terminal_geometry;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;
 mod terminal_keys;
