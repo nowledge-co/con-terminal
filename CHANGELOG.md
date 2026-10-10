@@ -4,6 +4,19 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.124` - Unreleased
+
+### Changed
+
+**Vertical tabs**
+
+- Compact tabs have smaller, balanced selection fills without smaller click
+  or drag targets. Shell tabs use clearer terminal-window icons, and Search
+  uses a simpler magnifying glass. Expanded tabs have lighter selection fills
+  and tighter spacing; their titles and directory labels scale with UI font size.
+- Tab context menus use the system UI font instead of inheriting the terminal's
+  monospace font.
+
 ## `v0.1.0-beta.123` - 2026-10-10
 
 ### Changed

@@ -155,6 +155,27 @@ It should feel like the best place to do terminal-native work in the AI era.
 
 ## Core Principles
 
+### Vertical Tab Navigation
+
+- Compact tabs retain a 40px interaction target inside the 44px rail. Their
+  visible selection fill is a centered 32px square with 7px rounding, leaving
+  breathing room without making click or drag targets smaller.
+- Use the Phosphor terminal-window glyph for generic shell tabs. Preserve
+  task-specific tab icons and replace them with the existing semantic status
+  glyph or progress ring when program status requires it.
+- Selection is a low-opacity foreground fill, not a nearly opaque panel or
+  an accent stripe. Custom tab colors retain their existing semantics. Text
+  and SVG foregrounds remain solid to avoid rough edges on translucent chrome.
+- Expanded rows use a 40px baseline height with UI-font-aware growth. Titles
+  use the system UI font; directory metadata uses the configured mono font.
+  Both text lines scale with the UI setting and stay vertically inside the row.
+- Keep rename/close controls hover-only and preserve the existing tooltip,
+  keyboard, middle-click and drag-reorder behavior. Do not add animation or
+  terminal-state reads to style-only navigation updates.
+- Set the UI font on tab navigation containers, not only their text labels:
+  deferred context menus inherit their trigger's text style. Keep directory
+  metadata and code explicitly monospace.
+
 ### 1. Terminal First
 
 The terminal is the main stage.

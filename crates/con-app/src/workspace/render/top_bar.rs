@@ -1018,8 +1018,10 @@ impl ConWorkspace {
                     let has_right = index + 1 < tab_count;
                     let has_others = tab_count > 1;
                     let tab_id = session_id;
-                    tab_el.child(tab_content).context_menu(
-                        move |menu: gpui_component::menu::PopupMenu, _window, _cx| {
+                    tab_el
+                        .font_family(theme.font_family.clone())
+                        .child(tab_content)
+                        .context_menu(move |menu: gpui_component::menu::PopupMenu, _window, _cx| {
                             use crate::tab_context_menu::{TabMenuOptions, build_tab_context_menu};
                             let w = weak.clone();
                             build_tab_context_menu(
@@ -1097,8 +1099,7 @@ impl ConWorkspace {
                                     current_color: tab_color,
                                 },
                             )
-                        },
-                    )
+                        })
                 });
                 visual_pos += 1;
 
