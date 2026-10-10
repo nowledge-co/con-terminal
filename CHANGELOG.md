@@ -23,8 +23,23 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Terminal pane edges**
+
+- Keep Windows resize fills aligned with the current pane size rather than
+  the previous frame, without stretching terminal text. macOS native terminal
+  edges now use the same physical-pixel alignment as pane dividers. Neither
+  change overrides Terminal Glass or widens the dividers. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **macOS**
 
+- Keep transparent terminal panes and surrounding panels in sync during resize
+  and show/hide transitions, preventing brief flashes of the background without
+  turning off transparency or blur. Ordinary terminal updates retain their
+  asynchronous rendering path. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
 - Avoid overlapping terminal backgrounds when creating tabs or split panes,
   or switching tabs with Terminal Glass enabled. Rapid tab switching no longer
   leaves a delayed hide for a tab that has already become active again. _(PR

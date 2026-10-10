@@ -66,6 +66,12 @@ members = [
   up by moving a git rev, and `[patch]` from Zed's repo does not apply because the
   crate there is named `gpui`, not `gpui-pre`. Wait for a `gpui-pre` snapshot with a
   matching gpui-component release, or move both back to git sources together.
+- The maintainer approved a temporary exception for native macOS presentation
+  on 2026-10-10. Three `gpui-pre` 0.3.7 packages resolve together from one public,
+  immutable Git revision; the copied registry manifests preserve the existing
+  component/type graph. This is not a general permission to fork dependencies.
+  [Provenance and removal criteria](../design/native-terminal-presentation.md)
+  track the upstream submission and compatible official replacement.
 - Ghostty source is fetched by `con-ghostty/build.rs` when needed, unless an override source directory is provided for local development.
 
 ## Platform boundary
