@@ -14,8 +14,12 @@ con is still pre-release, so entries may group related beta work while the produ
   or drag targets. Shell tabs use clearer terminal-window icons, and Search
   uses a simpler magnifying glass. Expanded tabs have lighter selection fills
   and tighter spacing; their titles and directory labels scale with UI font size.
+  _(PR [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
 - Tab context menus use the system UI font instead of inheriting the terminal's
-  monospace font.
+  monospace font. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ### Fixed
 
@@ -23,7 +27,9 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Avoid overlapping terminal backgrounds when creating tabs or split panes,
   or switching tabs with Terminal Glass enabled. Rapid tab switching no longer
-  leaves a delayed hide for a tab that has already become active again.
+  leaves a delayed hide for a tab that has already become active again. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.123` - 2026-10-10
 
