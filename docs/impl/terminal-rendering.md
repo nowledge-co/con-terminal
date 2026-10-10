@@ -48,6 +48,56 @@ tab renders and shows only the focused pane until the zoom shortcut is
 pressed again. This keeps it equivalent to tmux-style zoom while avoiding
 fake resize, detach, or process lifecycle events.
 
+### Transparent Surface Handoff
+
+On macOS, a pane's initial GPUI fallback and its embedded Ghostty surface are
+alternative background owners, never overlapping layers. Surface creation and
+reveal happen during canvas prepaint; the canvas decides whether it still needs
+the fallback **after** that layout update. An earlier `Render` snapshot can be
+stale by paint time and would veil a newly visible terminal for one frame.
+
+Tab activation exchanges native visibility at the pane tree's
+`on_children_prepainted` boundary, after incoming layout and before GPUI paint.
+Until that boundary the outgoing tab remains visible; the handoff hides every
+inactive tab and reveals only the latest active tab. Do not retain outgoing translucent
+surfaces until the next frame: alpha accumulates behind the incoming terminal,
+and a delayed hide can target a tab that has already been reactivated. This
+does not change the portable renderers' visibility scheduling or the old-macOS
+opaque-backing compatibility path.
+
+### Pane Edges During Chrome Resize
+
+Native macOS terminal frames must use the same physical-pixel endpoints as
+GPUI's painted dividers and content masks. `terminal_geometry` matches the
+pinned renderer's nearest-pixel, half-toward-zero snapping; a GPUI scene test
+compares that helper with real painted quads at multiple display scales. When
+upgrading GPUI, keep that compatibility test rather than assuming AppKit and
+GPUI round fractional split bounds identically.
+
+Windows retains a readback image at its original logical size while the next
+D3D frame is pending. Fill only the uncovered right/bottom regions, using the
+canvas's **current paint bounds**, not the pane bounds cached by an earlier
+prepaint. Do not stretch old terminal pixels, stack a whole-pane translucent
+fill behind the image, or ignore small gaps with a logical-pixel tolerance.
+The two fill regions must not overlap, so glass keeps its configured alpha.
+
+These rules remove local coverage defects; they do not make independent native
+compositors atomic. Fast chrome toggles still need physical acceptance. Keep
+the existing thin divider and transparency/blur policies unchanged; no timer,
+opaque terminal matte, or thicker divider is part of this fix. Linux's GPUI
+cell-rendering path already fills the current pane bounds and is unchanged.
+
+The isolated macOS transaction-presentation experiment passed the reporter's
+reproduction. Con requests that same frame-scoped mechanism only after a real
+native geometry change or a pending tab visibility handoff. Requests coalesce,
+survive an unavailable drawable, and restore AppKit's previous presentation mode
+after drawing. They neither schedule extra frames nor add a GPU completion wait.
+Ordinary terminal input, output, and scrolling keep asynchronous presentation.
+The compatible public snapshot is pinned in Cargo; see
+[Native Terminal Presentation](../design/native-terminal-presentation.md) for
+provenance, verification, and the official-package replacement condition.
+Windows/Linux do not request this macOS synchronization.
+
 ## Runtime stack
 
 ```text

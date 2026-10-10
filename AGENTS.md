@@ -17,6 +17,8 @@ for the agent. Use workspace manifests for current packages and versions.
   authorization forward without asking again.
 - Report checks performed, verification gaps, and the actual delivery state:
   local, committed, pushed, merged, or released.
+- Do not trigger paid review bots (`bugbot run` or `@codex review`). Review
+  existing feedback and perform local verification without those triggers.
 
 ## Git conventions
 
@@ -107,7 +109,16 @@ the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
   OSC 7501 has a maintainer-authorized temporary exception (2026-10-09):
   Ghostty may use the public `wey-gu/ghostty` fork at the immutable
   revision in `con-ghostty/build.rs`. Track official replacement in #444;
-  this exception does not permit local patches or other fork dependencies.
+  this exception does not permit local patches or unrelated fork dependencies.
+  Native macOS presentation has a separate maintainer-authorized temporary
+  exception (2026-10-10): a public GPUI fork may carry the reviewed frame-scoped
+  presentation fix at an immutable revision. Preserve the compatible snapshot
+  and component graph; do not replace it with an incompatible Zed Git package.
+  Record the upstream submission and official replacement condition in
+  `docs/design/native-terminal-presentation.md` before production integration.
+  This is not authorization for local patches, `3pp/` dependencies, or unrelated
+  upstream changes. Return to official packages once a compatible release
+  contains the fix.
   Consult sources matching the resolved version; use upstream or installed
   package sources when a reference checkout is absent or stale.
 - macOS embeds full libghostty; Windows/Linux use libghostty-vt with platform

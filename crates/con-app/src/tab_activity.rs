@@ -107,7 +107,7 @@ impl TabActivity {
             .unwrap_or(ActivityVisual::None);
         let active = visual != ActivityVisual::None;
         let slot_size = if compact { px(32.0) } else { size };
-        let icon_size = if compact { size.min(px(14.0)) } else { size };
+        let icon_size = if compact { size.min(px(18.0)) } else { size };
         let mut slot = div()
             .debug_selector(|| "tab-status-slot".into())
             .relative()

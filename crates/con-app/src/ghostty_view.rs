@@ -47,6 +47,21 @@ use crate::ui_scale::mono_icon_px;
 // Actions owned by the embedded terminal view.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
+/// The native surface can become visible during prepaint. Decide fallback
+/// coverage after layout, never from the earlier Render snapshot.
+fn terminal_surface_canvas(
+    fallback_color: Hsla,
+    layout: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> bool,
+    paint_input: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App),
+) -> Canvas<bool> {
+    canvas(layout, move |bounds, show_fallback, window, cx| {
+        if show_fallback {
+            window.paint_quad(fill(bounds, fallback_color));
+        }
+        paint_input(bounds, window, cx);
+    })
+}
+
 #[cfg(target_os = "macos")]
 use cocoa::appkit::NSWindowOrderingMode;
 #[cfg(target_os = "macos")]
@@ -1661,6 +1676,7 @@ impl GhosttyView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         let showed_layout_fallback = self.show_layout_fallback();
         self.ensure_initialized(bounds, window, cx);
         self.update_frame(bounds, window);
@@ -1787,6 +1803,7 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>, window: &Window) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         // `last_bounds` is Con's layout cache, not Ghostty's protocol state.
         // Pane-local surfaces can be hidden, focused, and resized without
         // repainting every sibling; always verify the embedded surface still
@@ -1801,6 +1818,7 @@ impl GhosttyView {
         }
         let started = perf_trace_enabled().then(Instant::now);
         self.last_bounds = Some(bounds);
+        window.request_native_surface_presentation_sync();
         self.sync_native_backing_background();
 
         // Keep libghostty's framebuffer/PTY metadata ahead of every AppKit
@@ -1958,6 +1976,7 @@ impl GhosttyView {
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
         let showed_layout_fallback = self.show_layout_fallback();
         #[cfg(target_os = "macos")]
         {
@@ -2852,7 +2871,6 @@ impl Render for GhosttyView {
         let handoff_menu_entry_enabled = self.handoff_menu_entry_enabled.get();
         let ui_font = cx.theme().font_family.clone();
         let entity = cx.entity().downgrade();
-        let show_layout_fallback = self.show_layout_fallback();
         let terminal_find = self.terminal_find.clone();
 
         let layout_fallback_bg = self
@@ -2880,13 +2898,6 @@ impl Render for GhosttyView {
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    div
-                }
-            })
-            .map(|div| {
-                if show_layout_fallback {
-                    div.bg(layout_fallback_bg)
-                } else {
                     div
                 }
             })
@@ -3159,19 +3170,23 @@ impl Render for GhosttyView {
                 cx.notify();
             }))
             .child(
-                canvas(
+                terminal_surface_canvas(
+                    layout_fallback_bg,
                     {
                         let entity = entity.clone();
                         move |bounds, window, cx| {
-                            let _ = entity.update(cx, |view: &mut GhosttyView, _cx| {
-                                view.on_layout(bounds, window, _cx);
-                            });
+                            entity
+                                .update(cx, |view: &mut GhosttyView, cx| {
+                                    view.on_layout(bounds, window, cx);
+                                    view.show_layout_fallback()
+                                })
+                                .unwrap_or(false)
                         }
                     },
                     {
                         let focus = input_focus.clone();
                         let entity = entity.clone();
-                        move |_bounds, _state, window, cx| {
+                        move |_bounds, window, cx| {
                             window.handle_input(
                                 &focus,
                                 GhosttyInputHandler {
@@ -3264,6 +3279,153 @@ mod tests {
         font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    struct TerminalCanvasTestView {
+        pending: std::rc::Rc<std::cell::Cell<bool>>,
+        complete_in_layout: bool,
+        fallback_color: gpui::Hsla,
+        input_paints: std::rc::Rc<std::cell::Cell<usize>>,
+    }
+
+    struct TabHandoffTestView;
+
+    impl Render for TabHandoffTestView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let outgoing = std::rc::Rc::new(std::cell::Cell::new(true));
+            let incoming = std::rc::Rc::new(std::cell::Cell::new(false));
+            let incoming_layout = incoming.clone();
+            let outgoing_paint = outgoing.clone();
+            div()
+                .size_full()
+                .child(
+                    super::terminal_surface_canvas(
+                        gpui::hsla(0.1, 0.2, 0.3, 0.85),
+                        move |_, _, _| {
+                            incoming_layout.set(true);
+                            false
+                        },
+                        move |_, _, _| {
+                            assert!(incoming.get(), "incoming layout must precede paint");
+                            assert!(!outgoing_paint.get(), "outgoing must retire before paint");
+                        },
+                    )
+                    .size_full(),
+                )
+                .on_children_prepainted(move |_, _, _| outgoing.set(false))
+        }
+    }
+
+    #[gpui::test]
+    fn tab_handoff_boundary_runs_after_incoming_layout_and_before_paint(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_, _| TabHandoffTestView);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(window.painted_quads().is_empty());
+        });
+    }
+
+    impl Render for TerminalCanvasTestView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let pending = self.pending.clone();
+            let complete = self.complete_in_layout;
+            let input_paints = self.input_paints.clone();
+            super::terminal_surface_canvas(
+                self.fallback_color,
+                move |_, _, _| {
+                    if complete {
+                        pending.set(false);
+                    }
+                    pending.get()
+                },
+                move |_, _, _| input_paints.set(input_paints.get() + 1),
+            )
+            .size_full()
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_canvas_does_not_cover_a_surface_revealed_in_the_same_frame(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let pending = std::rc::Rc::new(std::cell::Cell::new(true));
+        let input_paints = std::rc::Rc::new(std::cell::Cell::new(0));
+        let fallback_color = gpui::hsla(0.1, 0.2, 0.3, 0.85);
+        let (_view, cx) = cx.add_window_view({
+            let pending = pending.clone();
+            let input_paints = input_paints.clone();
+            move |_, _| TerminalCanvasTestView {
+                pending,
+                complete_in_layout: true,
+                fallback_color,
+                input_paints,
+            }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(
+                !window
+                    .painted_quads()
+                    .iter()
+                    .any(|quad| { quad.background == gpui::Background::from(fallback_color) })
+            );
+        });
+        assert!(!pending.get());
+        assert!(input_paints.get() > 0);
+    }
+
+    #[gpui::test]
+    fn terminal_canvas_retains_fallback_until_initialization_succeeds(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let fallback_color = gpui::hsla(0.1, 0.2, 0.3, 0.65);
+        let (view, cx) = cx.add_window_view(move |_, _| TerminalCanvasTestView {
+            pending: std::rc::Rc::new(std::cell::Cell::new(true)),
+            complete_in_layout: false,
+            fallback_color,
+            input_paints: std::rc::Rc::new(std::cell::Cell::new(0)),
+        });
+        for alpha in [0.65, 1.0] {
+            view.update(cx, |view, cx| {
+                view.fallback_color.a = alpha;
+                cx.notify();
+            });
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                let fallback = window
+                    .painted_quads()
+                    .into_iter()
+                    .filter(|quad| {
+                        quad.background
+                            == gpui::Background::from(gpui::Hsla {
+                                a: alpha,
+                                ..fallback_color
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(fallback.len(), 1);
+                assert!(fallback[0].bounds.size.width.0 > 0.0);
+                assert!(fallback[0].bounds.size.height.0 > 0.0);
+            });
+        }
+        view.update(cx, |view, cx| {
+            view.complete_in_layout = true;
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(window.painted_quads().is_empty());
+        });
+    }
 
     #[test]
     fn terminal_copy_prefers_selection_then_full_osc8_target() {

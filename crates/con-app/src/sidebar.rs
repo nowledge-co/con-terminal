@@ -5,7 +5,7 @@
 //!
 //! Visual rules
 //! ---
-//! - Active row: elevated pill bg + foreground text. **No accent
+//! - Active row: low-opacity selection fill + foreground text. **No accent
 //!   bar.** A single, unambiguous selection cue is enough; tab accent
 //!   colors render as the row surface itself at active/inactive alpha.
 //! - Action affordances (rename pencil, close X) are hover-only on
@@ -46,9 +46,11 @@ pub const PANEL_MAX_WIDTH: f32 = 360.0;
 #[allow(dead_code)]
 const HOVER_CARD_WIDTH: f32 = 240.0;
 /// Per-row height in pinned mode (two-line layout — name + subtitle).
-const ROW_HEIGHT: f32 = 44.0;
+const ROW_HEIGHT: f32 = 40.0;
 /// Square session tile size, leaving 2px on each side of the rail.
 const RAIL_ICON_SIZE: f32 = RAIL_WIDTH - 4.0;
+/// Selection is inset from the hit target; dragging still uses the full tile.
+const RAIL_SELECTION_SIZE: f32 = 32.0;
 /// Vertical gap between rail icons. Used to compute the icon's
 /// y-center for hover-card anchoring.
 const RAIL_ICON_GAP: f32 = 2.0;
@@ -973,7 +975,7 @@ impl SessionSidebar {
             ))
             .child(rail_icon_button(
                 "tab-sidebar-rail-search",
-                "phosphor/file-magnifying-glass.svg",
+                "phosphor/magnifying-glass.svg",
                 search_color,
                 theme,
                 cx.listener(|_, _, _, cx| {
@@ -1021,9 +1023,7 @@ impl SessionSidebar {
             let is_active = i == self.active_session;
             // Selection must read without the accent stripe. Overlay the shared
             // base rather than making the same background more opaque.
-            let active_bg = theme
-                .foreground
-                .opacity(if theme.is_dark() { 0.24 } else { 0.12 });
+            let active_bg = sidebar_selection_fill(theme);
             let hover_bg = theme.foreground.opacity(0.04);
             // Drop indicator — a 2px primary-color line above this
             // pill if drop_slot == i, or below the last pill if
@@ -1077,16 +1077,26 @@ impl SessionSidebar {
                 .justify_center()
                 .size(px(RAIL_ICON_SIZE))
                 .flex_shrink_0()
-                .rounded(px(8.0))
                 .cursor_pointer()
-                .bg(pill_bg)
-                .hover(move |s| {
-                    if is_active {
-                        s
-                    } else {
-                        s.bg(inactive_hover_bg)
-                    }
-                })
+                .group(SharedString::from(format!("rail-tab-group-{i}")))
+                .child(
+                    div()
+                        .debug_selector(|| "sidebar-session-selection".into())
+                        .absolute()
+                        .size(px(RAIL_SELECTION_SIZE))
+                        .rounded(px(7.0))
+                        .bg(pill_bg)
+                        .group_hover(
+                            SharedString::from(format!("rail-tab-group-{i}")),
+                            move |s| {
+                                if is_active {
+                                    s
+                                } else {
+                                    s.bg(inactive_hover_bg)
+                                }
+                            },
+                        ),
+                )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })),
@@ -1115,8 +1125,8 @@ impl SessionSidebar {
                     tab_bounds.borrow_mut().push(bounds);
                 })
                 .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
-                    session.icon,
-                    ui_icon_px(theme, 16.0),
+                    sidebar_tab_icon(session.icon),
+                    ui_icon_px(theme, 18.0),
                     if is_active {
                         theme.foreground
                     } else {
@@ -1364,10 +1374,10 @@ impl SessionSidebar {
                     .items_center()
                     .justify_between()
                     .h(px(34.0))
-                    .px(px(12.0))
+                    .px(px(16.0))
                     .child(
                         div()
-                            .text_size(px(10.5))
+                            .text_size(crate::ui_scale::ui_px(cx.theme(), 10.5))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(header_color)
                             .font_family(header_font)
@@ -1580,7 +1590,7 @@ impl SessionSidebar {
         let drop_above = drop_slot == Some(i) && drag_in_sidebar;
         let drop_below = i + 1 == total && drop_slot == Some(total) && drag_in_sidebar;
 
-        let row_h = ROW_HEIGHT;
+        let row_h = ui_px(theme, ROW_HEIGHT).max(px(40.0)).as_f32();
 
         let label_block: AnyElement = if is_renaming {
             if let Some(input) = rename_input {
@@ -1612,8 +1622,9 @@ impl SessionSidebar {
                     div()
                         .overflow_hidden()
                         .truncate()
-                        .text_size(px(12.5))
-                        .line_height(px(16.0))
+                        .debug_selector(|| "sidebar-session-name".into())
+                        .text_size(ui_px(theme, 12.5))
+                        .line_height(ui_px(theme, 16.0))
                         .font_family(sys)
                         .text_color(fg)
                         .when(is_active, |s| s.font_weight(FontWeight::MEDIUM))
@@ -1624,8 +1635,9 @@ impl SessionSidebar {
                     div()
                         .overflow_hidden()
                         .truncate()
-                        .text_size(px(10.5))
-                        .line_height(px(14.0))
+                        .debug_selector(|| "sidebar-session-directory".into())
+                        .text_size(ui_px(theme, 10.5))
+                        .line_height(ui_px(theme, 14.0))
                         .font_family(mono)
                         .text_color(sub_fg)
                         .child(sub.to_owned()),
@@ -1691,7 +1703,7 @@ impl SessionSidebar {
                         cx,
                     )
                 })
-                .unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
+                .unwrap_or_else(|| sidebar_selection_fill(theme))
         } else {
             accent_color
                 .map(|color| {
@@ -1703,7 +1715,7 @@ impl SessionSidebar {
                 })
                 .unwrap_or(gpui::transparent_black())
         };
-        let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
+        let hover_bg = theme.foreground.opacity(0.04);
         let inactive_hover_bg = accent_color
             .map(|color| {
                 crate::tab_colors::tab_accent_surface_hsla(
@@ -1724,10 +1736,10 @@ impl SessionSidebar {
         };
         let tab_bounds = self.tab_bounds.clone();
 
-        let icon_size = ui_icon_px(theme, 15.0);
+        let icon_size = ui_icon_px(theme, 16.0);
         let mut icon_stack = div().relative().flex_shrink_0().child(
             self.activity_layer.as_ref().unwrap().read(cx).icon(
-                session.icon,
+                sidebar_tab_icon(session.icon),
                 icon_size,
                 if is_active {
                     theme.foreground
@@ -1770,10 +1782,10 @@ impl SessionSidebar {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .pl(px(12.0))
+            .pl(px(10.0))
             .pr(px(8.0))
             .h(px(row_h))
-            .rounded(px(8.0))
+            .rounded(px(6.0))
             .cursor_pointer()
             .bg(row_bg)
             .text_color(if is_active {
@@ -1902,6 +1914,8 @@ impl SessionSidebar {
 
 impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Deferred context menus inherit the trigger's text style, including its font.
+        let ui_font = cx.theme().font_family.clone();
         let activity_layer = self
             .activity_layer
             .get_or_insert_with(|| cx.new(|cx| crate::tab_activity::TabActivity::new(window, cx)))
@@ -1929,6 +1943,7 @@ impl Render for SessionSidebar {
 
         if self.tools_panel_open || self.rail_only_override {
             return div()
+                .font_family(ui_font.clone())
                 .relative()
                 .h_full()
                 .w(px(RAIL_WIDTH))
@@ -1945,6 +1960,7 @@ impl Render for SessionSidebar {
                 let panel = self.render_panel_body(false, window, cx);
                 let panel_w = (visible_w - RAIL_WIDTH).max(0.0);
                 div()
+                    .font_family(ui_font.clone())
                     .relative()
                     .flex()
                     .h_full()
@@ -1964,6 +1980,7 @@ impl Render for SessionSidebar {
                     .into_any_element()
             }
             PanelMode::Collapsed => div()
+                .font_family(ui_font)
                 .relative()
                 .h_full()
                 .w(px(RAIL_WIDTH))
@@ -1987,14 +2004,21 @@ fn surface_tone(theme: &gpui_component::Theme, intensity: f32) -> Hsla {
     theme.background.blend(over)
 }
 
-fn sidebar_surface(theme: &gpui_component::Theme, opacity: f32, intensity: f32) -> Hsla {
-    let mut color = surface_tone(theme, intensity);
-    color.a = opacity.clamp(0.55, 0.98);
-    color
-}
-
 fn elevated_surface(theme: &gpui_component::Theme, opacity: f32) -> Hsla {
     theme.background.opacity((opacity + 0.06).min(0.98))
+}
+
+fn sidebar_selection_fill(theme: &gpui_component::Theme) -> Hsla {
+    theme
+        .foreground
+        .opacity(if theme.is_dark() { 0.10 } else { 0.07 })
+}
+
+fn sidebar_tab_icon(icon: &'static str) -> &'static str {
+    match icon {
+        "phosphor/terminal.svg" => "phosphor/terminal-window.svg",
+        _ => icon,
+    }
 }
 
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
@@ -2141,7 +2165,7 @@ where
         .child(
             svg()
                 .path(icon)
-                .size(ui_icon_px(theme, 14.0))
+                .size(ui_icon_px(theme, 16.0))
                 .flex_shrink_0()
                 .text_color(icon_color),
         )
@@ -2562,7 +2586,7 @@ mod tests {
                 .width_motion
                 .set_target(1.0, std::time::Duration::ZERO);
         });
-        for (font_size, expected) in [(12.0, 13.5), (16.0, 15.0), (24.0, 20.25)] {
+        for (font_size, expected) in [(12.0, 14.4), (16.0, 16.0), (24.0, 21.6)] {
             cx.update(|_, cx| {
                 gpui_component::Theme::update(cx, |theme| theme.font_size = px(font_size));
             });
@@ -2644,6 +2668,52 @@ mod tests {
             has_user_label: true,
             pane_count: 1,
             color: None,
+        }
+    }
+
+    #[gpui::test]
+    fn selection_is_inset_without_shrinking_drag_targets(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut sidebar = SessionSidebar::new(cx);
+            sidebar.sessions = vec![session(None, None)];
+            sidebar
+        });
+        let tile = cx.debug_bounds("sidebar-session-tile").unwrap();
+        let selection = cx.debug_bounds("sidebar-session-selection").unwrap();
+        let icon = cx.debug_bounds("tab-status-brand").unwrap();
+        assert_eq!(tile.size, Size::new(px(40.0), px(40.0)));
+        assert_eq!(selection.size, Size::new(px(32.0), px(32.0)));
+        assert_eq!(tile.center(), selection.center());
+        assert_eq!(tile.center(), icon.center());
+        assert_eq!(icon.size, Size::new(px(18.0), px(18.0)));
+        view.read_with(cx, |sidebar, _| {
+            assert_eq!(sidebar.tab_bounds.borrow()[0], tile);
+        });
+
+        view.update(cx, |sidebar, cx| {
+            sidebar.set_pinned(true, cx);
+            sidebar
+                .width_motion
+                .set_target(1.0, std::time::Duration::ZERO);
+        });
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            cx.update(|_, cx| gpui_component::Theme::change(mode, None, cx));
+            for font_size in [12.0, 16.0, 24.0] {
+                cx.update(|_, cx| {
+                    gpui_component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                });
+                view.update(cx, |_, cx| cx.notify());
+                let row = cx.debug_bounds("sidebar-session-row").unwrap();
+                let name = cx.debug_bounds("sidebar-session-name").unwrap();
+                let directory = cx.debug_bounds("sidebar-session-directory").unwrap();
+                assert!(row.top() < name.top());
+                assert!(name.bottom() <= directory.top());
+                assert!(directory.bottom() < row.bottom());
+            }
         }
     }
 

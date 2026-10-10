@@ -4,6 +4,48 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.124` - Unreleased
+
+### Changed
+
+**Vertical tabs**
+
+- Compact tabs have smaller, balanced selection fills without smaller click
+  or drag targets. Shell tabs use clearer terminal-window icons, and Search
+  uses a simpler magnifying glass. Expanded tabs have lighter selection fills
+  and tighter spacing; their titles and directory labels scale with UI font size.
+  _(PR [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Tab context menus use the system UI font instead of inheriting the terminal's
+  monospace font. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Terminal pane edges**
+
+- Keep Windows resize fills aligned with the current pane size rather than
+  the previous frame, without stretching terminal text. macOS native terminal
+  edges now use the same physical-pixel alignment as pane dividers. Neither
+  change overrides Terminal Glass or widens the dividers. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**macOS**
+
+- Keep transparent terminal panes and surrounding panels in sync during resize
+  and show/hide transitions, preventing brief flashes of the background without
+  turning off transparency or blur. Ordinary terminal updates retain their
+  asynchronous rendering path. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Avoid overlapping terminal backgrounds when creating tabs or split panes,
+  or switching tabs with Terminal Glass enabled. Rapid tab switching no longer
+  leaves a delayed hide for a tab that has already become active again. _(PR
+  [#460](https://github.com/nowledge-co/con-terminal/pull/460) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.123` - 2026-10-10
 
 ### Changed

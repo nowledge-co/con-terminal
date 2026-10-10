@@ -213,6 +213,8 @@ pub struct ConWorkspace {
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
     ghostty_hidden: bool,
+    #[cfg(target_os = "macos")]
+    native_tab_handoff_pending: bool,
     /// Agent panel drag state: start X position and start width when drag began.
     agent_panel_drag: Option<(f32, f32)>,
     /// Vertical tabs panel drag state: start X position and start width when drag began.
