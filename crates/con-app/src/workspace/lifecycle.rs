@@ -845,6 +845,8 @@ impl ConWorkspace {
             input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
             ghostty_hidden: false,
+            #[cfg(target_os = "macos")]
+            native_tab_handoff_pending: false,
             agent_panel_drag: None,
             sidebar_drag: None,
             terminal_theme,
@@ -1252,6 +1254,25 @@ impl ConWorkspace {
     pub(super) fn sync_active_tab_native_view_visibility(&self, cx: &App) {
         if self.has_active_tab() {
             self.sync_tab_native_view_visibility(self.active_tab, true, cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn commit_native_tab_handoff(&mut self, cx: &App) {
+        if !std::mem::take(&mut self.native_tab_handoff_pending) {
+            return;
+        }
+        // The incoming pane tree has completed native layout in this prepaint
+        // pass. Retire all other tabs before paint, not one frame later.
+        for (index, _) in self.tabs.iter().enumerate() {
+            if index != self.active_tab {
+                self.sync_tab_native_view_visibility(index, false, cx);
+            }
+        }
+        if !self.ghostty_hidden && !self.is_modal_open(cx) {
+            self.sync_active_tab_native_view_visibility(cx);
+        } else {
+            self.sync_tab_native_view_visibility(self.active_tab, false, cx);
         }
     }
 

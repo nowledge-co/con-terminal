@@ -686,6 +686,8 @@ impl Render for ConWorkspace {
         };
 
         let pane_content_bounds = self.pane_content_bounds.clone();
+        #[cfg(target_os = "macos")]
+        let native_tab_handoff = self.native_tab_handoff_pending.then(|| cx.weak_entity());
         let mut pane_content = div()
             .relative()
             .flex_1()
@@ -694,12 +696,18 @@ impl Render for ConWorkspace {
             .w_full()
             .overflow_hidden()
             .child(pane_tree_rendered)
-            .on_children_prepainted(move |bounds_list, _, _| {
+            .on_children_prepainted(move |bounds_list, _window, _cx| {
                 let Some(bounds) = bounds_list.first().copied() else {
                     return;
                 };
                 if let Ok(mut guard) = pane_content_bounds.lock() {
                     *guard = Some(bounds);
+                }
+                #[cfg(target_os = "macos")]
+                if let Some(workspace) = &native_tab_handoff {
+                    let _ = workspace.update(_cx, |workspace, cx| {
+                        workspace.commit_native_tab_handoff(cx);
+                    });
                 }
             })
             .on_drag_move::<DraggedTab>(cx.listener(

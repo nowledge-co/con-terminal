@@ -48,6 +48,23 @@ tab renders and shows only the focused pane until the zoom shortcut is
 pressed again. This keeps it equivalent to tmux-style zoom while avoiding
 fake resize, detach, or process lifecycle events.
 
+### Transparent Surface Handoff
+
+On macOS, a pane's initial GPUI fallback and its embedded Ghostty surface are
+alternative background owners, never overlapping layers. Surface creation and
+reveal happen during canvas prepaint; the canvas decides whether it still needs
+the fallback **after** that layout update. An earlier `Render` snapshot can be
+stale by paint time and would veil a newly visible terminal for one frame.
+
+Tab activation exchanges native visibility at the pane tree's
+`on_children_prepainted` boundary, after incoming layout and before GPUI paint.
+Until that boundary the outgoing tab remains visible; the handoff hides every
+inactive tab and reveals only the latest active tab. Do not retain outgoing translucent
+surfaces until the next frame: alpha accumulates behind the incoming terminal,
+and a delayed hide can target a tab that has already been reactivated. This
+does not change the portable renderers' visibility scheduling or the old-macOS
+opaque-backing compatibility path.
+
 ## Runtime stack
 
 ```text

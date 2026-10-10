@@ -17,6 +17,14 @@ con is still pre-release, so entries may group related beta work while the produ
 - Tab context menus use the system UI font instead of inheriting the terminal's
   monospace font.
 
+### Fixed
+
+**macOS**
+
+- Avoid overlapping terminal backgrounds when creating tabs or split panes,
+  or switching tabs with Terminal Glass enabled. Rapid tab switching no longer
+  leaves a delayed hide for a tab that has already become active again.
+
 ## `v0.1.0-beta.123` - 2026-10-10
 
 ### Changed

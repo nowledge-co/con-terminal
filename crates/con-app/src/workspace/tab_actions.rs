@@ -28,25 +28,39 @@ impl ConWorkspace {
             self.last_editor_tab_id = Some(self.tabs[index].summary_id);
         }
 
+        #[cfg(target_os = "macos")]
+        for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
+            terminal.set_focus_state(false, cx);
+        }
+
         // Show new tab's ghostty NSViews and focus active surface
         for terminal in self.tabs[index].pane_tree.all_terminals() {
             terminal.ensure_surface(window, cx);
         }
-        self.sync_tab_native_view_visibility(index, true, cx);
-        for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
-            terminal.set_focus_state(false, cx);
+        #[cfg(target_os = "macos")]
+        {
+            // Keep the outgoing tab until the incoming native layout is ready,
+            // then exchange visibility before GPUI paints this frame.
+            self.native_tab_handoff_pending = true;
         }
-        let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
-            .pane_tree
-            .all_surface_terminals()
-            .into_iter()
-            .cloned()
-            .collect();
-        cx.on_next_frame(window, move |_workspace, _window, cx| {
-            for terminal in &old_terminals {
-                terminal.set_native_view_visible(false, cx);
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.sync_tab_native_view_visibility(index, true, cx);
+            for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
+                terminal.set_focus_state(false, cx);
             }
-        });
+            let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
+                .pane_tree
+                .all_surface_terminals()
+                .into_iter()
+                .cloned()
+                .collect();
+            cx.on_next_frame(window, move |_workspace, _window, cx| {
+                for terminal in &old_terminals {
+                    terminal.set_native_view_visible(false, cx);
+                }
+            });
+        }
         if let Some(focused) = self.tabs[index].pane_tree.try_focused_terminal() {
             focused.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
