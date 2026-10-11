@@ -8,12 +8,29 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Changed
 
+**Agent panel**
+
+- Agent activity appears in one compact summary, without repeated loading
+  indicators or competing divider lines. Tool details wrap below the action
+  label, and session controls fit narrow panels. _(PR
+  [#464](https://github.com/nowledge-co/con-terminal/pull/464) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **App icons**
 
 - Tail A6 is now the default app icon across macOS, Windows, and Linux,
   including Flatpak packages. Previously saved icon choices stay unchanged;
   Classic remains available in Settings → Appearance. _(PR
   [#462](https://github.com/nowledge-co/con-terminal/pull/462) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Agent panel**
+
+- Approval buttons stay visible when the tool area sizes itself to its
+  contents, while longer tool output remains scrollable. _(PR
+  [#464](https://github.com/nowledge-co/con-terminal/pull/464) by
   [@wey-gu](https://github.com/wey-gu))_
 
 ### Added
