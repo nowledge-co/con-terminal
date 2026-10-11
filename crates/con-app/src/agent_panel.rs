@@ -3627,6 +3627,7 @@ fn render_assistant_message(
 
         let run_panel = panel.clone();
         let mut run_card = div()
+            .debug_selector(|| "agent-run-card".into())
             .ml(ui_space_px(theme, 19.0))
             .mr(ui_space_px(theme, 4.0))
             .mt(ui_space_px(theme, 6.0))
@@ -3664,7 +3665,7 @@ fn render_assistant_message(
                     svg()
                         .path(chevron)
                         .size(ui_space_px(theme, 11.0))
-                        .text_color(theme.muted_foreground.opacity(0.34)),
+                        .text_color(theme.muted_foreground),
                 )
                 .child(
                     div()
@@ -3673,51 +3674,27 @@ fn render_assistant_message(
                         .flex_1()
                         .min_w_0()
                         .gap(ui_space_px(theme, 2.0))
-                        .child(render_section_kicker(run_title, theme))
                         .child(
                             div()
+                                .debug_selector(|| "agent-run-title".into())
                                 .text_size(ui_px(theme, 12.75))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.74))
-                                .child("Actions, probes, and output"),
+                                .text_color(theme.foreground)
+                                .child(run_title),
                         )
                         .child(
                             div()
-                                .text_size(ui_px(theme, 10.75))
-                                .text_color(theme.muted_foreground.opacity(0.46))
+                                .debug_selector(|| "agent-run-summary".into())
+                                .text_size(ui_px(theme, 11.0))
+                                .text_color(if denied_count > 0 {
+                                    theme.danger
+                                } else {
+                                    theme.muted_foreground
+                                })
                                 .min_w_0()
-                                .child("A compact trace of what the agent actually did"),
-                        ),
-                )
-                .child({
-                    let mut summary = div()
-                        .flex()
-                        .items_center()
-                        .gap(ui_space_px(theme, 8.0))
-                        .flex_shrink_0()
-                        .child(
-                            div()
-                                .text_size(mono_px(theme, 10.5))
-                                .font_family(theme.mono_font_family.clone())
-                                .text_color(theme.muted_foreground.opacity(0.40))
                                 .child(run_status_summary(step_count, running_count, denied_count)),
-                        );
-                    if running_count > 0 {
-                        summary = summary.child(render_inline_state(
-                            format!("{} live", running_count).into(),
-                            theme.warning,
-                            theme,
-                        ));
-                    }
-                    if denied_count > 0 {
-                        summary = summary.child(render_inline_state(
-                            format!("{} denied", denied_count).into(),
-                            theme.danger,
-                            theme,
-                        ));
-                    }
-                    summary
-                }),
+                        ),
+                ),
         );
 
         if !collapsed {
@@ -5305,6 +5282,31 @@ mod tests {
                 assert!(label.size.height > px(18.0));
             }
         }
+    }
+
+    #[gpui::test]
+    fn run_trace_header_keeps_counts_below_the_title_in_narrow_panels(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let (_panel, view) = cx.add_window_view(|window, cx| {
+            gpui_component::Theme::update(cx, |theme| theme.font_size = gpui::px(24.0));
+            window.set_rem_size(gpui::px(24.0));
+            let mut panel = AgentPanel::new(window, cx);
+            panel.state.add_message("assistant", "Command was denied.");
+            panel.state.add_step("Run command");
+            panel.state.messages.last_mut().unwrap().steps[0].status = super::StepStatus::Denied;
+            panel
+        });
+        view.simulate_resize(gpui::size(gpui::px(280.0), gpui::px(640.0)));
+        let card = view.debug_bounds("agent-run-card").unwrap();
+        let title = view.debug_bounds("agent-run-title").unwrap();
+        let summary = view.debug_bounds("agent-run-summary").unwrap();
+        assert_eq!(title.left(), summary.left());
+        assert!(title.bottom() < summary.top());
+        assert!(title.right() < card.right());
+        assert!(summary.right() < card.right());
     }
 
     #[gpui::test]

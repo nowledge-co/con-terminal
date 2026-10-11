@@ -25,6 +25,11 @@ selector takes remaining width and shrinks before the action buttons. Stop,
 auto-approve, history, and new conversation remain component-library controls.
 Do not add an unrelated branding glyph or a second busy indicator to this row.
 
+Run trace headers use a short title with a status count beneath it. Keep the
+count in the same flexible column rather than a fixed-width trailing cluster;
+otherwise the title becomes a stack of words in narrow panels. Avoid repeating
+the same running/denied count in both text and a badge.
+
 ## Performance and behavior
 
 The summary is a small chrome subtree outside the virtualized transcript. It
