@@ -120,6 +120,7 @@ jobs:
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_geometry::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app app_icon::
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app agent_panel::tests
       - name: Program status acceptance fixture tests
         run: |
           python -m unittest discover -s scripts/terminal -p 'test_*.py'
@@ -194,5 +195,6 @@ jobs:
           cargo test --locked -p con --bin con sidebar::
           cargo test --locked -p con --bin con terminal_geometry::
           cargo test --locked -p con --bin con app_icon::
+          cargo test --locked -p con --bin con agent_panel::tests
       - name: Program status reducer benchmark correctness
         run: cargo test --locked -p con-core --example program_status_bench

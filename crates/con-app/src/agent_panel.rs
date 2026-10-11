@@ -3153,6 +3153,76 @@ fn render_section_kicker(label: &str, theme: &gpui_component::Theme) -> AnyEleme
         .into_any_element()
 }
 
+/// One live summary outside the virtualized transcript. Tool details can wrap
+/// without competing with the action label or changing message-cache keys.
+fn render_live_activity(
+    label: &str,
+    detail: Option<&str>,
+    icon: Option<&str>,
+    color: Hsla,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    let indicator = if let Some(icon) = icon {
+        svg()
+            .path(SharedString::from(icon.to_owned()))
+            .size(ui_icon_px(theme, 14.0))
+            .text_color(color)
+            .into_any_element()
+    } else {
+        Spinner::new().small().color(color).into_any_element()
+    };
+    let mut text = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .gap(ui_space_px(theme, 4.0))
+        .child(
+            div()
+                .debug_selector(|| "agent-live-label".into())
+                .text_size(ui_px(theme, 12.0))
+                .line_height(ui_px(theme, 18.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child(label.to_owned()),
+        );
+    if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+        text = text.child(
+            div()
+                .debug_selector(|| "agent-live-detail".into())
+                .min_w_0()
+                .overflow_hidden()
+                .text_size(mono_px(theme, 10.5))
+                .line_height(mono_px(theme, 16.0))
+                .font_family(theme.mono_font_family.clone())
+                .text_color(theme.muted_foreground)
+                .child(truncate_str(detail, 96)),
+        );
+    }
+    div()
+        .debug_selector(|| "agent-live-activity".into())
+        .flex()
+        .items_start()
+        .min_w_0()
+        .gap(ui_space_px(theme, 8.0))
+        .mx(ui_space_px(theme, 14.0))
+        .mb(ui_space_px(theme, 12.0))
+        .px(ui_space_px(theme, 10.0))
+        .py(ui_space_px(theme, 9.0))
+        .rounded(ui_space_px(theme, 8.0))
+        .bg(theme.foreground.opacity(0.04))
+        .child(
+            div()
+                .flex_shrink_0()
+                .h(ui_px(theme, 18.0))
+                .flex()
+                .items_center()
+                .child(indicator),
+        )
+        .child(text)
+        .into_any_element()
+}
+
 fn render_step_status_tag(status: StepStatus, theme: &gpui_component::Theme) -> Option<AnyElement> {
     match status {
         StepStatus::Running => Some(render_inline_state("Live".into(), theme.warning, theme)),
@@ -4221,6 +4291,10 @@ impl Render for AgentPanel {
             .collect();
 
         if !visible_tool_calls.is_empty() {
+            let running_count = visible_tool_calls
+                .iter()
+                .filter(|(_, tc)| tc.result.is_none())
+                .count();
             let mut tc_container = div()
                 .flex()
                 .flex_col()
@@ -4246,32 +4320,25 @@ impl Render for AgentPanel {
                                 .flex_1()
                                 .min_w_0()
                                 .gap(ui_space_px(theme, 2.0))
-                                .child(render_section_kicker("Working now", theme))
                                 .child(
                                     div()
                                         .text_size(ui_px(theme, 12.75))
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground.opacity(0.74))
-                                        .child("Live tools for this reply"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(ui_px(theme, 10.75))
-                                        .text_color(theme.muted_foreground.opacity(0.46))
-                                        .min_w_0()
-                                        .child("Commands and reads still in progress"),
+                                        .text_color(theme.foreground)
+                                        .child("Tool activity"),
                                 ),
                         )
                         .child(render_inline_state(
-                            format!(
-                                "{} live",
-                                visible_tool_calls
-                                    .iter()
-                                    .filter(|(_, tc)| tc.result.is_none())
-                                    .count()
-                            )
-                            .into(),
-                            theme.warning,
+                            if running_count > 0 {
+                                format!("{running_count} running").into()
+                            } else {
+                                "Finished".into()
+                            },
+                            if running_count > 0 {
+                                theme.warning
+                            } else {
+                                theme.muted_foreground
+                            },
                             theme,
                         )),
                 );
@@ -4288,18 +4355,13 @@ impl Render for AgentPanel {
                     theme.warning
                 };
 
-                // Icon or spinner
-                let icon_el: AnyElement = if is_done {
+                // The activity strip owns animation; trace rows remain quiet.
+                let icon_el: AnyElement = {
                     svg()
                         .path(icon)
                         .size(ui_space_px(theme, 12.0))
                         .flex_shrink_0()
                         .text_color(icon_color)
-                        .into_any_element()
-                } else {
-                    div()
-                        .flex_shrink_0()
-                        .child(Spinner::new().small().color(theme.warning))
                         .into_any_element()
                 };
 
@@ -4539,63 +4601,7 @@ impl Render for AgentPanel {
             transcript_footer = transcript_footer.child(approval_el);
         }
 
-        // ── Status indicator (hidden when approval cards are visible — they ARE the status) ──
-        if self.state.pending_approvals.is_empty()
-            && let Some((_icon, label)) = self.status_text()
-        {
-            let status_color = match self.state.status {
-                AgentStatus::Thinking => theme.warning,
-                AgentStatus::Responding => theme.success,
-                AgentStatus::Idle => theme.muted_foreground,
-            };
-            transcript_footer = transcript_footer.child(
-                div()
-                    .ml(px(19.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .py(px(3.0))
-                    .px(px(4.0))
-                    .child(Spinner::new().small().color(status_color))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(theme.muted_foreground.opacity(0.50))
-                            .child(label),
-                    ),
-            );
-        } // end pending_approvals.is_empty() guard
-
         // ── Header ──────────────────────────────────────────────
-        let status_indicator: AnyElement = match self.state.status {
-            AgentStatus::Idle => div()
-                .size(px(7.0))
-                .rounded_full()
-                .bg(theme.muted_foreground.opacity(0.25))
-                .into_any_element(),
-            AgentStatus::Thinking => Spinner::new()
-                .small()
-                .color(theme.warning)
-                .into_any_element(),
-            AgentStatus::Responding => Spinner::new()
-                .small()
-                .color(theme.success)
-                .into_any_element(),
-        };
-
-        let header_left = div()
-            .flex()
-            .items_center()
-            .gap(px(7.0))
-            .flex_shrink_0()
-            .child(
-                svg()
-                    .path("phosphor/oven-duotone.svg")
-                    .size(ui_icon_px(theme, 14.0))
-                    .text_color(theme.primary),
-            )
-            .child(status_indicator);
-
         let control_icons = {
             let mut actions = div().flex().items_center().gap(px(2.0)).flex_shrink_0();
 
@@ -4628,7 +4634,7 @@ impl Render for AgentPanel {
                         .text_color(if self.auto_approve {
                             theme.primary
                         } else {
-                            theme.muted_foreground.opacity(0.65)
+                            theme.muted_foreground
                         })
                         .tooltip(if self.auto_approve {
                             "Auto-approve on"
@@ -4680,35 +4686,23 @@ impl Render for AgentPanel {
             .xsmall()
             .compact()
             .dropdown_caret(true)
-            .tooltip("Provider")
+            .tooltip(format!("Provider: {provider_short_label}"))
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .size(px(20.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.0))
-                            .bg(theme.title_bar.opacity(self.ui_opacity * 0.92))
-                            .child(
-                                svg()
-                                    .path(provider_icon_path)
-                                    .size(mono_icon_px(theme, 12.0))
-                                    .text_color(theme.foreground.opacity(0.82)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .line_height(px(12.0))
-                            .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.foreground.opacity(0.88))
-                            .child(provider_short_label),
-                    ),
+                div().flex().items_center().gap(px(6.0)).child(
+                    div()
+                        .size(px(20.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .bg(theme.title_bar.opacity(self.ui_opacity * 0.92))
+                        .child(
+                            svg()
+                                .path(provider_icon_path)
+                                .size(mono_icon_px(theme, 12.0))
+                                .text_color(theme.foreground),
+                        ),
+                ),
             )
             .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                 let options = self.session_provider_options.clone();
@@ -4745,13 +4739,14 @@ impl Render for AgentPanel {
         } else {
             SharedString::from(humanize_model_name(&self.model_name))
         };
-        let model_picker = div().w(px(156.0)).flex_shrink_0().overflow_hidden().child(
+        let model_picker = div().flex_1().min_w_0().overflow_hidden().child(
             Button::new("agent-model-picker")
                 .ghost()
                 .xsmall()
                 .compact()
                 .dropdown_caret(true)
                 .tooltip("Model")
+                .text_color(theme.foreground)
                 .disabled(self.session_model_options.is_empty())
                 .label(model_label)
                 .dropdown_menu_with_anchor(Anchor::BottomLeft, {
@@ -4787,120 +4782,47 @@ impl Render for AgentPanel {
         let header = div()
             .flex()
             .items_center()
-            .gap(px(7.0))
+            .gap(ui_space_px(theme, 4.0))
             .w_full()
             .min_w_0()
-            .px(px(14.0))
-            .py(px(10.0))
+            .px(ui_space_px(theme, 14.0))
+            .py(ui_space_px(theme, 10.0))
             .flex_shrink_0()
-            .child(header_left)
             .child(provider_picker)
             .child(model_picker);
         let header = header.child(control_icons);
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
-            let args_display = format_tool_args(&approval.tool_name, &approval.args);
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_space_px(theme, 7.0))
-                    .mx(ui_space_px(theme, 14.0))
-                    .mb(ui_space_px(theme, 8.0))
-                    .child(render_section_kicker("Needs approval", theme))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(ui_space_px(theme, 8.0))
-                            .child(render_inline_state(
-                                "Approval waiting".into(),
-                                theme.warning,
-                                theme,
-                            ))
-                            .child(
-                                div()
-                                    .text_size(mono_px(theme, 10.5))
-                                    .line_height(mono_px(theme, 15.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.60))
-                                    .min_w_0()
-                                    .overflow_x_hidden()
-                                    .whitespace_nowrap()
-                                    .child(truncate_str(&args_display, 96)),
-                            ),
-                    )
-                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
-                    .into_any_element(),
-            )
+            let args = format_tool_args(&approval.tool_name, &approval.args);
+            Some(render_live_activity(
+                "Awaiting approval",
+                Some(&args),
+                Some("phosphor/shield-warning-fill.svg"),
+                theme.warning,
+                theme,
+            ))
         } else if let Some(tc) = self.running_tool_call() {
-            let args_display = format_tool_args(&tc.tool_name, &tc.args);
-            let human_name = humanize_tool_name(&tc.tool_name);
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_space_px(theme, 7.0))
-                    .mx(ui_space_px(theme, 14.0))
-                    .mb(ui_space_px(theme, 8.0))
-                    .child(render_section_kicker("Current run", theme))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(ui_space_px(theme, 8.0))
-                            .child(Spinner::new().small().color(theme.warning))
-                            .child(
-                                div()
-                                    .text_size(ui_px(theme, 12.0))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.foreground.opacity(0.74))
-                                    .child(human_name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(mono_px(theme, 10.5))
-                                    .line_height(mono_px(theme, 15.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.60))
-                                    .min_w_0()
-                                    .overflow_x_hidden()
-                                    .whitespace_nowrap()
-                                    .child(truncate_str(&args_display, 96)),
-                            ),
-                    )
-                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
-                    .into_any_element(),
-            )
+            let args = format_tool_args(&tc.tool_name, &tc.args);
+            Some(render_live_activity(
+                self.status_text()
+                    .map_or("Running tool…", |(_, label)| label),
+                Some(&args),
+                None,
+                theme.warning,
+                theme,
+            ))
         } else if let Some((_icon, label)) = self.status_text() {
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(ui_space_px(theme, 7.0))
-                    .mx(ui_space_px(theme, 14.0))
-                    .mb(ui_space_px(theme, 8.0))
-                    .child(render_section_kicker("Live status", theme))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(ui_space_px(theme, 8.0))
-                            .child(
-                                Spinner::new()
-                                    .small()
-                                    .color(theme.muted_foreground.opacity(0.6)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_px(theme, 12.0))
-                                    .text_color(theme.foreground.opacity(0.66))
-                                    .child(label),
-                            ),
-                    )
-                    .child(Separator::horizontal().color(theme.muted.opacity(0.10)))
-                    .into_any_element(),
-            )
+            Some(render_live_activity(
+                label,
+                None,
+                None,
+                if self.state.status == AgentStatus::Responding {
+                    theme.success
+                } else {
+                    theme.warning
+                },
+                theme,
+            ))
         } else {
             None
         };
@@ -4920,8 +4842,7 @@ impl Render for AgentPanel {
             .bg(theme.transparent)
             .font_family(theme.font_family.clone())
             .text_size(theme.font_size)
-            .child(header)
-            .child(Separator::horizontal().color(theme.muted.opacity(0.08)));
+            .child(header);
 
         if let Some(live_activity_strip) = live_activity_strip {
             panel = panel.child(live_activity_strip);
@@ -5079,7 +5000,9 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .id("agent-transcript-footer")
-                            .size_full()
+                            .debug_selector(|| "agent-transcript-footer".into())
+                            .w_full()
+                            .max_h(px(320.0))
                             .overflow_y_scroll()
                             .track_scroll(&self.transcript_footer_scroll_handle)
                             .child(
@@ -5333,6 +5256,77 @@ mod tests {
     use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
     use con_agent::{AgentConfig, ProviderConfig, ProviderKind};
     use con_core::terminal_status::Activity;
+
+    struct ActivityTestView;
+
+    impl gpui::Render for ActivityTestView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{ParentElement, Styled};
+            use gpui_component::ActiveTheme;
+            gpui::div().size_full().flex().flex_col().child(
+                super::render_live_activity(
+                    "Waiting for the remote build to finish",
+                    Some("服务器 /workspace/a-long-project-directory/build --configuration release --target integration"),
+                    Some("phosphor/hourglass-fill.svg"),
+                    cx.theme().warning,
+                    cx.theme(),
+                ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn live_activity_keeps_label_and_details_inside_narrow_and_scaled_panels(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{px, size};
+        cx.update(gpui_component::init);
+        for (font_size, width) in [(16.0, 280.0), (16.0, 640.0), (24.0, 280.0)] {
+            let (_, view) = cx.add_window_view(|window, cx| {
+                gpui_component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                window.set_rem_size(px(font_size));
+                ActivityTestView
+            });
+            view.simulate_resize(size(px(width), px(480.0)));
+            let strip = view.debug_bounds("agent-live-activity").unwrap();
+            let label = view.debug_bounds("agent-live-label").unwrap();
+            let detail = view.debug_bounds("agent-live-detail").unwrap();
+            assert!(strip.left() > px(0.0));
+            assert!(strip.right() < px(width));
+            assert_eq!(label.left(), detail.left());
+            assert!(label.bottom() < detail.top());
+            assert!(detail.right() < strip.right());
+            assert!(detail.bottom() < strip.bottom());
+            if width == 280.0 {
+                assert!(label.size.height > px(18.0));
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn approval_footer_has_intrinsic_height_without_a_fixed_parent_height(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let (_panel, view) = cx.add_window_view(|window, cx| {
+            let mut panel = AgentPanel::new(window, cx);
+            let _approval_rx = pending_approval(&mut panel.state, "preview-call");
+            panel
+        });
+        view.simulate_resize(gpui::size(gpui::px(320.0), gpui::px(640.0)));
+        let footer = view.debug_bounds("agent-transcript-footer").unwrap();
+        assert!(
+            footer.size.height > gpui::px(40.0),
+            "approval actions collapsed: {footer:?}"
+        );
+        assert!(footer.size.height <= gpui::px(320.0));
+        assert!(footer.bottom() <= gpui::px(640.0));
+    }
 
     fn pending_approval(
         state: &mut PanelState,
