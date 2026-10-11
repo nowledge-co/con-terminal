@@ -36,7 +36,7 @@ use crate::chat_markdown::{
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
 use crate::settings_panel::provider_label;
-use crate::ui_scale::{mono_icon_px, mono_px, mono_space_px, ui_icon_px, ui_px, ui_space_px};
+use crate::ui_scale::{mono_px, mono_space_px, ui_icon_px, ui_px, ui_space_px};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -4580,7 +4580,12 @@ impl Render for AgentPanel {
 
         // ── Header ──────────────────────────────────────────────
         let control_icons = {
-            let mut actions = div().flex().items_center().gap(px(2.0)).flex_shrink_0();
+            let mut actions = div()
+                .debug_selector(|| "agent-header-actions".into())
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .flex_shrink_0();
 
             if self.state.status != AgentStatus::Idle {
                 actions = actions.child(
@@ -4589,6 +4594,7 @@ impl Render for AgentPanel {
                         .ghost()
                         .xsmall()
                         .tooltip("Stop")
+                        .accessibility_label("Stop response")
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.emit(CancelRequest);
                             this.state.status = AgentStatus::Idle;
@@ -4618,6 +4624,11 @@ impl Render for AgentPanel {
                         } else {
                             "Auto-approve off"
                         })
+                        .accessibility_label(if self.auto_approve {
+                            "Auto-approve on"
+                        } else {
+                            "Auto-approve off"
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             let enabled = !this.auto_approve;
                             this.auto_approve = enabled;
@@ -4631,6 +4642,7 @@ impl Render for AgentPanel {
                         .ghost()
                         .xsmall()
                         .tooltip("History")
+                        .accessibility_label("Conversation history")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_history(cx);
                         })),
@@ -4641,6 +4653,7 @@ impl Render for AgentPanel {
                         .ghost()
                         .xsmall()
                         .tooltip("New Chat")
+                        .accessibility_label("New conversation")
                         .on_click(cx.listener(|this, _, _, cx| {
                             cx.emit(NewConversation);
                             this.clear_messages(cx);
@@ -4657,29 +4670,28 @@ impl Render for AgentPanel {
             .as_ref()
             .map(|provider| provider.short_label)
             .unwrap_or("AI");
+        let provider_label = current_provider
+            .as_ref()
+            .map(|provider| provider.label)
+            .unwrap_or(provider_short_label);
         let panel = cx.entity().clone();
         let provider_picker = Button::new("agent-provider-picker")
             .ghost()
             .xsmall()
             .compact()
+            .h(ui_px(theme, 24.0))
+            .px(ui_space_px(theme, 6.0))
+            .rounded(ui_space_px(theme, 6.0))
+            .bg(theme.foreground.opacity(0.04))
             .dropdown_caret(true)
-            .tooltip(format!("Provider: {provider_short_label}"))
+            .tooltip(format!("Provider: {provider_label}"))
+            .accessibility_label(format!("Provider: {provider_label}"))
+            .text_color(theme.foreground)
             .child(
-                div().flex().items_center().gap(px(6.0)).child(
-                    div()
-                        .size(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(6.0))
-                        .bg(theme.title_bar.opacity(self.ui_opacity * 0.92))
-                        .child(
-                            svg()
-                                .path(provider_icon_path)
-                                .size(mono_icon_px(theme, 12.0))
-                                .text_color(theme.foreground),
-                        ),
-                ),
+                svg()
+                    .path(provider_icon_path)
+                    .size(ui_icon_px(theme, 14.0))
+                    .text_color(theme.foreground),
             )
             .dropdown_menu_with_anchor(Anchor::BottomLeft, {
                 let options = self.session_provider_options.clone();
@@ -4716,47 +4728,65 @@ impl Render for AgentPanel {
         } else {
             SharedString::from(humanize_model_name(&self.model_name))
         };
-        let model_picker = div().flex_1().min_w_0().overflow_hidden().child(
-            Button::new("agent-model-picker")
-                .ghost()
-                .xsmall()
-                .compact()
-                .dropdown_caret(true)
-                .tooltip("Model")
-                .text_color(theme.foreground)
-                .disabled(self.session_model_options.is_empty())
-                .label(model_label)
-                .dropdown_menu_with_anchor(Anchor::BottomLeft, {
-                    let current_model = self.model_name.clone();
-                    let options = self.session_model_options.clone();
-                    let panel = panel.clone();
-                    move |menu: PopupMenu, _, _| {
-                        options.iter().cloned().fold(
-                            menu.min_w(px(240.0)).max_h(px(240.0)).scrollable(true),
-                            |menu, model: String| {
-                                let checked = model == current_model;
-                                menu.item(
-                                    PopupMenuItem::new(model.clone())
-                                        .checked(checked)
-                                        .on_click({
-                                            let selected_model = model.clone();
-                                            let panel = panel.clone();
-                                            move |_, _, cx| {
-                                                panel.update(cx, |_, cx| {
-                                                    cx.emit(SelectSessionModel {
-                                                        model: selected_model.clone(),
+        let model_picker = div()
+            .debug_selector(|| "agent-model-region".into())
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .child(
+                Button::new("agent-model-picker")
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .h(ui_px(theme, 24.0))
+                    .px(ui_space_px(theme, 8.0))
+                    .rounded(ui_space_px(theme, 6.0))
+                    .max_w_full()
+                    .flex_shrink_1()
+                    .bg(theme.foreground.opacity(0.04))
+                    .dropdown_caret(true)
+                    .tooltip(if self.model_name.is_empty() {
+                        "Choose a model".to_owned()
+                    } else {
+                        format!("Model: {}", self.model_name)
+                    })
+                    .text_color(theme.foreground)
+                    .disabled(self.session_model_options.is_empty())
+                    .label(model_label)
+                    .dropdown_menu_with_anchor(Anchor::BottomLeft, {
+                        let current_model = self.model_name.clone();
+                        let options = self.session_model_options.clone();
+                        let panel = panel.clone();
+                        move |menu: PopupMenu, _, _| {
+                            options.iter().cloned().fold(
+                                menu.min_w(px(240.0)).max_h(px(240.0)).scrollable(true),
+                                |menu, model: String| {
+                                    let checked = model == current_model;
+                                    menu.item(
+                                        PopupMenuItem::new(model.clone())
+                                            .checked(checked)
+                                            .on_click({
+                                                let selected_model = model.clone();
+                                                let panel = panel.clone();
+                                                move |_, _, cx| {
+                                                    panel.update(cx, |_, cx| {
+                                                        cx.emit(SelectSessionModel {
+                                                            model: selected_model.clone(),
+                                                        });
                                                     });
-                                                });
-                                            }
-                                        }),
-                                )
-                            },
-                        )
-                    }
-                }),
-        );
+                                                }
+                                            }),
+                                    )
+                                },
+                            )
+                        }
+                    }),
+            );
 
         let header = div()
+            .debug_selector(|| "agent-header".into())
             .flex()
             .items_center()
             .gap(ui_space_px(theme, 4.0))
@@ -5282,6 +5312,30 @@ mod tests {
                 assert!(label.size.height > px(18.0));
             }
         }
+    }
+
+    #[gpui::test]
+    fn session_controls_keep_actions_visible_with_long_models_and_large_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let (_panel, view) = cx.add_window_view(|window, cx| {
+            gpui_component::Theme::update(cx, |theme| theme.font_size = gpui::px(24.0));
+            window.set_rem_size(gpui::px(24.0));
+            let mut panel = AgentPanel::new(window, cx);
+            panel.model_name = "provider/a-long-model-name-with-release-and-context-suffix".into();
+            panel.state.status = super::AgentStatus::Thinking;
+            panel
+        });
+        view.simulate_resize(gpui::size(gpui::px(280.0), gpui::px(640.0)));
+        let header = view.debug_bounds("agent-header").unwrap();
+        let model = view.debug_bounds("agent-model-region").unwrap();
+        let actions = view.debug_bounds("agent-header-actions").unwrap();
+        assert!(model.right() <= actions.left());
+        assert!(actions.right() < header.right());
+        assert!(actions.top() >= header.top());
+        assert!(actions.bottom() <= header.bottom());
     }
 
     #[gpui::test]

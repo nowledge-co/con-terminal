@@ -24,6 +24,11 @@ The provider icon identifies the provider; its tooltip names it. The model
 selector takes remaining width and shrinks before the action buttons. Stop,
 auto-approve, history, and new conversation remain component-library controls.
 Do not add an unrelated branding glyph or a second busy indicator to this row.
+Both selectors have one quiet fill at the same height, without an extra badge
+inside the provider button. The model button uses intrinsic width within its
+flexible region, keeping its caret beside the label rather than across empty
+space. Long names remain available in the tooltip, and icon-only actions have
+explicit accessibility labels.
 
 Run trace headers use a short title with a status count beneath it. Keep the
 count in the same flexible column rather than a fixed-width trailing cluster;
