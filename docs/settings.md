@@ -67,9 +67,24 @@ Appearance controls the parts of con you look at all day:
 - tab position
 - pane title bars in split layouts
 
-**App Icon** previews your choice in the Dock and Cmd-Tab on macOS. Save Appearance to keep the selection and update the installed `.app` icon used by Finder and system search. Search tools may cache their icons. Choose Classic and save to restore the bundled icon.
+**App Icon** starts with Tail A6 for new configurations. Classic and the other
+raccoons remain available; an existing saved choice stays yours.
 
-The installed app must be writable; running from a read-only disk image or with `cargo run` only changes the running icon. Con reapplies the saved file icon at startup after an app update. Custom icons use macOS file metadata, not changes to the signed icon resource. This metadata can make `codesign --strict` reject a customized installation even though ordinary signature verification passes; release artifacts are still verified strictly before distribution.
+- **macOS:** preview in the Dock and Cmd-Tab. Save Appearance to keep the choice
+  and update the installed `.app` icon used by Finder and system search. Search
+  tools may cache their icons.
+- **Windows:** preview in running window icons, including the task switcher.
+  Pinned shortcuts and Explorer keep the icon bundled with the app.
+- **Linux:** preview X11 window icons where the window manager displays them.
+  Save to update the per-user application launcher icon, also used by Wayland
+  desktops. Your desktop may cache the old image until the launcher or session
+  refreshes. Live Wayland window previews are not supported yet. Flatpak keeps
+  its packaged launcher icon rather than writing outside the sandbox.
+
+Save Appearance to keep a choice for the next launch. Discarding an unsaved
+preview returns to your saved icon. All installation packages use Tail A6.
+
+On macOS, the installed app must be writable; running from a read-only disk image or with `cargo run` only changes the running icon. Con reapplies the saved file icon at startup after an app update. Custom icons use macOS file metadata, not changes to the signed icon resource. This metadata can make `codesign --strict` reject a customized installation even though ordinary signature verification passes; release artifacts are still verified strictly before distribution.
 
 Start with readability. Pick a theme with clear contrast, then adjust opacity or
 blur only if the terminal remains easy to scan.

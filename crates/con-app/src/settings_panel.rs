@@ -1920,7 +1920,7 @@ impl SettingsPanel {
         self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
-            self.release_icon_preview();
+            self.release_icon_preview(cx);
             self.config = snapshot;
             self.adopt_saved_app_icon();
             cx.emit(AppearancePreview);
@@ -3060,8 +3060,9 @@ impl SettingsPanel {
         Ok(())
     }
 
-    pub(crate) fn release_icon_preview(&self) {
+    pub(crate) fn release_icon_preview(&self, cx: &mut App) {
         crate::app_icon::restore_saved_if_owner(self.icon_preview_owner);
+        crate::app_icon::sync_window_icons(cx);
     }
 
     fn adopt_saved_app_icon(&mut self) {
@@ -4668,8 +4669,10 @@ impl SettingsPanel {
         let theme = cx.theme();
         let hint = if cfg!(target_os = "macos") {
             "Changes the Dock and Cmd-Tab icon while con is running."
+        } else if cfg!(target_os = "windows") {
+            "Changes running window icons. Pinned shortcuts keep the installed icon."
         } else {
-            "Saved with Appearance. Dock switching is currently macOS-only."
+            "Previews X11 windows. Save to change the launcher (except Flatpak); your desktop may cache the old icon."
         };
 
         let mut groups = div().flex().flex_col().gap(px(12.0));
@@ -4736,6 +4739,7 @@ impl SettingsPanel {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.config.appearance.app_icon = icon_id.clone();
                 crate::app_icon::apply_preview(this.icon_preview_owner, &icon_id);
+                crate::app_icon::sync_window_icons(cx);
                 cx.emit(AppearancePreview);
                 cx.notify();
             }))

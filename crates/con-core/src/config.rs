@@ -291,8 +291,8 @@ pub fn agent_avatar_asset(id: &str) -> &'static str {
         .unwrap_or(DEFAULT_AGENT_AVATAR_ASSET)
 }
 
-pub const DEFAULT_APP_ICON: &str = "default";
-pub const DEFAULT_APP_ICON_ASSET: &str = "Con-macOS-Dark-256x256@2x.png";
+pub const DEFAULT_APP_ICON: &str = "raccoon-tail-a6";
+pub const DEFAULT_APP_ICON_ASSET: &str = "app-icons/con-raccoon-tail-A6.png";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppIconChoice {
@@ -306,10 +306,10 @@ pub const APP_ICON_GROUPS: &[&str] = &["Classic", "Peek", "Suit", "Tail"];
 
 pub const APP_ICONS: &[AppIconChoice] = &[
     AppIconChoice {
-        id: DEFAULT_APP_ICON,
+        id: "default",
         label: "Classic",
         group: "Classic",
-        asset: DEFAULT_APP_ICON_ASSET,
+        asset: "Con-macOS-Dark-256x256@2x.png",
     },
     AppIconChoice {
         id: "raccoon-a1",
@@ -2077,12 +2077,13 @@ close_to_quit = false
     }
 
     #[test]
-    fn new_configs_use_classic_app_icon_by_default() {
+    fn new_configs_use_tail_a6_app_icon_by_default() {
         assert_eq!(Config::default().appearance.app_icon, DEFAULT_APP_ICON);
+        assert_eq!(DEFAULT_APP_ICON, "raccoon-tail-a6");
     }
 
     #[test]
-    fn loaded_legacy_configs_inherit_classic_app_icon_default() {
+    fn loaded_legacy_configs_inherit_tail_a6_app_icon_default() {
         let content = r#"
 [appearance]
 terminal_opacity = 0.8
@@ -2106,7 +2107,7 @@ app_icon = "raccoon-suit-a1"
     }
 
     #[test]
-    fn normalize_falls_back_to_classic_app_icon_for_unknown_ids() {
+    fn normalize_falls_back_to_tail_a6_app_icon_for_unknown_ids() {
         let mut config = Config::default();
         config.appearance.app_icon = "not-a-real-raccoon".into();
         config.normalize();
@@ -2123,6 +2124,15 @@ app_icon = "raccoon-suit-a1"
             assert_eq!(app_icon_asset(icon.id), icon.asset);
         }
         assert_eq!(app_icon_asset("missing"), DEFAULT_APP_ICON_ASSET);
+    }
+
+    #[test]
+    fn explicit_classic_choice_keeps_its_original_artwork() {
+        let mut config: Config = toml::from_str("[appearance]\napp_icon = \"default\"\n").unwrap();
+        config.normalize();
+        assert_eq!(config.appearance.app_icon, "default");
+        assert_eq!(app_icon_asset("default"), "Con-macOS-Dark-256x256@2x.png");
+        assert_ne!(app_icon_asset("default"), DEFAULT_APP_ICON_ASSET);
     }
 
     #[test]

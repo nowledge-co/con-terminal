@@ -113,7 +113,7 @@ The workflow builds correctly from the defaults baked into the scripts:
 
 - `MACOS_APP_NAME=con`
 - `MACOS_BUNDLE_ID_BASE=co.nowledge.con`
-- `MACOS_ICON_SOURCE=assets/Con-macOS-Dark-1024x1024@1x.png`
+- `CON_ICON_SOURCE=assets/app-icons/con-raccoon-tail-A6.png`
 - `MACOS_MINIMUM_SYSTEM_VERSION=10.15.7`
 
 If you reuse these scripts in another app repo, override those values there instead of editing the workflow.

@@ -77,4 +77,4 @@ apps:
           dest: /app/bin/con-cli
       desktop: packaging/flatpak/co.nowledge.con.desktop
       metainfo: packaging/flatpak/co.nowledge.con.metainfo.xml
-      icons: assets/Con-macOS-Dark-256x256@2x.png
+      icons: assets/app-icons/con-raccoon-tail-A6.png

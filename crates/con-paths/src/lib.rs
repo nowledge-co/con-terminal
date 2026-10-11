@@ -38,6 +38,13 @@ pub fn app_cache_dir() -> PathBuf {
         .join(APP_DIR_NAME)
 }
 
+/// Per-user override for Con's freedesktop launcher icon. This is separate
+/// from private application data so desktop environments can discover it.
+#[cfg(target_os = "linux")]
+pub fn launcher_icon_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|dir| dir.join("icons/hicolor/256x256/apps/co.nowledge.con.png"))
+}
+
 pub fn config_file() -> PathBuf {
     app_config_dir().join(CONFIG_FILE_NAME)
 }

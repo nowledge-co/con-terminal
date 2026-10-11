@@ -5,7 +5,7 @@ use con_core::config::{DEFAULT_APP_ICON, app_icon_asset, sanitize_app_icon};
 
 static APPLIED_APP_ICON: Mutex<String> = Mutex::new(String::new());
 static SAVED_APP_ICON: Mutex<String> = Mutex::new(String::new());
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 static SYNCED_FILE_ICON: Mutex<String> = Mutex::new(String::new());
 static NEXT_PREVIEW_OWNER: AtomicU64 = AtomicU64::new(1);
 static PREVIEW_STACK: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
@@ -15,7 +15,6 @@ pub fn current_asset() -> &'static str {
     app_icon_asset(&current_id())
 }
 
-#[cfg(target_os = "macos")]
 fn current_id() -> String {
     applied_id()
 }
@@ -28,7 +27,6 @@ fn mutex_id(slot: &Mutex<String>) -> String {
         .unwrap_or_else(|| DEFAULT_APP_ICON.to_string())
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn applied_id() -> String {
     mutex_id(&APPLIED_APP_ICON)
 }
@@ -46,20 +44,34 @@ pub fn remember_saved(id: &str) {
     }
 }
 
-/// Sync the installed icon without blocking the UI on IconServices I/O.
+/// Sync the installed icon without blocking the UI on desktop integration I/O.
 /// Call after recording a successfully saved (or loaded) configuration.
 pub fn sync_saved_file_icon(_cx: &gpui::App) {
     #[cfg(target_os = "macos")]
     _cx.background_executor()
         .spawn(async { sync_file_icon(set_bundle_icon) })
         .detach();
+    #[cfg(target_os = "linux")]
+    if !con_paths::is_flatpak() {
+        _cx.background_executor()
+            .spawn(async {
+                sync_file_icon(|id| {
+                    let path = con_paths::launcher_icon_path()
+                        .ok_or_else(|| anyhow::anyhow!("user icon directory is unavailable"))?;
+                    write_launcher_icon(&path, id)?;
+                    native::refresh_launcher_cache(&path);
+                    Ok(())
+                })
+            })
+            .detach();
+    }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn sync_file_icon(apply: impl FnOnce(&str) -> anyhow::Result<()>) {
     // Separate from APPLIED_APP_ICON: saving the already-previewed image
     // still needs a file update. Serialize NSWorkspace calls and cache only
-    // successes, so an unwritable bundle can be retried on the next save.
+    // successes, so an unwritable bundle or icon directory can be retried.
     let Ok(mut synced) = SYNCED_FILE_ICON.lock() else {
         return;
     };
@@ -209,6 +221,105 @@ fn set_application_icon_image(png: &[u8]) {
 #[cfg(not(target_os = "macos"))]
 fn set_application_icon_image(_png: &[u8]) {}
 
+/// Update existing native windows after a preview or rollback. New windows
+/// receive the current choice through the Root observer installed at startup.
+pub fn sync_window_icons(_cx: &mut gpui::App) {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    _cx.defer(|cx| {
+        // A picker click can run inside a window update; defer until that
+        // window is back in App so it receives the change as well.
+        for handle in cx.windows() {
+            let _ = handle.update(cx, |_, window, _| apply_window_icon(window));
+        }
+    });
+}
+
+pub fn init(_cx: &mut gpui::App) {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    _cx.observe_new::<gpui_component::Root>(|_, window, _| {
+        if let Some(window) = window {
+            apply_window_icon(window);
+        }
+    })
+    .detach();
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn apply_window_icon(window: &gpui::Window) {
+    if let Err(error) = native::apply(window, &current_id()) {
+        log::warn!("could not update window icon: {error:#}");
+    }
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn window_icon_image(id: &str) -> anyhow::Result<image::RgbaImage> {
+    let asset = app_icon_asset(id);
+    let bytes = crate::assets::png_bytes(asset)
+        .ok_or_else(|| anyhow::anyhow!("app icon asset missing: {asset}"))?;
+    let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)?.to_rgba8();
+    Ok(image::imageops::resize(
+        &image,
+        256,
+        256,
+        image::imageops::FilterType::Lanczos3,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+#[path = "app_icon/windows.rs"]
+mod native;
+
+#[cfg(target_os = "linux")]
+#[path = "app_icon/linux.rs"]
+mod native;
+
+#[cfg(any(target_os = "linux", test))]
+fn x11_icon_data(image: &image::RgbaImage) -> Vec<u32> {
+    let mut data = Vec::with_capacity(2 + image.as_raw().len() / 4);
+    data.extend([image.width(), image.height()]);
+    data.extend(image.pixels().map(|pixel| {
+        let [r, g, b, a] = pixel.0;
+        u32::from_be_bytes([a, r, g, b])
+    }));
+    data
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn write_launcher_icon(path: &std::path::Path, id: &str) -> anyhow::Result<()> {
+    use image::ImageEncoder;
+    use std::io::Write;
+
+    let image = window_icon_image(id)?;
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png).write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        image::ExtendedColorType::Rgba8,
+    )?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("icon path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+    let staged = parent.join(format!(".con-icon-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)?;
+        file.write_all(&png)?;
+        file.sync_all()?;
+        std::fs::rename(&staged, path)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(staged);
+    result
+}
+
+#[cfg(test)]
+#[path = "app_icon/ico.rs"]
+mod ico;
+
 #[cfg(target_os = "macos")]
 fn set_bundle_icon(id: &str) -> anyhow::Result<()> {
     use cocoa::base::id as ObjcId;
@@ -270,6 +381,75 @@ mod tests {
     use super::*;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn distribution_sources_match_the_default_catalog_asset() {
+        for source in [
+            include_str!("../build.rs"),
+            include_str!("../Cargo.toml"),
+            include_str!("../../../scripts/macos/common.sh"),
+            include_str!("../../../scripts/linux/release.sh"),
+            include_str!("../../../packaging/flatpak/aetherpak.yaml"),
+        ] {
+            assert!(source.contains(con_core::config::DEFAULT_APP_ICON_ASSET));
+        }
+    }
+
+    #[test]
+    fn launcher_icon_replaces_only_con_and_leaves_no_partial_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icons/co.nowledge.con.png");
+        write_launcher_icon(&path, "default").unwrap();
+        let classic = std::fs::read(&path).unwrap();
+        let unrelated = path.with_file_name("another-app.png");
+        std::fs::write(&unrelated, b"untouched").unwrap();
+        write_launcher_icon(&path, DEFAULT_APP_ICON).unwrap();
+        let current = std::fs::read(&path).unwrap();
+        assert_ne!(classic, current);
+        assert_eq!(image::load_from_memory(&current).unwrap().width(), 256);
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"untouched");
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            2
+        );
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(write_launcher_icon(&blocked, DEFAULT_APP_ICON).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), current);
+    }
+
+    #[test]
+    fn native_icon_assets_and_packaging_preserve_alpha() {
+        for choice in con_core::config::APP_ICONS {
+            let image = window_icon_image(choice.id).unwrap();
+            assert_eq!(image.dimensions(), (256, 256));
+            assert!(image.pixels().any(|pixel| pixel[3] > 0));
+        }
+        let png = crate::assets::png_bytes(con_core::config::DEFAULT_APP_ICON_ASSET).unwrap();
+        let bytes = ico::encode(&png).unwrap();
+        assert_eq!(&bytes[..6], &[0, 0, 1, 0, 7, 0]);
+        for (entry, size) in bytes[6..118]
+            .chunks_exact(16)
+            .zip([16, 24, 32, 48, 64, 128, 256])
+        {
+            assert_eq!(entry[0] as u32, size % 256);
+            assert_eq!(entry[1], entry[0]);
+            let len = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+            let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+            let image = image::load_from_memory(&bytes[offset..offset + len])
+                .unwrap()
+                .to_rgba8();
+            assert_eq!(image.dimensions(), (size, size));
+            assert_eq!(image.get_pixel(0, 0)[3], 0);
+        }
+    }
+
+    #[test]
+    fn x11_icon_pixels_are_straight_argb_not_premultiplied() {
+        let image =
+            image::RgbaImage::from_raw(2, 1, vec![240, 120, 60, 128, 1, 2, 3, 255]).unwrap();
+        assert_eq!(x11_icon_data(&image), vec![2, 1, 0x80f0783c, 0xff010203]);
+    }
 
     fn reset() -> std::sync::MutexGuard<'static, ()> {
         let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

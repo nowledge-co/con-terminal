@@ -689,12 +689,12 @@ impl ConWorkspace {
         // Restore the saved Dock image only if a Settings panel in this
         // window last applied the preview. Matching on icon id would let
         // closing one window cancel another window's identical preview.
-        self.settings_panel.update(cx, |panel, _cx| {
-            panel.release_icon_preview();
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.release_icon_preview(cx);
         });
         if let Some(panel) = self.settings_window_panel.clone() {
-            panel.update(cx, |panel, _cx| {
-                panel.release_icon_preview();
+            panel.update(cx, |panel, cx| {
+                panel.release_icon_preview(cx);
             });
         }
 

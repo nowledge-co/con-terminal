@@ -1,3 +1,7 @@
+#[cfg(target_os = "windows")]
+#[path = "src/app_icon/ico.rs"]
+mod ico;
+
 fn main() {
     // Windows users hit `cargo build -p con --release` out of muscle
     // memory and get a confusing cargo warning: "binary target `con` is
@@ -57,8 +61,14 @@ fn main() {
         // repo whose tree contains a file literally named `con.*`,
         // even inside a subdirectory — same trap that forces the
         // binary to ship as `con-app.exe`.
-        let icon = "../../assets/windows/con-app.ico";
-        println!("cargo:rerun-if-changed={}", icon);
+        let source = "../../assets/app-icons/con-raccoon-tail-A6.png";
+        println!("cargo:rerun-if-changed={source}");
+        println!("cargo:rerun-if-changed=src/app_icon/ico.rs");
+        let icon =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("con-app.ico");
+        let png = std::fs::read(source).expect("read default app icon");
+        std::fs::write(&icon, ico::encode(&png).expect("encode default app icon"))
+            .expect("write app icon resource");
 
         let mut res = winresource::WindowsResource::new();
         // Some locked-down hosts (and the GitHub Actions windows-2022
@@ -67,7 +77,7 @@ fn main() {
         if let Ok(toolkit) = std::env::var("CON_RC_TOOLKIT_PATH") {
             res.set_toolkit_path(&toolkit);
         }
-        res.set_icon(icon);
+        res.set_icon(icon.to_str().expect("app icon output path"));
         res.set("FileDescription", "con");
         res.set("ProductName", "con");
         if let Err(e) = res.compile() {

@@ -1146,6 +1146,7 @@ fn open_window_from_disk(cx: &mut App) {
         return;
     };
     app_icon::apply_persisted(&config.appearance.app_icon);
+    app_icon::sync_window_icons(cx);
     app_icon::sync_saved_file_icon(cx);
     open_con_window(config, fresh_window_session_with_history(), false, cx);
 }
@@ -2747,8 +2748,9 @@ fn main() {
             }
         };
 
-        // Set dock icon for development (`cargo run`) and any saved selection.
+        // Apply saved choices to existing and newly created native windows.
         app_icon::apply_persisted(&config.appearance.app_icon);
+        app_icon::init(cx);
         app_icon::sync_saved_file_icon(cx);
 
         // Initialize gpui-component subsystems (theme, input, dialog, etc.)

@@ -192,7 +192,7 @@ EOF
 # 256x256 icon — freedesktop hicolor's bread-and-butter size, and
 # what GNOME / KDE / xfce / wayland launchers all hit-test against
 # first. Pull from the macOS app-icon set we already ship.
-icon_src="assets/Con-macOS-Dark-256x256@2x.png"
+icon_src="assets/app-icons/con-raccoon-tail-A6.png"
 if [[ -f "$icon_src" ]]; then
   cp "$icon_src" "${stage_dir}/${linux_app_id}.png"
 else

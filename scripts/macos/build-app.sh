@@ -77,7 +77,7 @@ sips -z 32 32 "$CON_ICON_SOURCE" --out "$iconset_dir/icon_16x16@2x.png" >/dev/nu
 sips -z 64 64 "$CON_ICON_SOURCE" --out "$iconset_dir/icon_32x32@2x.png" >/dev/null
 sips -z 256 256 "$CON_ICON_SOURCE" --out "$iconset_dir/icon_128x128@2x.png" >/dev/null
 sips -z 512 512 "$CON_ICON_SOURCE" --out "$iconset_dir/icon_256x256@2x.png" >/dev/null
-cp "$CON_ICON_SOURCE" "$iconset_dir/icon_512x512@2x.png"
+sips -z 1024 1024 "$CON_ICON_SOURCE" --out "$iconset_dir/icon_512x512@2x.png" >/dev/null
 
 iconutil -c icns "$iconset_dir" -o "$resources_dir/con.icns"
 generate_info_plist "$contents_dir/Info.plist"

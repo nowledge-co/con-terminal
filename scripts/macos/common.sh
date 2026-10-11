@@ -121,7 +121,7 @@ setup_release_env() {
   export CON_BUILD_NUMBER="$(derive_build_number)"
   export CON_BUNDLE_ID_BASE="${CON_BUNDLE_ID_BASE:-co.nowledge.con}"
   export CON_MINIMUM_SYSTEM_VERSION="${CON_MINIMUM_SYSTEM_VERSION:-10.15.7}"
-  export CON_ICON_SOURCE="${CON_ICON_SOURCE:-$REPO_ROOT/assets/Con-macOS-Dark-1024x1024@1x.png}"
+  export CON_ICON_SOURCE="${CON_ICON_SOURCE:-$REPO_ROOT/assets/app-icons/con-raccoon-tail-A6.png}"
   export CON_DIST_ROOT="${CON_DIST_ROOT:-$REPO_ROOT/dist/macos/$CON_CHANNEL/$CON_ARCH}"
 
   local default_bundle_id="$CON_BUNDLE_ID_BASE"
