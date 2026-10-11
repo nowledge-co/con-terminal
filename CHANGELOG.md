@@ -41,7 +41,8 @@ con is still pre-release, so entries may group related beta work while the produ
   saving also updates the user launcher icon outside Flatpak; desktops may
   cache the old image. Windows pinned shortcuts keep the installed icon,
   and Wayland does not yet support live window previews. _(PR
-  [#462](https://github.com/nowledge-co/con-terminal/pull/462) by
+  [#462](https://github.com/nowledge-co/con-terminal/pull/462),
+  [#463](https://github.com/nowledge-co/con-terminal/pull/463) by
   [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.124` - 2026-10-10
