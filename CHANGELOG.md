@@ -16,6 +16,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#464](https://github.com/nowledge-co/con-terminal/pull/464) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**Window chrome**
+
+- Sidebars and the bottom input bar share the titlebar's translucent material,
+  with quieter, consistent edges around the terminal. Window Chrome adjusts
+  these areas together; Terminal Glass stays independent. _(PR
+  [#464](https://github.com/nowledge-co/con-terminal/pull/464) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **App icons**
 
 - Tail A6 is now the default app icon across macOS, Windows, and Linux,

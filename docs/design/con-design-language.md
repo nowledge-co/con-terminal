@@ -94,6 +94,15 @@ con is light-first (Flexoki Light default) but must excel in both themes.
   alpha; retain translucency on the surface instead.
 - Apply the same rule throughout sidebar navigation, file trees and search,
   including disclosure arrows, secondary paths and result line numbers.
+- The titlebar, left sidebar, agent sidebar, and bottom input bar share one
+  translucent chrome material. Keep outer panels square and flush to the
+  window; rounding belongs to controls and content within them. Use the same
+  quiet foreground-derived fill for their terminal-facing 1px edges, with no
+  rule beneath the macOS titlebar. Decorative edges must remain separate from
+  native presentation synchronization and transient seam covers. Window Chrome
+  controls this shared material; Terminal Glass controls terminal surfaces
+  independently. Do not use terminal opacity for some auxiliary regions and
+  UI opacity for others.
 - Show each tab once: expanded vertical tabs live in the labeled list; compact
   tabs live in the icon rail. Keep the rail's section controls available in
   either state, and retain compact tab navigation beside Files/Search panels.

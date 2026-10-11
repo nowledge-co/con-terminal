@@ -534,33 +534,16 @@ impl Render for ConWorkspace {
         let chrome_static_seam_color =
             terminal_separator_over_backdrop(terminal_surface_color, theme);
         let pane_divider_color = terminal_separator_over_backdrop(terminal_surface_color, theme);
-        let top_bar_surface_color = theme.title_bar.opacity(self.terminal_opacity);
+        let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         let input_bar_surface_color = top_bar_surface_color;
-        #[cfg(target_os = "macos")]
-        let elevated_panel_base_color = terminal_surface_color;
-        #[cfg(not(target_os = "macos"))]
-        let elevated_panel_base_color = theme.title_bar;
-        let elevated_panel_surface_color = elevated_panel_base_color
-            .blend(
-                theme
-                    .background
-                    .opacity(if theme.is_dark() { 0.14 } else { 0.06 }),
-            )
-            .opacity(elevated_ui_surface_opacity);
-        // The panel's own fill covers this pixel; a second static fill would
-        // darken it. Transition and drag seam covers still prevent light leaks.
-        #[cfg(target_os = "macos")]
-        let agent_panel_divider_color = theme.transparent;
-        #[cfg(not(target_os = "macos"))]
-        let agent_panel_divider_color = chrome_static_seam_color;
-        #[cfg(target_os = "macos")]
-        let agent_panel_resize_hover_color = theme.foreground.opacity(0.06);
-        #[cfg(not(target_os = "macos"))]
-        let agent_panel_resize_hover_color = chrome_static_seam_color.opacity(0.18);
-        let sidebar_seam_color =
+        // Auxiliary chrome shares the titlebar's material. These quiet inner
+        // edges are decoration, not the native transition/drag seam covers.
+        let agent_panel_surface_color = top_bar_surface_color;
+        let chrome_edge_color =
             theme
                 .foreground
                 .opacity(if theme.is_dark() { 0.055 } else { 0.045 });
+        let chrome_resize_hover_color = theme.foreground.opacity(0.08);
         let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
             let sidebar = self.sidebar.read(cx);
             let tab_sidebar_width = if vertical_tabs_enabled {
@@ -873,15 +856,9 @@ impl Render for ConWorkspace {
                     .bg(input_bar_surface_color)
                     .pt(px(1.0))
                     // Separate output from input without adding another base fill.
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .w_full()
-                            .h(px(1.0))
-                            .bg(theme.foreground.opacity(0.10 * input_bar_content_opacity)),
-                    )
+                    .child(div().absolute().top_0().left_0().w_full().h(px(1.0)).bg(
+                        chrome_edge_color.opacity(chrome_edge_color.a * input_bar_content_opacity),
+                    ))
                     .child(
                         div()
                             .min_h(px((input_bar_height - 1.0).max(0.0)))
@@ -965,7 +942,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((resize_edge - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(sidebar_seam_color),
+                    .bg(chrome_edge_color),
             );
             main_area = main_area.child(
                 div()
@@ -978,7 +955,7 @@ impl Render for ConWorkspace {
                     .cursor_col_resize()
                     .occlude()
                     .bg(theme.transparent)
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                    .hover(|s| s.bg(chrome_resize_hover_color))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -997,7 +974,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((left_panel_width - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(sidebar_seam_color),
+                    .bg(chrome_edge_color),
             );
         }
 
@@ -1030,7 +1007,7 @@ impl Render for ConWorkspace {
                     .flex_shrink_0()
                     .flex()
                     .flex_row()
-                    .bg(elevated_panel_surface_color)
+                    .bg(agent_panel_surface_color)
                     .child(
                         div()
                             .id("agent-panel-divider")
@@ -1038,7 +1015,7 @@ impl Render for ConWorkspace {
                             .w(px(1.0))
                             .h_full()
                             .flex_shrink_0()
-                            .bg(agent_panel_divider_color)
+                            .bg(chrome_edge_color)
                             .child(
                                 div()
                                     .absolute()
@@ -1048,7 +1025,7 @@ impl Render for ConWorkspace {
                                     .w(px(5.0))
                                     .cursor_col_resize()
                                     .bg(theme.transparent)
-                                    .hover(|s| s.bg(agent_panel_resize_hover_color))
+                                    .hover(|s| s.bg(chrome_resize_hover_color))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(
