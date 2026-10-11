@@ -4,6 +4,29 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.125` - Unreleased
+
+### Changed
+
+**App icons**
+
+- Tail A6 is now the default app icon across macOS, Windows, and Linux,
+  including Flatpak packages. Previously saved icon choices stay unchanged;
+  Classic remains available in Settings → Appearance. _(PR
+  [#462](https://github.com/nowledge-co/con-terminal/pull/462) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Added
+
+**Windows, Linux**
+
+- Preview app icons in running Windows and Linux X11 windows. On Linux,
+  saving also updates the user launcher icon outside Flatpak; desktops may
+  cache the old image. Windows pinned shortcuts keep the installed icon,
+  and Wayland does not yet support live window previews. _(PR
+  [#462](https://github.com/nowledge-co/con-terminal/pull/462) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.124` - 2026-10-10
 
 ### Changed
