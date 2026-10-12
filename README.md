@@ -1,5 +1,5 @@
 <p align="center">
-   <a href="https://con.nowledge.co"><img src="assets/Con-macOS-Dark-256x256@2x.png" width="120" alt="con logo"></a>
+   <a href="https://con.nowledge.co"><img src="assets/app-icons/con-raccoon-tail-A6.png" width="128" alt="con logo"></a>
 </p>
 <h1 align="center">con</h1>
 <p align="center"><strong>The terminal emulator with AI harness, nothing more</strong></p>
@@ -14,7 +14,7 @@
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con-terminal?logo=github&style=flat"></a>
   <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/macOS-beta-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
-  <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows preview (tracker)" src="https://custom-icon-badges.demolab.com/badge/Windows-preview-0078D6?logo=windows11&logoColor=white"></a>
+  <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows early beta (tracker)" src="https://custom-icon-badges.demolab.com/badge/Windows-early-0078D6?logo=windows11&logoColor=white"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux preview (tracker)" src="https://img.shields.io/badge/Linux-preview-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
 </p>
@@ -22,7 +22,6 @@
   <a href="https://con.nowledge.co/llms.txt"><img alt="llms.txt for AI agents" src="https://img.shields.io/badge/llms.txt-for_agent-6B7280?logo=dependabot&style=flat"></a>
   <a href="https://con.nowledge.co/docs"><img alt="Docs" src="https://img.shields.io/badge/Docs-8CA1AF?logo=readthedocs&logoColor=fff"></a>
   <a href="https://con.nowledge.co/changelog"><img alt="Changelog" src="https://img.shields.io/badge/change-log-4A5568?logo=git&style=flat"></a>
-  <a href="https://con.nowledge.co"><img alt="Changelog" src="https://img.shields.io/badge/con-homepage-blue.svg?logo=data:image/svg+xml;base64,PHN2ZwogIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICB3aWR0aD0iNjQiCiAgaGVpZ2h0PSI2NCIKICB2aWV3Qm94PSIwIDAgMTI4IDEyOCIKICByb2xlPSJpbWciCiAgYXJpYS1sYWJlbD0iUmFjY29vbiBpY29uIgo+CiAgPCEtLSBlYXJzIC0tPgogIDxwYXRoIGQ9Ik0zMiAyOCA0NCA2IDU4IDM0WiIgZmlsbD0iIzRiNTU2MyIvPgogIDxwYXRoIGQ9Ik05NiAyOCA4NCA2IDcwIDM0WiIgZmlsbD0iIzRiNTU2MyIvPgogIDxwYXRoIGQ9Ik00MCAyNyA0NSAxNyA1MiAzMVoiIGZpbGw9IiNkMWQ1ZGIiLz4KICA8cGF0aCBkPSJNODggMjcgODMgMTcgNzYgMzFaIiBmaWxsPSIjZDFkNWRiIi8+CgogIDwhLS0gaGVhZCAtLT4KICA8cGF0aAogICAgZD0iTTY0IDE4QzM1IDE4IDE0IDQyIDE0IDcxYzAgMzEgMjIgNDkgNTAgNDlzNTAtMTggNTAtNDljMC0yOS0yMS01My01MC01M1oiCiAgICBmaWxsPSIjOWNhM2FmIgogIC8+CgogIDwhLS0gZGFyayByYWNjb29uIG1hc2sgLS0+CiAgPHBhdGgKICAgIGQ9Ik0yMSA2MmMxMi0xNyAyOS0yNSA0My0yNXMzMSA4IDQzIDI1Yy03IDE0LTIwIDI1LTQzIDI1UzI4IDc2IDIxIDYyWiIKICAgIGZpbGw9IiMzNzQxNTEiCiAgLz4KCiAgPCEtLSBsaWdodCBmYWNlL211enpsZSAtLT4KICA8ZWxsaXBzZSBjeD0iNjQiIGN5PSI3NSIgcng9IjM1IiByeT0iMjkiIGZpbGw9IiNmM2Y0ZjYiLz4KCiAgPCEtLSBjaGVlayBwYXRjaGVzIC0tPgogIDxwYXRoIGQ9Ik0zNSA2NmM4LTEwIDE5LTE1IDI5LTE1LTEwIDUtMTcgMTMtMjAgMjVaIiBmaWxsPSIjZTVlN2ViIi8+CiAgPHBhdGggZD0iTTkzIDY2Yy04LTEwLTE5LTE1LTI5LTE1IDEwIDUgMTcgMTMgMjAgMjVaIiBmaWxsPSIjZTVlN2ViIi8+CgogIDwhLS0gZXllcyAtLT4KICA8Y2lyY2xlIGN4PSI0NyIgY3k9IjY0IiByPSI2IiBmaWxsPSIjMTExODI3Ii8+CiAgPGNpcmNsZSBjeD0iODEiIGN5PSI2NCIgcj0iNiIgZmlsbD0iIzExMTgyNyIvPgoKICA8IS0tIG5vc2UgLS0+CiAgPHBhdGgKICAgIGQ9Ik01NSA3OGM1LTUgMTMtNSAxOCAwLTIgOC02IDEyLTkgMTJzLTctNC05LTEyWiIKICAgIGZpbGw9IiMxMTE4MjciCiAgLz4KCiAgPCEtLSBtb3V0aCAtLT4KICA8cGF0aAogICAgZD0iTTY0IDkwYy01IDctMTMgMTAtMjEgNk02NCA5MGM1IDcgMTMgMTAgMjEgNiIKICAgIGZpbGw9Im5vbmUiCiAgICBzdHJva2U9IiMxMTE4MjciCiAgICBzdHJva2Utd2lkdGg9IjUiCiAgICBzdHJva2UtbGluZWNhcD0icm91bmQiCiAgLz4KCiAgPCEtLSBsb3dlciBmdXIgLyByYWNjb29uIHN0cmlwZSBmZWVsIC0tPgogIDxwYXRoCiAgICBkPSJNMzMgMTAxYzggOCAxOSAxMiAzMSAxMnMyMy00IDMxLTEyIgogICAgZmlsbD0ibm9uZSIKICAgIHN0cm9rZT0iIzZiNzI4MCIKICAgIHN0cm9rZS13aWR0aD0iOSIKICAgIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICAvPgo8L3N2Zz4="></a>
 </p>
 
 
@@ -59,13 +58,11 @@ If you're an old-school terminal user and only want enough AI harness when neede
   <a href="docs/screenshots.md">View the full screenshot gallery</a>
 </p>
 
-## 2 min know-how
+## Quick controls
 
 <p align="center">
   <video controls muted playsinline width="100%" src="https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17"></video>
 </p>
-
-Quick controls:
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
