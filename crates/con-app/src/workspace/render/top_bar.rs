@@ -7,6 +7,8 @@ use gpui_component::tooltip::Tooltip;
 const CHROME_CONTROL_SIZE: f32 = 22.0;
 const TAB_STRIP_INSET: f32 = (TOP_BAR_TABS_HEIGHT - TOP_BAR_TAB_HEIGHT) * 0.5;
 const HORIZONTAL_TAB_MIN_WIDTH: f32 = 140.0;
+const HORIZONTAL_TAB_MAX_WIDTH: f32 = 200.0;
+const TAB_WINDOW_DRAG_GAP: f32 = 64.0;
 const TAB_CLOSE_SIZE: f32 = 20.0;
 const TAB_SELECTION_INSET: f32 = 2.0;
 const TAB_SURFACE_HEIGHT: f32 = TOP_BAR_TAB_HEIGHT - 2.0 * TAB_SELECTION_INSET;
@@ -35,14 +37,18 @@ fn titlebar_icon_size(theme: &gpui_component::Theme, base: f32) -> Pixels {
 }
 
 fn tab_identity_icon_size(theme: &gpui_component::Theme) -> Pixels {
-    titlebar_icon_size(theme, 12.0).min(px(TAB_CLOSE_SIZE))
+    titlebar_icon_size(theme, 16.0).min(px(TAB_CLOSE_SIZE))
 }
 
 fn horizontal_tab_icon(icon: &'static str) -> &'static str {
-    if icon == "phosphor/terminal.svg" {
-        "phosphor/terminal-window.svg"
-    } else {
-        icon
+    match icon {
+        "phosphor/terminal.svg" | "phosphor/terminal-window.svg" => "tab-terminal-refined.png",
+        "phosphor/code.svg" => "tab-code.png",
+        "phosphor/file-code.svg" => "tab-file.png",
+        "phosphor/globe.svg" => "tab-remote.png",
+        "phosphor/pulse.svg" => "tab-monitor.png",
+        "phosphor/book-open.svg" => "tab-reader.png",
+        _ => icon,
     }
 }
 
@@ -112,12 +118,15 @@ pub(super) fn tab_drag_capsule(
         .text_color(theme.foreground)
         .child(
             tab_identity_icon_slot().child(
-                svg()
+                div()
                     .debug_selector(|| "drag-capsule-icon".into())
-                    .path(horizontal_tab_icon(preview.icon))
                     .size(tab_identity_icon_size(theme))
                     .flex_shrink_0()
-                    .text_color(theme.foreground),
+                    .child(crate::assets::tab_identity_icon(
+                        horizontal_tab_icon(preview.icon),
+                        tab_identity_icon_size(theme),
+                        theme.foreground,
+                    )),
             ),
         )
         .child(
@@ -139,6 +148,14 @@ fn tab_tray_container() -> gpui::Div {
         .items_center()
         .h(px(TOP_BAR_TAB_HEIGHT))
         .mb(px(TAB_STRIP_INSET))
+}
+
+fn horizontal_tab_viewport(tab_count: usize) -> gpui::Div {
+    div()
+        .flex()
+        .flex_1()
+        .min_w_0()
+        .max_w(px(tab_count as f32 * HORIZONTAL_TAB_MAX_WIDTH))
 }
 
 fn tab_tray_layer(background: Hsla) -> gpui::Div {
@@ -452,10 +469,10 @@ fn chrome_button(
 #[cfg(test)]
 mod chrome_tests {
     use super::{
-        chrome_button, chrome_controls_row, horizontal_tab_target, tab_attention_mark,
-        tab_close_button, tab_close_slot, tab_drag_capsule, tab_identity_icon_size,
-        tab_identity_icon_slot, tab_identity_row, tab_name_label, tab_selection_layer,
-        tab_trailing_drop_target, tab_tray_container, tab_tray_layer,
+        chrome_button, chrome_controls_row, horizontal_tab_target, horizontal_tab_viewport,
+        tab_attention_mark, tab_close_button, tab_close_slot, tab_drag_capsule,
+        tab_identity_icon_size, tab_identity_icon_slot, tab_identity_row, tab_name_label,
+        tab_selection_layer, tab_trailing_drop_target, tab_tray_container, tab_tray_layer,
     };
     use gpui::{
         Context, ElementId, FocusHandle, InteractiveElement, IntoElement, MouseButton,
@@ -463,6 +480,27 @@ mod chrome_tests {
     };
     use gpui_component::ActiveTheme;
     use gpui_component::ElementExt;
+
+    #[test]
+    fn generic_tab_identities_use_badges_without_replacing_application_brands() {
+        for (icon, badge) in [
+            ("phosphor/terminal.svg", "tab-terminal-refined.png"),
+            ("phosphor/code.svg", "tab-code.png"),
+            ("phosphor/file-code.svg", "tab-file.png"),
+            ("phosphor/globe.svg", "tab-remote.png"),
+            ("phosphor/pulse.svg", "tab-monitor.png"),
+            ("phosphor/book-open.svg", "tab-reader.png"),
+        ] {
+            assert_eq!(super::horizontal_tab_icon(icon), badge);
+        }
+        for icon in [
+            "agents/opencode.svg",
+            "providers/openai.svg",
+            "phosphor/rocket.svg",
+        ] {
+            assert_eq!(super::horizontal_tab_icon(icon), icon);
+        }
+    }
 
     struct ChromeTestView {
         height: f32,
@@ -493,6 +531,109 @@ mod chrome_tests {
 
     struct DragCapsuleView {
         width: f32,
+    }
+
+    struct CaptionGapView {
+        width: f32,
+        count: usize,
+        caption_clicks: usize,
+    }
+
+    impl Render for CaptionGapView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("caption-probe")
+                .flex()
+                .w(px(self.width))
+                .h(px(super::TOP_BAR_TABS_HEIGHT))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.caption_clicks += 1;
+                    }),
+                )
+                .child(
+                    div().flex().flex_1().min_w_0().child(
+                        horizontal_tab_viewport(self.count)
+                            .id("caption-tabs")
+                            .debug_selector(|| "caption-tabs".into())
+                            .overflow_x_scroll()
+                            .mr(px(super::TAB_WINDOW_DRAG_GAP))
+                            .child(
+                                tab_tray_container()
+                                    .min_w(px(self.count as f32 * super::HORIZONTAL_TAB_MIN_WIDTH))
+                                    .children((0..self.count).map(|index| {
+                                        horizontal_tab_target()
+                                            .id(ElementId::Name(
+                                                format!("caption-tab-{index}").into(),
+                                            ))
+                                            .debug_selector(move || format!("caption-tab-{index}"))
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                    })),
+                            ),
+                    ),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "caption-controls".into())
+                        .size(px(22.0))
+                        .flex_shrink_0(),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn capped_tabs_leave_a_caption_gap_without_losing_equal_widths(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, _| CaptionGapView {
+            width: 2000.0,
+            count: 2,
+            caption_clicks: 0,
+        });
+        for count in [2, 3, 10] {
+            for width in [2000.0, 900.0, 320.0] {
+                view.update(cx, |view, cx| {
+                    view.count = count;
+                    view.width = width;
+                    cx.notify();
+                });
+                cx.simulate_resize(gpui::size(px(width), px(100.0)));
+                let viewport = cx.debug_bounds("caption-tabs").unwrap();
+                let controls = cx.debug_bounds("caption-controls").unwrap();
+                let first = cx.debug_bounds("caption-tab-0").unwrap();
+                assert!(controls.left() - viewport.right() >= px(super::TAB_WINDOW_DRAG_GAP));
+                assert!(first.size.width >= px(super::HORIZONTAL_TAB_MIN_WIDTH));
+                assert!(first.size.width <= px(super::HORIZONTAL_TAB_MAX_WIDTH));
+                for selector in [
+                    "caption-tab-1",
+                    "caption-tab-2",
+                    "caption-tab-3",
+                    "caption-tab-4",
+                    "caption-tab-5",
+                    "caption-tab-6",
+                    "caption-tab-7",
+                    "caption-tab-8",
+                    "caption-tab-9",
+                ]
+                .into_iter()
+                .take(count - 1)
+                {
+                    let tab = cx.debug_bounds(selector).unwrap();
+                    // GPUI distributes fractional widths on the device pixel grid.
+                    assert!(
+                        (tab.size.width - first.size.width).abs() <= px(1.0),
+                        "unequal allocation for {count} tabs at {width}: {first:?}, {tab:?}"
+                    );
+                }
+                let gap = gpui::point(viewport.right() + px(20.0), viewport.center().y);
+                cx.simulate_click(gap, gpui::Modifiers::default());
+                cx.update(|_, cx| assert_eq!(view.read(cx).caption_clicks, 1));
+                cx.simulate_click(first.center(), gpui::Modifiers::default());
+                cx.update(|_, cx| assert_eq!(view.read(cx).caption_clicks, 1));
+                view.update(cx, |view, _| view.caption_clicks = 0);
+            }
+        }
     }
 
     impl Render for DragCapsuleView {
@@ -657,79 +798,87 @@ mod chrome_tests {
                 .w(px(self.width))
                 .h(px(super::TOP_BAR_TABS_HEIGHT))
                 .items_end()
-                .overflow_x_scroll()
-                .track_scroll(&self.scroll)
                 .child(
-                    tab_tray_container()
-                        .min_w(px(2.0 * super::HORIZONTAL_TAB_MIN_WIDTH))
+                    horizontal_tab_viewport(2)
+                        .id("layout-viewport")
+                        .overflow_x_scroll()
+                        .debug_selector(|| "layout-viewport".into())
+                        .track_scroll(&self.scroll)
                         .child(
-                            tab_tray_layer(gpui::transparent_black())
-                                .debug_selector(|| "tray-paint".into()),
-                        )
-                        .children(
-                            [
-                                ("short-tab", "~"),
-                                (
-                                    "long-tab",
-                                    if self.renamed {
-                                        "Mem"
-                                    } else {
-                                        "a-long-project-name-with-a-long-working-directory"
-                                    },
-                                ),
-                            ]
-                            .map(|(id, title)| {
-                                let index = usize::from(id == "long-tab");
-                                let is_active = self.active == index;
-                                let scroll = self.scroll.clone();
-                                let reveal = self.reveal.clone();
-                                horizontal_tab_target()
-                                    .id(id)
-                                    .text_size(px(12.0))
-                                    .debug_selector(move || id.into())
-                                    .on_prepaint(move |bounds, window, _| {
-                                        if is_active {
-                                            super::schedule_tab_reveal(
-                                                (index as u64, index, 2),
-                                                bounds,
-                                                &scroll,
-                                                &reveal,
-                                                window,
-                                            );
-                                        }
-                                    })
-                                    .child(
-                                        tab_identity_row()
-                                            .relative()
+                            tab_tray_container()
+                                .min_w(px(2.0 * super::HORIZONTAL_TAB_MIN_WIDTH))
+                                .child(
+                                    tab_tray_layer(gpui::transparent_black())
+                                        .debug_selector(|| "tray-paint".into()),
+                                )
+                                .children(
+                                    [
+                                        ("short-tab", "~"),
+                                        (
+                                            "long-tab",
+                                            if self.renamed {
+                                                "Mem"
+                                            } else {
+                                                "a-long-project-name-with-a-long-working-directory"
+                                            },
+                                        ),
+                                    ]
+                                    .map(|(id, title)| {
+                                        let index = usize::from(id == "long-tab");
+                                        let is_active = self.active == index;
+                                        let scroll = self.scroll.clone();
+                                        let reveal = self.reveal.clone();
+                                        horizontal_tab_target()
+                                            .id(id)
+                                            .text_size(px(12.0))
+                                            .debug_selector(move || id.into())
+                                            .on_prepaint(move |bounds, window, _| {
+                                                if is_active {
+                                                    super::schedule_tab_reveal(
+                                                        (index as u64, index, 2),
+                                                        bounds,
+                                                        &scroll,
+                                                        &reveal,
+                                                        window,
+                                                    );
+                                                }
+                                            })
                                             .child(
-                                                tab_selection_layer(
-                                                    gpui::transparent_black(),
-                                                    gpui::transparent_black(),
-                                                )
-                                                .debug_selector(move || format!("{id}-surface")),
-                                            )
-                                            .child(
-                                                tab_identity_icon_slot().debug_selector(
-                                                    move || format!("{id}-identity"),
-                                                ),
-                                            )
-                                            .child(
-                                                tab_name_label()
-                                                    .debug_selector(move || format!("{id}-label"))
+                                                tab_identity_row()
+                                                    .relative()
                                                     .child(
-                                                        div()
-                                                            .min_w_0()
-                                                            .overflow_x_hidden()
-                                                            .whitespace_nowrap()
-                                                            .text_ellipsis()
-                                                            .child(title),
+                                                        tab_selection_layer(
+                                                            gpui::transparent_black(),
+                                                            gpui::transparent_black(),
+                                                        )
+                                                        .debug_selector(move || {
+                                                            format!("{id}-surface")
+                                                        }),
+                                                    )
+                                                    .child(tab_identity_icon_slot().debug_selector(
+                                                        move || format!("{id}-identity"),
+                                                    ))
+                                                    .child(
+                                                        tab_name_label()
+                                                            .debug_selector(move || {
+                                                                format!("{id}-label")
+                                                            })
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .overflow_x_hidden()
+                                                                    .whitespace_nowrap()
+                                                                    .text_ellipsis()
+                                                                    .child(title),
+                                                            ),
                                                     ),
-                                            ),
-                                    )
-                            }),
-                        )
-                        .child(
-                            tab_trailing_drop_target().debug_selector(|| "trailing-drop".into()),
+                                            )
+                                    }),
+                                )
+                                .child(
+                                    tab_trailing_drop_target()
+                                        .debug_selector(|| "trailing-drop".into()),
+                                ),
                         ),
                 )
         }
@@ -741,7 +890,12 @@ mod chrome_tests {
         let short = cx.debug_bounds("short-tab").unwrap();
         let long = cx.debug_bounds("long-tab").unwrap();
         assert_eq!(short.size.width, long.size.width);
-        assert_eq!(short.size.width + long.size.width, px(700.0));
+        assert_eq!(short.size.width, px(super::HORIZONTAL_TAB_MAX_WIDTH));
+        assert_eq!(short.size.width + long.size.width, px(400.0));
+        assert_eq!(
+            cx.debug_bounds("layout-root").unwrap().right() - long.right(),
+            px(300.0)
+        );
         let identity_before = cx.debug_bounds("long-tab-identity").unwrap();
         let label_before = cx.debug_bounds("long-tab-label").unwrap();
         view.update(cx, |view, cx| {
@@ -1167,6 +1321,7 @@ impl ConWorkspace {
             || pane_title_drag_to_tab_active
             || pane_origin_drag_active;
         let tab_count = self.tabs.len();
+        let mut rendered_tab_count = tab_count;
         if tab_strip_preview_active || pane_origin_drag_active {
             self.horizontal_tab_reveal_key.set(None);
         }
@@ -1948,6 +2103,7 @@ impl ConWorkspace {
                     }
                 }
             }
+            rendered_tab_count = visual_pos;
         }
 
         let mut leading_chrome = div()
@@ -1986,14 +2142,11 @@ impl ConWorkspace {
                 tab_strip_progress
             };
             leading_chrome = leading_chrome.child(
-                div()
+                horizontal_tab_viewport(rendered_tab_count)
                     .id("horizontal-tab-viewport")
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    // Leave a small, stable window-drag area before the controls.
-                    .mr(px(24.0))
                     .overflow_x_scroll()
+                    // Surplus width stays on the parent caption, outside tab hit targets.
+                    .mr(px(TAB_WINDOW_DRAG_GAP))
                     .track_scroll(&self.horizontal_tab_scroll)
                     .opacity(opacity)
                     .child(tabs_container),

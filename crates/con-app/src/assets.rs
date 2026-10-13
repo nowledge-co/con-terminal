@@ -95,6 +95,29 @@ pub fn png_preview(path: &'static str, logical_size: f32) -> ImageSource {
     }))
 }
 
+/// Tab identities may be small bitmap objects; action/status glyphs stay SVG.
+pub(crate) fn tab_identity_icon(
+    path: &'static str,
+    size: gpui::Pixels,
+    color: gpui::Hsla,
+) -> gpui::AnyElement {
+    use gpui::{IntoElement, Styled, StyledImage};
+    if path.ends_with(".png") {
+        gpui::img(png_preview(path, size.as_f32()))
+            .size(size)
+            .object_fit(gpui::ObjectFit::Contain)
+            .flex_shrink_0()
+            .into_any_element()
+    } else {
+        gpui::svg()
+            .path(path)
+            .size(size)
+            .flex_shrink_0()
+            .text_color(color)
+            .into_any_element()
+    }
+}
+
 struct PngPreview;
 
 impl Asset for PngPreview {
@@ -149,6 +172,40 @@ fn preview_bgra(bytes: &[u8], size: u32) -> Result<image::RgbaImage> {
 mod tests {
     use super::*;
     use gpui::{Context, IntoElement, Render, Styled, Window, img, px};
+
+    #[test]
+    fn tab_identities_are_embedded_small_and_transparent() {
+        for path in [
+            "tab-terminal-refined.png",
+            "tab-code.png",
+            "tab-file.png",
+            "tab-remote.png",
+            "tab-monitor.png",
+            "tab-reader.png",
+        ] {
+            let bytes = png_bytes(path).expect("tab identity must ship in the binary");
+            let image = image::load_from_memory(&bytes).unwrap().into_rgba8();
+            assert_eq!(image.dimensions(), (256, 256));
+            assert_eq!(image.get_pixel(0, 0)[3], 0, "{path} has an opaque backdrop");
+            let solid = image.pixels().filter(|p| p[3] >= 240).count();
+            let fringe = image.pixels().filter(|p| p[3] > 0 && p[3] < 200).count();
+            assert!(solid > 4096, "{path} has insufficient solid coverage");
+            assert!(fringe < solid / 4, "{path} has a diffuse alpha halo");
+            for size in [16, 32] {
+                let icon = preview_bgra(&bytes, size).unwrap();
+                let solid = icon.pixels().filter(|p| p[3] >= 240).count();
+                assert!(
+                    solid > (size * size / 20) as usize,
+                    "{path} is too faint at {size}px"
+                );
+                assert_eq!(icon.get_pixel(0, 0)[3], 0);
+                assert!(
+                    icon.pixels().filter(|p| p[3] == 0).count() > (size * size / 10) as usize,
+                    "{path} loses its transparent silhouette at {size}px"
+                );
+            }
+        }
+    }
 
     struct PreviewView {
         loaded: std::rc::Rc<std::cell::Cell<bool>>,

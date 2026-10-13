@@ -118,12 +118,11 @@ impl TabActivity {
             .size(slot_size);
         if !active || (compact && visual.glyph().is_none()) {
             slot = slot.child(
-                svg()
+                div()
                     .debug_selector(|| "tab-status-brand".into())
-                    .path(icon)
                     .size(icon_size)
                     .flex_shrink_0()
-                    .text_color(color),
+                    .child(crate::assets::tab_identity_icon(icon, icon_size, color)),
             );
         }
         if active {

@@ -16,7 +16,12 @@ configured UI font, while terminal text and code keep their monospace fonts.
 - Divide the available tab region equally, independent of title length or
   selection. AI summaries and inline renaming must not move neighbouring tabs.
   Names truncate after the fixed identity slot and retain full-name tooltips.
-  Keep a 140-point minimum target width; the region scrolls horizontally when
+  Keep a 140-point minimum and a 200-point maximum target width; all visible
+  targets still share the same allocation. Cap the viewport by the number of
+  rendered targets, including a pane-promotion placeholder only while it is
+  actually present. Surplus width remains unpainted, draggable titlebar space.
+  Leave at least 64 points between the strip and the action controls.
+  The region scrolls horizontally when
   it cannot fit all tabs. Activating a tab reveals it, but ordinary repaints
   must not override manual scrolling. Window controls stay outside this region;
   blank titlebar space outside the tab strip remains draggable.
@@ -80,9 +85,14 @@ Its title uses normal weight. Hover strengthens that tab's fill, never adding
 a separate name badge or rectangular outer frame.
 Labels use solid theme-derived ink at normal weight. Selection must not depend
 on making unselected titles hard to read.
-Identity glyphs use a twelve-point frame at default UI size. Generic terminal
-tabs use Phosphor's terminal-window asset for a balanced, self-contained mark;
-specific application identities remain unchanged. Labels use the UI font at
+Identity glyphs use a sixteen-point frame at default UI size. Generic terminal,
+code, file, remote, monitor, and reader identities use generated freestanding PNG objects, explicitly
+requested for tab navigation. Specific application identity assets remain
+unchanged; action controls and semantic status glyphs retain Phosphor SVGs.
+The PNGs are embedded in the binary and share the existing premultiplied-alpha,
+physical-pixel-sized preview cache. Do not decode or resize them during paint,
+read them from the filesystem at runtime, or apply translucent glyph opacity.
+Labels use the UI font at
 11.5 points scaled from the configured UI size, preserving original case.
 The six-point gap groups the icon and label
 without adding padding inside the label itself. Larger UI sizes cap the frame at the
@@ -90,8 +100,15 @@ twenty-point identity slot; hover never shifts the slot or label.
 
 User-assigned accent fills and configured inactive accent opacity remain
 supported. Activity and attention indicators retain their semantic colors.
-Labels do not inherit glyph opacity from these fills. Icons use solid,
-theme-derived ink and the existing Phosphor assets.
+Labels do not inherit glyph opacity from these fills. SVG icons use solid,
+theme-derived ink. Bitmap identities keep their authored colors: teal for terminal,
+connection and monitor shapes, amber for code and documents, and ivory for books.
+Distinct silhouettes replace shared square backplates. Shallow chamfers provide
+definition without external shadows or glow; negative spaces remain transparent.
+Judge details at the actual sixteen-point display size, not the source resolution.
+The current local design trial uses a front-facing teal terminal frame with a
+larger ivory prompt and restrained depth, without a monitor stand;
+the remaining identities keep their freestanding forms pending visual acceptance.
 
 Names come from the same retained presentation as the sidebar, including user
 renames. Do not shorten by character count: the label truncates according to
