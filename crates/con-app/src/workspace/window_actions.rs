@@ -580,6 +580,21 @@ impl ConWorkspace {
             .into_iter()
             .cloned()
             .collect();
+        if self.config.appearance.tabs_orientation == TabsOrientation::Horizontal
+            && self.tabs.len() > 2
+            && !cx.reduce_motion()
+        {
+            let presentation = self.sidebar.read(cx).session(index);
+            self.tab_slot_motion.depart(
+                self.tabs[index].summary_id,
+                presentation.map_or_else(
+                    || self.tabs[index].title.clone(),
+                    |entry| entry.name.clone(),
+                ),
+                presentation.map_or("phosphor/terminal.svg", |entry| entry.icon),
+                std::time::Instant::now(),
+            );
+        }
         // Save the closing tab's conversation
         {
             let conv = self.tabs[index].session.conversation();

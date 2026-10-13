@@ -17,7 +17,7 @@ The module split keeps those responsibilities explicit:
 | `chrome.rs`, `chrome_actions.rs`, `caption.rs` | Window chrome math, transparency seam guards, pane scope picker, layout profile actions, and non-macOS caption buttons. |
 | `pane_actions.rs`, `tab_actions.rs`, `suggestions.rs` | Terminal commands, pane/surface/tab lifecycle, shell history, suggestions, and tab summaries. |
 | `render.rs`, `render/top_bar.rs`, `render/popups.rs` | GPUI render tree, top chrome/tab strip composition, and workspace-level popup overlays. Rendering stays isolated from behavior modules. |
-| `tab_presentation.rs`, `helpers.rs`, `tests.rs` | Tab/pane naming, geometry helpers, rename helpers, and workspace unit tests. |
+| `tab_presentation.rs`, `tab_motion.rs`, `helpers.rs`, `tests.rs` | Tab/pane naming, presentation-only tab slot motion, geometry helpers, rename helpers, and workspace unit tests. |
 
 Rules for future changes:
 

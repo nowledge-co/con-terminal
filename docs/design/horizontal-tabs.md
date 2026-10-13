@@ -32,11 +32,32 @@ Endpoint visibility is observed after layout. Notify chrome only when those
 two booleans change, never schedule an unconditional next-frame callback or
 poll scroll state while idle. Preserve manual scrolling and explicit reveals.
 
-## Addition and Removal Motion: Next Phase
+## Addition and Removal Motion
 
-Individual tabs currently enter and leave immediately. The strip's overall
-appearance/disappearance already uses `MotionValue` through
-`sync_tab_strip_motion`; that is separate from per-tab motion.
+`TabSlotMotion` animates slot weights from zero to one on arrival (220 ms)
+and from the current weight to zero on departure (160 ms). The existing
+`MotionValue` deceleration samples elapsed time, not frame count. Weighted
+minimum widths, flex growth and strip width caps use the same sampled units;
+titles and icons are clipped as space changes, never scaled.
+
+Ordinary idle renders reuse the retained live-ID list. Only topology changes
+reconcile slots; departure anchors are resolved then, not searched on every
+frame. Request animation frames only while a slot remains unsettled.
+
+Logical creation and closure remain immediate. A departing slot retains only
+a title, icon identifier, last painted colors and neighboring IDs, never a
+terminal entity or PTY.
+Discard it when its weight reaches zero. Retarget an interrupted arrival from
+its current width. Use session IDs for element identity and callbacks.
+
+Selection reveal runs once slots settle, so a zero-width arrival cannot poison
+the retained reveal key. Prepaint records the actual interpolated bounds.
+Starting a drag or rename snaps to final allocation and clears departing
+chrome; sorting and hit testing must not mix animated and final positions.
+Reduce Motion also snaps without requesting a further frame. Vertical tabs
+and the one-tab/no-strip layout keep their existing behavior. Wholesale
+workspace replacement snaps to its new scene rather than animating every
+restored/imported tab from zero width.
 
 The maintainer's reference recording shows tab creation at 00:02–00:04 and
 pane expansion at 00:25–00:27. Borrow their spatial continuity, not an isolated
@@ -44,17 +65,9 @@ opacity effect. Pane identities and a compact tab-level identity stack merit
 separate exploration: active identity first, bounded count, no repeated icons
 for ordinary one-pane tabs, and no ambiguity with surface tabs.
 
-The next implementation should commit logical creation/closure immediately,
-then animate only bounded, metadata-only chrome. Do not keep a closing PTY
-alive for an exit animation. Use stable session IDs for transition state,
-retarget from the current visual position during rapid actions, keep selection
-and hit targets in agreement, and preserve the last-tab/window-close behavior.
-Respect Reduce Motion and request frames only during unsettled transitions.
-
-Before shipping, test overflow, first/last/middle closure, rapid reversals,
-dragging during transitions, and the one-tab/two-tab height boundary. Do not
-animate individual width allocation until reveal and drag geometry consume
-the same interpolated bounds.
+Tests cover time-based arrival, interrupted closure, consecutive middle
+closures, idle/reduced-motion frame demand, and real GPUI intermediate slot
+geometry. The existing overflow, reveal and drag tests remain applicable.
 
 The identity assets and their generation prompts are documented in
 [`assets/tab-icons.md`](../../assets/tab-icons.md). Generic identities do not

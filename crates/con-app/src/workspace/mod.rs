@@ -141,6 +141,7 @@ mod session_worker;
 mod sidebar_settings;
 mod suggestions;
 mod tab_actions;
+mod tab_motion;
 mod tab_presentation;
 mod terminal_factory;
 mod terminal_status;
@@ -208,6 +209,7 @@ pub struct ConWorkspace {
     left_panel_motion: SidebarMotion,
     agent_panel_width: f32,
     tab_strip_motion: MotionValue,
+    tab_slot_motion: tab_motion::TabSlotMotion,
     input_bar_visible: bool,
     input_bar_motion: SidebarMotion,
     /// Tracks whether a modal was open on the last render, so we can

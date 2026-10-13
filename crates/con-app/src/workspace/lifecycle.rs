@@ -846,6 +846,7 @@ impl ConWorkspace {
             }),
             agent_panel_width,
             tab_strip_motion: MotionValue::new(if has_multiple_tabs { 1.0 } else { 0.0 }),
+            tab_slot_motion: Default::default(),
             input_bar_visible: session.input_bar_visible,
             input_bar_motion: SidebarMotion::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,

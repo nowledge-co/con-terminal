@@ -1,6 +1,7 @@
 # Pane Transition Motion
 
-Status: implementation study, not a shipped animation feature.
+Status: horizontal tab slot motion is implemented. Terminal-body pane motion
+remains an implementation study, not a shipped feature.
 
 ## Reference Direction
 
@@ -31,7 +32,7 @@ not that application-level resize cost.
 
 ## Recommended Sequence
 
-1. Finish per-tab chrome motion separately. Logical closure stays immediate;
+1. Keep per-tab chrome motion separate. Logical closure stays immediate;
    decorative exit state must never own a terminal process.
 2. Establish a pane transition presentation layer with final logical bounds
    committed once. Keep cell geometry, selection and mouse reporting truthful.

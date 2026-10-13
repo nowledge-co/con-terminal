@@ -15,6 +15,9 @@ con is still pre-release, so entries may group related beta work while the produ
   Tabs shrink before scrolling, and an All tabs menu keeps hidden tabs directly
   accessible by name. Paging arrows sit outside the labels when tabs overflow;
   wheel scrolling works over the tab buttons themselves.
+- Opening and closing horizontal tabs smoothly redistributes their space.
+  Closing a tab still closes its terminal immediately. Dragging and Reduce
+  Motion use the final layout without a transition.
 - Smart, Shell and Agent input modes have distinct framed icons. The bottom
   bar and agent composer share a consistent send button, with clearer empty
   and ready states. The agent composer keeps its action aligned in multiline

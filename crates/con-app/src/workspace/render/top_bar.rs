@@ -357,6 +357,45 @@ fn horizontal_tab_target() -> gpui::Div {
         .h(px(TOP_BAR_TAB_HEIGHT))
 }
 
+fn animated_tab_target(weight: f32) -> gpui::Div {
+    horizontal_tab_target()
+        .flex_grow(weight)
+        .min_w(px(HORIZONTAL_TAB_MIN_WIDTH * weight))
+        .px(px(TAB_SELECTION_INSET * weight))
+        .when(weight < 1.0, |tab| tab.overflow_hidden())
+}
+
+fn departing_tab(
+    exit: &super::super::tab_motion::DepartingTab,
+    theme: &gpui_component::Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let (background, ink) = exit.colors.unwrap_or((theme.transparent, theme.foreground));
+    animated_tab_target(exit.weight)
+        .id(("departing-tab", exit.id))
+        .font_family(theme.font_family.clone())
+        .text_size(ui_px(theme, 11.5))
+        .line_height(ui_px(theme, 16.0))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(ink)
+        .child(
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .child(tab_selection_layer(background, background))
+                .child(
+                    tab_identity_icon_slot().child(crate::assets::tab_identity_icon(
+                        horizontal_tab_icon(exit.icon),
+                        tab_identity_icon_size(theme),
+                        ink,
+                    )),
+                )
+                .child(tab_identity_row().child(div().truncate().child(exit.title.clone()))),
+        )
+}
+
 fn tab_identity_row() -> gpui::Div {
     div()
         .flex()
@@ -667,6 +706,76 @@ mod chrome_tests {
                 "{path}"
             );
         }
+    }
+
+    #[gpui::test]
+    fn animated_slots_share_space_and_settle_to_equal_widths(cx: &mut gpui::TestAppContext) {
+        use std::time::{Duration, Instant};
+        struct AnimatedSlots {
+            motion: super::super::super::tab_motion::TabSlotMotion,
+            now: Instant,
+            ids: Vec<u64>,
+        }
+        impl Render for AnimatedSlots {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.motion.sync(self.ids.iter().copied(), true, self.now);
+                let (units, _) = self.motion.advance(self.now, false);
+                div().w_full().h(px(40.0)).child(
+                    super::horizontal_tab_viewport(self.ids.len())
+                        .max_w(px(units * super::HORIZONTAL_TAB_MAX_WIDTH))
+                        .child(
+                            tab_tray_container()
+                                .min_w(px(units * super::HORIZONTAL_TAB_MIN_WIDTH))
+                                .children(self.ids.iter().copied().map(|id| {
+                                    super::animated_tab_target(self.motion.weight(id, self.now))
+                                        .id(("slot", id))
+                                        .debug_selector(move || format!("slot-{id}").into())
+                                        .child(div().min_w_0().truncate().child("Long tab title"))
+                                })),
+                        ),
+                )
+            }
+        }
+        let start = Instant::now();
+        let (view, cx) = cx.add_window_view(|_, _| AnimatedSlots {
+            motion: Default::default(),
+            now: start,
+            ids: vec![1, 2],
+        });
+        cx.simulate_resize(gpui::size(px(520.0), px(40.0)));
+        cx.run_until_parked();
+        let first = cx.debug_bounds("slot-1").unwrap();
+        assert_eq!(first.size.width, px(200.0));
+        view.update(cx, |view, cx| {
+            view.ids.push(3);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("slot-3").unwrap().size.width, px(0.0));
+        assert_eq!(cx.debug_bounds("slot-1").unwrap(), first);
+        view.update(cx, |view, cx| {
+            view.now = start + Duration::from_millis(60);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let newcomer = cx.debug_bounds("slot-3").unwrap();
+        assert!(newcomer.size.width > px(0.0) && newcomer.size.width < px(520.0 / 3.0));
+        let first_mid = cx.debug_bounds("slot-1").unwrap();
+        let second_mid = cx.debug_bounds("slot-2").unwrap();
+        assert_eq!(first_mid.size.width, second_mid.size.width);
+        assert_eq!(first_mid.right(), second_mid.left());
+        assert_eq!(second_mid.right(), newcomer.left());
+        view.update(cx, |view, cx| {
+            view.now = start + Duration::from_millis(220);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let widths: Vec<_> = ["slot-1", "slot-2", "slot-3"]
+            .into_iter()
+            .map(|id| cx.debug_bounds(id).unwrap().size.width)
+            .collect();
+        assert!((widths[0] - widths[2]).abs() < px(0.1));
+        assert!((widths.iter().copied().sum::<gpui::Pixels>() - px(520.0)).abs() < px(0.1));
     }
 
     #[gpui::test]
@@ -1642,6 +1751,23 @@ impl ConWorkspace {
             || pane_title_drag_to_tab_active
             || pane_origin_drag_active;
         let tab_count = self.tabs.len();
+        let motion_now = std::time::Instant::now();
+        let animate_slots = self.config.appearance.tabs_orientation == TabsOrientation::Horizontal
+            && tab_count > 1
+            && !tab_strip_preview_active
+            && !cx.has_active_drag()
+            && self.tab_rename.is_none()
+            && !cx.reduce_motion();
+        self.tab_slot_motion.sync(
+            self.tabs.iter().map(|tab| tab.summary_id),
+            animate_slots,
+            motion_now,
+        );
+        let (mut slot_units, slots_animating) =
+            self.tab_slot_motion.advance(motion_now, cx.reduce_motion());
+        if slots_animating {
+            window.request_animation_frame();
+        }
         let mut rendered_tab_count = tab_count;
         if tab_strip_preview_active || pane_origin_drag_active {
             self.horizontal_tab_reveal_key.set(None);
@@ -1652,7 +1778,7 @@ impl ConWorkspace {
         let rename_input = self.tab_rename.as_ref().map(|r| r.input.clone());
         let mut tabs_container = tab_tray_container()
             .id("tab-strip-container")
-            .min_w(px(self.tabs.len() as f32 * HORIZONTAL_TAB_MIN_WIDTH))
+            .min_w(px(slot_units * HORIZONTAL_TAB_MIN_WIDTH))
             .when(
                 !self.horizontal_tab_edges.get().0 && !self.horizontal_tab_edges.get().1,
                 |tray| {
@@ -1759,10 +1885,8 @@ impl ConWorkspace {
                 None
             };
 
-            tabs_container = tabs_container.min_w(px((tab_count
-                + usize::from(pane_title_drag_drop_slot.is_some()))
-                as f32
-                * HORIZONTAL_TAB_MIN_WIDTH));
+            slot_units += usize::from(pane_title_drag_drop_slot.is_some()) as f32;
+            tabs_container = tabs_container.min_w(px(slot_units * HORIZONTAL_TAB_MIN_WIDTH));
 
             let render_indices: Vec<usize> = if let Some(dragged_id) = dragged_source_id
                 && let Some(source_idx) = self.tabs.iter().position(|t| t.summary_id == dragged_id)
@@ -1790,6 +1914,11 @@ impl ConWorkspace {
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
                 let session_id = tab.summary_id;
+                for exit in &self.tab_slot_motion.departing {
+                    if self.tab_slot_motion.before(exit) == Some(session_id) {
+                        tabs_container = tabs_container.child(departing_tab(exit, theme));
+                    }
+                }
                 let tab_id = session_id;
                 let tab_color = tab.color;
                 let terminal_status = self
@@ -1815,10 +1944,12 @@ impl ConWorkspace {
                     status_detail.as_deref(),
                 );
 
-                let close_id = ElementId::Name(format!("tab-close-{}", index).into());
+                let close_id = ElementId::Name(format!("tab-close-{}", session_id).into());
 
                 let close_button = tab_close_slot()
-                    .id(ElementId::Name(format!("tab-close-slot-{index}").into()))
+                    .id(ElementId::Name(
+                        format!("tab-close-slot-{session_id}").into(),
+                    ))
                     .group("tab-close-control")
                     .invisible()
                     .group_hover("tab", |s| s.visible())
@@ -1865,127 +1996,128 @@ impl ConWorkspace {
                 let tab_drag_source_bounds = self.tab_strip_tab_bounds.clone();
                 let wheel_scroll = self.horizontal_tab_scroll.clone();
 
-                let mut tab_el = horizontal_tab_target()
-                    .id(ElementId::Name(format!("tab-{}", index).into()))
-                    .group("tab")
-                    .text_size(ui_px(theme, 11.5))
-                    .cursor_pointer()
-                    // Windows: without `.occlude()` the parent top_bar's
-                    // `WindowControlArea::Drag` hit-test routes the click
-                    // to the OS (HTCAPTION) and starts a window drag
-                    // before GPUI fires `on_click` — so the tab never
-                    // activates. Same treatment as the `+`, caption
-                    // buttons, and tab-close controls in this file.
-                    .occlude()
-                    // Caption hit-test occlusion also blocks the ancestor's scroll listener.
-                    .on_scroll_wheel(move |event, window, cx| {
-                        scroll_occluded_tab(event, &wheel_scroll, window, cx);
-                    })
-                    // Left mouse-down: stop propagation so the event
-                    // doesn't bubble to top_bar's start_window_move()
-                    // on macOS (which steals mouseDragged events and
-                    // prevents on_drag from firing). pending_mouse_down
-                    // is registered after mouse_down_listeners in GPUI
-                    // and runs first in bubble phase (rev order), so
-                    // on_click / on_drag still work correctly.
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_this, _, _, cx| {
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_click(
-                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                            if event.click_count() == 2 {
-                                this.begin_tab_rename_by_id(tab_id, window, cx);
-                            } else {
-                                this.activate_tab_by_id(tab_id, window, cx);
-                            }
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, window, cx| {
-                            this.close_tab_by_id(tab_id, window, cx);
-                        }),
-                    )
-                    .on_drag(
-                        dragged,
-                        move |dragged: &DraggedTab, offset, window, cx: &mut App| {
-                            // Only track session id for tab-strip drags.
-                            // Pane-origin drags must not set this or the dragged
-                            // tab will be hidden and live-reorder will misfire.
-                            if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
-                                && let Ok(mut guard) = active_dragged_tab_session_id.lock()
-                            {
-                                *guard = Some(dragged.session_id);
-                            }
-                            let mut d = dragged.clone();
-                            if let Some(ref mut c) = d.preview_constraint {
-                                // GPUI's offset is cursor-in-source-element. Store it
-                                // for drop math/debug helpers, but the visible preview
-                                // is rendered by Workspace's overlay below.
-                                c.cursor_offset_x = offset.x;
-                                c.cursor_offset_y = offset.y;
-                                c.top = window.mouse_position().y - offset.y;
-                                c.height = c.preview_height;
-                                if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
-                                    && let Ok(mut guard) = tab_drag_preview.lock()
-                                {
-                                    let target_width = tab_drag_source_bounds
-                                        .lock()
-                                        .ok()
-                                        .and_then(|bounds| bounds.get(render_pos).copied())
-                                        .map(|bounds| bounds.size.width)
-                                        .unwrap_or(
-                                            preview_size.width + px(2.0 * TAB_SELECTION_INSET),
-                                        );
-                                    let capsule_width = (target_width
-                                        - px(2.0 * TAB_SELECTION_INSET))
-                                    .max(px(TAB_CLOSE_SIZE));
-                                    *guard = Some(TabDragPreviewState {
-                                        title: dragged.label.clone(),
-                                        icon: dragged.icon,
-                                        source_top: c.top + px(TAB_SELECTION_INSET),
-                                        cursor_offset_x: offset.x
-                                            - (target_width - capsule_width) * 0.5,
-                                        source_visual_index: render_pos,
-                                        size: size(capsule_width, px(TAB_SURFACE_HEIGHT)),
-                                    });
+                let mut tab_el =
+                    animated_tab_target(self.tab_slot_motion.weight(session_id, motion_now))
+                        .id(("tab", session_id))
+                        .group("tab")
+                        .text_size(ui_px(theme, 11.5))
+                        .cursor_pointer()
+                        // Windows: without `.occlude()` the parent top_bar's
+                        // `WindowControlArea::Drag` hit-test routes the click
+                        // to the OS (HTCAPTION) and starts a window drag
+                        // before GPUI fires `on_click` — so the tab never
+                        // activates. Same treatment as the `+`, caption
+                        // buttons, and tab-close controls in this file.
+                        .occlude()
+                        // Caption hit-test occlusion also blocks the ancestor's scroll listener.
+                        .on_scroll_wheel(move |event, window, cx| {
+                            scroll_occluded_tab(event, &wheel_scroll, window, cx);
+                        })
+                        // Left mouse-down: stop propagation so the event
+                        // doesn't bubble to top_bar's start_window_move()
+                        // on macOS (which steals mouseDragged events and
+                        // prevents on_drag from firing). pending_mouse_down
+                        // is registered after mouse_down_listeners in GPUI
+                        // and runs first in bubble phase (rev order), so
+                        // on_click / on_drag still work correctly.
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_this, _, _, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                if event.click_count() == 2 {
+                                    this.begin_tab_rename_by_id(tab_id, window, cx);
+                                } else {
+                                    this.activate_tab_by_id(tab_id, window, cx);
                                 }
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Middle,
+                            cx.listener(move |this, _, window, cx| {
+                                this.close_tab_by_id(tab_id, window, cx);
+                            }),
+                        )
+                        .on_drag(
+                            dragged,
+                            move |dragged: &DraggedTab, offset, window, cx: &mut App| {
+                                // Only track session id for tab-strip drags.
+                                // Pane-origin drags must not set this or the dragged
+                                // tab will be hidden and live-reorder will misfire.
+                                if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                                    && let Ok(mut guard) = active_dragged_tab_session_id.lock()
+                                {
+                                    *guard = Some(dragged.session_id);
+                                }
+                                let mut d = dragged.clone();
+                                if let Some(ref mut c) = d.preview_constraint {
+                                    // GPUI's offset is cursor-in-source-element. Store it
+                                    // for drop math/debug helpers, but the visible preview
+                                    // is rendered by Workspace's overlay below.
+                                    c.cursor_offset_x = offset.x;
+                                    c.cursor_offset_y = offset.y;
+                                    c.top = window.mouse_position().y - offset.y;
+                                    c.height = c.preview_height;
+                                    if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                                        && let Ok(mut guard) = tab_drag_preview.lock()
+                                    {
+                                        let target_width = tab_drag_source_bounds
+                                            .lock()
+                                            .ok()
+                                            .and_then(|bounds| bounds.get(render_pos).copied())
+                                            .map(|bounds| bounds.size.width)
+                                            .unwrap_or(
+                                                preview_size.width + px(2.0 * TAB_SELECTION_INSET),
+                                            );
+                                        let capsule_width = (target_width
+                                            - px(2.0 * TAB_SELECTION_INSET))
+                                        .max(px(TAB_CLOSE_SIZE));
+                                        *guard = Some(TabDragPreviewState {
+                                            title: dragged.label.clone(),
+                                            icon: dragged.icon,
+                                            source_top: c.top + px(TAB_SELECTION_INSET),
+                                            cursor_offset_x: offset.x
+                                                - (target_width - capsule_width) * 0.5,
+                                            source_visual_index: render_pos,
+                                            size: size(capsule_width, px(TAB_SURFACE_HEIGHT)),
+                                        });
+                                    }
+                                }
+                                cx.new(|_| d)
+                            },
+                        )
+                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            let to = this.tab_strip_drop_slot.unwrap_or(index);
+                            if dragged.origin == DraggedTabOrigin::Pane {
+                                clear_pane_tab_promotion_drag_state(
+                                    &mut this.pane_title_drag,
+                                    &mut this.tab_strip_drop_slot,
+                                    &mut this.tab_drag_target,
+                                );
+                            } else {
+                                this.tab_strip_drop_slot = None;
+                                this.tab_drag_target = None;
                             }
-                            cx.new(|_| d)
-                        },
-                    )
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                        let to = this.tab_strip_drop_slot.unwrap_or(index);
-                        if dragged.origin == DraggedTabOrigin::Pane {
-                            clear_pane_tab_promotion_drag_state(
-                                &mut this.pane_title_drag,
-                                &mut this.tab_strip_drop_slot,
-                                &mut this.tab_drag_target,
-                            );
-                        } else {
-                            this.tab_strip_drop_slot = None;
-                            this.tab_drag_target = None;
-                        }
-                        if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
-                            *guard = None;
-                        }
-                        if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
-                            && let Ok(mut guard) = this.tab_drag_preview.lock()
-                        {
-                            *guard = None;
-                        }
-                        if dragged.origin == DraggedTabOrigin::Pane
-                            && let Some(pane_id) = dragged.pane_id
-                        {
-                            this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
-                            return;
-                        }
-                        this.reorder_tab_by_id(dragged.session_id, to, cx);
-                        cx.notify();
-                    }));
+                            if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
+                                *guard = None;
+                            }
+                            if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                                && let Ok(mut guard) = this.tab_drag_preview.lock()
+                            {
+                                *guard = None;
+                            }
+                            if dragged.origin == DraggedTabOrigin::Pane
+                                && let Some(pane_id) = dragged.pane_id
+                            {
+                                this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
+                                return;
+                            }
+                            this.reorder_tab_by_id(dragged.session_id, to, cx);
+                            cx.notify();
+                        }));
 
                 tab_el = tab_el.tooltip(move |window, cx| {
                     Tooltip::new(label_detail.clone()).build(window, cx)
@@ -2027,6 +2159,16 @@ impl ConWorkspace {
                         .unwrap_or_else(|| tab_hover_surface(theme.foreground, theme.is_dark()));
                     (inactive_bg, inactive_hover_bg)
                 };
+
+                self.tab_slot_motion.remember_colors(
+                    session_id,
+                    capsule_bg,
+                    if is_active {
+                        theme.foreground
+                    } else {
+                        tab_secondary_ink
+                    },
+                );
 
                 if show_indicator_left {
                     tab_el = tab_el.child(
@@ -2157,6 +2299,7 @@ impl ConWorkspace {
                 let pane_title_drag_tab_bounds_for_prepaint =
                     self.pane_title_drag_tab_bounds.clone();
                 let reveal_active = is_active
+                    && !slots_animating
                     && !cx.has_active_drag()
                     && !tab_strip_preview_active
                     && !pane_origin_drag_active;
@@ -2434,6 +2577,11 @@ impl ConWorkspace {
                     }
                 }
             }
+            for exit in &self.tab_slot_motion.departing {
+                if self.tab_slot_motion.before(exit).is_none() {
+                    tabs_container = tabs_container.child(departing_tab(exit, theme));
+                }
+            }
             rendered_tab_count = visual_pos;
         }
 
@@ -2483,6 +2631,7 @@ impl ConWorkspace {
                     cx.entity_id(),
                     cx,
                 )
+                .max_w(px(slot_units * HORIZONTAL_TAB_MAX_WIDTH))
                 // Surplus width stays on the parent caption, outside tab hit targets.
                 .mr(px(TAB_WINDOW_DRAG_GAP))
                 .opacity(opacity),
