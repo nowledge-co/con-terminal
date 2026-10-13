@@ -5092,59 +5092,30 @@ impl Render for AgentPanel {
             let inline_input = self.inline_input_state.clone().unwrap();
 
             let has_text = self.inline_input_has_text;
-            let inline_control_size = mono_space_px(theme, 24.0);
             let inline_input_text_size = mono_px(theme, 13.0);
 
             // Keep the inline action at the same visual weight as the main bar.
-            let send_button = div()
-                .id("inline-send-btn")
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(inline_control_size)
-                .rounded(mono_space_px(theme, 12.0))
-                .cursor_pointer()
-                .flex_shrink_0()
-                .bg(if has_text {
-                    theme.primary.opacity(0.14)
-                } else {
-                    theme.transparent
-                })
-                .hover(|s| {
-                    if has_text {
-                        s.bg(theme.primary.opacity(0.22))
-                    } else {
-                        s.bg(theme.foreground.opacity(0.06))
-                    }
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
+            let send_button =
+                crate::input_chrome::send_button("inline-send-btn", has_text, theme, cx)
+                    .accessibility_label("Send message")
+                    .tooltip("Send message")
+                    .debug_selector(|| "agent-composer-send".into())
+                    .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(ref input) = this.inline_input_state {
                             let text = input.read(cx).text().to_string();
                             if !text.trim().is_empty() {
                                 input.update(cx, |s, cx| s.set_value("", window, cx));
+                                input.read(cx).focus_handle(cx).focus(window, cx);
                                 cx.emit(InlineInputSubmit { text });
                             }
                         }
-                    }),
-                )
-                .child(
-                    svg()
-                        .path("phosphor/arrow-up.svg")
-                        .size(mono_space_px(theme, 12.0))
-                        .text_color(if has_text {
-                            theme.primary.opacity(0.92)
-                        } else {
-                            theme.muted_foreground.opacity(0.62)
-                        }),
-                );
+                    }));
 
             panel = panel.child(
                 div()
                     .absolute()
                     .left(mono_space_px(theme, 8.0))
-                    .right(mono_space_px(theme, 9.0))
+                    .right(mono_space_px(theme, 8.0))
                     .bottom(mono_space_px(theme, 8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
@@ -5185,16 +5156,17 @@ impl Render for AgentPanel {
                     // Input container — matches main input bar visual style
                     .child(
                         div()
+                            .debug_selector(|| "agent-composer-surface".into())
                             .flex()
-                            .items_center()
+                            .items_end()
                             .w_full()
                             .min_h(mono_space_px(theme, 46.0))
                             .gap(mono_space_px(theme, 8.0))
-                            .pl(mono_space_px(theme, 7.0))
+                            .pl(mono_space_px(theme, 4.0))
                             .pr(mono_space_px(theme, 8.0))
                             .py(mono_space_px(theme, 8.0))
-                            .rounded(mono_space_px(theme, 14.0))
-                            .bg(theme.background)
+                            .rounded(mono_space_px(theme, 12.0))
+                            .bg(theme.background.blend(theme.foreground.opacity(0.035)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
@@ -5208,7 +5180,8 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_1()
                                     .w_full()
-                                    .min_w(mono_space_px(theme, 120.0))
+                                    .min_w_0()
+                                    .debug_selector(|| "agent-composer-field".into())
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(inline_input_text_size)
                                     // PressEnter owns submission; prevent native newline fallback.
@@ -5218,7 +5191,8 @@ impl Render for AgentPanel {
                                             Textarea::new(&inline_input)
                                                 .appearance(false)
                                                 .font_family(theme.mono_font_family.clone())
-                                                .text_size(inline_input_text_size),
+                                                .text_size(inline_input_text_size)
+                                                .min_h(mono_space_px(theme, 28.0)),
                                         ),
                                     ),
                             )
@@ -5495,6 +5469,43 @@ mod tests {
     }
 
     #[gpui::test]
+    fn inline_composer_fits_narrow_panels_and_keeps_submit_inside(cx: &mut gpui::TestAppContext) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        for (font_size, width) in [(16.0, 240.0), (16.0, 400.0), (24.0, 280.0)] {
+            let (panel, view) = cx.add_window_view(|window, cx| {
+                gpui_component::Theme::update(cx, |theme| theme.font_size = gpui::px(font_size));
+                window.set_rem_size(gpui::px(font_size));
+                let mut panel = AgentPanel::new(window, cx);
+                panel.set_show_inline_input(true, cx);
+                panel
+            });
+            view.simulate_resize(gpui::size(gpui::px(width), gpui::px(500.0)));
+            view.update(|window, cx| {
+                panel.update(cx, |panel, cx| {
+                    panel
+                        .inline_input_state
+                        .as_ref()
+                        .unwrap()
+                        .update(cx, |input, cx| {
+                            input.set_value("Follow up\n第二行", window, cx);
+                        });
+                    cx.notify();
+                });
+            });
+            let surface = view.debug_bounds("agent-composer-surface").unwrap();
+            let field = view.debug_bounds("agent-composer-field").unwrap();
+            let send = view.debug_bounds("agent-composer-send").unwrap();
+            assert!(surface.left() > gpui::px(0.0));
+            assert!(surface.right() < gpui::px(width));
+            assert!(field.size.width > gpui::px(0.0));
+            assert!(field.right() <= send.left());
+            assert!(send.right() < surface.right());
+            assert!(send.bottom() < surface.bottom());
+        }
+    }
+
+    #[gpui::test]
     fn inline_composer_submits_without_inserting_or_removing_text(cx: &mut gpui::TestAppContext) {
         use gpui::Focusable;
         use std::{cell::RefCell, rc::Rc};
@@ -5528,8 +5539,14 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.simulate_input("third");
         cx.simulate_keystrokes("secondary-enter");
+        cx.simulate_input("clicked message");
+        let send = cx.debug_bounds("agent-composer-send").unwrap();
+        cx.simulate_click(send.center(), gpui::Modifiers::default());
         cx.update(|window, cx| {
-            assert_eq!(*submissions.borrow(), ["first\nsecond", "third"]);
+            assert_eq!(
+                *submissions.borrow(),
+                ["first\nsecond", "third", "clicked message"]
+            );
             let input = panel.read(cx).inline_input_state.as_ref().unwrap().read(cx);
             assert_eq!(input.value(), "");
             assert!(input.focus_handle(cx).is_focused(window));

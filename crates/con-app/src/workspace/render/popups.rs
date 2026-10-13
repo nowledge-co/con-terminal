@@ -178,7 +178,7 @@ impl ConWorkspace {
         terminal_content_left: f32,
         terminal_content_width: f32,
         input_bar_progress: f32,
-        ui_surface_opacity: f32,
+        _ui_surface_opacity: f32,
         elevated_ui_surface_opacity: f32,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -208,7 +208,7 @@ impl ConWorkspace {
                     .collect();
                 let popup_available_width = (terminal_content_width - 48.0).max(300.0);
                 let popup_width = px((terminal_content_width * 0.38)
-                    .clamp(380.0, 540.0)
+                    .clamp(320.0, 440.0)
                     .min(popup_available_width));
                 let popup_bottom = px(62.0 + (43.0 * input_bar_progress.max(0.01)));
                 let preview_content = self.render_scope_node(
@@ -220,23 +220,12 @@ impl ConWorkspace {
                     cx,
                 );
                 let theme = cx.theme();
-                let popup_surface = if theme.is_dark() {
-                    theme
-                        .background
-                        .opacity(elevated_ui_surface_opacity.max(0.96))
-                } else {
-                    theme.title_bar.opacity(0.99)
-                };
-                let preview_surface = if theme.is_dark() {
-                    theme.title_bar.opacity(ui_surface_opacity * 0.98)
-                } else {
-                    theme.foreground.opacity(0.038)
-                };
-                let segmented_surface = if theme.is_dark() {
-                    theme.title_bar.opacity(ui_surface_opacity * 0.96)
-                } else {
-                    theme.foreground.opacity(0.035)
-                };
+                let popup_surface = theme
+                    .background
+                    .blend(theme.foreground.opacity(0.035))
+                    .opacity(elevated_ui_surface_opacity.max(0.99));
+                let preview_surface = theme.foreground.opacity(0.035);
+                let segmented_surface = theme.foreground.opacity(0.045);
                 let scope_frame_inset = px(3.0);
                 let scope_frame_radius = px(9.0);
                 let local_keycap = |label: String| {
@@ -254,7 +243,7 @@ impl ConWorkspace {
                         .line_height(px(11.0))
                         .font_family(theme.mono_font_family.clone())
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground.opacity(0.66))
+                        .text_color(theme.muted_foreground)
                         .child(label)
                 };
 
@@ -272,18 +261,22 @@ impl ConWorkspace {
                                 .child(
                                     div()
                                         .text_size(px(12.5))
-                                        .font_family(theme.mono_font_family.clone())
+                                        .font_family(theme.font_family.clone())
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme.foreground.opacity(0.86))
-                                        .child("Pane scope"),
+                                        .text_color(theme.foreground)
+                                        .child("Send to"),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(10.0))
                                         .line_height(px(13.0))
-                                        .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.52))
-                                        .child("Choose where input is sent"),
+                                        .font_family(theme.font_family.clone())
+                                        .text_color(theme.muted_foreground)
+                                        .child(format!(
+                                            "{} of {} panes",
+                                            selected_ids.len(),
+                                            panes.len()
+                                        )),
                                 ),
                         ),
                     )
@@ -295,24 +288,21 @@ impl ConWorkspace {
                             .px(px(6.0))
                             .py(px(4.0))
                             .rounded(px(8.0))
-                            .bg(theme.foreground.opacity(0.026))
                             .child(
                                 div()
                                     .text_size(px(9.5))
                                     .line_height(px(11.0))
-                                    .font_family(theme.mono_font_family.clone())
+                                    .font_family(theme.font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.muted_foreground.opacity(0.56))
-                                    .child("Toggle"),
+                                    .text_color(theme.muted_foreground)
+                                    .child("Toggle panes"),
                             )
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(px(3.0))
-                                    .child(local_keycap("1-9".to_string()))
-                                    .child(local_keycap("A".to_string()))
-                                    .child(local_keycap("F".to_string())),
+                                    .child(local_keycap("1-9".to_string())),
                             ),
                     );
 
@@ -321,7 +311,7 @@ impl ConWorkspace {
                         div().flex_1().child(
                             div()
                                 .id(SharedString::from(id))
-                                .h(px(23.0))
+                                .h(px(28.0))
                                 .w_full()
                                 .rounded(px(6.0))
                                 .cursor_pointer()
@@ -330,41 +320,44 @@ impl ConWorkspace {
                                 .justify_center()
                                 .gap(px(6.0))
                                 .bg(if active {
-                                    theme.primary.opacity(0.11)
+                                    theme.background.blend(theme.foreground.opacity(0.015))
                                 } else {
                                     theme.transparent
                                 })
                                 .hover(|s| {
                                     s.bg(if active {
-                                        theme.primary.opacity(0.14)
+                                        theme.background.blend(theme.foreground.opacity(0.035))
                                     } else {
                                         theme.foreground.opacity(0.045)
                                     })
                                 })
                                 .child(svg().path(icon).size(mono_icon_px(theme, 12.0)).text_color(
                                     if active {
-                                        theme.primary.opacity(0.88)
+                                        theme.primary
                                     } else {
-                                        theme.muted_foreground.opacity(0.48)
+                                        theme.muted_foreground
                                     },
                                 ))
                                 .child(
                                     div()
-                                        .text_size(px(10.8))
+                                        .text_size(px(11.5))
                                         .line_height(px(13.0))
-                                        .font_family(theme.mono_font_family.clone())
+                                        .font_family(theme.font_family.clone())
                                         .font_weight(if active {
                                             FontWeight::MEDIUM
                                         } else {
                                             FontWeight::NORMAL
                                         })
                                         .text_color(if active {
-                                            theme.primary.opacity(0.94)
+                                            theme.foreground
                                         } else {
-                                            theme.muted_foreground.opacity(0.68)
+                                            theme.muted_foreground
                                         })
                                         .child(label),
-                                ),
+                                )
+                                .child(local_keycap(
+                                    if id == "scope-all" { "A" } else { "F" }.to_string(),
+                                )),
                         )
                     };
 
@@ -375,7 +368,7 @@ impl ConWorkspace {
                     .child(
                         div()
                             .w_full()
-                            .h(px(31.0))
+                            .h(px(34.0))
                             .p(scope_frame_inset)
                             .rounded(scope_frame_radius)
                             .bg(segmented_surface)
@@ -424,7 +417,14 @@ impl ConWorkspace {
                     .child(div().flex_1());
 
                 let preview = div()
-                    .h(px(214.0))
+                    .debug_selector(|| "pane-scope-map".into())
+                    .h(px(if panes.len() <= 3 {
+                        144.0
+                    } else if panes.len() <= 6 {
+                        184.0
+                    } else {
+                        224.0
+                    }))
                     .w_full()
                     .rounded(scope_frame_radius)
                     .p(scope_frame_inset)
@@ -433,13 +433,15 @@ impl ConWorkspace {
 
                 return Some(
                     div()
+                        .debug_selector(|| "pane-scope-popup".into())
                         .absolute()
                         .left(px(terminal_content_left + 20.0))
                         .bottom(popup_bottom)
                         .w(popup_width)
                         .rounded(px(12.0))
                         .bg(popup_surface)
-                        .p(px(11.0))
+                        .p(px(12.0))
+                        .font_family(theme.font_family.clone())
                         .flex()
                         .flex_col()
                         .gap(px(10.0))

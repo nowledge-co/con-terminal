@@ -608,20 +608,8 @@ impl ConWorkspace {
         } else {
             None
         };
-        let base_tile_surface = if theme.is_dark() {
-            theme
-                .title_bar
-                .opacity(if is_focused { 0.80 } else { 0.70 })
-        } else {
-            theme
-                .foreground
-                .opacity(if is_focused { 0.044 } else { 0.034 })
-        };
-        let hover_tile_surface = if theme.is_dark() {
-            theme.title_bar.opacity(0.84)
-        } else {
-            theme.foreground.opacity(0.052)
-        };
+        let base_tile_surface = theme.foreground.opacity(0.025);
+        let hover_tile_surface = theme.foreground.opacity(0.055);
 
         div()
             .id(SharedString::from(format!("scope-pane-{pane_id}")))
@@ -632,16 +620,19 @@ impl ConWorkspace {
             .overflow_hidden()
             .px(px(10.0))
             .py(px(9.0))
-            .rounded(px(9.0))
+            .rounded(px(6.0))
+            .flex()
+            .flex_col()
+            .justify_between()
             .cursor_pointer()
             .bg(if is_selected {
-                theme.primary.opacity(0.085)
+                theme.primary.opacity(0.06)
             } else {
                 base_tile_surface
             })
             .hover(|s| {
                 s.bg(if is_selected {
-                    theme.primary.opacity(0.12)
+                    theme.primary.opacity(0.10)
                 } else {
                     hover_tile_surface
                 })
@@ -674,13 +665,9 @@ impl ConWorkspace {
                                         div()
                                             .text_size(px(11.2))
                                             .line_height(px(14.0))
-                                            .font_family(theme.mono_font_family.clone())
+                                            .font_family(theme.font_family.clone())
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(if is_selected {
-                                                theme.primary
-                                            } else {
-                                                theme.foreground
-                                            })
+                                            .text_color(theme.foreground)
                                             .min_w_0()
                                             .overflow_hidden()
                                             .overflow_x_hidden()
@@ -693,8 +680,8 @@ impl ConWorkspace {
                                 div()
                                     .text_size(px(10.0))
                                     .line_height(px(12.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .font_family(theme.font_family.clone())
+                                    .text_color(theme.muted_foreground)
                                     .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
@@ -720,11 +707,30 @@ impl ConWorkspace {
                                 .text_color(if is_selected {
                                     theme.primary
                                 } else {
-                                    theme.muted_foreground.opacity(0.58)
+                                    theme.muted_foreground
                                 })
                                 .child(format!("{}", display_index + 1)),
                         ),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .children(is_focused.then(|| {
+                        svg()
+                            .path("phosphor/target.svg")
+                            .size(px(12.0))
+                            .text_color(theme.muted_foreground)
+                    }))
+                    .child(div().flex_1())
+                    .children(is_selected.then(|| {
+                        svg()
+                            .path("phosphor/check.svg")
+                            .size(px(13.0))
+                            .text_color(theme.primary)
+                    })),
             )
             .into_any_element()
     }
@@ -765,7 +771,6 @@ impl ConWorkspace {
                 first,
                 second,
             } => {
-                let theme = cx.theme();
                 let make_pane = |child: AnyElement, basis: f32| {
                     div()
                         .flex_grow_1()
@@ -774,13 +779,7 @@ impl ConWorkspace {
                         .overflow_hidden()
                         .child(child)
                 };
-                let divider = div()
-                    .bg(theme.title_bar_border.opacity(0.75))
-                    .map(|divider| match direction {
-                        PaneSplitDirection::Horizontal => divider.w(px(1.0)).h_full(),
-                        PaneSplitDirection::Vertical => divider.h(px(1.0)).w_full(),
-                    });
-                let mut container = div().flex().size_full().gap(px(6.0));
+                let mut container = div().flex().size_full().gap(px(4.0));
                 container = match direction {
                     PaneSplitDirection::Horizontal => container.flex_row(),
                     PaneSplitDirection::Vertical => container.flex_col(),
@@ -797,7 +796,6 @@ impl ConWorkspace {
                         ),
                         *ratio,
                     ))
-                    .child(divider)
                     .child(make_pane(
                         self.render_scope_node(
                             second,

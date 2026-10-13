@@ -69,6 +69,7 @@ mod editor_tab_actions;
 mod editor_view;
 mod file_tree_view;
 mod input_bar;
+mod input_chrome;
 mod keycaps;
 mod model_registry;
 mod motion;

@@ -1,6 +1,6 @@
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Colorize, Disableable,
+    ActiveTheme, Colorize,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     input::{InputEvent, Position, Textarea, TextareaState},
 };
@@ -96,17 +96,9 @@ impl InputMode {
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Smart => "phosphor/magic-wand.svg",
-            Self::Shell => "phosphor/terminal.svg",
-            Self::Agent => "phosphor/sparkle.svg",
-        }
-    }
-
-    fn tint(self, cx: &App) -> Hsla {
-        match self {
-            Self::Smart => cx.theme().muted_foreground,
-            Self::Shell => cx.theme().success,
-            Self::Agent => cx.theme().primary,
+            Self::Smart => "input-mode-smart.png",
+            Self::Shell => "tab-terminal-refined.png",
+            Self::Agent => "input-mode-agent.png",
         }
     }
 
@@ -1242,18 +1234,16 @@ impl Render for InputBar {
         let input_cursor = input_state.read(cx).cursor();
         let mono_scale = mono_density_scale(theme);
         let control_size = mono_space_px(theme, 28.0);
-        let mode_icon_size = mono_space_px(theme, 16.0);
+        let mode_icon_size = mono_space_px(theme, 24.0);
         let compact_icon_size = mono_space_px(theme, 14.0);
-
-        let mode_tint = self.mode.tint(cx);
 
         // ── Mode prefix — icon-only, minimal ──
         let mode_prefix = Button::new("mode-toggle")
             .custom(
                 ButtonCustomVariant::new(cx)
-                    .color(theme.foreground.opacity(0.035))
-                    .hover(theme.foreground.opacity(0.09))
-                    .active(theme.foreground.opacity(0.14)),
+                    .color(theme.transparent)
+                    .hover(theme.foreground.opacity(0.055))
+                    .active(theme.foreground.opacity(0.10)),
             )
             .accessibility_label(format!("{}; switch mode", self.mode.tooltip()))
             .tooltip_with_action(self.mode.tooltip(), &crate::CycleInputMode, None)
@@ -1264,18 +1254,17 @@ impl Render for InputBar {
             .h(control_size)
             .p_0()
             .cursor_pointer()
-            .rounded(px(6.0 * mono_scale))
+            .rounded(px(8.0 * mono_scale))
             .on_click(cx.listener(|this, _, window, cx| {
                 this.cycle_mode(window, cx);
                 this.current_input_state()
                     .update(cx, |state, cx| state.focus(window, cx));
             }))
-            .child(
-                svg()
-                    .path(self.mode.icon())
-                    .size(mode_icon_size)
-                    .text_color(mode_tint),
-            );
+            .child(crate::assets::tab_identity_icon(
+                self.mode.icon(),
+                mode_icon_size,
+                theme.foreground,
+            ));
 
         // ── Pane target control — scales to many panes without growing the row ──
         let all_selected = self.all_panes_selected();
@@ -1352,57 +1341,19 @@ impl Render for InputBar {
         };
 
         // ── Send button — inside container, right edge ──
-        let submit_fill = if has_text {
-            theme.foreground
-        } else {
-            theme.foreground.opacity(0.045)
-        };
-        let send_button = Button::new("send-button")
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .color(submit_fill)
-                    .hover(if has_text {
-                        theme.foreground.opacity(0.88)
-                    } else {
-                        theme.foreground.opacity(0.06)
-                    })
-                    .active(if has_text {
-                        theme.foreground.opacity(0.76)
-                    } else {
-                        theme.foreground.opacity(0.08)
-                    }),
-            )
+        let send_button = crate::input_chrome::send_button("send-button", has_text, theme, cx)
             .accessibility_label("Submit input")
             .tooltip(if self.mode == InputMode::Agent {
                 "Send message"
             } else {
                 "Run input"
             })
-            .tab_stop(false)
-            .disabled(!has_text)
             .debug_selector(|| "command-send-button".into())
-            .size(control_size)
-            .w(control_size)
-            .h(control_size)
-            .p_0()
-            .cursor_pointer()
-            .rounded_full()
-            .bg(submit_fill)
             .on_click(cx.listener(|this, _, window, cx| {
                 cx.emit(SubmitInput);
                 this.current_input_state()
                     .update(cx, |state, cx| state.focus(window, cx));
-            }))
-            .child(
-                svg()
-                    .path("phosphor/arrow-up.svg")
-                    .size(mono_space_px(theme, 16.0))
-                    .text_color(if has_text {
-                        theme.background
-                    } else {
-                        theme.foreground.blend(theme.background.opacity(0.45))
-                    }),
-            );
+            }));
 
         // Shell input is terminal chrome; natural-language agent input uses
         // the UI font so its prose reads like the agent panel.

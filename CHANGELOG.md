@@ -4,6 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.130` - Unreleased
+
+### Changed
+
+**Tabs and input**
+
+- Horizontal tabs keep equal widths with a compact maximum, leaving more room
+  to drag the window. Generic tab identities use small, cached color icons.
+- Smart, Shell and Agent input modes have distinct framed icons. The bottom
+  bar and agent composer share a consistent send button, with clearer empty
+  and ready states. The agent composer keeps its action aligned in multiline
+  drafts and fits narrow panels.
+- The pane target picker is more compact, with clearer selected counts,
+  keyboard hints, selection checks and a separate focused-pane indicator.
+
 ## `v0.1.0-beta.129` - 2026-10-13
 
 ### Added
