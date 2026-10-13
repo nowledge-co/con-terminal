@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.130` - Unreleased
+## `v0.1.0-beta.130` - 2026-10-13
 
 ### Changed
 
@@ -15,19 +15,23 @@ con is still pre-release, so entries may group related beta work while the produ
   Tabs shrink before scrolling, and an All tabs menu keeps hidden tabs directly
   accessible by name. Paging arrows sit outside the labels when tabs overflow;
   wheel scrolling works over the tab buttons themselves.
+  _(PR [#472](https://github.com/nowledge-co/con-terminal/pull/472) by [@wey-gu](https://github.com/wey-gu))_
 - Opening and closing horizontal tabs smoothly redistributes their space.
   Closing a tab still closes its terminal immediately. Dragging and Reduce
   Motion use the final layout without a transition.
+  _(PR [#472](https://github.com/nowledge-co/con-terminal/pull/472) by [@wey-gu](https://github.com/wey-gu))_
 - Smart, Shell and Agent input modes have distinct framed icons. The bottom
   bar and agent composer share a consistent send button, with clearer empty
   and ready states. The agent composer keeps its action aligned in multiline
   drafts and fits narrow panels.
+  _(PR [#472](https://github.com/nowledge-co/con-terminal/pull/472) by [@wey-gu](https://github.com/wey-gu))_
 - The pane target picker is more compact, with clearer selected counts,
   keyboard hints, selection checks and a separate focused-pane indicator.
   It sits closer to its control and follows multiline input height. Quieter
   mode artwork and balanced insets keep the bottom bar unobtrusive.
   Presets and pane tiles share aligned edges and spacing, with quieter neutral
   selection fills in light and dark themes.
+  _(PR [#472](https://github.com/nowledge-co/con-terminal/pull/472) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.129` - 2026-10-13
 
