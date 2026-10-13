@@ -28,14 +28,17 @@ paint. The generation prompts are in `assets/input-mode-icons.md`.
 
 The scope popup belongs to command composition, not terminal output. Use UI
 type for its labels and monospace only for keycaps. A compact header shows the
-selected count; A and F belong beside their presets, while 1-9 identifies
-individual pane toggles. The map and preset row share the same outer insets.
+selected count on the same line; A and F belong beside their presets, while
+numbered tiles identify individual pane toggles. The map and preset row share
+one full-width frame, 3-point insets and 4-point gaps. Do not add a trailing
+flex spacer to the preset row: it shrinks that row and offsets the midline.
 The popup aligns with the target control and sits 10 points above the actual
 input height, including multiline drafts. Clamp it inside the terminal gutters
 at narrow widths. All dimensions follow UI density. The broadcast glyph denotes
 all panes; labels stay neutral rather than tinting the whole control.
 
-Pane tiles use restrained selected fills with an explicit check mark. A target
+Pane tiles use opaque neutral selected fills with an explicit accent check mark,
+not stacked translucent accent backgrounds. Number keycaps stay neutral. A target
 glyph identifies the actual focused pane independently of broadcast selection;
 process status remains a separate colored dot. Gaps, rather than extra separator
 lines, express the live split layout. Fewer panes need less map height.

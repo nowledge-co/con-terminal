@@ -1,8 +1,19 @@
 use super::super::*;
 
+use super::super::chrome_actions::PANE_SCOPE_GAP;
+
+fn pane_scope_frame(theme: &gpui_component::Theme) -> gpui::Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .p(px(3.0))
+        .rounded(px(9.0))
+        .bg(theme.foreground.opacity(0.025))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::pane_scope_popup_geometry;
+    use super::{PANE_SCOPE_GAP, pane_scope_frame, pane_scope_popup_geometry};
     use gpui::px;
 
     #[test]
@@ -31,6 +42,83 @@ mod tests {
                     assert!(left + width <= px(terminal_left + terminal_width - 12.0 * scale));
                     assert_eq!(bottom, px(52.0 * scale));
                 }
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn preset_and_equal_split_frames_share_edges_and_midline(cx: &mut gpui::TestAppContext) {
+        use gpui::{
+            Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
+            px, size,
+        };
+        use gpui_component::ActiveTheme;
+
+        struct Frames;
+        impl Render for Frames {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = cx.theme();
+                let segments = pane_scope_frame(theme)
+                    .debug_selector(|| "presets".into())
+                    .h(px(34.0))
+                    .flex()
+                    .gap(px(PANE_SCOPE_GAP))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .debug_selector(|| "preset-left".into()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .debug_selector(|| "preset-right".into()),
+                    );
+                let map = pane_scope_frame(theme)
+                    .debug_selector(|| "map".into())
+                    .h(px(128.0))
+                    .child(
+                        div()
+                            .flex()
+                            .size_full()
+                            .gap(px(PANE_SCOPE_GAP))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .debug_selector(|| "pane-left".into()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .debug_selector(|| "pane-right".into()),
+                            ),
+                    );
+                div()
+                    .w_full()
+                    .p(px(12.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .child(segments)
+                    .child(map)
+            }
+        }
+        cx.update(gpui_component::init);
+        let (_, view) = cx.add_window_view(|_, _| Frames);
+        for width in [240.0, 320.0, 440.0] {
+            view.simulate_resize(size(px(width), px(250.0)));
+            let presets = view.debug_bounds("presets").unwrap();
+            let map = view.debug_bounds("map").unwrap();
+            assert_eq!(presets.left(), map.left());
+            assert_eq!(presets.right(), map.right());
+            for (preset, pane) in [("preset-left", "pane-left"), ("preset-right", "pane-right")] {
+                let preset = view.debug_bounds(preset).unwrap();
+                let pane = view.debug_bounds(pane).unwrap();
+                assert_eq!(preset.left(), pane.left());
+                assert_eq!(preset.right(), pane.right());
             }
         }
     }
@@ -284,10 +372,6 @@ impl ConWorkspace {
                     .background
                     .blend(theme.foreground.opacity(0.035))
                     .opacity(elevated_ui_surface_opacity.max(0.99));
-                let preview_surface = theme.foreground.opacity(0.035);
-                let segmented_surface = theme.foreground.opacity(0.045);
-                let scope_frame_inset = px(3.0);
-                let scope_frame_radius = px(9.0);
                 let local_keycap = |label: String| {
                     let wide = label.chars().count() > 1;
                     div()
@@ -311,64 +395,27 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(14.0))
+                    .gap(px(12.0))
                     .child(
-                        div().flex().items_center().gap(px(6.0)).child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.0))
-                                .child(
-                                    div()
-                                        .text_size(px(12.5))
-                                        .font_family(theme.font_family.clone())
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme.foreground)
-                                        .child("Send to"),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(10.0))
-                                        .line_height(px(13.0))
-                                        .font_family(theme.font_family.clone())
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!(
-                                            "{} of {} panes",
-                                            selected_ids.len(),
-                                            panes.len()
-                                        )),
-                                ),
-                        ),
+                        div()
+                            .text_size(px(12.5))
+                            .font_family(theme.font_family.clone())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child("Send to"),
                     )
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(7.0))
-                            .px(px(6.0))
-                            .py(px(4.0))
-                            .rounded(px(8.0))
-                            .child(
-                                div()
-                                    .text_size(px(9.5))
-                                    .line_height(px(11.0))
-                                    .font_family(theme.font_family.clone())
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.muted_foreground)
-                                    .child("Toggle panes"),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(3.0))
-                                    .child(local_keycap("1-9".to_string())),
-                            ),
+                            .text_size(px(10.0))
+                            .line_height(px(13.0))
+                            .font_family(theme.font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{} of {} panes", selected_ids.len(), panes.len())),
                     );
 
                 let preset_segment =
                     |id: &'static str, icon: &'static str, label: &'static str, active: bool| {
-                        div().flex_1().child(
+                        div().flex_1().min_w_0().child(
                             div()
                                 .id(SharedString::from(id))
                                 .h(px(28.0))
@@ -421,74 +468,54 @@ impl ConWorkspace {
                         )
                     };
 
-                let presets_row = div()
+                let presets_row = pane_scope_frame(theme)
+                    .debug_selector(|| "pane-scope-presets".into())
+                    .h(px(34.0))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(PANE_SCOPE_GAP))
                     .child(
-                        div()
-                            .w_full()
-                            .h(px(34.0))
-                            .p(scope_frame_inset)
-                            .rounded(scope_frame_radius)
-                            .bg(segmented_surface)
-                            .flex()
-                            .items_center()
-                            .gap(px(2.0))
-                            .child(
-                                preset_segment(
-                                    "scope-all",
-                                    "phosphor/broadcast-duotone.svg",
-                                    "All panes",
-                                    is_broadcast,
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(
-                                        |this: &mut ConWorkspace,
-                                         _: &MouseDownEvent,
-                                         window,
-                                         cx| {
-                                            this.set_scope_broadcast(window, cx);
-                                        },
-                                    ),
-                                ),
-                            )
-                            .child(
-                                preset_segment(
-                                    "scope-focused",
-                                    "phosphor/target.svg",
-                                    "Focused",
-                                    is_focused,
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(
-                                        |this: &mut ConWorkspace,
-                                         _: &MouseDownEvent,
-                                         window,
-                                         cx| {
-                                            this.set_scope_focused(window, cx);
-                                        },
-                                    ),
-                                ),
+                        preset_segment(
+                            "scope-all",
+                            "phosphor/broadcast-duotone.svg",
+                            "All panes",
+                            is_broadcast,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(
+                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
+                                    this.set_scope_broadcast(window, cx);
+                                },
                             ),
+                        ),
                     )
-                    .child(div().flex_1());
+                    .child(
+                        preset_segment(
+                            "scope-focused",
+                            "phosphor/target.svg",
+                            "Focused",
+                            is_focused,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(
+                                |this: &mut ConWorkspace, _: &MouseDownEvent, window, cx| {
+                                    this.set_scope_focused(window, cx);
+                                },
+                            ),
+                        ),
+                    );
 
-                let preview = div()
+                let preview = pane_scope_frame(theme)
                     .debug_selector(|| "pane-scope-map".into())
                     .h(px(if panes.len() <= 3 {
-                        144.0
+                        128.0
                     } else if panes.len() <= 6 {
                         184.0
                     } else {
                         224.0
                     }))
-                    .w_full()
-                    .rounded(scope_frame_radius)
-                    .p(scope_frame_inset)
-                    .bg(preview_surface)
                     .child(preview_content);
 
                 return Some(

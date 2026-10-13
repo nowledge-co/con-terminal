@@ -30,5 +30,10 @@ Windows/Linux runtime checks were unavailable; no terminal backend code changed.
 
 ## Lesson
 
+A later visual check found a second layout mismatch in the target picker: an
+empty trailing flex item shrank the preset strip relative to the map. Remove
+the spacer and use a shared full-width frame and split gap. A rendered-bounds
+test now checks both outer edges and the equal-split midline at three widths.
+
 Use one height calculation for reserved slots and their component content.
 Test rendered bounds, not just size constants, when polishing compact controls.
