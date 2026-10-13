@@ -5449,8 +5449,7 @@ mod tests {
 
         assert_eq!(state.pending_approvals.len(), 2);
         assert!(state.pending_approvals.iter().any(|approval| {
-            approval.call_id == "other-call"
-                && approval.approval_tx.same_channel(&second_tx) == false
+            approval.call_id == "other-call" && !approval.approval_tx.same_channel(&second_tx)
         }));
         assert!(state.pending_approvals.iter().any(|approval| {
             approval.call_id == "shared-call" && approval.approval_tx.same_channel(&second_tx)

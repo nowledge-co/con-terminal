@@ -65,7 +65,7 @@ pub(crate) fn evaluate_osc8_url(raw: &str) -> Osc8UrlDecision {
     match url.scheme() {
         scheme @ ("http" | "https") => {
             if !has_explicit_web_authority(raw, scheme)
-                || !url.host_str().is_some_and(|host| !host.is_empty())
+                || url.host_str().is_none_or(|host| host.is_empty())
                 || !url.username().is_empty()
                 || url.password().is_some()
             {

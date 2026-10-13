@@ -216,11 +216,10 @@ impl FileTreeView {
             let _ = this.update(cx, |this, cx| {
                 if this.load_generation == generation
                     && this.root.as_deref() == Some(root.as_path())
+                    && *this.entries != entries
                 {
-                    if *this.entries != entries {
-                        this.entries = Arc::new(entries);
-                        cx.notify();
-                    }
+                    this.entries = Arc::new(entries);
+                    cx.notify();
                 }
             });
         })
@@ -289,13 +288,13 @@ impl TreeWatcher {
             handler.handle_event(event);
         })?;
         let parent = root.parent().map(Path::to_path_buf);
-        if let Some(parent) = &parent {
-            if let Err(error) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                log::warn!(
-                    "Cannot watch file tree parent {}: {error}",
-                    parent.display()
-                );
-            }
+        if let Some(parent) = &parent
+            && let Err(error) = watcher.watch(parent, RecursiveMode::NonRecursive)
+        {
+            log::warn!(
+                "Cannot watch file tree parent {}: {error}",
+                parent.display()
+            );
         }
         let mut this = Self {
             watcher,

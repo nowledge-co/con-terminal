@@ -730,7 +730,7 @@ mod tests {
     #[gpui::test]
     fn search_matches_category_and_action_id(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let (palette, cx) = cx.add_window_view(|window, cx| CommandPalette::new(window, cx));
+        let (palette, cx) = cx.add_window_view(CommandPalette::new);
 
         palette.update(cx, |palette, _| {
             palette.query_text = "privacy".into();

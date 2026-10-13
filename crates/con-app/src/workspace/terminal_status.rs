@@ -221,7 +221,7 @@ impl ConWorkspace {
                     continue;
                 }
                 live.insert(id);
-                let query = Query::for_terminal(&terminal, cx);
+                let query = Query::for_terminal(terminal, cx);
                 let surface = state.surfaces.entry(id).or_insert_with(|| Surface {
                     instance,
                     query: query.clone(),

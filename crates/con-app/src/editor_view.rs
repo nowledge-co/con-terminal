@@ -2203,12 +2203,12 @@ impl Render for EditorView {
                 let Some(bounds) = bounds_list.first().copied() else {
                     return;
                 };
-                if let Some(view) = view_handle.upgrade() {
-                    if view.update(cx, |this, _cx| this.update_content_bounds(bounds)) {
-                        window.on_next_frame(move |_window, cx| {
-                            view.update(cx, |_this, cx| cx.notify());
-                        });
-                    }
+                if let Some(view) = view_handle.upgrade()
+                    && view.update(cx, |this, _cx| this.update_content_bounds(bounds))
+                {
+                    window.on_next_frame(move |_window, cx| {
+                        view.update(cx, |_this, cx| cx.notify());
+                    });
                 }
             })
             .on_mouse_down(

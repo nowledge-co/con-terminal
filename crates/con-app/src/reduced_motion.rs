@@ -96,7 +96,7 @@ mod platform {
             (*observer).set_ivar("sender", Box::into_raw(Box::new(tx)) as *mut c_void);
             let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
             let center: *mut Object = msg_send![workspace, notificationCenter];
-            let name: *mut Object = msg_send![class!(NSString), stringWithUTF8String:b"NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification\0".as_ptr()];
+            let name: *mut Object = msg_send![class!(NSString), stringWithUTF8String:c"NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification".as_ptr()];
             let _: () = msg_send![center, addObserver:observer selector:sel!(displayOptionsChanged:) name:name object:std::ptr::null::<Object>()];
             cx.set_global(Observer(observer));
         }

@@ -1541,27 +1541,26 @@ impl Render for InputBar {
                             cx.stop_propagation();
                         }
                     }
-                    "up" | "down" => {
-                        if this.handle_history_navigation_key(key, window, cx) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
+                    "up" | "down" if this.handle_history_navigation_key(key, window, cx) => {
+                        window.prevent_default();
+                        cx.stop_propagation();
                     }
-                    "right" if !mods.control && !mods.platform && !mods.alt => {
-                        if this.accept_selected_path_completion(window, cx)
-                            || this.accept_inline_suggestion(window, cx)
-                        {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
+                    "right"
+                        if !mods.control
+                            && !mods.platform
+                            && !mods.alt
+                            && (this.accept_selected_path_completion(window, cx)
+                                || this.accept_inline_suggestion(window, cx)) =>
+                    {
+                        window.prevent_default();
+                        cx.stop_propagation();
                     }
-                    "end" => {
+                    "end"
                         if this.accept_selected_path_completion(window, cx)
-                            || this.accept_inline_suggestion(window, cx)
-                        {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
+                            || this.accept_inline_suggestion(window, cx) =>
+                    {
+                        window.prevent_default();
+                        cx.stop_propagation();
                     }
                     "e" if mods.control || mods.platform => {
                         if !(this.accept_selected_path_completion(window, cx)
@@ -1572,13 +1571,13 @@ impl Render for InputBar {
                         window.prevent_default();
                         cx.stop_propagation();
                     }
-                    "right" if mods.platform => {
-                        if this.accept_selected_path_completion(window, cx)
-                            || this.accept_inline_suggestion(window, cx)
-                        {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
+                    "right"
+                        if mods.platform
+                            && (this.accept_selected_path_completion(window, cx)
+                                || this.accept_inline_suggestion(window, cx)) =>
+                    {
+                        window.prevent_default();
+                        cx.stop_propagation();
                     }
                     "w" if mods.control || mods.platform => {
                         this.delete_previous_word(window, cx);
