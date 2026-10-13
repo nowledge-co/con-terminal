@@ -313,6 +313,7 @@ pub struct ConWorkspace {
     tab_strip_tab_bounds: std::sync::Arc<std::sync::Mutex<Vec<Bounds<Pixels>>>>,
     horizontal_tab_scroll: gpui::ScrollHandle,
     horizontal_tab_reveal_key: HorizontalTabRevealState,
+    horizontal_tab_edges: Rc<Cell<(bool, bool)>>,
     /// Bounds of real tabs only (no ghost placeholder), in render order.
     /// Used exclusively by pane-title-drag slot calculation so it never
     /// needs to know where the ghost tab sits in the visual layout.

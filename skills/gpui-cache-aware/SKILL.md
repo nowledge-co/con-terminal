@@ -106,6 +106,17 @@ If a cached view causes overlap, clipping, or stale layout, the cache boundary i
 
 ### GPUI interaction gotchas
 
+- Caption `.occlude()` targets can block an ancestor's wheel listener. Forward
+  wheel events from the real occluded target to its shared scroll handle, and
+  include occlusion in the interaction test fixture. A plain layout fixture can
+  pass while the native caption cannot scroll.
+- Component popover triggers need mouse-down to reach their wrapper. Apply
+  native-caption occlusion outside the whole popover, not to its inner button;
+  retain mouse-down consumption on ordinary caption buttons.
+- When observing scroll endpoints after layout, request a follow-up frame only
+  when visibility changes. An unconditional `on_next_frame` from prepaint creates
+  idle frame demand even when no animation is running.
+
 - `.hover(|style| ...)` is a style hook on `Div`; `.on_hover(...)` is an
   enter/exit listener and requires a `Stateful<Div>`.
 - If a view needs `.on_hover(...)`, call `.id(stable_id)` first. Use a stable id

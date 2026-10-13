@@ -1,12 +1,12 @@
 use super::super::*;
 use crate::ui_scale::ui_px;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
-use gpui_component::menu::ContextMenuExt;
+use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 
 const CHROME_CONTROL_SIZE: f32 = 22.0;
 const TAB_STRIP_INSET: f32 = (TOP_BAR_TABS_HEIGHT - TOP_BAR_TAB_HEIGHT) * 0.5;
-const HORIZONTAL_TAB_MIN_WIDTH: f32 = 140.0;
+const HORIZONTAL_TAB_MIN_WIDTH: f32 = 120.0;
 const HORIZONTAL_TAB_MAX_WIDTH: f32 = 200.0;
 const TAB_WINDOW_DRAG_GAP: f32 = 64.0;
 const TAB_CLOSE_SIZE: f32 = 20.0;
@@ -156,6 +156,170 @@ fn horizontal_tab_viewport(tab_count: usize) -> gpui::Div {
         .flex_1()
         .min_w_0()
         .max_w(px(tab_count as f32 * HORIZONTAL_TAB_MAX_WIDTH))
+}
+
+fn scroll_occluded_tab(
+    event: &ScrollWheelEvent,
+    scroll: &gpui::ScrollHandle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let delta = event.delta.pixel_delta(window.line_height());
+    let delta_x = if delta.x.is_zero() { delta.y } else { delta.x };
+    let offset = scroll.offset();
+    let next = (offset.x + delta_x).clamp(-scroll.max_offset().x, px(0.0));
+    if next != offset.x {
+        scroll.set_offset(point(next, offset.y));
+        window.refresh();
+    }
+    cx.stop_propagation();
+}
+
+fn tab_overflow_sides(scroll: &gpui::ScrollHandle) -> (bool, bool) {
+    let max = scroll.max_offset().x.as_f32().max(0.0);
+    let position = (-scroll.offset().x.as_f32()).clamp(0.0, max);
+    (position > 0.5, max - position > 0.5)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn horizontal_tab_strip(
+    count: usize,
+    content: AnyElement,
+    scroll: &gpui::ScrollHandle,
+    edges: &Rc<Cell<(bool, bool)>>,
+    material: Hsla,
+    theme: &gpui_component::Theme,
+    owner: gpui::EntityId,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let visible = edges.get();
+    let overflow = visible.0 || visible.1;
+    let mut viewport = Some(
+        div()
+            .id("horizontal-tab-viewport")
+            .debug_selector(|| "horizontal-tab-viewport".into())
+            .flex_1()
+            .min_w_0()
+            .when(overflow, |viewport| {
+                viewport
+                    .h(px(TOP_BAR_TAB_HEIGHT))
+                    .mb(px(TAB_STRIP_INSET))
+                    .bg(tab_resting_surface(theme.foreground, theme.is_dark()))
+                    .when(!visible.0, |viewport| {
+                        viewport.rounded_l(px(TOP_BAR_TAB_HEIGHT * 0.5))
+                    })
+                    .when(!visible.1, |viewport| {
+                        viewport.rounded_r(px(TOP_BAR_TAB_HEIGHT * 0.5))
+                    })
+            })
+            .overflow_x_scroll()
+            .track_scroll(scroll)
+            .child(content),
+    );
+    let mut strip = horizontal_tab_viewport(count)
+        .id("horizontal-tab-container")
+        .relative()
+        .items_center()
+        .h(px(TOP_BAR_TAB_HEIGHT + TAB_STRIP_INSET));
+    for (left, show) in [(true, visible.0), (false, visible.1)] {
+        if !left {
+            strip = strip.child(viewport.take().expect("tab viewport is inserted once"));
+        }
+        if !overflow {
+            continue;
+        }
+        let scroll = scroll.clone();
+        let wheel_scroll = scroll.clone();
+        let id = if left {
+            "tab-scroll-left"
+        } else {
+            "tab-scroll-right"
+        };
+        strip = strip.child(
+            div()
+                // Keep both gutters while overflowing: reaching an endpoint must
+                // not move the viewport or cover the first/last tab's label.
+                .w(px(24.0))
+                .h(px(TOP_BAR_TAB_HEIGHT))
+                .mb(px(TAB_STRIP_INSET))
+                .when(show, |slot| {
+                    slot.bg(tab_resting_surface(theme.foreground, theme.is_dark()))
+                })
+                .when(left, |slot| slot.rounded_l(px(TOP_BAR_TAB_HEIGHT * 0.5)))
+                .when(!left, |slot| slot.rounded_r(px(TOP_BAR_TAB_HEIGHT * 0.5)))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(show, |slot| {
+                    slot.child(
+                        Button::new(id)
+                            .custom(
+                                ButtonCustomVariant::new(cx)
+                                    .color(material.opacity(0.0))
+                                    .hover(
+                                        material
+                                            .opacity(1.0)
+                                            .blend(theme.foreground.opacity(0.065)),
+                                    )
+                                    .active(
+                                        material.opacity(1.0).blend(theme.foreground.opacity(0.10)),
+                                    ),
+                            )
+                            .size(px(18.0))
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .p_0()
+                            .rounded_full()
+                            .tab_stop(false)
+                            .occlude()
+                            .debug_selector(move || id.into())
+                            .accessibility_label(if left {
+                                "Scroll tabs left"
+                            } else {
+                                "Scroll tabs right"
+                            })
+                            .tooltip(if left {
+                                "Scroll tabs left"
+                            } else {
+                                "Scroll tabs right"
+                            })
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_scroll_wheel(move |event, window, cx| {
+                                scroll_occluded_tab(event, &wheel_scroll, window, cx);
+                            })
+                            .on_click(move |_, window, cx| {
+                                let offset = scroll.offset();
+                                let step = scroll.bounds().size.width * 0.7;
+                                let next = (offset.x + if left { step } else { -step })
+                                    .clamp(-scroll.max_offset().x, px(0.0));
+                                scroll.set_offset(point(next, offset.y));
+                                window.refresh();
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                svg()
+                                    .path(if left {
+                                        "phosphor/caret-left.svg"
+                                    } else {
+                                        "phosphor/caret-right.svg"
+                                    })
+                                    .size(px(11.0))
+                                    .text_color(theme.foreground),
+                            ),
+                    )
+                }),
+        );
+    }
+    let scroll = scroll.clone();
+    let edges = edges.clone();
+    strip.on_prepaint(move |_, window, _| {
+        let next = tab_overflow_sides(&scroll);
+        if edges.replace(next) != next {
+            // Only endpoint visibility changes invalidate chrome; no idle frame loop.
+            window.on_next_frame(move |_, cx| cx.notify(owner));
+        }
+    })
 }
 
 fn tab_tray_layer(background: Hsla) -> gpui::Div {
@@ -411,6 +575,20 @@ fn chrome_button(
     action: Option<Box<dyn Action>>,
     cx: &App,
 ) -> Button {
+    chrome_control(id, icon, toggled, label, action, cx)
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+
+// Dropdown triggers must bubble mouse-down to the component's popover wrapper.
+fn chrome_control(
+    id: &'static str,
+    icon: &'static str,
+    toggled: Option<bool>,
+    label: &'static str,
+    action: Option<Box<dyn Action>>,
+    cx: &App,
+) -> Button {
     let theme = cx.theme();
     let active = toggled == Some(true);
     let ink = if active {
@@ -443,8 +621,6 @@ fn chrome_button(
         .when_some(toggled, |button, toggled| button.toggled(toggled))
         // Keep title-bar dragging from swallowing controls on Windows, and
         // preserve terminal focus on pointer activation on all platforms.
-        .occlude()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             svg()
                 .debug_selector(move || format!("{id}-icon"))
@@ -480,6 +656,134 @@ mod chrome_tests {
     };
     use gpui_component::ActiveTheme;
     use gpui_component::ElementExt;
+    use gpui_component::menu::DropdownMenu as _;
+
+    #[test]
+    fn overflow_navigation_assets_are_bundled() {
+        use gpui::AssetSource;
+        for path in ["phosphor/caret-left.svg", "phosphor/caret-right.svg"] {
+            assert!(
+                crate::assets::ConAssets.load(path).unwrap().is_some(),
+                "{path}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn overflow_edges_page_to_both_ends_and_disappear_when_tabs_fit(cx: &mut gpui::TestAppContext) {
+        struct OverflowView {
+            scroll: gpui::ScrollHandle,
+            edges: std::rc::Rc<std::cell::Cell<(bool, bool)>>,
+            count: usize,
+        }
+        impl Render for OverflowView {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let content = tab_tray_container()
+                    .min_w(px(self.count as f32 * super::HORIZONTAL_TAB_MIN_WIDTH))
+                    .children((0..self.count).map(|_| horizontal_tab_target()));
+                super::horizontal_tab_strip(
+                    self.count,
+                    content.into_any_element(),
+                    &self.scroll,
+                    &self.edges,
+                    cx.theme().background,
+                    cx.theme(),
+                    cx.entity_id(),
+                    cx,
+                )
+            }
+        }
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|_, _| OverflowView {
+            scroll: gpui::ScrollHandle::new(),
+            edges: Default::default(),
+            count: 6,
+        });
+        cx.simulate_resize(gpui::size(px(320.0), px(40.0)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tab-scroll-left").is_none());
+        let initial_viewport = cx.debug_bounds("horizontal-tab-viewport").unwrap();
+        let right = cx.debug_bounds("tab-scroll-right").unwrap();
+        assert!(right.origin.x >= initial_viewport.right());
+        for _ in 0..3 {
+            let right = cx.debug_bounds("tab-scroll-right").unwrap();
+            cx.simulate_click(right.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.refresh();
+            });
+            cx.run_until_parked();
+        }
+        assert!(cx.debug_bounds("tab-scroll-right").is_none());
+        assert!(cx.debug_bounds("tab-scroll-left").is_some());
+        let final_viewport = cx.debug_bounds("horizontal-tab-viewport").unwrap();
+        assert_eq!(initial_viewport, final_viewport);
+        let left = cx.debug_bounds("tab-scroll-left").unwrap();
+        assert!(left.right() <= final_viewport.origin.x);
+        for _ in 0..3 {
+            let left = cx.debug_bounds("tab-scroll-left").unwrap();
+            cx.simulate_click(left.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.refresh();
+            });
+            cx.run_until_parked();
+        }
+        assert!(cx.debug_bounds("tab-scroll-left").is_none());
+        view.update(cx, |view, cx| {
+            view.count = 2;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("tab-scroll-left").is_none());
+        assert!(cx.debug_bounds("tab-scroll-right").is_none());
+    }
+
+    #[gpui::test]
+    fn tab_menu_trigger_bubbles_mouse_down_to_open_popover(cx: &mut gpui::TestAppContext) {
+        struct MenuProbe(std::rc::Rc<std::cell::Cell<bool>>);
+        impl Render for MenuProbe {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let opened = self.0.clone();
+                div().size_full().child(
+                    div().occlude().child(
+                        super::chrome_control(
+                            "probe-menu",
+                            "phosphor/caret-down.svg",
+                            None,
+                            "All tabs",
+                            None,
+                            cx,
+                        )
+                        .debug_selector(|| "probe-menu".into())
+                        .dropdown_menu(|menu, _, _| menu)
+                        .on_open_change(move |open, _, _| opened.set(*open)),
+                    ),
+                )
+            }
+        }
+        cx.update(gpui_component::init);
+        let opened = std::rc::Rc::new(std::cell::Cell::new(false));
+        let (_, view) = cx.add_window_view(|_, _| MenuProbe(opened.clone()));
+        let button = view.debug_bounds("probe-menu").unwrap();
+        view.simulate_click(button.center(), gpui::Modifiers::default());
+        assert!(
+            opened.get(),
+            "the dropdown must receive the button's mouse-down"
+        );
+    }
 
     #[test]
     fn generic_tab_identities_use_badges_without_replacing_application_brands() {
@@ -827,11 +1131,21 @@ mod chrome_tests {
                                         let index = usize::from(id == "long-tab");
                                         let is_active = self.active == index;
                                         let scroll = self.scroll.clone();
+                                        let wheel_scroll = scroll.clone();
                                         let reveal = self.reveal.clone();
                                         horizontal_tab_target()
                                             .id(id)
                                             .text_size(px(12.0))
                                             .debug_selector(move || id.into())
+                                            .occlude()
+                                            .on_scroll_wheel(move |event, window, cx| {
+                                                super::scroll_occluded_tab(
+                                                    event,
+                                                    &wheel_scroll,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
                                             .on_prepaint(move |bounds, window, _| {
                                                 if is_active {
                                                     super::schedule_tab_reveal(
@@ -948,6 +1262,13 @@ mod chrome_tests {
         });
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| view.read(cx).scroll.offset()), offset);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: root.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(30.0))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        assert!(cx.update(|_, cx| view.read(cx).scroll.offset().x) > offset.x);
         view.update(cx, |view, cx| {
             view.active = 1;
             view.reveal.set(None);
@@ -1332,10 +1653,15 @@ impl ConWorkspace {
         let mut tabs_container = tab_tray_container()
             .id("tab-strip-container")
             .min_w(px(self.tabs.len() as f32 * HORIZONTAL_TAB_MIN_WIDTH))
-            .child(tab_tray_layer(tab_resting_surface(
-                theme.foreground,
-                theme.is_dark(),
-            )))
+            .when(
+                !self.horizontal_tab_edges.get().0 && !self.horizontal_tab_edges.get().1,
+                |tray| {
+                    tray.child(tab_tray_layer(tab_resting_surface(
+                        theme.foreground,
+                        theme.is_dark(),
+                    )))
+                },
+            )
             // Pane-origin drag: update tab_strip_drop_slot when cursor is in
             // the tab strip so the ghost tab preview follows the cursor.
             .on_drag_move::<DraggedTab>(cx.listener(
@@ -1537,6 +1863,7 @@ impl ConWorkspace {
                 let active_dragged_tab_session_id = self.active_dragged_tab_session_id.clone();
                 let tab_drag_preview = self.tab_drag_preview.clone();
                 let tab_drag_source_bounds = self.tab_strip_tab_bounds.clone();
+                let wheel_scroll = self.horizontal_tab_scroll.clone();
 
                 let mut tab_el = horizontal_tab_target()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
@@ -1550,6 +1877,10 @@ impl ConWorkspace {
                     // activates. Same treatment as the `+`, caption
                     // buttons, and tab-close controls in this file.
                     .occlude()
+                    // Caption hit-test occlusion also blocks the ancestor's scroll listener.
+                    .on_scroll_wheel(move |event, window, cx| {
+                        scroll_occluded_tab(event, &wheel_scroll, window, cx);
+                    })
                     // Left mouse-down: stop propagation so the event
                     // doesn't bubble to top_bar's start_window_move()
                     // on macOS (which steals mouseDragged events and
@@ -2142,14 +2473,19 @@ impl ConWorkspace {
                 tab_strip_progress
             };
             leading_chrome = leading_chrome.child(
-                horizontal_tab_viewport(rendered_tab_count)
-                    .id("horizontal-tab-viewport")
-                    .overflow_x_scroll()
-                    // Surplus width stays on the parent caption, outside tab hit targets.
-                    .mr(px(TAB_WINDOW_DRAG_GAP))
-                    .track_scroll(&self.horizontal_tab_scroll)
-                    .opacity(opacity)
-                    .child(tabs_container),
+                horizontal_tab_strip(
+                    rendered_tab_count,
+                    tabs_container.into_any_element(),
+                    &self.horizontal_tab_scroll,
+                    &self.horizontal_tab_edges,
+                    top_bar_surface_color,
+                    theme,
+                    cx.entity_id(),
+                    cx,
+                )
+                // Surplus width stays on the parent caption, outside tab hit targets.
+                .mr(px(TAB_WINDOW_DRAG_GAP))
+                .opacity(opacity),
             );
         }
 
@@ -2158,6 +2494,70 @@ impl ConWorkspace {
         // Right-side controls — compact row
         let mut tab_controls = chrome_controls_row(top_bar_height)
             .ml(px(if show_horizontal_tabs { 8.0 } else { 0.0 }));
+        if show_horizontal_tabs && tab_count > 1 {
+            let workspace = cx.entity().downgrade();
+            tab_controls = tab_controls.child(
+                // Occlude the whole popover trigger, not its inner button: the
+                // wrapper must receive mouse-down while the caption must not.
+                div().occlude().child(
+                    chrome_control(
+                        "tab-list",
+                        "phosphor/caret-down.svg",
+                        None,
+                        "All tabs",
+                        None,
+                        cx,
+                    )
+                    .debug_selector(|| "horizontal-tab-menu".into())
+                    .dropdown_menu(move |menu, _, cx| {
+                        let mut menu = menu.scrollable(true);
+                        let Some(entity) = workspace.upgrade() else {
+                            return menu;
+                        };
+                        let this = entity.read(cx);
+                        // Capture labels only when opening, not on every chrome repaint.
+                        let entries = this
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .map(|(index, tab)| {
+                                let name = this
+                                    .sidebar
+                                    .read(cx)
+                                    .session(index)
+                                    .map_or(tab.title.as_str(), |entry| entry.name.as_str());
+                                (
+                                    tab.summary_id,
+                                    SharedString::from(name.to_owned()),
+                                    index == this.active_tab,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        for (session_id, title, active) in &entries {
+                            let session_id = *session_id;
+                            let workspace = workspace.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(title.clone()).checked(*active).on_click(
+                                    move |_, window, cx| {
+                                        let _ = workspace.update(cx, |this, cx| {
+                                            // Resolve identity on click: tabs may close or reorder while the menu is open.
+                                            if let Some(index) = this
+                                                .tabs
+                                                .iter()
+                                                .position(|tab| tab.summary_id == session_id)
+                                            {
+                                                this.activate_tab(index, window, cx);
+                                            }
+                                        });
+                                    },
+                                ),
+                            );
+                        }
+                        menu
+                    }),
+                ),
+            );
+        }
         #[cfg(target_os = "linux")]
         {
             if linux_client_decorated(window) {

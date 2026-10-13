@@ -12,6 +12,9 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Horizontal tabs keep equal widths with a compact maximum, leaving more room
   to drag the window. Generic tab identities use small, cached color icons.
+  Tabs shrink before scrolling, and an All tabs menu keeps hidden tabs directly
+  accessible by name. Paging arrows sit outside the labels when tabs overflow;
+  wheel scrolling works over the tab buttons themselves.
 - Smart, Shell and Agent input modes have distinct framed icons. The bottom
   bar and agent composer share a consistent send button, with clearer empty
   and ready states. The agent composer keeps its action aligned in multiline
