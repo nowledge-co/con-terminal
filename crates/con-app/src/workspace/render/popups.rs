@@ -1,5 +1,63 @@
 use super::super::*;
 
+#[cfg(test)]
+mod tests {
+    use super::pane_scope_popup_geometry;
+    use gpui::px;
+
+    #[test]
+    fn pane_targets_follow_control_and_multiline_height() {
+        let (left, width, bottom) = pane_scope_popup_geometry(230.0, 800.0, 44.0, 1.0, 1.0);
+        assert_eq!((left, width, bottom), (px(274.0), px(320.0), px(54.0)));
+        assert_eq!(
+            pane_scope_popup_geometry(230.0, 800.0, 84.0, 1.0, 1.0).2,
+            px(94.0)
+        );
+    }
+
+    #[test]
+    fn pane_targets_fit_terminal_gutters_at_scaled_and_narrow_widths() {
+        for scale in [1.0, 1.5] {
+            for terminal_left in [0.0, 230.0] {
+                for terminal_width in [240.0, 420.0, 1100.0] {
+                    let (left, width, bottom) = pane_scope_popup_geometry(
+                        terminal_left,
+                        terminal_width,
+                        84.0 * scale,
+                        0.5,
+                        scale,
+                    );
+                    assert!(left >= px(terminal_left + 12.0 * scale));
+                    assert!(left + width <= px(terminal_left + terminal_width - 12.0 * scale));
+                    assert_eq!(bottom, px(52.0 * scale));
+                }
+            }
+        }
+    }
+}
+
+fn pane_scope_popup_geometry(
+    terminal_left: f32,
+    terminal_width: f32,
+    input_height: f32,
+    progress: f32,
+    scale: f32,
+) -> (Pixels, Pixels, Pixels) {
+    let inset = 12.0 * scale;
+    let width = (terminal_width * 0.38)
+        .clamp(320.0 * scale, 440.0 * scale)
+        .min((terminal_width - 2.0 * inset).max(0.0));
+    let anchor = (crate::input_chrome::BAR_INSET
+        + crate::input_chrome::CONTROL_SIZE
+        + crate::input_chrome::CONTROL_GAP)
+        * scale;
+    let left = (terminal_left + anchor)
+        .min(terminal_left + terminal_width - width - inset)
+        .max(terminal_left + inset);
+    let bottom = input_height * progress.clamp(0.0, 1.0) + 10.0 * scale;
+    (px(left), px(width), px(bottom))
+}
+
 impl ConWorkspace {
     pub(super) fn render_skill_popup(
         &self,
@@ -206,11 +264,13 @@ impl ConWorkspace {
                     .enumerate()
                     .map(|(ix, pane)| (pane.id, ix))
                     .collect();
-                let popup_available_width = (terminal_content_width - 48.0).max(300.0);
-                let popup_width = px((terminal_content_width * 0.38)
-                    .clamp(320.0, 440.0)
-                    .min(popup_available_width));
-                let popup_bottom = px(62.0 + (43.0 * input_bar_progress.max(0.01)));
+                let (popup_left, popup_width, popup_bottom) = pane_scope_popup_geometry(
+                    terminal_content_left,
+                    terminal_content_width,
+                    self.input_bar.read(cx).rendered_height(cx).as_f32(),
+                    input_bar_progress,
+                    crate::ui_scale::mono_density_scale(cx.theme()),
+                );
                 let preview_content = self.render_scope_node(
                     &layout,
                     &pane_map,
@@ -378,7 +438,7 @@ impl ConWorkspace {
                             .child(
                                 preset_segment(
                                     "scope-all",
-                                    "phosphor/squares-four.svg",
+                                    "phosphor/broadcast-duotone.svg",
                                     "All panes",
                                     is_broadcast,
                                 )
@@ -435,7 +495,7 @@ impl ConWorkspace {
                     div()
                         .debug_selector(|| "pane-scope-popup".into())
                         .absolute()
-                        .left(px(terminal_content_left + 20.0))
+                        .left(popup_left)
                         .bottom(popup_bottom)
                         .w(popup_width)
                         .rounded(px(12.0))

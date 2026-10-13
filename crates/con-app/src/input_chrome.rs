@@ -4,6 +4,10 @@ use gpui_component::{Disableable, Theme};
 
 use crate::ui_scale::mono_space_px;
 
+pub(crate) const BAR_INSET: f32 = 8.0;
+pub(crate) const CONTROL_SIZE: f32 = 28.0;
+pub(crate) const CONTROL_GAP: f32 = 8.0;
+
 /// The bottom bar and agent composer share one submit affordance.
 pub(crate) fn send_button(id: &'static str, enabled: bool, theme: &Theme, cx: &App) -> Button {
     let fill = if enabled {
@@ -11,7 +15,7 @@ pub(crate) fn send_button(id: &'static str, enabled: bool, theme: &Theme, cx: &A
     } else {
         theme.foreground.opacity(0.055)
     };
-    let size = mono_space_px(theme, 28.0);
+    let size = mono_space_px(theme, CONTROL_SIZE);
     Button::new(id)
         .custom(
             ButtonCustomVariant::new(cx)

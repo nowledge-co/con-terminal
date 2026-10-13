@@ -184,6 +184,7 @@ mod tests {
             "tab-reader.png",
             "input-mode-smart.png",
             "input-mode-agent.png",
+            "input-mode-shell.png",
         ] {
             let bytes = png_bytes(path).expect("tab identity must ship in the binary");
             let image = image::load_from_memory(&bytes).unwrap().into_rgba8();

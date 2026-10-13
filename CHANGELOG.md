@@ -18,6 +18,8 @@ con is still pre-release, so entries may group related beta work while the produ
   drafts and fits narrow panels.
 - The pane target picker is more compact, with clearer selected counts,
   keyboard hints, selection checks and a separate focused-pane indicator.
+  It sits closer to its control and follows multiline input height. Quieter
+  mode artwork and balanced insets keep the bottom bar unobtrusive.
 
 ## `v0.1.0-beta.129` - 2026-10-13
 
