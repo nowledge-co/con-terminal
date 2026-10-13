@@ -147,6 +147,7 @@ fn complete_schema() -> Result<Value> {
     let providers = [
         "anthropic",
         "openai",
+        "codex-local",
         "chatgpt",
         "github-copilot",
         "openaicompatible",
@@ -688,6 +689,25 @@ mod tests {
         assert_eq!(
             serde_json::to_value(config).unwrap(),
             serde_json::to_value(decoded).unwrap()
+        );
+    }
+
+    #[test]
+    fn codex_local_model_round_trips_without_con_credentials() {
+        let config = parse(
+            "con.version = 1\ncon.agent.provider = codex-local\ncon.agent.providers.codex-local.model = local-codex-model\n",
+            None,
+        ).unwrap();
+        assert_eq!(config.agent.provider, con_agent::ProviderKind::CodexLocal);
+        let provider = config.agent.providers.codex_local.as_ref().unwrap();
+        assert_eq!(provider.model.as_deref(), Some("local-codex-model"));
+        assert!(provider.api_key.is_none());
+        let text = render(&config).unwrap();
+        let restored = parse(&text, None).unwrap();
+        assert_eq!(restored.agent.provider, con_agent::ProviderKind::CodexLocal);
+        assert_eq!(
+            restored.agent.providers.codex_local,
+            config.agent.providers.codex_local
         );
     }
 

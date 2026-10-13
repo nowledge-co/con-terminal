@@ -151,7 +151,12 @@ impl<M: CompletionModel> AgentHook<M> for ConHook {
 }
 
 impl ConHook {
-    async fn on_tool_call(&self, tool_name: &str, internal_call_id: &str, args: &str) -> Flow {
+    pub(crate) async fn on_tool_call(
+        &self,
+        tool_name: &str,
+        internal_call_id: &str,
+        args: &str,
+    ) -> Flow {
         let call_id = internal_call_id.to_string();
         let tool_name = tool_name.to_string();
         let args = args.to_string();

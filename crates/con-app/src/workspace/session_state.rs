@@ -264,6 +264,7 @@ impl ConWorkspace {
         for provider in [
             ProviderKind::Anthropic,
             ProviderKind::OpenAI,
+            ProviderKind::CodexLocal,
             ProviderKind::ChatGPT,
             ProviderKind::GitHubCopilot,
             ProviderKind::OpenAICompatible,

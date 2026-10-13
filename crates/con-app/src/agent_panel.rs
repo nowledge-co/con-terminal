@@ -857,6 +857,7 @@ impl AgentPanel {
         match provider {
             ProviderKind::Anthropic => "Claude",
             ProviderKind::OpenAI => "OpenAI",
+            ProviderKind::CodexLocal => "Codex",
             ProviderKind::ChatGPT => "ChatGPT",
             ProviderKind::GitHubCopilot => "Copilot",
             ProviderKind::OpenAICompatible => "Compat",
@@ -877,6 +878,7 @@ impl AgentPanel {
         match provider {
             ProviderKind::Anthropic => "providers/anthropic.svg",
             ProviderKind::OpenAI => "providers/openai.svg",
+            ProviderKind::CodexLocal => "phosphor/plugs-connected.svg",
             ProviderKind::ChatGPT => "providers/openai.svg",
             ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
             ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
@@ -907,6 +909,7 @@ impl AgentPanel {
         vec![
             ProviderKind::Anthropic,
             ProviderKind::OpenAI,
+            ProviderKind::CodexLocal,
             ProviderKind::ChatGPT,
             ProviderKind::GitHubCopilot,
             ProviderKind::OpenAICompatible,
@@ -927,6 +930,12 @@ impl AgentPanel {
 
     fn provider_is_configured(config: &AgentConfig, provider: &ProviderKind) -> bool {
         let sidebar_provider = Self::session_sidebar_provider_kind(provider);
+        if sidebar_provider == ProviderKind::CodexLocal {
+            // Explicit local selection/config is enough: auth is owned by Codex,
+            // not a Con key/cache. Never hide the active local route behind keys.
+            return config.provider == ProviderKind::CodexLocal
+                || config.providers.codex_local.is_some();
+        }
         if oauth_token_dir(&sidebar_provider).is_some_and(|dir| dir.exists()) {
             return true;
         }
@@ -971,6 +980,7 @@ impl AgentPanel {
         for provider in [
             ProviderKind::Anthropic,
             ProviderKind::OpenAI,
+            ProviderKind::CodexLocal,
             ProviderKind::ChatGPT,
             ProviderKind::GitHubCopilot,
             ProviderKind::OpenAICompatible,
@@ -5706,6 +5716,32 @@ mod tests {
             &config,
             &ProviderKind::OpenAICompatible
         ));
+    }
+
+    #[test]
+    fn local_codex_route_remains_selectable_without_con_auth() {
+        let mut config = AgentConfig::default();
+        config.provider = ProviderKind::CodexLocal;
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                api_key: Some("test-key".into()),
+                ..Default::default()
+            },
+        );
+        let providers = AgentPanel::configured_session_providers(&config);
+        assert_eq!(providers.first(), Some(&ProviderKind::CodexLocal));
+        assert_eq!(
+            AgentPanel::provider_short_label(&ProviderKind::CodexLocal),
+            "Codex"
+        );
+        config
+            .providers
+            .set(&ProviderKind::CodexLocal, ProviderConfig::default());
+        config.provider = ProviderKind::Anthropic;
+        assert!(
+            AgentPanel::configured_session_providers(&config).contains(&ProviderKind::CodexLocal)
+        );
     }
 
     #[test]

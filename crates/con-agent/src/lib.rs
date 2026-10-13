@@ -1,4 +1,5 @@
 pub mod chatgpt_subscription;
+pub mod codex_local;
 pub mod context;
 pub mod control;
 pub mod conversation;

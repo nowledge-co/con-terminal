@@ -133,6 +133,9 @@ pub enum ProviderKind {
     #[default]
     Anthropic,
     OpenAI,
+    /// Local Codex app-server; authentication and endpoint stay owned by Codex.
+    #[serde(rename = "codex-local")]
+    CodexLocal,
     #[serde(rename = "chatgpt")]
     ChatGPT,
     #[serde(rename = "github-copilot", alias = "githubcopilot")]
@@ -168,6 +171,7 @@ impl std::fmt::Display for ProviderKind {
         match self {
             Self::Anthropic => write!(f, "anthropic"),
             Self::OpenAI => write!(f, "openai"),
+            Self::CodexLocal => write!(f, "codex-local"),
             Self::ChatGPT => write!(f, "chatgpt"),
             Self::GitHubCopilot => write!(f, "github-copilot"),
             Self::OpenAICompatible => write!(f, "openai-compatible"),
@@ -195,6 +199,7 @@ fn display_provider_model(kind: &ProviderKind, model: &str) -> String {
     let provider = match kind {
         ProviderKind::ChatGPT => "ChatGPT",
         ProviderKind::OpenAI => "OpenAI",
+        ProviderKind::CodexLocal => "Codex Local",
         ProviderKind::GitHubCopilot => "GitHub Copilot",
         ProviderKind::OpenAICompatible => "OpenAI-compatible",
         ProviderKind::MiniMax => "MiniMax",
@@ -215,7 +220,11 @@ fn display_provider_model(kind: &ProviderKind, model: &str) -> String {
         ProviderKind::XAI => "xAI",
         ProviderKind::Anthropic => "Anthropic",
     };
-    format!("{provider} · {model}")
+    if model.is_empty() {
+        format!("{provider} · configured default")
+    } else {
+        format!("{provider} · {model}")
+    }
 }
 
 fn truncate_utf8_for_log(text: &str, max_bytes: usize) -> String {
@@ -1091,6 +1100,7 @@ impl ProviderKind {
             Self::GitHubCopilot => "GITHUB_COPILOT_API_KEY",
             Self::OpenAICompatible => "OPENAI_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
+            Self::CodexLocal => "", // Codex owns authentication; never resolve a Con key.
             Self::MiniMax | Self::MiniMaxAnthropic => "MINIMAX_API_KEY",
             Self::Moonshot | Self::MoonshotAnthropic => "MOONSHOT_API_KEY",
             Self::ZAI | Self::ZAIAnthropic => "ZAI_API_KEY",
@@ -1114,6 +1124,7 @@ impl ProviderKind {
             Self::GitHubCopilot => "gpt-4o",
             Self::OpenAICompatible => "gpt-4o",
             Self::OpenAI => "gpt-4o",
+            Self::CodexLocal => "", // Omission preserves Codex's configured default model.
             Self::MiniMax => "MiniMax-M2",
             Self::MiniMaxAnthropic => "MiniMax-M2",
             Self::Moonshot => "kimi-k2.5",
@@ -1646,6 +1657,8 @@ pub struct ProviderMap {
     pub anthropic: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openai: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "codex-local")]
+    pub codex_local: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chatgpt: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "github-copilot")]
@@ -1695,6 +1708,7 @@ impl ProviderMap {
         match kind {
             ProviderKind::Anthropic => self.anthropic.as_ref(),
             ProviderKind::OpenAI => self.openai.as_ref(),
+            ProviderKind::CodexLocal => self.codex_local.as_ref(),
             ProviderKind::ChatGPT => self.chatgpt.as_ref(),
             ProviderKind::GitHubCopilot => self.github_copilot.as_ref(),
             ProviderKind::OpenAICompatible => self.openaicompatible.as_ref(),
@@ -1725,6 +1739,7 @@ impl ProviderMap {
         let slot = match kind {
             ProviderKind::Anthropic => &mut self.anthropic,
             ProviderKind::OpenAI => &mut self.openai,
+            ProviderKind::CodexLocal => &mut self.codex_local,
             ProviderKind::ChatGPT => &mut self.chatgpt,
             ProviderKind::GitHubCopilot => &mut self.github_copilot,
             ProviderKind::OpenAICompatible => &mut self.openaicompatible,
@@ -2109,6 +2124,60 @@ pub enum AgentEvent {
     Error(String),
 }
 
+/// One Rig tool registry for both HTTP providers and local Codex dynamic tools.
+pub(crate) fn build_tool_server(
+    root: PathBuf,
+    terminal_exec_tx: Sender<TerminalExecRequest>,
+    pane_tx: Sender<PaneRequest>,
+    cancelled: Arc<AtomicBool>,
+) -> rig::tool::server::ToolServerHandle {
+    rig::tool::server::ToolServer::new()
+        .tool(TerminalExecTool::new(terminal_exec_tx.clone()))
+        .tool(ShellExecTool)
+        .tool(FileReadTool::new(root.clone()))
+        .tool(FileWriteTool::new(root.clone()))
+        .tool(EditFileTool::new(root.clone()))
+        .tool(ListFilesTool::new(root.clone()))
+        .tool(SearchTool::new(root))
+        .tool(ListPanesTool::new(pane_tx.clone()))
+        .tool(ListTabWorkspacesTool::new(pane_tx.clone()))
+        .tool(TmuxInspectTool::new(pane_tx.clone()))
+        .tool(TmuxListTool::new(pane_tx.clone()))
+        .tool(TmuxCaptureTool::new(pane_tx.clone()))
+        .tool(TmuxFindTargetsTool::new(pane_tx.clone()))
+        .tool(ResolveWorkTargetTool::new(pane_tx.clone()))
+        .tool(EnsureLocalCodingWorkspaceTool::new(pane_tx.clone()))
+        .tool(AgentCliTurnTool::new(pane_tx.clone()))
+        .tool(EnsureLocalAgentTargetTool::new(pane_tx.clone()))
+        .tool(EnsureLocalShellTargetTool::new(pane_tx.clone()))
+        .tool(EnsureRemoteShellTargetTool::new(pane_tx.clone()))
+        .tool(EnsureRemoteTmuxShellTargetTool::new(
+            pane_tx.clone(),
+            terminal_exec_tx.clone(),
+        ))
+        .tool(EnsureRemoteTmuxWorkspaceTool::new(
+            pane_tx.clone(),
+            terminal_exec_tx.clone(),
+        ))
+        .tool(RemoteExecTool::new(
+            pane_tx.clone(),
+            terminal_exec_tx.clone(),
+        ))
+        .tool(TmuxEnsureShellTargetTool::new(pane_tx.clone()))
+        .tool(TmuxShellTurnTool::new(pane_tx.clone()))
+        .tool(TmuxSendKeysTool::new(pane_tx.clone()))
+        .tool(TmuxRunCommandTool::new(pane_tx.clone()))
+        .tool(TmuxEnsureAgentTargetTool::new(pane_tx.clone()))
+        .tool(ProbeShellContextTool::new(pane_tx.clone()))
+        .tool(ReadPaneTool::new(pane_tx.clone()))
+        .tool(SendKeysTool::new(pane_tx.clone()))
+        .tool(SearchPanesTool::new(pane_tx.clone()))
+        .tool(CreatePaneTool::new(pane_tx.clone()))
+        .tool(WaitForTool::new(pane_tx, cancelled))
+        .tool(BatchExecTool::new(terminal_exec_tx))
+        .run()
+}
+
 // ── Agent builder macro ─────────────────────────────────────────────
 
 /// Build an agent with all tools, stream the response, and consume it.
@@ -2121,53 +2190,16 @@ macro_rules! build_and_stream {
     ($client:expr, $cfg:expr, $kind:expr, $system_prompt:expr, $prompt:expr,
      $history:expr, $hook:expr, $terminal_exec_tx:expr, $pane_tx:expr,
      $event_tx:expr, $cancelled:expr, $workspace_root:expr) => {{
-        let root: std::path::PathBuf = $workspace_root;
+        let tools = build_tool_server(
+            $workspace_root,
+            $terminal_exec_tx,
+            $pane_tx,
+            $cancelled.clone(),
+        );
         let mut builder = $client
             .agent($cfg.effective_model(&$kind))
             .preamble($system_prompt)
-            .tool(TerminalExecTool::new($terminal_exec_tx.clone()))
-            .tool(ShellExecTool)
-            .tool(FileReadTool::new(root.clone()))
-            .tool(FileWriteTool::new(root.clone()))
-            .tool(EditFileTool::new(root.clone()))
-            .tool(ListFilesTool::new(root.clone()))
-            .tool(SearchTool::new(root))
-            .tool(ListPanesTool::new($pane_tx.clone()))
-            .tool(ListTabWorkspacesTool::new($pane_tx.clone()))
-            .tool(TmuxInspectTool::new($pane_tx.clone()))
-            .tool(TmuxListTool::new($pane_tx.clone()))
-            .tool(TmuxCaptureTool::new($pane_tx.clone()))
-            .tool(TmuxFindTargetsTool::new($pane_tx.clone()))
-            .tool(ResolveWorkTargetTool::new($pane_tx.clone()))
-            .tool(EnsureLocalCodingWorkspaceTool::new($pane_tx.clone()))
-            .tool(AgentCliTurnTool::new($pane_tx.clone()))
-            .tool(EnsureLocalAgentTargetTool::new($pane_tx.clone()))
-            .tool(EnsureLocalShellTargetTool::new($pane_tx.clone()))
-            .tool(EnsureRemoteShellTargetTool::new($pane_tx.clone()))
-            .tool(EnsureRemoteTmuxShellTargetTool::new(
-                $pane_tx.clone(),
-                $terminal_exec_tx.clone(),
-            ))
-            .tool(EnsureRemoteTmuxWorkspaceTool::new(
-                $pane_tx.clone(),
-                $terminal_exec_tx.clone(),
-            ))
-            .tool(RemoteExecTool::new(
-                $pane_tx.clone(),
-                $terminal_exec_tx.clone(),
-            ))
-            .tool(TmuxEnsureShellTargetTool::new($pane_tx.clone()))
-            .tool(TmuxShellTurnTool::new($pane_tx.clone()))
-            .tool(TmuxSendKeysTool::new($pane_tx.clone()))
-            .tool(TmuxRunCommandTool::new($pane_tx.clone()))
-            .tool(TmuxEnsureAgentTargetTool::new($pane_tx.clone()))
-            .tool(ProbeShellContextTool::new($pane_tx.clone()))
-            .tool(ReadPaneTool::new($pane_tx.clone()))
-            .tool(SendKeysTool::new($pane_tx.clone()))
-            .tool(SearchPanesTool::new($pane_tx.clone()))
-            .tool(CreatePaneTool::new($pane_tx.clone()))
-            .tool(WaitForTool::new($pane_tx, $cancelled.clone()))
-            .tool(BatchExecTool::new($terminal_exec_tx))
+            .tool_server_handle(tools)
             .default_max_turns(rig_model_call_budget($cfg.max_turns));
 
         if let Some(max_tokens) = $cfg.effective_max_tokens(&$kind) {
@@ -2344,6 +2376,26 @@ impl AgentProvider {
         let response = match *kind {
             ProviderKind::Anthropic => stream_with!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => stream_with!(self.build_openai_client()?),
+            ProviderKind::CodexLocal => {
+                let tools = build_tool_server(
+                    workspace_root.clone(),
+                    terminal_exec_tx,
+                    pane_tx,
+                    cancelled.clone(),
+                );
+                crate::codex_local::send(
+                    &self.config,
+                    &system_prompt,
+                    chat_history,
+                    &last_user_msg,
+                    &workspace_root,
+                    tools,
+                    hook,
+                    &event_tx,
+                    &cancelled,
+                )
+                .await?
+            }
             ProviderKind::ChatGPT => stream_with!(self.build_chatgpt_client()?),
             ProviderKind::GitHubCopilot => stream_with!(self.build_github_copilot_client()?),
             ProviderKind::OpenAICompatible => {
@@ -2369,7 +2421,12 @@ impl AgentProvider {
             ProviderKind::XAI => stream_with!(self.build_xai_client()?),
         };
 
-        let model_name = self.config.effective_model(kind).to_string();
+        let configured_model = self.config.effective_model(kind);
+        let model_name = if *kind == ProviderKind::CodexLocal && configured_model.is_empty() {
+            "Codex configured default".to_string()
+        } else {
+            configured_model.to_string()
+        };
         let message = Message::assistant(&response).with_model(model_name);
         let _ = event_tx.send(AgentEvent::Done(message.clone()));
 
@@ -2778,6 +2835,9 @@ impl AgentProvider {
         match *kind {
             ProviderKind::Anthropic => do_complete!(self.build_anthropic_client()?),
             ProviderKind::OpenAI => do_complete!(self.build_openai_client()?),
+            ProviderKind::CodexLocal => {
+                crate::codex_local::complete(&self.config, prompt, preamble).await
+            }
             ProviderKind::ChatGPT => do_complete!(self.build_chatgpt_client()?),
             ProviderKind::GitHubCopilot => do_complete!(self.build_github_copilot_client()?),
             ProviderKind::OpenAICompatible => {

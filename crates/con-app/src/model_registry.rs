@@ -216,6 +216,7 @@ type CustomModelMap = HashMap<(ProviderKind, String), Vec<String>>;
 pub struct ModelRegistry {
     inner: Arc<Mutex<Option<CacheEntry>>>,
     custom: Arc<Mutex<CustomModelMap>>,
+    codex_local: Arc<Mutex<Vec<String>>>,
 }
 
 impl ModelRegistry {
@@ -223,6 +224,7 @@ impl ModelRegistry {
         Self {
             inner: Arc::new(Mutex::new(None)),
             custom: Arc::new(Mutex::new(HashMap::new())),
+            codex_local: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -258,6 +260,9 @@ impl ModelRegistry {
         provider: &ProviderKind,
         base_url: Option<&str>,
     ) -> Vec<String> {
+        if *provider == ProviderKind::CodexLocal {
+            return self.codex_local.lock().unwrap().clone();
+        }
         // Subscription availability and capabilities come from its dedicated
         // catalog. Keep this compatibility path on the same fallback source so
         // older callers cannot drift from `models_for_config`.
@@ -295,6 +300,11 @@ impl ModelRegistry {
             .collect();
         append_missing_models(&mut models, pinned_models(provider));
         models
+    }
+
+    /// Local Codex availability is independent of the public API catalog.
+    pub fn set_codex_local_models(&self, models: Vec<String>) {
+        *self.codex_local.lock().unwrap() = models;
     }
 
     /// Stores models discovered from a specific user-configured endpoint.
@@ -561,6 +571,23 @@ impl ModelRegistry {
 mod tests {
     use super::*;
     use con_agent::ProviderKind;
+
+    #[test]
+    fn codex_models_stay_separate_from_api_models_and_allow_a_default() {
+        let registry = ModelRegistry::new();
+        assert!(registry.models_for(&ProviderKind::CodexLocal).is_empty());
+        let api_models = registry.models_for(&ProviderKind::OpenAI);
+        registry.set_codex_local_models(vec!["local-only-model".into()]);
+        assert_eq!(
+            registry.models_for(&ProviderKind::CodexLocal),
+            vec!["local-only-model"]
+        );
+        assert_eq!(registry.models_for(&ProviderKind::OpenAI), api_models);
+        assert_eq!(
+            registry.clone().models_for(&ProviderKind::CodexLocal),
+            vec!["local-only-model"]
+        );
+    }
 
     #[test]
     fn anthropic_variants_share_canonical_models_family() {

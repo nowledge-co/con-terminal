@@ -85,6 +85,7 @@ fn provider_connection_status(
 }
 
 enum ProviderModelFetchRequest {
+    CodexLocal,
     OpenAICompatible {
         base_url: String,
         api_key: Option<String>,
@@ -97,6 +98,9 @@ enum ProviderModelFetchRequest {
 impl ProviderModelFetchRequest {
     async fn fetch(self) -> anyhow::Result<ProviderModelFetchResult> {
         match self {
+            Self::CodexLocal => Ok(ProviderModelFetchResult::CodexLocal {
+                models: con_agent::codex_local::fetch_models().await?,
+            }),
             Self::OpenAICompatible { base_url, api_key } => {
                 let models =
                     ModelRegistry::fetch_openai_compatible_models(&base_url, api_key.as_deref())
@@ -112,6 +116,9 @@ impl ProviderModelFetchRequest {
 }
 
 enum ProviderModelFetchResult {
+    CodexLocal {
+        models: Vec<String>,
+    },
     OpenAICompatible {
         base_url: String,
         models: Vec<String>,
@@ -124,7 +131,9 @@ enum ProviderModelFetchResult {
 impl ProviderModelFetchResult {
     fn models(&self) -> &[String] {
         match self {
-            Self::OpenAICompatible { models, .. } | Self::ChatGPT { models } => models,
+            Self::OpenAICompatible { models, .. }
+            | Self::ChatGPT { models }
+            | Self::CodexLocal { models } => models,
         }
     }
 }
@@ -290,6 +299,7 @@ enum SettingsSaveErrorKind {
 const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
     ProviderKind::Anthropic,
     ProviderKind::OpenAI,
+    ProviderKind::CodexLocal,
     ProviderKind::ChatGPT,
     ProviderKind::GitHubCopilot,
     ProviderKind::OpenAICompatible,
@@ -582,6 +592,7 @@ impl SettingsPanel {
         match Self::sidebar_provider_kind(provider) {
             ProviderKind::Anthropic => "providers/anthropic.svg",
             ProviderKind::OpenAI => "providers/openai.svg",
+            ProviderKind::CodexLocal => "phosphor/plugs-connected.svg",
             ProviderKind::ChatGPT => "providers/openai.svg",
             ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
             ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
@@ -603,6 +614,10 @@ impl SettingsPanel {
     }
 
     fn provider_config_has_auth_signal(provider: &ProviderKind, config: &ProviderConfig) -> bool {
+        // Local Codex owns auth. A stale/ignored Con key is not a readiness signal.
+        if *provider == ProviderKind::CodexLocal {
+            return false;
+        }
         let has_api_key = config
             .api_key
             .as_ref()
@@ -2493,7 +2508,7 @@ impl SettingsPanel {
     fn fetch_selected_provider_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(
             self.selected_provider,
-            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT
+            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT | ProviderKind::CodexLocal
         ) || self.provider_model_fetching
         {
             return;
@@ -2507,6 +2522,7 @@ impl SettingsPanel {
             .set(&provider, provider_config.clone());
 
         let fetch_request = match provider {
+            ProviderKind::CodexLocal => ProviderModelFetchRequest::CodexLocal,
             ProviderKind::OpenAICompatible => {
                 let Some(base_url) = provider_config
                     .base_url
@@ -2580,6 +2596,9 @@ impl SettingsPanel {
                                     }
                                 }
                                 ProviderModelFetchResult::ChatGPT { .. } => {}
+                                ProviderModelFetchResult::CodexLocal { models } => {
+                                    registry.set_codex_local_models(models);
+                                }
                             }
                             if panel.selected_provider == provider {
                                 let current_model =
@@ -5131,8 +5150,9 @@ impl SettingsPanel {
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
         let can_fetch_models = matches!(
             self.selected_provider,
-            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT
+            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT | ProviderKind::CodexLocal
         );
+        let is_codex_local = self.selected_provider == ProviderKind::CodexLocal;
         let protocol_switch_label = Self::protocol_switch_label(&self.selected_provider);
         let protocol_switch_hint = Self::protocol_switch_hint(&self.selected_provider);
         let anthropic_protocol_enabled = Self::uses_anthropic_protocol(&self.selected_provider);
@@ -5168,6 +5188,7 @@ impl SettingsPanel {
             provider_list = provider_list.child(
                 div()
                     .id(SharedString::from(format!("prov-{label}")))
+                    .debug_selector(|| format!("settings-provider-{label}"))
                     .min_h(rems(2.125))
                     .px(px(8.0))
                     .flex()
@@ -5261,6 +5282,12 @@ impl SettingsPanel {
             has_key_override,
         );
 
+        let (connection_ready, connection_label) = if is_codex_local {
+            (false, "Codex-managed")
+        } else {
+            (connection_ready, connection_label)
+        };
+
         let model_card_content = card(theme, card_opacity).child(
             div()
                 .px(px(14.0))
@@ -5346,7 +5373,9 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     self.provider_model_status.clone().unwrap_or_else(|| {
-                                        if self.selected_provider == ProviderKind::ChatGPT {
+                                        if is_codex_local {
+                                            "Leave the model blank to use Codex's configured default. Fetch available models from the local app-server.".to_string()
+                                        } else if self.selected_provider == ProviderKind::ChatGPT {
                                             "Fetch the current ChatGPT Subscription model list after OAuth sign-in. Or enter the model ID.".to_string()
                                         } else {
                                             "Fetch /models when the provider exposes a model list. Or enter the model ID.".to_string()
@@ -5355,7 +5384,7 @@ impl SettingsPanel {
                                 ),
                         )
                         .child(
-                            div().flex_shrink_0().child(
+                            div().debug_selector(|| "settings-provider-fetch".into()).flex_shrink_0().child(
                                 Button::new("fetch-openai-compatible-models")
                                     .small()
                                     .ghost()
@@ -5604,18 +5633,23 @@ impl SettingsPanel {
                         } else {
                             None
                         })
-                        .child(stacked_input_field(
+                        .children(is_codex_local.then(|| {
+                            div().text_xs().line_height(rems(1.25))
+                                .text_color(theme.muted_foreground)
+                                .child("Con starts codex app-server locally and uses Codex's own login and configuration. Install the Codex CLI and run codex login first. No API key or OAuth sign-in in Con is needed. Commands and edits still use Con tools and approvals.")
+                        }))
+                        .children((!is_codex_local).then(|| stacked_input_field(
                             Self::provider_api_key_label(&self.selected_provider),
                             Self::provider_api_key_hint(&self.selected_provider),
                             &api_key_input,
                             theme,
-                        ))
-                        .child(stacked_input_field(
+                        )))
+                        .children((!is_codex_local).then(|| stacked_input_field(
                             "Base URL",
                             Self::provider_base_url_hint(&self.selected_provider),
                             &base_url_input,
                             theme,
-                        ))
+                        )))
                         .children(if endpoint_presets.is_empty() {
                             None
                         } else {
@@ -5629,7 +5663,7 @@ impl SettingsPanel {
                         }),
                 ),
             )
-            .child(
+            .children((!is_codex_local).then(||
                 card(theme, card_opacity).child(
                     div()
                         .px(px(14.0))
@@ -5649,8 +5683,8 @@ impl SettingsPanel {
                             &max_tokens_input,
                             theme,
                         )),
-                ),
-            );
+                )
+            ));
 
         let provider_column = if mobile {
             div().w_full().min_w_0().child(
@@ -7270,6 +7304,7 @@ fn stacked_input_field(
     theme: &gpui_component::Theme,
 ) -> Div {
     div()
+        .debug_selector(|| format!("settings-provider-field-{label}"))
         .flex()
         .flex_col()
         .gap(px(6.0))
@@ -7472,6 +7507,7 @@ pub(crate) fn provider_label(provider: &ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Anthropic => "Anthropic",
         ProviderKind::OpenAI => "OpenAI",
+        ProviderKind::CodexLocal => "Codex Local",
         ProviderKind::ChatGPT => "ChatGPT Subscription",
         ProviderKind::GitHubCopilot => "GitHub Copilot",
         ProviderKind::OpenAICompatible => "OpenAI Compatible",
@@ -7523,6 +7559,10 @@ fn display_theme_name(name: &str) -> String {
             .join(" "),
     }
 }
+
+#[cfg(test)]
+#[path = "settings_panel/codex_tests.rs"]
+mod codex_tests;
 
 #[cfg(test)]
 mod tests {

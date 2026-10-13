@@ -90,6 +90,40 @@ ConWorkspace::send_to_agent()
                         Bridge emits HarnessEvent::ResponseComplete
 ```
 
+## Local Codex transport
+
+`codex-local` is a separate provider, not an API-key/OAuth variant of an HTTP
+client. `crates/con-agent/src/codex_local.rs` starts a dedicated JSONL stdio app-server
+on the shared Tokio runtime. Codex owns authentication and model routing; Con
+never imports credentials for this path.
+
+Both HTTP/Rig agents and local Codex receive the same Rig `ToolServerHandle`
+registry built in `provider.rs`. Codex advertises those definitions as experimental
+`dynamicTools`; `item/tool/call` dispatches through `ConHook` before invoking the
+Rig tool. Tool-start, approval-needed/ended, result, text and reasoning events use
+the existing channels, so routing stays per-tab. Native Codex execution is disabled
+and read-only sandbox/approval settings are checked before starting generation.
+
+Each user request gets an ephemeral thread with recent text history injected via
+`thread/inject_items`. Con remains the conversation authority; no Codex thread IDs
+or rollouts are persisted. The child exits on completion, errors, cancellation or
+timeout. Lightweight completions use the same transport with no dynamic tools.
+See [Configuration](configuration.md#local-codex-provider) for setup and limits.
+
+The regular `con-agent` tests cover the JSONL transport, streaming, tool approval,
+cancellation and process cleanup without a Codex installation. An opt-in test
+also exercises a real app-server against a loopback-only Responses fixture:
+
+```bash
+CON_CODEX_TEST_BIN=/absolute/path/to/codex \
+  cargo test -p con-agent real_app_server_routes_tools -- --ignored --nocapture
+```
+
+That test uses a temporary `CODEX_HOME`, injected history, Con's real
+`TerminalExecTool` channel and manual approval. Its visible-execution receiver is
+an isolated fixture, not the user's terminal. It requires no credentials, paid
+model calls or external model service, and rejects leaked native execution tools.
+
 ## Event Polling & Tab Routing
 
 The workspace polls **all** tabs' sessions every 4ms:

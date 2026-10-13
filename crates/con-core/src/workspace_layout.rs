@@ -755,6 +755,7 @@ fn parse_provider_kind(value: Option<&str>) -> Option<ProviderKind> {
     match value?.trim().to_ascii_lowercase().as_str() {
         "anthropic" => Some(ProviderKind::Anthropic),
         "openai" => Some(ProviderKind::OpenAI),
+        "codex-local" => Some(ProviderKind::CodexLocal),
         "chatgpt" => Some(ProviderKind::ChatGPT),
         "github-copilot" | "githubcopilot" => Some(ProviderKind::GitHubCopilot),
         "openai-compatible" | "openai_compatible" | "openai compatible" => {

@@ -78,6 +78,51 @@ con.experimental.handoff = true
 `con.version = 1` is the current Con schema marker. Native-owned values must use
 their Ghostty names rather than aliases such as `con.terminal.font_size`.
 
+### Local Codex provider
+
+Choose **Codex Local** in Settings → Providers, then select it as the active AI
+provider. Con launches `codex app-server --listen stdio://`; Codex manages its own
+authentication, configured endpoint, and default model. Con does not copy Codex
+credentials or require an API key or OAuth login for this provider.
+
+Install the Codex CLI and sign in with `codex login` first (or keep an existing
+working Codex configuration). This is a local **client**, not offline inference:
+model availability and any required account/billing remain determined by Codex.
+
+```ini
+con.version = 1
+con.agent.provider = codex-local
+# Optional. Omit to use the model selected in Codex's configuration.
+con.agent.providers.codex-local.model = gpt-5.3-codex
+```
+
+**Fetch Models** queries the installed app-server's `model/list`, not the public
+OpenAI API or the ChatGPT Subscription catalog. Clear the model input to restore
+Codex's configured default. Codex owns sampling/reasoning and token limits; Con's
+HTTP endpoint, credentials, temperature, and token-ceiling overrides are not
+forwarded. For this provider, `con.agent.max_turns` bounds Con dynamic tool calls
+per request.
+
+The executable is found on PATH (including Con's native CLI fallback directories).
+On macOS, the bundled CLI in `Codex.app` or `ChatGPT.app` under `/Applications`
+or `~/Applications` is also supported, including both `Contents/Resources/codex`
+and `Contents/Resources/codex-cli/bin/codex`. Set `CON_CODEX_BIN` to an absolute
+executable path if discovery picks the wrong installation. Codex honors its own
+`CODEX_HOME`; Con never edits that directory's authentication/config files.
+
+Con uses dedicated ephemeral threads, injects the recent conversation history,
+and keeps tools on its shared Rig registry and approval flow. Native Codex shell
+execution, hooks, apps/plugins, and configured MCP servers are disabled; the
+Codex thread stays read-only and native approval requests are declined. Commands
+and writes use Con tools. Cancellation terminates only Con's dedicated app-server,
+not a running Codex app or daemon. On Unix, the dedicated process group is stopped
+as well, including children launched by an npm shim. Stdio setup requests have a 30-second timeout;
+a turn has a 15-minute limit.
+
+This integration uses Codex's experimental `dynamicTools` and
+`thread/inject_items` APIs. Use a recent Codex version supporting both; unsupported
+protocols report an error rather than falling back to a different provider.
+
 ### Includes and provenance
 
 `config-file` includes belong to Ghostty's native configuration graph. Con-specific
