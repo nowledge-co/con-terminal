@@ -4,6 +4,28 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.129` - 2026-10-13
+
+### Added
+
+**Built-in agent**
+
+- Choose **Codex Local** to use an installed Codex CLI's login, configured
+  endpoint, and model with Con's built-in agent. Leave the model blank to follow
+  Codex's default, or fetch its available models in Settings. Replies stream in
+  the agent panel, while commands and edits still use Con's tools and approvals.
+  Requires a recent Codex CLI; this does not provide offline inference. _(PR
+  [#471](https://github.com/nowledge-co/con-terminal/pull/471) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+### Changed
+
+**Documentation**
+
+- The README now shows the current Tail A6 app icon. _(PR
+  [#470](https://github.com/nowledge-co/con-terminal/pull/470) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.128` - 2026-10-12
 
 ### Fixed

@@ -125,7 +125,7 @@ The Providers section stores the connection details for the model hosts you use.
 The AI section chooses the active provider and model for the agent panel,
 Command Palette AI actions, and AI fallback suggestions.
 
-con supports Anthropic, OpenAI, ChatGPT, GitHub Copilot, OpenAI-compatible
+con supports Anthropic, OpenAI, Codex Local, ChatGPT, GitHub Copilot, OpenAI-compatible
 hosts, MiniMax, Moonshot, Z.AI, DeepSeek, Groq, Gemini, Ollama, OpenRouter,
 Mistral, Together, Cohere, Perplexity, and xAI.
 
@@ -152,6 +152,32 @@ apply to the separate OpenAI API provider.
 
 The provider picker in the agent panel shows configured providers. If a provider
 is missing there, configure it first in Settings.
+
+### Use an installed Codex CLI
+
+Choose **Codex Local** in Providers if you already use Codex on this computer.
+Con uses Codex's login and endpoint configuration; you do not need to enter
+credentials again in Con.
+
+1. Install a recent Codex CLI and run `codex login`, or keep your existing
+   working Codex configuration.
+2. Select **Codex Local** in Providers. Leave the model blank to follow Codex's
+   configured default, or choose **Fetch Models** and select a model.
+3. Choose **Codex Local** as the active provider in AI and save your settings.
+   For an existing tab, choose it in the agent panel's provider picker; changing
+   the global default does not replace that tab's current choice.
+
+Con starts a separate local app-server for each request. Model requests still
+go to the service configured in Codex; this is not offline inference. Con's
+terminal context, tools, and approval controls remain in use. Running Codex
+sessions are left alone.
+
+If Con cannot find Codex, check that `codex` is on PATH. On macOS, Con also looks
+inside Codex and ChatGPT app bundles. For another location, set `CON_CODEX_BIN`
+to the executable's absolute path in the environment used to launch Con. A CLI
+that lacks the required app-server APIs reports an error; Con does not silently
+switch providers. See [local Codex configuration](impl/configuration.md#local-codex-provider)
+for the protocol requirements and configuration keys.
 
 ## Tool approval
 
