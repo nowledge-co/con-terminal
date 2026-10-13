@@ -105,6 +105,10 @@ impl MotionValue {
     }
 
     pub fn set_target(&mut self, target: f32, duration: Duration) {
+        self.set_target_at(target, duration, Instant::now());
+    }
+
+    pub(crate) fn set_target_at(&mut self, target: f32, duration: Duration, now: Instant) {
         if duration.is_zero() {
             self.current = target;
             self.from = target;
@@ -113,13 +117,13 @@ impl MotionValue {
             self.started_at = None;
             return;
         }
-        let current = self.current();
+        let current = self.current_at(now);
         self.current = current;
         self.from = current;
         self.target = target;
         self.duration = duration;
         self.started_at = if (current - target).abs() > 0.001 {
-            Some(Instant::now())
+            Some(now)
         } else {
             self.current = target;
             None
@@ -140,11 +144,15 @@ impl MotionValue {
     }
 
     pub fn current(&self) -> f32 {
+        self.current_at(Instant::now())
+    }
+
+    pub(crate) fn current_at(&self, now: Instant) -> f32 {
         let Some(started_at) = self.started_at else {
             return self.target;
         };
 
-        let elapsed = started_at.elapsed();
+        let elapsed = now.saturating_duration_since(started_at);
         if elapsed >= self.duration || self.duration.is_zero() {
             return self.target;
         }
@@ -159,6 +167,15 @@ impl MotionValue {
     }
 
     fn update(&mut self, reduce_motion: bool, request_frame: impl FnOnce()) -> f32 {
+        self.update_at(Instant::now(), reduce_motion, request_frame)
+    }
+
+    pub(crate) fn update_at(
+        &mut self,
+        now: Instant,
+        reduce_motion: bool,
+        request_frame: impl FnOnce(),
+    ) -> f32 {
         if reduce_motion {
             self.current = self.target;
             self.from = self.target;
@@ -166,9 +183,10 @@ impl MotionValue {
             return self.target;
         }
 
-        let value = self.current();
+        let value = self.current_at(now);
         if let Some(started_at) = self.started_at {
-            if started_at.elapsed() >= self.duration || self.duration.is_zero() {
+            if now.saturating_duration_since(started_at) >= self.duration || self.duration.is_zero()
+            {
                 self.current = self.target;
                 self.from = self.target;
                 self.started_at = None;
