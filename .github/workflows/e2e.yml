@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/e2e.yml"
+      - "scripts/ci/**"
       - "crates/con-test/**"
       - "crates/con-app/**"
       - "crates/con-core/**"
@@ -20,6 +21,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/e2e.yml"
+      - "scripts/ci/**"
       - "crates/con-test/**"
       - "crates/con-app/**"
       - "crates/con-core/**"

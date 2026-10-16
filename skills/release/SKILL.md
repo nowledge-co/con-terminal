@@ -88,8 +88,16 @@ curl -fsSL https://con-releases.nowledge.co/install.ps1 >/dev/null
 
 ## Recovery
 
+- If dependency setup stalls, inspect the active step before assuming a slow
+  build or Apple outage. macOS/Linux Zig setup must use
+  `scripts/ci/install-zig.sh` with a workflow step deadline; run its regression
+  suite before changing bootstrap policy. Connection timeouts alone do not
+  bound downloads.
 - If a platform workflow is cancelled, rerun that exact workflow run; do not
-  push a second tag.
+  push a second tag when the tagged workflow is still correct. If the workflow
+  itself needs a fix, merge it to main and use a new immutable tag instead;
+  rerunning an old tag still uses its old workflow. Carry forward release notes
+  and author credits from any cancelled, unpublished release attempts.
 - If all platform workflows succeeded but the release remains draft, inspect
   the latest `Finalize release` run. Rerun only the finalizer after confirming
   the release gate inputs are complete.
