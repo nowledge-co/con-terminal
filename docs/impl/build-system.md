@@ -7,6 +7,24 @@ If it is absent, Homebrew must supply a bottle without auto-update or incidental
 upgrade. An unavailable bottle fails rather than compiling CMake from source.
 Zig remains explicitly pinned to the project version.
 
+## CI Zig Downloads
+
+macOS and Linux release, portable and E2E jobs share
+`scripts/ci/install-zig.sh`. It tries the official distribution first, then two
+independent mirrors. Each source gets one attempt with a 10-second connection
+timeout, a 180-second total limit and a 30-second low-speed timeout. A 12-minute
+workflow step deadline bounds the entire installation, including extraction.
+The script logs each source, checks the archive against the pinned SHA-256 from
+Zig's official download index, and verifies the executable's version before
+adding it to the runner PATH. Partial downloads never count as success.
+
+Update the script's version and all supported host checksums together with
+`mise.toml`. Run `bash scripts/ci/test-install-zig.sh` for stalled-transfer,
+corrupt-download, source exhaustion and PATH safety regressions. Windows keeps
+its separate PowerShell installer and existing request timeout.
+
+## Native Packaging
+
 The release workflow compiles ARM and Intel app bundles on their respective
 native runners. Signing, notarization, stapling and DMG creation run in separate
 ARM jobs. Intel binaries are not cross-compiled; Rosetta is used only to execute

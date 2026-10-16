@@ -78,30 +78,10 @@ jobs:
         # Same Zig the linux CI smoke test installs — needed for
         # con-ghostty's libghostty-vt build.
         shell: bash
+        timeout-minutes: 12
         run: |
-          set -euo pipefail
-          ZIG_VERSION="0.16.0"
-          ZIG_ARCH="x86_64"
-          ZIG_DIR="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
-          ZIG_TARBALL="${ZIG_DIR}.tar.xz"
-          for base_url in \
-            "https://zigmirror.hryx.net/zig" \
-            "https://zig.linus.dev/zig" \
-            "https://zig.mirror.mschae23.de/zig" \
-            "https://ziglang.freetls.fastly.net" \
-            "https://pkg.hexops.org/zig" \
-            "https://ziglang.org/download/${ZIG_VERSION}"; do
-            if curl --retry 3 --retry-all-errors --retry-delay 5 --connect-timeout 30 \
-              -sSfL "${base_url}/${ZIG_TARBALL}" \
-              -o "/tmp/${ZIG_TARBALL}"; then
-              break
-            fi
-          done
-          test -s "/tmp/${ZIG_TARBALL}"
-          mkdir -p "$HOME/.local"
-          tar -xJf "/tmp/${ZIG_TARBALL}" -C "$HOME/.local"
-          echo "$HOME/.local/${ZIG_DIR}" >> "$GITHUB_PATH"
-          "$HOME/.local/${ZIG_DIR}/zig" version
+          bash scripts/ci/test-install-zig.sh
+          bash scripts/ci/install-zig.sh
 
       - name: apt deps for gpui_linux (wayland/x11 + font stack)
         # Mirror the matrix from .github/workflows/ci-portable.yml so
