@@ -4,6 +4,36 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.138` - 2026-10-16
+
+### Changed
+
+**Vertical Tabs**
+
+- Expanded tabs use the full sidebar width and a compact toolbar, with refined
+  selection fills, hover-only close controls and icons shared with horizontal
+  tabs. Icons move smoothly between compact and expanded navigation; working
+  tabs use a rotating ring or pulsing bars to suit the available space.
+  _(PR [#483](https://github.com/nowledge-co/con-terminal/pull/483) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Tabs**
+
+- Agent tab icons no longer change when output mentions another product.
+  _(PR [#482](https://github.com/nowledge-co/con-terminal/pull/482) by [@adaiguoguo](https://github.com/adaiguoguo))_
+- Reopening a window with vertical tabs no longer leaves an empty horizontal
+  capsule in the titlebar.
+  _(PR [#483](https://github.com/nowledge-co/con-terminal/pull/483) by [@wey-gu](https://github.com/wey-gu))_
+
+**Release Reliability**
+
+- macOS and Linux release builds switch download sources when Zig setup stalls,
+  rather than waiting indefinitely. Downloaded toolchains are checked against
+  pinned official checksums before use. This release includes the tab changes
+  from beta.136 and beta.137, whose publication was cancelled.
+  _(PR [#484](https://github.com/nowledge-co/con-terminal/pull/484) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.137` - 2026-10-16
 
 ### Changed
