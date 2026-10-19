@@ -7,9 +7,19 @@ canvas with 3pt of breathing room. Its native viewport stays rectangular;
 rounded corners belong to the terminal cards, not a second enclosing mask. Terminal cards,
 including a single pane, use 2pt insets and the same 8pt corners within that
 canvas. In clean mode, a single terminal returns to zero inset and zero radius.
+A card corner that meets a rounded window corner (pane, input tray or agent
+composer) shares that corner's centre: its radius is the window radius, read
+from AppKit, less the card's clearance from both window edges, and never below
+8pt. Other corners keep 8pt. Fullscreen windows have no corner to follow. The
+radius is derived from painted bounds, so it settles back to 8pt as an adjacent
+sidebar opens rather than switching on a layout flag.
 Horizontal tabs already include bottom clearance inside their fixed-height row.
 Subtract that clearance from the canvas's top margin as the strip appears, so
-the visible tab-to-pane gap matches the 5pt lateral outer inset. Keep caption
+the visible tab-to-pane gap matches the 5pt lateral outer inset. Without a tab strip, the
+caption's controls are centred in its row like the traffic lights, so the card
+starts at the row's bottom edge: the space below the controls then equals the
+space above them. A docked caption gives its row back and the card keeps its
+full 5pt top clearance. Keep caption
 height and tab/control centering unchanged. The native clip, gutter paint and
 agent panel top use the same top geometry.
 The original divider hit

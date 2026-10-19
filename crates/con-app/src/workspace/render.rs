@@ -845,6 +845,7 @@ impl Render for ConWorkspace {
                     .mt(px(frame::canvas_top_inset(
                         canvas_depth,
                         tab_strip_progress,
+                        caption.header,
                     )));
                 area
             })
@@ -966,9 +967,8 @@ impl Render for ConWorkspace {
                                 ))
                                 .w(px(island_width))
                                 .h(px(full_input_bar_height))
-                                .rounded(px(frame::INPUT_RADIUS * canvas_depth))
                                 .overflow_hidden()
-                                .bg(island)
+                                .child(frame::card_fill(frame::INPUT_RADIUS * canvas_depth, island))
                                 .child(input),
                         ),
                     )
@@ -1001,6 +1001,7 @@ impl Render for ConWorkspace {
                 top_bar_surface_color,
                 canvas_depth,
                 tab_strip_progress,
+                caption.header,
                 0.0,
                 terminal_surface_color.opacity(self.terminal_opacity),
             ))
@@ -1148,6 +1149,7 @@ impl Render for ConWorkspace {
                                     canvas_depth,
                                 ),
                                 tab_strip_progress,
+                                caption.header,
                             );
                             panel.pt(px(top)).pb(px(bottom)).bg(top_bar_surface_color)
                         }

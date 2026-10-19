@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
+#include <objc/message.h>
 #include <objc/runtime.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -250,6 +251,18 @@ bool con_terminal_canvas_set_safe_area(void *gpui_ptr, double height,
     view.materialColor = color;
     view.clipGeneration = clip.generation;
     return true;
+}
+
+// AppKit's window corner radius changes across macOS releases; workspace cards
+// beside a window corner derive concentric curves from it. Fullscreen and
+// unknown releases report no window corner.
+double con_window_corner_radius(void *gpui_ptr) {
+    NSWindow *window = ((__bridge NSView *)gpui_ptr).window;
+    if (window == nil || (window.styleMask & NSWindowStyleMaskFullScreen) != 0) return 0.0;
+    SEL selector = NSSelectorFromString(@"_cornerRadius");
+    if (![window respondsToSelector:selector]) return 0.0;
+    CGFloat radius = ((CGFloat (*)(id, SEL))objc_msgSend)(window, selector);
+    return isfinite(radius) && radius > 0.0 ? radius : 0.0;
 }
 
 uint8_t con_terminal_canvas_header_corners(void *gpui_ptr, double x, double y,

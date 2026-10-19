@@ -5090,8 +5090,25 @@ impl Render for AgentPanel {
                             .pl(mono_space_px(theme, 8.0))
                             .pr(mono_space_px(theme, 8.0))
                             .py(mono_space_px(theme, 8.0))
-                            .rounded(mono_space_px(theme, 12.0))
-                            .bg(theme.background.blend(theme.foreground.opacity(0.035)))
+                            .map(|surface| {
+                                #[cfg(target_os = "macos")]
+                                {
+                                    surface.child(crate::workspace::frame::card_fill(
+                                        crate::workspace::frame::PANE_RADIUS,
+                                        theme.title_bar.blend(if theme.is_dark() {
+                                            theme.foreground.opacity(0.10)
+                                        } else {
+                                            gpui::white().opacity(0.55)
+                                        }),
+                                    ))
+                                }
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    surface
+                                        .rounded(mono_space_px(theme, 12.0))
+                                        .bg(theme.background.blend(theme.foreground.opacity(0.035)))
+                                }
+                            })
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
@@ -5125,21 +5142,14 @@ impl Render for AgentPanel {
                             .map(|surface| {
                                 #[cfg(target_os = "macos")]
                                 {
-                                    surface
-                                        .rounded(px(crate::workspace::frame::PANE_RADIUS))
-                                        .bg(theme.title_bar.blend(if theme.is_dark() {
-                                            theme.foreground.opacity(0.10)
-                                        } else {
-                                            gpui::white().opacity(0.55)
-                                        }))
-                                        .child(
-                                            crate::workspace::frame::card_edge(
-                                                crate::workspace::frame::PANE_RADIUS,
-                                                theme.foreground,
-                                                theme.is_dark(),
-                                            )
-                                            .inset_0(),
+                                    surface.child(
+                                        crate::workspace::frame::card_edge(
+                                            crate::workspace::frame::PANE_RADIUS,
+                                            theme.foreground,
+                                            theme.is_dark(),
                                         )
+                                        .inset_0(),
+                                    )
                                 }
                                 #[cfg(not(target_os = "macos"))]
                                 {
