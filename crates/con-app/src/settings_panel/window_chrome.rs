@@ -14,26 +14,29 @@ pub(crate) fn floating_titlebar_options(title: SharedString) -> TitlebarOptions 
     TitlebarOptions {
         title: Some(title),
         appears_transparent: cfg!(target_os = "macos"),
-        traffic_light_position: {
-            #[cfg(target_os = "macos")]
-            {
-                TitleBar::title_bar_options()
-                    .traffic_light_position
-                    .map(|mut position| {
-                        // GPUI expects the button frame's top inset, not its
-                        // center or visible circle. It reapplies this on resize
-                        // and when leaving fullscreen.
-                        let height =
-                            native_button_height().unwrap_or(TITLE_BAR_HEIGHT - position.y * 2.0);
-                        position.y = (SETTINGS_HEADER_HEIGHT - height) / 2.0;
-                        position
-                    })
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                None
-            }
-        },
+        traffic_light_position: traffic_light_position(SETTINGS_HEADER_HEIGHT),
+    }
+}
+
+/// Centre the native traffic lights in a custom header of `height`.
+pub(crate) fn traffic_light_position(height: Pixels) -> Option<gpui::Point<Pixels>> {
+    #[cfg(target_os = "macos")]
+    {
+        TitleBar::title_bar_options()
+            .traffic_light_position
+            .map(|mut position| {
+                // GPUI expects the button frame's top inset, not its
+                // center or visible circle. It reapplies this on resize
+                // and when leaving fullscreen.
+                let button = native_button_height().unwrap_or(TITLE_BAR_HEIGHT - position.y * 2.0);
+                position.y = (height - button) / 2.0;
+                position
+            })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = height;
+        None
     }
 }
 

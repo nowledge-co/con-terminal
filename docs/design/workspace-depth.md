@@ -15,12 +15,13 @@ radius is derived from painted bounds, so it settles back to 8pt as an adjacent
 sidebar opens rather than switching on a layout flag.
 Horizontal tabs already include bottom clearance inside their fixed-height row.
 Subtract that clearance from the canvas's top margin as the strip appears, so
-the visible tab-to-pane gap matches the 5pt lateral outer inset. Without a tab strip, the
-caption's controls are centred in its row like the traffic lights, so the card
-starts at the row's bottom edge: the space below the controls then equals the
-space above them. A docked caption gives its row back and the card keeps its
-full 5pt top clearance. Keep caption
-height and tab/control centering unchanged. The native clip, gutter paint and
+the visible tab-to-pane gap matches the 5pt lateral outer inset. The macOS
+caption row is 32pt, matching AppKit's titlebar; the traffic lights and the
+22pt controls are both centred in it, leaving 5pt around the controls. Without
+a tab strip, the card starts at the row's bottom edge, so the space below the
+controls equals the space above them. A docked caption gives its row back and
+the card keeps its full 5pt top clearance. The strip's appearance does not
+change caption height or tab/control centering. The native clip, gutter paint and
 agent panel top use the same top geometry.
 The original divider hit
 targets remain available between them. Following maintainer feedback on 2026-10-17,

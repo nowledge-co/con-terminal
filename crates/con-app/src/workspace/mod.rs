@@ -19,6 +19,13 @@ use tokio::sync::oneshot;
 const AGENT_PANEL_DEFAULT_WIDTH: f32 = 400.0;
 const AGENT_PANEL_MIN_WIDTH: f32 = 200.0;
 const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
+/// macOS caption row: 5pt between the 22pt controls, the window top and the
+/// card below, with the native traffic lights centred in the same row.
+#[cfg(target_os = "macos")]
+pub(crate) const CAPTION_HEIGHT: f32 = 32.0;
+#[cfg(target_os = "macos")]
+const TOP_BAR_COMPACT_HEIGHT: f32 = CAPTION_HEIGHT;
+#[cfg(not(target_os = "macos"))]
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 #[cfg(target_os = "macos")]
 const TOP_BAR_TABS_HEIGHT: f32 = TOP_BAR_COMPACT_HEIGHT;

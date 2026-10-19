@@ -671,6 +671,11 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
     Some(TitlebarOptions {
         title: Some("con".into()),
         appears_transparent: transparent,
+        // Centre the native buttons in con's caption row, like its controls.
+        #[cfg(target_os = "macos")]
+        traffic_light_position: settings_panel::traffic_light_position(gpui::px(
+            workspace::CAPTION_HEIGHT,
+        )),
         ..Default::default()
     })
 }

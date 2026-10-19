@@ -35,7 +35,9 @@ mod subscription;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
 mod window_chrome;
 use window_chrome::SETTINGS_HEADER_HEIGHT;
-pub(crate) use window_chrome::{floating_titlebar_options, settings_titlebar_options};
+pub(crate) use window_chrome::{
+    floating_titlebar_options, settings_titlebar_options, traffic_light_position,
+};
 
 actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
