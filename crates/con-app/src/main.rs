@@ -98,6 +98,8 @@ mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
 mod terminal_restore;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod terminal_scrollbar;
 mod terminal_shortcuts;
 mod terminal_url;
 mod theme;

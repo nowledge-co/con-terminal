@@ -14,7 +14,7 @@ the recommended architecture, and the staged path from today's
 preview pane to a fully shippable Linux terminal backend (the
 remaining work is the long-term GPUI-owned glyph-atlas grid
 renderer matching the D3D11/DirectWrite path Windows uses, plus
-scrollback gestures and packaging).
+packaging).
 
 This is a planning document, not an implementation log. The live issue
 tracker is GitHub issue #18. The deeper architecture notes live in
@@ -133,7 +133,6 @@ What it still does **not** give you:
 - a dedicated terminal glyph-atlas renderer (the canvas positions cached
   GPUI-shaped spans on a fixed grid, but still delegates glyph rasterization
   and painting to GPUI instead of owning a terminal-specific atlas)
-- local scrollback wheel gestures and alternate-screen wheel-to-arrow fallback
 - native packaging artifacts (`.deb`, AppImage, Flatpak, …); the
   current release pipeline already ships a tarball, one-line installer,
   `co.nowledge.con.desktop` launcher identity, icon install, appcast,
@@ -150,6 +149,25 @@ the whole pane. Libghostty-vt still receives the existing physical cell metrics
 for Kitty image placement. Native Linux CI runs the view's grid, resize,
 selection and image regression tests. See issues #485 and #486 for the sizing
 fix and the separate pointer-coordinate follow-up.
+
+### Scrollback contract
+
+The wheel goes to the application only while it tracks the mouse
+(`mouse_tracking_active()`) and Shift is not held. Decide from that mode, not
+from whether a report was written: a press over the padding writes nothing and
+must not scroll Con's view under a tracking application. Otherwise
+`LinuxPtySession::scroll_viewport_or_alt_screen` scrolls the scrollback, or on
+the alternate screen with alt-scroll mode (DECSET 1007) sends cursor keys.
+Convert wheel deltas with the painted logical row height, as in the grid
+geometry contract above. GPUI's X11 and Wayland backends move a Shift+wheel onto
+the horizontal axis, so with Shift held the vertical amount arrives on `x`. The row remainder and cursor-key helpers live in
+`con-ghostty/src/scroll.rs`, shared with Windows.
+
+Shift+PgUp/PgDn page Con's view on the primary screen and go to the application
+on the alternate screen. The overlay thumb uses the shared geometry in
+`con-app/src/terminal_scrollbar.rs`. To check scrolling by hand against an
+isolated profile, run `scripts/linux/scrollback-repro.sh <con> <con-cli>` (issue
+#497).
 
 Current verification note:
 
@@ -334,7 +352,7 @@ can ship.
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
 | 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
-| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, terminal-local Tab / Shift+Tab capture, mouse reporting, and basic left-drag text selection are wired; scrollback gestures, desktop IME validation matrix, and the glyph-atlas renderer remain) |
+| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, terminal-local Tab / Shift+Tab capture, mouse reporting, basic left-drag text selection, scrollback wheel, Shift+PgUp/PgDn and the scrollbar are wired; desktop IME validation matrix and the glyph-atlas renderer remain) |
 | 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; runtime Linux app id, desktop-file basename, and `StartupWMClass` are aligned as `co.nowledge.con`; native package format decision remains | 🚧 partially landed |
 
 ## Immediate next work
@@ -353,8 +371,7 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    buffer each changed frame. That limits how dense the renderer can
    stay on huge panes (the gap shows up first on `top -d 0.1`-class
    workloads and large command-start redraws).
-2. Finish Linux input correctness: scrollback gestures, alternate-screen
-   wheel-to-arrow fallback, drag-to-scroll selection polish, and a real
+2. Finish Linux input correctness: drag-to-scroll selection polish, and a real
    desktop/IME validation matrix across Wayland and X11. DECCKM,
    bracketed paste, basic left-drag text selection, and CJK IME
    commit/preedit input are already wired through `libghostty-vt`

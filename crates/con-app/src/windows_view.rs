@@ -67,12 +67,10 @@ use crate::terminal_paste::{
     payload_from_external_paths, unsafe_paste_preview,
 };
 use crate::terminal_restore::restored_terminal_output;
+use crate::terminal_scrollbar::{SCROLLBAR_INSET_PX, SCROLLBAR_WIDTH_PX, thumb_layout};
 use con_ghostty::windows::host_view::{MouseDownRoute, MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
-const SCROLLBAR_INSET_PX: f32 = 4.0;
-const SCROLLBAR_WIDTH_PX: f32 = 6.0;
-const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
 const SELECTION_AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(15);
 const TERMINAL_PADDING_X_PX: f32 = 10.0;
 const TERMINAL_PADDING_Y_PX: f32 = 8.0;
@@ -1409,18 +1407,12 @@ impl GhosttyView {
 
     fn scrollbar_layout(&self, scrollbar: GhosttyScrollbar) -> Option<(f32, f32, f32)> {
         let bounds = self.pane_bounds?;
-        let height = f32::from(bounds.size.height);
-        let track_height = (height - (SCROLLBAR_INSET_PX * 2.0)).max(0.0);
-        if track_height <= 0.0 || scrollbar.total <= scrollbar.len || scrollbar.len == 0 {
-            return None;
-        }
-        let thumb_height = ((scrollbar.len as f32 / scrollbar.total as f32) * track_height)
-            .clamp(SCROLLBAR_MIN_THUMB_PX.min(track_height), track_height);
-        let travel = (track_height - thumb_height).max(0.0);
-        let max_offset = scrollbar.total.saturating_sub(scrollbar.len).max(1);
-        let offset = scrollbar.offset.min(max_offset);
-        let thumb_top = SCROLLBAR_INSET_PX + (offset as f32 / max_offset as f32) * travel;
-        Some((track_height, thumb_height, thumb_top))
+        let layout = thumb_layout(f32::from(bounds.size.height), scrollbar)?;
+        Some((
+            layout.track_height_px,
+            layout.thumb_height_px,
+            layout.thumb_top_px,
+        ))
     }
 
     fn start_scrollbar_drag(&mut self, pos: Point<Pixels>) {

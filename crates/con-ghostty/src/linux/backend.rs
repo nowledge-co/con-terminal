@@ -8,8 +8,8 @@ use parking_lot::Mutex;
 
 use super::pty::{LinuxPtyOptions, LinuxPtySession, LinuxPtySpawnError, LinuxWakeCallback};
 use crate::stub::{
-    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttySplitDirection,
-    GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
+    CommandFinishedSignal, CommandRecord, GhosttyConfigPatch, GhosttyScrollbar,
+    GhosttySplitDirection, GhosttySurfaceEvent, MouseButton, SurfaceSize, TerminalColors,
 };
 use crate::vt::{
     ScreenSnapshot, SelectionAutoscroll, SelectionAutoscrollUpdate, SelectionGeometry,
@@ -494,6 +494,52 @@ impl LinuxGhosttyTerminal {
                 false
             }
         }
+    }
+
+    /// See [`LinuxPtySession::scroll_viewport_or_alt_screen`].
+    pub fn scroll_viewport_or_alt_screen(
+        &self,
+        delta_y_px: f32,
+        row_height_px: f32,
+        allow_alt_screen_keys: bool,
+    ) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.scroll_viewport_or_alt_screen(delta_y_px, row_height_px, allow_alt_screen_keys);
+        }
+    }
+
+    /// See [`LinuxPtySession::scroll_viewport_rows`]: negative rows are up.
+    pub fn scroll_viewport_rows(&self, rows: isize) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.scroll_viewport_rows(rows);
+        }
+    }
+
+    pub fn scroll_viewport_to_offset(&self, offset: u64) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.scroll_viewport_to_offset(offset);
+        }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(LinuxPtySession::scrollbar)
+    }
+
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(LinuxPtySession::mouse_tracking_active)
+    }
+
+    pub fn is_alternate_screen(&self) -> bool {
+        self.inner
+            .lock()
+            .as_ref()
+            .is_some_and(|session| session.vt().is_alternate_screen())
     }
 
     pub fn request_close(&self) {

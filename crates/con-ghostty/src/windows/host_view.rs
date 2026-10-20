@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 use crate::cursor::CursorBlink;
+use crate::scroll::{ScrollRemainder, cursor_key_for_scroll_rows, viewport_delta_for_scroll_rows};
 use crate::stub::GhosttyScrollbar;
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::{DesktopNotificationPolicy, clipboard_write_policy};
@@ -83,38 +84,6 @@ pub struct RenderSession {
 
 unsafe impl Send for RenderSession {}
 unsafe impl Sync for RenderSession {}
-
-#[derive(Debug, Default)]
-struct ScrollRemainder {
-    px: f32,
-    alternate_screen: Option<bool>,
-}
-
-impl ScrollRemainder {
-    fn reset(&mut self) {
-        self.px = 0.0;
-        self.alternate_screen = None;
-    }
-
-    fn rows_for_delta(
-        &mut self,
-        delta_y_px: f32,
-        cell_height_px: f32,
-        alternate_screen: bool,
-    ) -> isize {
-        if self.alternate_screen != Some(alternate_screen) {
-            self.px = 0.0;
-            self.alternate_screen = Some(alternate_screen);
-        }
-
-        self.px += delta_y_px;
-        let rows = (self.px / cell_height_px).trunc() as isize;
-        if rows != 0 {
-            self.px -= rows as f32 * cell_height_px;
-        }
-        rows
-    }
-}
 
 /// Keyboard modifiers held at the time of a mouse event.
 ///
@@ -1041,39 +1010,6 @@ fn is_valid_shell_cwd(path: &Path) -> bool {
     path.is_absolute() && path.is_dir()
 }
 
-fn cursor_key_for_scroll_rows(rows: isize, decckm: bool) -> Option<&'static str> {
-    match rows.cmp(&0) {
-        std::cmp::Ordering::Greater => Some(if decckm { "\x1bOA" } else { "\x1b[A" }),
-        std::cmp::Ordering::Less => Some(if decckm { "\x1bOB" } else { "\x1b[B" }),
-        std::cmp::Ordering::Equal => None,
-    }
-}
-
-fn viewport_delta_for_scroll_rows(rows: isize) -> isize {
-    -rows
-}
-
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn alt_scroll_rows_match_cursor_direction() {
-        assert_eq!(cursor_key_for_scroll_rows(2, false), Some("\x1b[A"));
-        assert_eq!(cursor_key_for_scroll_rows(-2, false), Some("\x1b[B"));
-        assert_eq!(cursor_key_for_scroll_rows(2, true), Some("\x1bOA"));
-        assert_eq!(cursor_key_for_scroll_rows(-2, true), Some("\x1bOB"));
-        assert_eq!(cursor_key_for_scroll_rows(0, false), None);
-    }
-
-    #[test]
-    fn viewport_scroll_inverts_gpui_rows_for_libghostty_vt() {
-        assert_eq!(viewport_delta_for_scroll_rows(3), -3);
-        assert_eq!(viewport_delta_for_scroll_rows(-3), 3);
-        assert_eq!(viewport_delta_for_scroll_rows(0), 0);
-    }
 }

@@ -243,6 +243,9 @@ mod transcript;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pty_write;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod scroll;
+
 pub mod process;
 
 #[cfg(target_os = "macos")]

@@ -12,6 +12,8 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::pty_write::{PtyWriteQueue, PtyWriteWorker};
+use crate::scroll::{ScrollRemainder, cursor_key_for_scroll_rows, viewport_delta_for_scroll_rows};
+use crate::stub::GhosttyScrollbar;
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
 use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{
@@ -291,6 +293,8 @@ pub struct LinuxPtySession {
     title: Option<String>,
     current_dir: Option<String>,
     input_generation: AtomicU64,
+    /// Wheel movement smaller than one row, carried to the next event.
+    scroll_remainder: Mutex<ScrollRemainder>,
     started_at: Instant,
 }
 
@@ -524,10 +528,113 @@ impl LinuxPtySession {
         self.mark_needs_render();
     }
 
+    /// Return the viewport to the prompt before writing user input.
     pub fn scroll_viewport_to_bottom(&self) {
+        self.scroll_remainder.lock().reset();
         if self.shared.screen.scroll_viewport_bottom() {
             self.mark_needs_render();
         }
+    }
+
+    /// Scroll for a wheel event the application did not ask to receive.
+    ///
+    /// `delta_y_px` uses GPUI's sign (positive is up) and is measured in the
+    /// same logical pixels as `row_height_px`, the painted row height. On the
+    /// alternate screen with alt-scroll mode (DECSET 1007) the rows become
+    /// cursor keys for apps such as `less`, unless `allow_alt_screen_keys`
+    /// is false (Shift held); otherwise the viewport moves through scrollback.
+    pub fn scroll_viewport_or_alt_screen(
+        &self,
+        delta_y_px: f32,
+        row_height_px: f32,
+        allow_alt_screen_keys: bool,
+    ) {
+        if delta_y_px.abs() < f32::EPSILON || row_height_px <= 0.0 {
+            return;
+        }
+        let screen = &self.shared.screen;
+        let alternate_screen = screen.is_alternate_screen();
+        let rows = self.scroll_remainder.lock().rows_for_delta(
+            delta_y_px,
+            row_height_px,
+            alternate_screen,
+        );
+        if rows == 0 {
+            return;
+        }
+
+        if alternate_screen {
+            if allow_alt_screen_keys && screen.is_alt_scroll() {
+                self.send_scroll_as_cursor_keys(rows);
+            }
+            return;
+        }
+
+        self.scroll_viewport_delta(viewport_delta_for_scroll_rows(rows));
+    }
+
+    /// Scroll by `rows` in libghostty-vt's sign: negative is up, toward
+    /// older rows.
+    pub fn scroll_viewport_rows(&self, rows: isize) {
+        self.scroll_remainder.lock().reset();
+        self.scroll_viewport_delta(rows);
+    }
+
+    /// Scroll by `rows` in libghostty-vt's sign, skipping the call when the
+    /// viewport already sits at the end it would move toward. libghostty-vt
+    /// asks for a full snapshot on every viewport scroll, even one that
+    /// cannot move, so a touchpad held against either end would redraw the
+    /// whole pane on every event.
+    fn scroll_viewport_delta(&self, rows: isize) {
+        let screen = &self.shared.screen;
+        if let Some(scrollbar) = screen.scrollbar() {
+            let at_top = scrollbar.offset == 0;
+            let at_tail = scrollbar.offset >= scrollbar.total.saturating_sub(scrollbar.len);
+            if (rows < 0 && at_top) || (rows > 0 && at_tail) {
+                return;
+            }
+        }
+        if screen.scroll_viewport_delta(rows) {
+            self.mark_needs_render();
+        }
+    }
+
+    /// Move the viewport to a scrollbar offset: `0` is the oldest row and
+    /// `total - len` is the live tail. Larger offsets stop at the tail.
+    pub fn scroll_viewport_to_offset(&self, target_offset: u64) {
+        let Some(scrollbar) = self.shared.screen.scrollbar() else {
+            return;
+        };
+        let max_offset = scrollbar.total.saturating_sub(scrollbar.len);
+        let target = target_offset.min(max_offset);
+        let delta = target as i128 - scrollbar.offset.min(max_offset) as i128;
+        if delta != 0 {
+            self.scroll_viewport_rows(delta.clamp(isize::MIN as i128, isize::MAX as i128) as isize);
+        }
+    }
+
+    pub fn scrollbar(&self) -> Option<GhosttyScrollbar> {
+        self.shared.screen.scrollbar()
+    }
+
+    /// True while the application asked for mouse reports.
+    pub fn mouse_tracking_active(&self) -> bool {
+        self.shared.screen.mouse_tracking_active()
+    }
+
+    /// Write one cursor key per wheel row. This bypasses `write_input` so
+    /// the wheel remainder survives between events on the alternate screen.
+    fn send_scroll_as_cursor_keys(&self, rows: isize) {
+        let Some(key) = cursor_key_for_scroll_rows(rows, self.shared.screen.is_decckm()) else {
+            return;
+        };
+        for _ in 0..rows.unsigned_abs() {
+            if let Err(err) = self.shared.screen.write_input(key.as_bytes()) {
+                log::debug!("linux terminal alternate-scroll write failed: {err:#}");
+                return;
+            }
+        }
+        self.input_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn selection_press(
@@ -967,6 +1074,7 @@ fn spawn_local(
         )),
         current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
         input_generation: AtomicU64::new(0),
+        scroll_remainder: Mutex::new(ScrollRemainder::default()),
         started_at,
     })
 }
@@ -1291,6 +1399,7 @@ fn spawn_host_bridge(
         )),
         current_dir: options.cwd.map(|cwd| cwd.to_string_lossy().to_string()),
         input_generation: AtomicU64::new(0),
+        scroll_remainder: Mutex::new(ScrollRemainder::default()),
         started_at,
     })
 }
@@ -2429,5 +2538,206 @@ mod tests {
             .expect("exit signal should be backfilled");
         assert_eq!(finished.exit_code, Some(7));
         assert_eq!(finished.duration, Duration::from_millis(20));
+    }
+
+    /// A 24-row session whose child only waits, so the tests can feed the
+    /// screen directly and read the viewport without racing child output.
+    fn scroll_test_session(script: &str) -> LinuxPtySession {
+        let session = LinuxPtySession::spawn(LinuxPtyOptions {
+            command_program: Some(OsString::from("/bin/sh")),
+            command_args: Some(vec![OsString::from("-c"), OsString::from(script)]),
+            size: crate::stub::SurfaceSize {
+                columns: 80,
+                rows: 24,
+                width_px: 800,
+                height_px: 480,
+                cell_width_px: 10,
+                cell_height_px: 20,
+            },
+            ..LinuxPtyOptions::default()
+        })
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !session.read_recent_lines(24).join(" ").contains("READY") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "PTY did not become ready"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session
+    }
+
+    /// Clear the screen, then print `row-001` to `row-{count}`.
+    fn feed_numbered_rows(session: &LinuxPtySession, count: usize) {
+        let mut rows = String::from("\x1b[H\x1b[2J");
+        for row in 1..=count {
+            rows.push_str(&format!("row-{row:03}\r\n"));
+        }
+        session.vt().feed(rows.as_bytes());
+    }
+
+    fn first_visible_row(session: &LinuxPtySession) -> String {
+        session
+            .read_screen_text(24)
+            .into_iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| line.trim().to_owned())
+            .unwrap_or_default()
+    }
+
+    fn wait_for_child_hex(session: &LinuxPtySession, expected: &[u8]) {
+        let expected_hex = expected
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let output = session
+                .read_recent_lines(24)
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if output.contains(&expected_hex) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never received {expected_hex}; it printed {output:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    const IDLE_CHILD: &str = "stty raw -echo; printf READY; exec sleep 30";
+
+    #[test]
+    fn wheel_rows_move_the_viewport_into_scrollback() {
+        let session = scroll_test_session(IDLE_CHILD);
+        feed_numbered_rows(&session, 200);
+        let bottom = session.scrollbar().expect("scrollbar state");
+        assert!(
+            bottom.total > bottom.len,
+            "200 rows must overflow 24: {bottom:?}"
+        );
+        let top_before = first_visible_row(&session);
+
+        session.scroll_viewport_or_alt_screen(5.0 * 20.0, 20.0, true);
+
+        let scrolled = session.scrollbar().unwrap();
+        assert_eq!(scrolled.offset + 5, bottom.offset);
+        let before: usize = top_before.trim_start_matches("row-").parse().unwrap();
+        assert_eq!(
+            first_visible_row(&session),
+            format!("row-{:03}", before - 5)
+        );
+
+        session.scroll_viewport_or_alt_screen(-5.0 * 20.0, 20.0, true);
+        assert_eq!(session.scrollbar().unwrap().offset, bottom.offset);
+    }
+
+    #[test]
+    fn scrolling_past_either_end_stops_there() {
+        let session = scroll_test_session(IDLE_CHILD);
+        feed_numbered_rows(&session, 200);
+        let bottom = session.scrollbar().unwrap();
+        session.take_needs_render();
+
+        session.scroll_viewport_or_alt_screen(-3.0 * 20.0, 20.0, true);
+        assert_eq!(session.scrollbar().unwrap().offset, bottom.offset);
+        assert!(
+            !session.take_needs_render(),
+            "scrolling down at the live tail must not redraw"
+        );
+
+        session.scroll_viewport_or_alt_screen(10_000.0 * 20.0, 20.0, true);
+        assert_eq!(session.scrollbar().unwrap().offset, 0);
+        assert_eq!(first_visible_row(&session), "row-001");
+        session.take_needs_render();
+
+        session.scroll_viewport_or_alt_screen(3.0 * 20.0, 20.0, true);
+        session.scroll_viewport_rows(-3);
+        assert!(
+            !session.take_needs_render(),
+            "scrolling up at the oldest row must not redraw"
+        );
+    }
+
+    #[test]
+    fn scrollbar_offsets_jump_to_that_row() {
+        let session = scroll_test_session(IDLE_CHILD);
+        feed_numbered_rows(&session, 200);
+        let bottom = session.scrollbar().unwrap();
+
+        session.scroll_viewport_to_offset(0);
+        assert_eq!(first_visible_row(&session), "row-001");
+
+        session.scroll_viewport_to_offset(u64::MAX);
+        assert_eq!(session.scrollbar().unwrap().offset, bottom.offset);
+
+        session.scroll_viewport_rows(-24);
+        assert_eq!(session.scrollbar().unwrap().offset + 24, bottom.offset);
+    }
+
+    #[test]
+    fn alternate_screen_wheel_sends_cursor_keys() {
+        for (decckm, key) in [
+            ("", b"\x1b[A".as_slice()),
+            ("\x1b[?1h", b"\x1bOA".as_slice()),
+        ] {
+            let session = scroll_test_session(
+                "stty raw -echo; printf READY; dd bs=1 count=9 2>/dev/null | od -An -tx1; sleep 1",
+            );
+            session
+                .vt()
+                .feed(format!("\x1b[?1049h\x1b[?1007h{decckm}").as_bytes());
+            let offset = session.scrollbar().map(|bar| bar.offset);
+
+            session.scroll_viewport_or_alt_screen(3.0 * 20.0, 20.0, true);
+
+            assert_eq!(session.scrollbar().map(|bar| bar.offset), offset);
+            wait_for_child_hex(&session, &key.repeat(3));
+        }
+    }
+
+    #[test]
+    fn shift_wheel_on_the_alternate_screen_sends_nothing() {
+        let session = scroll_test_session(IDLE_CHILD);
+        session.vt().feed(b"\x1b[?1049h\x1b[?1007h");
+        let generation = session.input_generation();
+
+        session.scroll_viewport_or_alt_screen(3.0 * 20.0, 20.0, false);
+
+        assert_eq!(session.input_generation(), generation);
+    }
+
+    #[test]
+    fn input_returns_to_the_bottom_and_drops_the_wheel_remainder() {
+        let session = scroll_test_session(IDLE_CHILD);
+        feed_numbered_rows(&session, 200);
+        let bottom = session.scrollbar().unwrap();
+
+        // Two and a half rows up: the half row stays in the remainder.
+        session.scroll_viewport_or_alt_screen(2.5 * 20.0, 20.0, true);
+        assert_eq!(session.scrollbar().unwrap().offset + 2, bottom.offset);
+
+        session.write_input(b"x").unwrap();
+        assert_eq!(session.scrollbar().unwrap().offset, bottom.offset);
+
+        // With the remainder kept, this half row would complete a third row.
+        session.scroll_viewport_or_alt_screen(0.5 * 20.0, 20.0, true);
+        assert_eq!(session.scrollbar().unwrap().offset, bottom.offset);
+    }
+
+    #[test]
+    fn mouse_tracking_follows_the_application_modes() {
+        let session = scroll_test_session(IDLE_CHILD);
+        assert!(!session.mouse_tracking_active());
+        session.vt().feed(b"\x1b[?1002h");
+        assert!(session.mouse_tracking_active());
+        session.vt().feed(b"\x1b[?1002l");
+        assert!(!session.mouse_tracking_active());
     }
 }

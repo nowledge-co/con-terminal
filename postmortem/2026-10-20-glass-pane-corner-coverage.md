@@ -210,3 +210,12 @@ without exclusions or changed deadlines. Formatting and whitespace checks
 passed. This verifies native path geometry and lifecycle on macOS 15; the
 contributor's macOS 27 screenshots remain separate evidence, not a local
 macOS 27 runtime certification.
+
+The integrated dev app also built and ran in a separate private profile.
+Inspection covered light/dark glass, nested panes with surface titles, the input
+tray and agent panel, zoom/restore, a single-tab caption, and entering/leaving
+native fullscreen. These are settled-state checks, not pixel-difference or
+high-frame-rate acceptance. The maintainer noticed remaining rough dark pane
+edges in this preview and requested that #496/#499 merge first, followed by a
+separate rendering fix before the next release. Do not treat the geometry tests
+or the initial local inspection as acceptance of that outstanding visual issue.
