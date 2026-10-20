@@ -1,4 +1,4 @@
-use gpui::{Bounds, Hsla, IntoElement, PathBuilder, Pixels, Styled, Window, point, px};
+use gpui::{Bounds, Hsla, IntoElement, Pixels, Styled, Window, point, px};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -64,19 +64,6 @@ pub(crate) fn card_edge(radius: f32, foreground: Hsla, dark: bool) -> gpui::Div 
         foreground.opacity(if dark { 0.12 } else { 0.075 }),
         false,
         true,
-        0.0,
-    )
-}
-
-/// Keep the contour's antialiasing separate from the native clip and exterior
-/// cutout. Each coverage ramp extends half a physical pixel from its curve.
-pub(crate) fn pane_edge(radius: f32, foreground: Hsla, dark: bool) -> gpui::Div {
-    edge(
-        radius,
-        foreground.opacity(if dark { 0.12 } else { 0.075 }),
-        false,
-        true,
-        1.0,
     )
 }
 
@@ -150,16 +137,10 @@ fn window_corner_radius(window: &Window) -> f32 {
 
 /// Shared fine edge with a short, diagonal contact shadow. Never shade native content.
 pub(crate) fn surface_edge(radius: f32, color: Hsla, raised: bool) -> gpui::Div {
-    edge(radius, color, raised, false, 0.0)
+    edge(radius, color, raised, false)
 }
 
-fn edge(
-    radius: f32,
-    color: Hsla,
-    raised: bool,
-    concentric: bool,
-    coverage_inset_pixels: f32,
-) -> gpui::Div {
+fn edge(radius: f32, color: Hsla, raised: bool, concentric: bool) -> gpui::Div {
     use gpui::ParentElement;
     gpui::div().absolute().child(
         gpui::canvas(
@@ -195,7 +176,6 @@ fn edge(
                         }
                     }
                 }
-                let (bounds, radii) = inset_contour(bounds, radii, width * coverage_inset_pixels);
                 // Clip before rasterization: a transparent full-window quad
                 // would still shade its interior on every frame.
                 for strip in outline_strips(bounds, radii, width) {
@@ -211,20 +191,6 @@ fn edge(
         )
         .absolute()
         .size_full(),
-    )
-}
-
-fn inset_contour(
-    bounds: Bounds<Pixels>,
-    radii: gpui::Corners<Pixels>,
-    inset: Pixels,
-) -> (Bounds<Pixels>, gpui::Corners<Pixels>) {
-    let inset = inset
-        .max(px(0.0))
-        .min(bounds.size.width.min(bounds.size.height) * 0.5);
-    (
-        bounds.inset(inset),
-        radii.map(|radius| (*radius - inset).max(px(0.0))),
     )
 }
 
@@ -408,12 +374,12 @@ impl PaneSurround {
                     cache.as_ref().unwrap().corners.clone(),
                 )
             },
-            move |_, (strips, corners), window, _| {
+            move |_, (strips, corners), window, cx| {
                 for strip in strips {
                     window.paint_quad(gpui::fill(strip, color));
                 }
                 for corner in corners {
-                    window.paint_path(corner, color);
+                    corner.paint(color, window, cx);
                 }
             },
         )
@@ -429,7 +395,7 @@ struct SurroundGeometry {
     depth: f32,
     scale: f32,
     radii: gpui::Corners<Pixels>,
-    corners: Vec<gpui::Path<Pixels>>,
+    corners: Vec<CornerCutout>,
 }
 
 impl CanvasSurround {
@@ -470,7 +436,7 @@ impl CanvasSurround {
                     cache.as_ref().unwrap().corners.clone(),
                 )
             },
-            move |bounds, (strips, corners), window, _| {
+            move |bounds, (strips, corners), window, cx| {
                 log::trace!(target: "con::canvas", "paint bounds={bounds:?} depth={depth} safe_height={safe_height}");
                 for strip in strips {
                     if strip.size.width > px(0.0) && strip.size.height > px(0.0) {
@@ -478,7 +444,7 @@ impl CanvasSurround {
                     }
                 }
                 for corner in corners {
-                    window.paint_path(corner, color);
+                    corner.paint(color, window, cx);
                 }
             },
         )
@@ -487,29 +453,90 @@ impl CanvasSurround {
     }
 }
 
-fn corner_cutouts(bounds: Bounds<Pixels>, radii: gpui::Corners<Pixels>) -> Vec<gpui::Path<Pixels>> {
+// Normalized circular cutout, not a UI icon. GPUI's SVG atlas rasterizes this
+// above device resolution and reuses the alpha masks across positions/themes.
+// Keep the cubic identical to the native pane clip; do not offset the curve.
+const CORNER_MASK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><path fill="white" d="M0 0H1C0.4477152 0 0 0.4477152 0 1Z"/></svg>"#;
+
+#[derive(Clone)]
+struct CornerCutout {
+    bounds: Bounds<Pixels>,
+    mask: usize,
+}
+
+impl CornerCutout {
+    fn presentation(&self, scale: f32) -> Option<(Bounds<Pixels>, gpui::TransformationMatrix)> {
+        let bounds = crate::terminal_geometry::snap_terminal_bounds(self.bounds, scale);
+        if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+            return None;
+        }
+        // Reflect one atlas entry about its snapped physical centre. Rasterizing
+        // four flipped curves separately need not produce identical coverage.
+        let x = if matches!(self.mask, 1 | 2) {
+            -1.0
+        } else {
+            1.0
+        };
+        let y = if matches!(self.mask, 2 | 3) {
+            -1.0
+        } else {
+            1.0
+        };
+        Some((
+            bounds,
+            gpui::TransformationMatrix {
+                rotation_scale: [[x, 0.0], [0.0, y]],
+                translation: [
+                    bounds.center().x.as_f32() * scale * (1.0 - x),
+                    bounds.center().y.as_f32() * scale * (1.0 - y),
+                ],
+            },
+        ))
+    }
+
+    fn paint(&self, color: Hsla, window: &mut Window, cx: &gpui::App) {
+        let Some((bounds, reflection)) = self.presentation(window.scale_factor()) else {
+            return;
+        };
+        if let Err(error) = window.paint_svg(
+            bounds,
+            "con/circular-corner-mask-v1".into(),
+            Some(CORNER_MASK),
+            reflection,
+            color,
+            cx,
+        ) {
+            log::error!("failed to paint pane corner: {error}");
+        }
+    }
+}
+
+fn corner_cutouts(bounds: Bounds<Pixels>, radii: gpui::Corners<Pixels>) -> Vec<CornerCutout> {
     let limit = bounds.size.width.min(bounds.size.height) * 0.5;
     let mut corners = Vec::with_capacity(4);
-    for (origin, radius, x_sign, y_sign) in [
-        (bounds.origin, radii.top_left, 1.0, 1.0),
+    for (mask, (origin, radius, x_sign, y_sign)) in [
+        (bounds.origin, radii.top_left, 1.0_f32, 1.0_f32),
         (bounds.top_right(), radii.top_right, -1.0, 1.0),
         (bounds.bottom_right(), radii.bottom_right, -1.0, -1.0),
         (bounds.bottom_left(), radii.bottom_left, 1.0, -1.0),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let r = radius.min(limit);
         if r <= px(0.0) {
             continue;
         }
-        let c = r * 0.552_284_8;
-        let at = |x: Pixels, y: Pixels| point(origin.x + x * x_sign, origin.y + y * y_sign);
-        let mut path = PathBuilder::fill();
-        path.move_to(origin);
-        path.line_to(at(r, px(0.0)));
-        path.cubic_bezier_to(at(px(0.0), r), at(r - c, px(0.0)), at(px(0.0), r - c));
-        path.close();
-        if let Ok(path) = path.build() {
-            corners.push(path);
-        }
+        corners.push(CornerCutout {
+            bounds: Bounds::new(
+                point(
+                    origin.x + r * x_sign.min(0.0),
+                    origin.y + r * y_sign.min(0.0),
+                ),
+                gpui::size(r, r),
+            ),
+            mask,
+        });
     }
     corners
 }
@@ -691,53 +718,6 @@ pub(crate) fn header_background(color: Hsla) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pane_contour_keeps_its_coverage_inside_the_native_curve() {
-        let assert_close = |actual: Pixels, expected: Pixels| {
-            assert!(
-                (actual - expected).abs() <= px(0.0001),
-                "{actual:?} != {expected:?}"
-            );
-        };
-        for scale in [1.0, 1.5, 2.0] {
-            let bounds = Bounds::new(point(px(5.0), px(5.0)), gpui::size(px(200.0), px(120.0)));
-            let radii = gpui::Corners {
-                top_left: px(11.0),
-                top_right: px(8.0),
-                bottom_right: px(11.0),
-                bottom_left: px(8.0),
-            };
-            let pixel = px(1.0 / scale);
-            let (inner, inner_radii) = inset_contour(bounds, radii, pixel);
-            assert_close(inner.left(), bounds.left() + pixel);
-            assert_close(inner.right(), bounds.right() - pixel);
-            assert_close(
-                inner.top() + inner_radii.top_left,
-                bounds.top() + radii.top_left,
-            );
-            assert_close(
-                inner.left() + inner_radii.top_left,
-                bounds.left() + radii.top_left,
-            );
-            assert_close(
-                inner.right() - inner_radii.bottom_right,
-                bounds.right() - radii.bottom_right,
-            );
-            assert_close(
-                inner.bottom() - inner_radii.bottom_right,
-                bounds.bottom() - radii.bottom_right,
-            );
-            for strip in outline_strips(inner, inner_radii, pixel) {
-                assert!(strip.left() >= inner.left() && strip.right() <= inner.right());
-                assert!(strip.top() >= inner.top() && strip.bottom() <= inner.bottom());
-            }
-        }
-        let tiny = Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(1.0), px(0.5)));
-        let (inner, radii) = inset_contour(tiny, gpui::Corners::all(px(0.0)), px(1.0));
-        assert!(inner.size.width >= px(0.0) && inner.size.height >= px(0.0));
-        assert_eq!(radii, gpui::Corners::all(px(0.0)));
-    }
 
     #[test]
     fn agent_edges_follow_terminal_cards_and_the_visible_input_tray() {
@@ -1176,40 +1156,98 @@ mod tests {
     }
 
     #[test]
-    fn corner_paths_stay_small_and_leave_the_card_interior_unpainted() {
+    fn corner_masks_keep_smooth_coverage_and_leave_the_card_interior_unpainted() {
+        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(crate::assets::ConAssets));
         let bounds = Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(600.0), px(400.0)));
-        for scale in [1.0, 2.0] {
-            let paths = corner_cutouts(bounds, gpui::Corners::all(px(PANE_RADIUS)));
-            assert_eq!(paths.len(), 4);
-            for path in &paths {
-                assert!(path.bounds.size.width <= px(PANE_RADIUS));
-                assert!(path.bounds.size.height <= px(PANE_RADIUS));
+        for scale in [1.0, 1.5, 2.0] {
+            let masks = corner_cutouts(bounds, gpui::Corners::all(px(PANE_RADIUS)));
+            assert_eq!(masks.len(), 4);
+            for mask in masks {
+                assert!(mask.bounds.size.width <= px(PANE_RADIUS));
+                assert!(mask.bounds.size.height <= px(PANE_RADIUS));
             }
-            let contains = |x, y| {
-                let p = point(px(x), px(y));
-                paths[0].vertices.chunks_exact(3).any(|triangle| {
-                    let cross = |a: gpui::Point<Pixels>, b: gpui::Point<Pixels>| {
-                        (b.x - a.x).as_f32() * (p.y - a.y).as_f32()
-                            - (b.y - a.y).as_f32() * (p.x - a.x).as_f32()
-                    };
-                    let [a, b, c] = [
-                        triangle[0].xy_position,
-                        triangle[1].xy_position,
-                        triangle[2].xy_position,
-                    ];
-                    let sides = [cross(a, b), cross(b, c), cross(c, a)];
-                    sides.iter().all(|s| *s >= 0.0) || sides.iter().all(|s| *s <= 0.0)
-                })
-            };
-            assert!(contains(0.1, 0.1));
-            let near = 0.25 / scale;
+            let image = renderer
+                .render_single_frame(CORNER_MASK, PANE_RADIUS * scale)
+                .unwrap();
+            let alphas = image
+                .as_bytes(0)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|pixel| pixel[3])
+                .collect::<Vec<_>>();
+            let levels = alphas
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
             assert!(
-                !contains(PANE_RADIUS - near, near) && !contains(near, PANE_RADIUS - near),
-                "corner cutout must meet the straight edges at {scale}x"
+                levels.len() > 8,
+                "coverage collapsed to coarse multisample steps at {scale}x"
             );
-            assert!(!contains(8.0, 8.0), "corner painted terminal interior");
+            let side = (PANE_RADIUS * scale * gpui::SMOOTH_SVG_SCALE_FACTOR) as usize;
+            assert_eq!(alphas[0], 255);
+            assert_eq!(alphas[side * side - 1], 0);
+            assert!(alphas[side - 1] <= 8, "cutout extends beyond the tangent");
+            let area = alphas
+                .iter()
+                .map(|alpha| f32::from(*alpha) / 255.0)
+                .sum::<f32>()
+                / (side * side) as f32;
+            assert!(
+                (area - (1.0 - std::f32::consts::PI / 4.0)).abs() < 0.015,
+                "mask does not follow the circular clip"
+            );
         }
         assert!(corner_cutouts(bounds, gpui::Corners::default()).is_empty());
+        let masks = corner_cutouts(
+            bounds,
+            gpui::Corners {
+                top_left: px(0.0),
+                top_right: px(11.0),
+                bottom_left: px(0.0),
+                bottom_right: px(8.0),
+            },
+        );
+        assert_eq!(
+            masks.iter().map(|mask| mask.mask).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(masks[0].bounds.origin, point(px(589.0), px(0.0)));
+        assert_eq!(masks[1].bounds.origin, point(px(592.0), px(392.0)));
+    }
+
+    #[test]
+    fn corner_reflections_stay_in_their_device_pixel_tiles() {
+        let bounds = Bounds::new(point(px(5.0), px(7.0)), gpui::size(px(200.0), px(120.0)));
+        let masks = corner_cutouts(bounds, gpui::Corners::all(px(8.0)));
+        for scale in [1.0, 1.5, 2.0] {
+            for (corner, mask) in masks.iter().enumerate() {
+                let (tile, transform) = mask.presentation(scale).unwrap();
+                let physical = |x: Pixels, y: Pixels| point(x * scale, y * scale);
+                let min = physical(tile.left(), tile.top());
+                let max = physical(tile.right(), tile.bottom());
+                let size = tile.size.map(|value| value * scale);
+                let exterior = transform.apply(min + point(size.width * 0.1, size.height * 0.1));
+                let interior = transform.apply(min + point(size.width * 0.9, size.height * 0.9));
+                assert_eq!(exterior.x > interior.x, matches!(corner, 1 | 2));
+                assert_eq!(exterior.y > interior.y, matches!(corner, 2 | 3));
+                for source in [min, max, point(min.x, max.y), point(max.x, min.y)] {
+                    let target = transform.apply(source);
+                    assert!(target.x >= min.x - px(0.0001) && target.x <= max.x + px(0.0001));
+                    assert!(target.y >= min.y - px(0.0001) && target.y <= max.y + px(0.0001));
+                }
+                let restored = transform.apply(transform.apply(min));
+                assert!((restored.x - min.x).abs() <= px(0.0001));
+                assert!((restored.y - min.y).abs() <= px(0.0001));
+            }
+            let tiny = CornerCutout {
+                bounds: Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(0.01), px(0.01))),
+                mask: 0,
+            };
+            assert!(
+                tiny.presentation(scale).is_none(),
+                "subpixel mask must not allocate a zero-sized SVG"
+            );
+        }
     }
 
     #[gpui::test]

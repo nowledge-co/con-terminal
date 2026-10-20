@@ -244,6 +244,42 @@ The embedded-assets dev build and formatting/whitespace checks also passed.
 Separate baseline/candidate bundles were inspected with the same three-pane
 fixture, surface headers, bottom input tray, 0.82 glass/chrome opacity and blur
 on macOS 15. Light appearance remains quiet, but the dark comparison still has
-visible fine edge artifacts. This experiment is not accepted as the completed
-visual fix and must not be merged or released on geometry tests alone. There is
+visible fine edge artifacts. That experiment was not accepted as the completed
+visual fix and is superseded by the shared-mask candidate below. There is
 no local Windows/Linux, macOS 27, 1x-display or high-frame-rate visual acceptance.
+
+### Shared Raster Coverage
+
+Removing only the contour left visible corner detailing. Removing only the
+exterior cutouts exposed the light window backing outside the native curves.
+Both comparisons used temporary switches, now removed. Neither removing the
+outline nor omitting the cutouts is a valid fix.
+
+The pinned renderer rasterizes paths with four multisamples. Its SVG route
+instead rasterizes an alpha mask above device resolution and retains it in the
+sprite atlas. The replacement keeps the same circular cubic, native clip and
+original contour position, but paints corner-sized alpha sprites rather than
+the tessellated exterior paths. No dependency, native geometry or material
+opacity changes are involved. This addresses the cutout's sampling; it is not
+a correction to GPUI's separate destination-alpha issue.
+
+An intermediate implementation rasterized four reflected SVGs separately. Its
+new raster test failed the two-alpha-level reflection tolerance, while the
+other 655 tests passed. The final implementation uses one canonical mask and
+GPU reflections about each tile's snapped device-pixel centre, avoiding
+independent rasterizations rather than weakening that comparison. The atlas
+key is independent of position and theme; equal-sized corners share one entry.
+Subpixel tiles that snap to zero are skipped before SVG allocation. There are
+no new native views, full-pane textures, per-paint SVG strings or timers.
+
+The final linked app suite passed all 657 tests serially. Raster regressions
+check coverage levels, circular area and tangent/interior pixels at 1x, 1.5x
+and 2x. Geometry tests check four reflected tile positions, double reflection,
+asymmetric/zero-radius cases and zero-sized snapped tiles. The native dev build,
+formatting and whitespace checks passed. The final candidate was inspected in
+light/dark glass on macOS 15, including nested panes, split/close, zoom/restore,
+surface headers, the input tray and agent-panel toggles. The local settled-state
+comparison is visibly more even; maintainer acceptance of this new preview is
+still pending. These checks do not certify macOS 27 appearance, transition-frame
+timing, 1x hardware or Windows/Linux runtime behavior. Changed runtime code is
+confined to the macOS-only frame module.

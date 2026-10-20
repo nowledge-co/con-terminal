@@ -3271,7 +3271,7 @@ impl PaneTree {
                             radius / crate::workspace::frame::PANE_RADIUS,
                         ))
                         .child(
-                            crate::workspace::frame::pane_edge(
+                            crate::workspace::frame::card_edge(
                                 radius,
                                 theme.foreground,
                                 theme.is_dark(),
