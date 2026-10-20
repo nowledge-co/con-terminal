@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.145`
+## `v0.1.0-beta.145` - 2026-10-20
 
 ### Changed
 
@@ -15,6 +15,13 @@ con is still pre-release, so entries may group related beta work while the produ
   _(PR [#496](https://github.com/nowledge-co/con-terminal/pull/496) by [@yetone](https://github.com/yetone))_
 
 ### Fixed
+
+**macOS**
+
+- Transparent pane corners stay smooth in light and dark themes, without
+  bright speckles or dark rims. The compact title bar no longer has a dark
+  strip above the panes. Transparency and blur are preserved.
+  _(PR [#502](https://github.com/nowledge-co/con-terminal/pull/502) by [@wey-gu](https://github.com/wey-gu))_
 
 **Linux**
 
