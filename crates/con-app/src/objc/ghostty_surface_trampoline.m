@@ -18,11 +18,46 @@ static const int64_t kConDisplayWakeQuietPeriodMilliseconds = 250;
 static char kConTerminalCanvasKey;
 static char kConTerminalCanvasMaskKey;
 
+typedef struct {
+    CGFloat topLeft, topRight, bottomRight, bottomLeft;
+} ConTerminalCornerRadii;
+
+static bool con_terminal_radii_equal(ConTerminalCornerRadii a, ConTerminalCornerRadii b) {
+    return a.topLeft == b.topLeft && a.topRight == b.topRight &&
+        a.bottomRight == b.bottomRight && a.bottomLeft == b.bottomLeft;
+}
+
+static CGFloat con_terminal_max_radius(ConTerminalCornerRadii radii) {
+    return fmax(fmax(radii.topLeft, radii.topRight), fmax(radii.bottomRight, radii.bottomLeft));
+}
+
+// The same circular Bezier as GPUI's exterior cutouts, in AppKit's y-up space.
+static CGPathRef con_terminal_corner_path(CGRect rect, ConTerminalCornerRadii radii) {
+    CGFloat x = CGRectGetMinX(rect), y = CGRectGetMinY(rect);
+    CGFloat right = CGRectGetMaxX(rect), top = CGRectGetMaxY(rect);
+    CGFloat tl = radii.topLeft, tr = radii.topRight;
+    CGFloat br = radii.bottomRight, bl = radii.bottomLeft;
+    const CGFloat c = 0.5522848;
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGPathMoveToPoint(path, NULL, x + bl, y);
+    CGPathAddLineToPoint(path, NULL, right - br, y);
+    CGPathAddCurveToPoint(path, NULL, right - br + c * br, y, right, y + br - c * br, right, y + br);
+    CGPathAddLineToPoint(path, NULL, right, top - tr);
+    CGPathAddCurveToPoint(path, NULL, right, top - tr + c * tr, right - tr + c * tr, top, right - tr, top);
+    CGPathAddLineToPoint(path, NULL, x + tl, top);
+    CGPathAddCurveToPoint(path, NULL, x + tl - c * tl, top, x, top - tl + c * tl, x, top - tl);
+    CGPathAddLineToPoint(path, NULL, x, y + bl);
+    CGPathAddCurveToPoint(path, NULL, x, y + bl - c * bl, x + bl - c * bl, y, x + bl, y);
+    CGPathCloseSubpath(path);
+    return path;
+}
+
 @interface ConTerminalCanvasClip : NSObject
 @property(nonatomic) NSRect rect;
 @property(nonatomic) CGFloat radius;
 @property(nonatomic) uint64_t generation;
 @property(nonatomic) CGFloat scale;
+@property(nonatomic) ConTerminalCornerRadii radii;
 @end
 @implementation ConTerminalCanvasClip
 @end
@@ -34,7 +69,7 @@ static char kConTerminalCanvasMaskKey;
 @property(nonatomic) NSRect rect;
 @property(nonatomic) NSRect bounds;
 @property(nonatomic) NSRect paneRect;
-@property(nonatomic) CGFloat paneRadius;
+@property(nonatomic) ConTerminalCornerRadii paneRadii;
 @property(nonatomic) CGFloat radius;
 @property(nonatomic) CGFloat scale;
 @end
@@ -62,22 +97,24 @@ static char kConTerminalPaneHeaderKey;
 @property(nonatomic) CGFloat green;
 @property(nonatomic) CGFloat blue;
 @property(nonatomic) CGFloat alpha;
+@property(nonatomic) ConTerminalCornerRadii radii;
 @end
 
 void con_terminal_canvas_apply_clip(void *host_ptr);
 @implementation ConTerminalPaneHeader
+- (CALayer *)makeBackingLayer { return [CAShapeLayer layer]; }
 - (NSView *)hitTest:(NSPoint)point { return nil; }
 - (BOOL)acceptsFirstResponder { return NO; }
 @end
 
 bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
-                                 double width, double height, double radius,
+                                 double width, double height, double top_left, double top_right,
                                  double red, double green, double blue, double alpha) {
     NSView *host = (__bridge NSView *)host_ptr;
     if (host == nil || host.superview == nil ||
         !isfinite(x) || !isfinite(y) || !isfinite(width) || !isfinite(height) ||
-        !isfinite(radius) || !isfinite(red) || !isfinite(green) ||
-        !isfinite(blue) || !isfinite(alpha) || width < 0 || height < 0 || radius < 0) return false;
+        !isfinite(top_left) || !isfinite(top_right) || !isfinite(red) || !isfinite(green) ||
+        !isfinite(blue) || !isfinite(alpha) || width < 0 || height < 0 || top_left < 0 || top_right < 0) return false;
     ConTerminalPaneHeader *header = objc_getAssociatedObject(host, &kConTerminalPaneHeaderKey);
     if (height == 0 || width == 0) {
         if (header == nil) return false;
@@ -87,13 +124,13 @@ bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
         return true;
     }
     NSRect rect = NSMakeRect(x, host.superview.bounds.size.height - y - height, width, height);
-    radius = fmin(radius, fmin(width * 0.5, height));
+    CGFloat limit = fmin(width * 0.5, height);
+    ConTerminalCornerRadii radii = {fmin(top_left, limit), fmin(top_right, limit), 0, 0};
     CGFloat scale = host.window != nil ? host.window.backingScaleFactor : 1.0;
+    CAShapeLayer *material = (CAShapeLayer *)header.layer;
     if (header != nil && header.superview == host.superview &&
-        NSEqualRects(header.frame, rect) && header.layer.cornerRadius == radius &&
-        header.layer.contentsScale == scale && header.layer.backgroundColor != NULL &&
-        header.layer.masksToBounds &&
-        header.layer.maskedCorners == (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner) &&
+        NSEqualRects(header.frame, rect) && con_terminal_radii_equal(header.radii, radii) &&
+        material.contentsScale == scale && material.path != NULL && material.fillColor != NULL &&
         header.red == red && header.green == green && header.blue == blue && header.alpha == alpha &&
         header.materialVisible && header.hidden == host.hidden) {
         con_terminal_canvas_apply_clip((__bridge void *)header);
@@ -112,12 +149,13 @@ bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
         [host.superview addSubview:header positioned:NSWindowAbove relativeTo:host];
     }
     header.frame = rect;
-    header.layer.masksToBounds = YES;
-    header.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-    header.layer.cornerCurve = kCACornerCurveCircular;
-    header.layer.contentsScale = scale;
-    header.layer.cornerRadius = radius;
-    header.layer.backgroundColor = [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha].CGColor;
+    material = (CAShapeLayer *)header.layer;
+    CGPathRef path = con_terminal_corner_path(NSRectToCGRect(header.bounds), radii);
+    material.contentsScale = scale;
+    material.path = path;
+    material.fillColor = [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha].CGColor;
+    CGPathRelease(path);
+    header.radii = radii;
     header.red = red;
     header.green = green;
     header.blue = blue;
@@ -145,23 +183,34 @@ void con_terminal_pane_remove_header(void *host_ptr) {
 
 // Pane bounds use the same parent coordinate system as the workspace clip.
 // Keeping them on each host leaves the window-wide transition underlay alone.
-bool con_terminal_pane_set_clip(void *host_ptr, double x, double y,
-                                double width, double height, double radius) {
+bool con_terminal_pane_set_clip_corners(void *host_ptr, double x, double y,
+                                       double width, double height, double top_left,
+                                       double top_right, double bottom_right, double bottom_left) {
     NSView *host = (__bridge NSView *)host_ptr;
     if (host == nil || host.superview == nil || !isfinite(x) || !isfinite(y) ||
-        !isfinite(width) || !isfinite(height) || !isfinite(radius) ||
-        width < 0 || height < 0 || radius < 0) return false;
+        !isfinite(width) || !isfinite(height) || !isfinite(top_left) || !isfinite(top_right) ||
+        !isfinite(bottom_right) || !isfinite(bottom_left) || width < 0 || height < 0 ||
+        top_left < 0 || top_right < 0 || bottom_right < 0 || bottom_left < 0) return false;
     NSRect rect = NSMakeRect(x, host.superview.bounds.size.height - y - height, width, height);
-    radius = fmin(radius, fmin(width, height) * 0.5);
+    CGFloat limit = fmin(width, height) * 0.5;
+    ConTerminalCornerRadii radii = {fmin(top_left, limit), fmin(top_right, limit),
+        fmin(bottom_right, limit), fmin(bottom_left, limit)};
     ConTerminalCanvasClip *clip = objc_getAssociatedObject(host, &kConTerminalPaneClipKey);
-    if (clip != nil && NSEqualRects(clip.rect, rect) && clip.radius == radius) return false;
+    if (clip != nil && NSEqualRects(clip.rect, rect) && con_terminal_radii_equal(clip.radii, radii)) return false;
     if (clip == nil) {
         clip = [ConTerminalCanvasClip new];
         objc_setAssociatedObject(host, &kConTerminalPaneClipKey, clip, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     clip.rect = rect;
-    clip.radius = radius;
+    clip.radii = radii;
     return true;
+}
+
+// Uniform entry point retained for native geometry fixtures.
+bool con_terminal_pane_set_clip(void *host_ptr, double x, double y,
+                                double width, double height, double radius) {
+    return con_terminal_pane_set_clip_corners(host_ptr, x, y, width, height,
+        radius, radius, radius, radius);
 }
 
 static NSView *con_terminal_parent(NSView *gpui) {
@@ -211,9 +260,9 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
     if (clip == nil) return;
     ConTerminalCanvasClip *pane = objc_getAssociatedObject(host, &kConTerminalPaneClipKey);
     NSRect rect = [host convertRect:clip.rect fromView:host.superview];
-    CGFloat paneRadius = pane.radius;
+    ConTerminalCornerRadii paneRadii = pane != nil ? pane.radii : (ConTerminalCornerRadii){0};
     NSRect paneRect = pane != nil ? [host convertRect:pane.rect fromView:host.superview] : NSZeroRect;
-    BOOL paneContainsHost = pane == nil || (paneRadius <= 0 && NSContainsRect(paneRect, host.bounds));
+    BOOL paneContainsHost = pane == nil || (con_terminal_max_radius(paneRadii) <= 0 && NSContainsRect(paneRect, host.bounds));
     BOOL clean = clip.radius <= 0 && NSContainsRect(rect, host.bounds) && paneContainsHost;
     BOOL paneMaskNeeded = !paneContainsHost;
     // A rectangular pane clip must still constrain reused/resizing hosts.
@@ -232,7 +281,7 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
         objc_setAssociatedObject(host, &kConTerminalCanvasMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else if (NSEqualRects(mask.rect, rect) && NSEqualRects(mask.bounds, host.bounds) &&
                mask.radius == clip.radius && mask.scale == scale &&
-               mask.paneRadius == paneRadius && NSEqualRects(mask.paneRect, paneRect)) {
+               con_terminal_radii_equal(mask.paneRadii, paneRadii) && NSEqualRects(mask.paneRect, paneRect)) {
         if (clean ? host.layer.mask != nil : (host.layer.mask != mask.layer ||
                 mask.targetLayer != host.layer || mask.layer.mask != (paneMaskNeeded ? mask.paneLayer : nil))) {
             // AppKit may replace a backing layer without changing view bounds.
@@ -253,7 +302,7 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
     mask.bounds = host.bounds;
     mask.radius = clip.radius;
     mask.scale = scale;
-    mask.paneRadius = paneRadius;
+    mask.paneRadii = paneRadii;
     mask.paneRect = paneRect;
     if (clean) {
         // Clean mode needs no extra offscreen mask for an already-contained host.
@@ -274,7 +323,7 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
     mask.layer.contentsScale = scale;
     mask.layer.path = path;
     if (paneMaskNeeded) {
-        CGPathRef panePath = CGPathCreateWithRoundedRect(NSRectToCGRect(paneRect), paneRadius, paneRadius, NULL);
+        CGPathRef panePath = con_terminal_corner_path(NSRectToCGRect(paneRect), paneRadii);
         mask.paneLayer.frame = host.bounds;
         mask.paneLayer.contentsScale = scale;
         mask.paneLayer.path = panePath;
@@ -295,7 +344,7 @@ bool con_terminal_canvas_clip_is_attached(void *host_ptr) {
     if (clip == nil || host.layer == nil) return false;
     NSRect rect = [host convertRect:clip.rect fromView:host.superview];
     NSRect paneRect = pane != nil ? [host convertRect:pane.rect fromView:host.superview] : NSZeroRect;
-    BOOL paneContainsHost = pane == nil || (pane.radius <= 0 && NSContainsRect(paneRect, host.bounds));
+    BOOL paneContainsHost = pane == nil || (con_terminal_max_radius(pane.radii) <= 0 && NSContainsRect(paneRect, host.bounds));
     if (clip.radius <= 0.0 && NSContainsRect(rect, host.bounds) && paneContainsHost) {
         return host.layer.mask == nil;
     }

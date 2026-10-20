@@ -106,14 +106,16 @@ fn concentric_corners(
     window_radius: f32,
     radius: f32,
 ) -> gpui::Corners<Pixels> {
+    let limit = card.size.width.min(card.size.height).as_f32().max(0.0) * 0.5;
+    let radius = radius.max(0.0).min(limit);
     if radius <= 0.0 || window_radius <= 0.0 {
-        return gpui::Corners::all(px(radius.max(0.0)));
+        return gpui::Corners::all(px(radius));
     }
     let left = card.left().as_f32();
     let top = card.top().as_f32();
     let right = (viewport.width - card.right()).as_f32();
     let bottom = (viewport.height - card.bottom()).as_f32();
-    let corner = |x: f32, y: f32| px(radius.max(window_radius - x.max(y).max(0.0)));
+    let corner = |x: f32, y: f32| px(radius.max(window_radius - x.max(y).max(0.0)).min(limit));
     gpui::Corners {
         top_left: corner(left, top),
         top_right: corner(right, top),
@@ -842,6 +844,18 @@ mod tests {
         assert_eq!(
             canvas_inner_bounds(docked, 1.0, 0.0, 0.0).top().as_f32() + PANE_INSET,
             CANVAS_INSET + PANE_INSET
+        );
+    }
+
+    #[test]
+    fn window_corners_stay_within_small_cards() {
+        let card = Bounds::new(point(px(5.0), px(5.0)), gpui::size(px(10.0), px(6.0)));
+        let radii = concentric_corners(card, gpui::size(px(20.0), px(16.0)), 16.0, PANE_RADIUS);
+        assert_eq!(radii, gpui::Corners::all(px(3.0)));
+        let flat = Bounds::new(card.origin, gpui::size(px(10.0), px(0.0)));
+        assert_eq!(
+            concentric_corners(flat, gpui::size(px(20.0), px(16.0)), 16.0, PANE_RADIUS),
+            gpui::Corners::all(px(0.0))
         );
     }
 

@@ -188,3 +188,25 @@ Its first full run passed 652 tests but hit the unrelated launch-helper
 protocol fixture's four-second deadline. That fixture passed in isolation.
 The same executable then passed all 653 tests with `--test-threads=1`, without
 skipping tests or changing source or test deadlines.
+
+## Concentric-corner integration review
+
+PR #496 was authored before the native-header follow-up. Its GPUI surfaces
+derived four radii from the AppKit window corner, but the existing native pane
+mask and header API still accepted one uniform radius. Merging those layers
+without adapting them would violate the shared-coverage rule again, especially
+where a bottom corner meets a larger window corner.
+
+The integration forwards the same resolved four radii to the native pane mask
+and the upper pair to native header material. Both use cached circular paths;
+the header remains noninteractive and independent of the workspace clip. Native
+fixtures check asymmetric corner coverage and cache reuse, not only uniform
+rounded rectangles. All layers clamp radii consistently for small panes.
+The macOS-only traffic-light helper export is also gated so portable builds
+do not acquire an unused import under warnings-as-errors.
+
+The integrated candidate passed all 656 linked macOS app tests serially,
+without exclusions or changed deadlines. Formatting and whitespace checks
+passed. This verifies native path geometry and lifecycle on macOS 15; the
+contributor's macOS 27 screenshots remain separate evidence, not a local
+macOS 27 runtime certification.

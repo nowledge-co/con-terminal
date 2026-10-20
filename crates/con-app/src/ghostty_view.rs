@@ -121,7 +121,8 @@ unsafe extern "C" {
         y: f64,
         width: f64,
         height: f64,
-        radius: f64,
+        top_left: f64,
+        top_right: f64,
         red: f64,
         green: f64,
         blue: f64,
@@ -129,13 +130,16 @@ unsafe extern "C" {
     ) -> bool;
     fn con_terminal_pane_header_set_visible(host: *mut c_void, visible: bool);
     fn con_terminal_pane_remove_header(host: *mut c_void);
-    fn con_terminal_pane_set_clip(
+    fn con_terminal_pane_set_clip_corners(
         view: *mut c_void,
         x: f64,
         y: f64,
         width: f64,
         height: f64,
-        radius: f64,
+        top_left: f64,
+        top_right: f64,
+        bottom_right: f64,
+        bottom_left: f64,
     ) -> bool;
     fn objc_getAssociatedObject(object: id, key: *const c_void) -> id;
     fn objc_setAssociatedObject(object: id, key: *const c_void, value: id, policy: usize);
@@ -1865,8 +1869,9 @@ impl GhosttyView {
         // The transition underlay is shared by the entire window. Only the
         // individual terminal host belongs to this pane.
         if let Some(view) = self.host_view {
+            let radii = crate::workspace::frame::window_concentric_corners(bounds, radius, window);
             let changed = unsafe {
-                con_terminal_pane_set_clip(
+                con_terminal_pane_set_clip_corners(
                     view as *mut c_void,
                     f64::from(bounds.left()),
                     f64::from(bounds.top()),
@@ -1874,7 +1879,10 @@ impl GhosttyView {
                     f64::from(bounds.size.height),
                     // A translucent exterior fill cannot erase native pixels.
                     // Exclude terminal content outside the card before blending.
-                    f64::from(radius),
+                    f64::from(radii.top_left),
+                    f64::from(radii.top_right),
+                    f64::from(radii.bottom_right),
+                    f64::from(radii.bottom_left),
                 )
             };
             if changed {
@@ -1899,7 +1907,8 @@ impl GhosttyView {
                         f64::from(bounds.top()),
                         f64::from(bounds.size.width),
                         f64::from(height),
-                        f64::from(radius),
+                        f64::from(radii.top_left),
+                        f64::from(radii.top_right),
                         f64::from(color.r),
                         f64::from(color.g),
                         f64::from(color.b),
@@ -3527,6 +3536,54 @@ mod tests {
                 let cached_path: *const c_void = msg_send![pane_mask, path];
                 assert_eq!(path, cached_path, "idle clipping rebuilt its path");
 
+                assert!(super::con_terminal_pane_set_clip_corners(
+                    host.cast(),
+                    0.0,
+                    0.0,
+                    200.0,
+                    120.0,
+                    18.0,
+                    4.0,
+                    14.0,
+                    2.0,
+                ));
+                super::con_terminal_canvas_apply_clip(host.cast());
+                let asymmetric: *const c_void = msg_send![pane_mask, path];
+                for (x, y, inside) in [
+                    (4.0, 116.0, false),
+                    (196.0, 116.0, true),
+                    (2.0, 2.0, true),
+                    (198.0, 2.0, false),
+                ] {
+                    assert_eq!(
+                        CGPathContainsPoint(
+                            asymmetric,
+                            std::ptr::null(),
+                            NSPoint::new(x, y),
+                            false
+                        ),
+                        inside,
+                        "native clipping lost a per-corner radius at {x},{y}"
+                    );
+                }
+                assert!(!super::con_terminal_pane_set_clip_corners(
+                    host.cast(),
+                    0.0,
+                    0.0,
+                    200.0,
+                    120.0,
+                    18.0,
+                    4.0,
+                    14.0,
+                    2.0,
+                ));
+                super::con_terminal_canvas_apply_clip(host.cast());
+                let reused: *const c_void = msg_send![pane_mask, path];
+                assert_eq!(
+                    asymmetric, reused,
+                    "idle asymmetric clipping rebuilt its path"
+                );
+
                 view.set_pane_header_color(gpui::white());
                 view.last_bounds = Some(gpui::Bounds::new(
                     gpui::point(px(0.0), px(24.0)),
@@ -3547,10 +3604,19 @@ mod tests {
                     (0.0, 96.0, 200.0, 24.0)
                 );
                 let header_layer: cocoa::base::id = msg_send![header, layer];
-                let radius: f64 = msg_send![header_layer, cornerRadius];
-                let corners: usize = msg_send![header_layer, maskedCorners];
-                assert_eq!(radius, 8.0);
-                assert_eq!(corners, (1 << 2) | (1 << 3), "only the upper corners round");
+                let header_path: *const c_void = msg_send![header_layer, path];
+                for (x, y, inside) in [(0.5, 23.5, false), (199.5, 23.5, false), (0.5, 0.5, true)] {
+                    assert_eq!(
+                        CGPathContainsPoint(
+                            header_path,
+                            std::ptr::null(),
+                            NSPoint::new(x, y),
+                            false
+                        ),
+                        inside,
+                        "only the upper header corners round"
+                    );
+                }
                 let hit: cocoa::base::id = msg_send![header, hitTest:NSPoint::new(10.0, 10.0)];
                 assert!(hit.is_null(), "material intercepted a pane control");
                 assert!(
@@ -3561,6 +3627,7 @@ mod tests {
                         200.0,
                         24.0,
                         8.0,
+                        8.0,
                         1.0,
                         1.0,
                         1.0,
@@ -3568,6 +3635,32 @@ mod tests {
                     ),
                     "idle prepaint mutated the material"
                 );
+                assert!(super::con_terminal_pane_set_header(
+                    host.cast(),
+                    0.0,
+                    0.0,
+                    200.0,
+                    24.0,
+                    20.0,
+                    4.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                ));
+                let header_path: *const c_void = msg_send![header_layer, path];
+                for (x, y, inside) in [(4.0, 20.0, false), (196.0, 20.0, true), (0.5, 0.5, true)] {
+                    assert_eq!(
+                        CGPathContainsPoint(
+                            header_path,
+                            std::ptr::null(),
+                            NSPoint::new(x, y),
+                            false
+                        ),
+                        inside,
+                        "header material lost a per-corner radius"
+                    );
+                }
                 view.native_view_visible.set(false);
                 view.apply_native_visibility();
                 let hidden: bool = msg_send![header, isHidden];

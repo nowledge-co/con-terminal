@@ -196,6 +196,13 @@ have its old split-sized mask.
   terminal translucency behind the tray.
 - The clip path is cached per host. A window-scoped geometry generation
   invalidates otherwise unchanged terminal layouts when the outer canvas moves.
+- Resolve each card's four corner radii from its snapped bounds and use those
+  same values for GPUI contours/cutouts and the native pane mask. Forward its
+  upper pair to native header material; a uniform native radius beneath a
+  larger translucent exterior cutout can expose native pixels outside the curve.
+  Radius-only changes invalidate cached paths. Clamp radii to half the smaller
+  card dimension, including during small-pane layouts. The native header's
+  material path is independent of the shared workspace clip.
 - A header below another header has square top corners, avoiding holes at the
   title/surface-strip join. An undecorated single terminal keeps a zero radius.
 - Header material follows its host's visibility, including tab/surface changes

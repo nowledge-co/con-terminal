@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.145`
+
+### Changed
+
+**macOS**
+
+- Workspace cards follow the window's outer corners, with more even spacing
+  around title-bar controls and centred traffic lights.
+  _(PR [#496](https://github.com/nowledge-co/con-terminal/pull/496) by [@yetone](https://github.com/yetone))_
+
 ## `v0.1.0-beta.144` - 2026-10-20
 
 ### Fixed
