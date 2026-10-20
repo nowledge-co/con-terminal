@@ -327,3 +327,27 @@ All eight Apple library tests pass. This establishes the blend-state defect
 and the correction, not final visual acceptance of Con pane corners. The
 separate Con preview experiment must still verify the integrated result; no
 production dependency change is authorized by this A/B permission.
+
+The candidate Con app built against the remote immutable revision. Its lockfile
+changes only `gpui-pre-apple`; `cargo tree` confirms one original GPUI core
+identity shared with the unchanged components and macOS package. Independent
+A/B bundles were inspected sequentially in dark/light appearance on macOS
+15.7.9, with matching three-pane fixtures, geometry, 0.82 glass/chrome opacity
+and blur. Hidden-window screenshots were excluded: native backing can be stale
+until the window is raised and repainted. Settled corner appearance did not
+improve enough to accept this as the reported issue's completed fix.
+
+The candidate's isolated new pane produced the expected shell output and closed
+on shell exit. Split, zoom/restore, sidebar and input-tray toggles were exercised.
+These checks do not prove high-frame-rate transition correctness or acceptance
+on macOS 27, 1x displays, Windows or Linux. Keep PR #502 in draft and production
+pins unchanged. Further investigation must distinguish native clip coverage,
+GPUI exterior coverage and the contour rather than assuming another colour
+adjustment or the blend-factor correction alone resolves their combination.
+
+The final remote-pin candidate passed all 657 linked app tests serially, with
+the short private temporary directory and no skipped tests. Formatting and
+whitespace checks passed. This is an independent experimental worktree, not a
+production-pin commit. The window-level captures and a separately prepared
+white backdrop do not certify full-desktop/high-contrast compositor behavior;
+the maintainer must still inspect the actual visible result.
