@@ -4,6 +4,11 @@ Status: maintainer accepted the Con-only preview on 2026-10-18. This acceptance
 does not certify the full display, theme, or platform matrix. PR and release
 records establish delivery separately from preview acceptance.
 
+Follow-up: the transparent light-theme report on macOS 27 exposed a limitation
+of this accepted approach. A translucent cutout does not remove the rectangular
+pixels beneath it. See [the glass corner coverage follow-up](2026-10-20-glass-pane-corner-coverage.md)
+for the correction and its separate verification limits.
+
 ## Report
 
 The maintainer's October 18 close-up shows dark, uneven contours around light

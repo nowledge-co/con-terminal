@@ -2343,7 +2343,7 @@ impl PaneTree {
         has_splits: bool,
         is_zoomed: bool,
         _tab_accent_color: Option<con_core::session::TabAccentColor>,
-        tab_accent_inactive_alpha: f32,
+        _tab_accent_inactive_alpha: f32,
         close_pane_cb: PaneCallback,
         toggle_zoom_cb: PaneCallback,
         focus_pane_cb: PaneCallback,
@@ -2492,7 +2492,9 @@ impl PaneTree {
         };
         // The whole title bar is draggable. The visible pane drag preview is
         // rendered by Workspace, centred at the live cursor position.
-        let bar_bg = Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha);
+        #[cfg(not(target_os = "macos"))]
+        let bar_bg = Self::pane_chrome_bg(theme, is_focused, _tab_accent_inactive_alpha);
+        #[cfg(not(target_os = "macos"))]
         let bar_bg = if is_focused && !cfg!(target_os = "macos") {
             bar_bg.blend(theme.foreground.opacity(0.025))
         } else {
@@ -2511,7 +2513,8 @@ impl PaneTree {
             .map(|bar| {
                 #[cfg(target_os = "macos")]
                 {
-                    bar.child(crate::workspace::frame::pane_header_background(bar_bg))
+                    // The native pane owns the header material; GPUI owns its controls.
+                    bar
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
@@ -3032,6 +3035,7 @@ impl PaneTree {
 
         // Surface strip — only when there are multiple surfaces or an owner/title
         if show_surface_strip {
+            #[cfg(not(target_os = "macos"))]
             let strip_bg = Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha);
             let rail_bg = theme.transparent;
 
@@ -3225,8 +3229,7 @@ impl PaneTree {
                 .map(|bar| {
                     #[cfg(target_os = "macos")]
                     {
-                        bar.relative()
-                            .child(crate::workspace::frame::pane_header_background(strip_bg))
+                        bar
                     }
                     #[cfg(not(target_os = "macos"))]
                     {
@@ -3247,12 +3250,13 @@ impl PaneTree {
                 .collect::<Vec<_>>();
             let (inset, radius) =
                 crate::workspace::frame::pane_card_geometry(tree_has_splits, _canvas_depth);
+            let header_color = Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha);
             let pane = col
                 .relative()
                 .id(("terminal-pane-card", pane_id))
                 .on_prepaint(move |bounds, window, cx| {
                     for terminal in &terminals {
-                        terminal.set_pane_clip(bounds, radius, window, cx);
+                        terminal.set_pane_clip(bounds, radius, header_color, window, cx);
                     }
                 });
             div()
@@ -3807,6 +3811,7 @@ mod tests {
             pane.set_pane_clip(
                 Bounds::new(point(px(100.0), px(0.0)), size(px(200.0), px(300.0))),
                 7.0,
+                gpui::white(),
                 window,
                 cx,
             );
@@ -3968,6 +3973,18 @@ mod tests {
             });
             cx.run_until_parked();
             let bar = cx.debug_bounds("pane-title-bar-0").unwrap();
+            #[cfg(target_os = "macos")]
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                let scale = window.scale_factor();
+                assert!(
+                    window.painted_quads().iter().all(|quad| {
+                        quad.bounds.size.width.0 != bar.size.width.as_f32() * scale
+                            || quad.bounds.size.height.0 != bar.size.height.as_f32() * scale
+                    }),
+                    "pane title duplicated its native material in the GPU overlay"
+                );
+            });
             cx.simulate_mouse_move(bar.center(), MouseButton::Left, Modifiers::default());
             cx.run_until_parked();
             let label = cx.debug_bounds("pane-title-label-0").unwrap();

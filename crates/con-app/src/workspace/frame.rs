@@ -652,20 +652,6 @@ pub(crate) fn header_background(color: Hsla) -> impl IntoElement {
     .left_0()
 }
 
-pub(crate) fn pane_header_background(color: Hsla) -> impl IntoElement {
-    gpui::canvas(
-        |_, _, _| {},
-        move |bounds, (), window, _| {
-            // The pane's exterior cutout owns rounding for header and terminal.
-            window.paint_quad(gpui::fill(bounds, color));
-        },
-    )
-    .absolute()
-    .size_full()
-    .top_0()
-    .left_0()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -139,6 +139,20 @@ With optional arguments:
 RUST_LOG=con_agent::flow=info,con_agent=warn,con_core=warn,con::suggestions=debug,con_core::suggestions=debug cargo run -p con
 ```
 
+### Transferable macOS debug previews
+
+Ordinary debug builds read RustEmbed assets from the source checkout. Before
+copying a native debug app to another Mac of the same architecture, embed them:
+
+```sh
+cargo build -p con --bin con --features rust-embed/debug-embed
+```
+
+This builds the executable, not a complete signed app bundle. Keep `con-cli`
+beside it, prepare the bundle separately, and isolate configuration and session
+paths on the test host. Check startup logs for missing assets after transfer.
+Copying a same-architecture binary avoids a heavy build on a shared CI runner.
+
 ## Test
 
 ```bash

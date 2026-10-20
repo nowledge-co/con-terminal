@@ -115,6 +115,20 @@ unsafe extern "C" {
     fn con_terminal_canvas_generation(view: *mut c_void) -> u64;
     fn con_terminal_canvas_apply_clip(view: *mut c_void);
     fn con_terminal_canvas_clip_is_attached(view: *mut c_void) -> bool;
+    fn con_terminal_pane_set_header(
+        host: *mut c_void,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        radius: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> bool;
+    fn con_terminal_pane_header_set_visible(host: *mut c_void, visible: bool);
+    fn con_terminal_pane_remove_header(host: *mut c_void);
     fn con_terminal_pane_set_clip(
         view: *mut c_void,
         x: f64,
@@ -374,6 +388,8 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_pane_clip: Option<(Bounds<Pixels>, f32)>,
     #[cfg(target_os = "macos")]
+    native_pane_header_color: Option<Hsla>,
+    #[cfg(target_os = "macos")]
     mouse_cursor: CursorStyle,
     #[cfg(target_os = "macos")]
     pending_mouse_visible: Cell<Option<bool>>,
@@ -476,6 +492,8 @@ impl GhosttyView {
             native_canvas_generation: 0,
             #[cfg(target_os = "macos")]
             native_pane_clip: None,
+            #[cfg(target_os = "macos")]
+            native_pane_header_color: None,
             #[cfg(target_os = "macos")]
             mouse_cursor: CursorStyle::IBeam,
             #[cfg(target_os = "macos")]
@@ -1182,6 +1200,7 @@ impl GhosttyView {
         }
         if let Some(host_view) = self.host_view.take() {
             unsafe {
+                con_terminal_pane_remove_header(host_view.cast());
                 let superview: id = msg_send![host_view, superview];
                 if !superview.is_null() {
                     let _: () = msg_send![host_view, removeFromSuperview];
@@ -1828,6 +1847,11 @@ impl GhosttyView {
         self.apply_pane_clip(window);
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn set_pane_header_color(&mut self, color: Hsla) {
+        self.native_pane_header_color = Some(color);
+    }
+
     #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn pane_clip_for_test(&self) -> Option<(Bounds<Pixels>, f32)> {
         self.native_pane_clip
@@ -1835,7 +1859,7 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn apply_pane_clip(&self, window: &Window) {
-        let Some((bounds, _radius)) = self.native_pane_clip else {
+        let Some((bounds, radius)) = self.native_pane_clip else {
             return;
         };
         // The transition underlay is shared by the entire window. Only the
@@ -1848,15 +1872,41 @@ impl GhosttyView {
                     f64::from(bounds.top()),
                     f64::from(bounds.size.width),
                     f64::from(bounds.size.height),
-                    // GPUI owns the decorative curve. Applying it again to
-                    // the native surface multiplies independent AA coverage.
-                    0.0,
+                    // A translucent exterior fill cannot erase native pixels.
+                    // Exclude terminal content outside the card before blending.
+                    f64::from(radius),
                 )
             };
             if changed {
                 window.request_native_surface_presentation_sync();
                 unsafe {
                     con_terminal_canvas_apply_clip(view as *mut c_void);
+                }
+            }
+            if let Some(color) = self.native_pane_header_color {
+                // Use the final terminal viewport, not the host's seam overdraw.
+                // update_frame calls this again after committing child geometry.
+                let height = self.last_bounds.map_or(px(0.0), |terminal| {
+                    (terminal.top() - bounds.top())
+                        .max(px(0.0))
+                        .min(bounds.size.height)
+                });
+                let color: gpui::Rgba = color.into();
+                if unsafe {
+                    con_terminal_pane_set_header(
+                        view.cast(),
+                        f64::from(bounds.left()),
+                        f64::from(bounds.top()),
+                        f64::from(bounds.size.width),
+                        f64::from(height),
+                        f64::from(radius),
+                        f64::from(color.r),
+                        f64::from(color.g),
+                        f64::from(color.b),
+                        f64::from(color.a),
+                    )
+                } {
+                    window.request_native_surface_presentation_sync();
                 }
             }
         }
@@ -2196,6 +2246,7 @@ impl GhosttyView {
                     self.native_view_visible.get() && !self.awaiting_first_layout_visibility;
                 let hidden = if effective_visible { NO } else { YES };
                 let _: () = msg_send![host_view, setHidden:hidden];
+                con_terminal_pane_header_set_visible(host_view.cast(), effective_visible);
                 if effective_visible {
                     let _: () = msg_send![host_view, setNeedsDisplay:YES];
                 }
@@ -3390,6 +3441,163 @@ mod tests {
         font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    #[gpui::test]
+    fn decorated_pane_removes_native_pixels_from_the_exterior_corners(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use cocoa::foundation::{NSPoint, NSRect, NSSize};
+        use objc::{class, msg_send, sel, sel_impl};
+        use std::ffi::c_void;
+
+        unsafe extern "C" {
+            fn con_terminal_canvas_set_clip(
+                view: *mut c_void,
+                x: f64,
+                y: f64,
+                width: f64,
+                height: f64,
+                radius: f64,
+            ) -> bool;
+            fn CGPathContainsPoint(
+                path: *const c_void,
+                transform: *const c_void,
+                point: NSPoint,
+                even_odd: bool,
+            ) -> bool;
+        }
+        struct Fixture;
+        impl Render for Fixture {
+            fn render(
+                &mut self,
+                _: &mut Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                div()
+            }
+        }
+        cx.add_window_view(|window, cx| unsafe {
+            let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(200.0, 120.0));
+            let parent: cocoa::base::id = msg_send![class!(NSView), alloc];
+            let parent: cocoa::base::id = msg_send![parent, initWithFrame:rect];
+            let gpui: cocoa::base::id = msg_send![class!(NSView), alloc];
+            let gpui: cocoa::base::id = msg_send![gpui, initWithFrame:rect];
+            let host: cocoa::base::id = msg_send![class!(NSScrollView), alloc];
+            let host: cocoa::base::id = msg_send![host, initWithFrame:rect];
+            let _: () = msg_send![parent, addSubview:gpui];
+            let _: () = msg_send![parent, addSubview:host];
+            con_terminal_canvas_set_clip(gpui.cast(), 0.0, 0.0, 200.0, 120.0, 0.0);
+            let app = std::sync::Arc::new(
+                con_ghostty::GhosttyApp::new(
+                    None, None, None, None, None, None, None, None, None, None, None, None, None,
+                    false,
+                )
+                .expect("native Ghostty app"),
+            );
+            let terminal = cx.new(|cx| super::GhosttyView::new(app, None, None, 14.0, cx));
+            terminal.update(cx, |view, _| {
+                view.host_view = Some(host);
+                let bounds = gpui::Bounds::new(
+                    gpui::point(px(0.0), px(0.0)),
+                    gpui::size(px(200.0), px(120.0)),
+                );
+                view.set_pane_clip(bounds, 8.0, window);
+                let layer: cocoa::base::id = msg_send![host, layer];
+                let mask: cocoa::base::id = msg_send![layer, mask];
+                assert!(
+                    !mask.is_null(),
+                    "glass corner retained the rectangular host"
+                );
+                let pane_mask: cocoa::base::id = msg_send![mask, mask];
+                assert!(!pane_mask.is_null());
+                let path: *const c_void = msg_send![pane_mask, path];
+                for (x, y) in [(0.5, 0.5), (199.5, 0.5), (0.5, 119.5), (199.5, 119.5)] {
+                    assert!(
+                        !CGPathContainsPoint(path, std::ptr::null(), NSPoint::new(x, y), false),
+                        "native pixels remain below the translucent corner at {x},{y}"
+                    );
+                }
+                assert!(CGPathContainsPoint(
+                    path,
+                    std::ptr::null(),
+                    NSPoint::new(100.0, 60.0),
+                    false
+                ));
+                view.set_pane_clip(bounds, 8.0, window);
+                let cached_path: *const c_void = msg_send![pane_mask, path];
+                assert_eq!(path, cached_path, "idle clipping rebuilt its path");
+
+                view.set_pane_header_color(gpui::white());
+                view.last_bounds = Some(gpui::Bounds::new(
+                    gpui::point(px(0.0), px(24.0)),
+                    gpui::size(px(200.0), px(96.0)),
+                ));
+                view.set_pane_clip(bounds, 8.0, window);
+                let children: cocoa::base::id = msg_send![parent, subviews];
+                let header: cocoa::base::id = msg_send![children, lastObject];
+                assert_ne!(header, host);
+                let frame: NSRect = msg_send![header, frame];
+                assert_eq!(
+                    (
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height
+                    ),
+                    (0.0, 96.0, 200.0, 24.0)
+                );
+                let header_layer: cocoa::base::id = msg_send![header, layer];
+                let radius: f64 = msg_send![header_layer, cornerRadius];
+                let corners: usize = msg_send![header_layer, maskedCorners];
+                assert_eq!(radius, 8.0);
+                assert_eq!(corners, (1 << 2) | (1 << 3), "only the upper corners round");
+                let hit: cocoa::base::id = msg_send![header, hitTest:NSPoint::new(10.0, 10.0)];
+                assert!(hit.is_null(), "material intercepted a pane control");
+                assert!(
+                    !super::con_terminal_pane_set_header(
+                        host.cast(),
+                        0.0,
+                        0.0,
+                        200.0,
+                        24.0,
+                        8.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0,
+                    ),
+                    "idle prepaint mutated the material"
+                );
+                view.native_view_visible.set(false);
+                view.apply_native_visibility();
+                let hidden: bool = msg_send![header, isHidden];
+                assert!(hidden, "inactive terminal retained visible chrome");
+                view.native_view_visible.set(true);
+                view.awaiting_first_layout_visibility = false;
+                view.apply_native_visibility();
+                let hidden: bool = msg_send![header, isHidden];
+                assert!(!hidden);
+
+                view.last_bounds = Some(bounds);
+                view.set_pane_clip(bounds, 0.0, window);
+                let clean_mask: cocoa::base::id = msg_send![layer, mask];
+                assert!(clean_mask.is_null(), "clean mode retained corner clipping");
+                view.apply_native_visibility();
+                let hidden: bool = msg_send![header, isHidden];
+                assert!(hidden, "clean mode revealed a cached pane header");
+                super::con_terminal_pane_remove_header(host.cast());
+                let children: cocoa::base::id = msg_send![parent, subviews];
+                let count: usize = msg_send![children, count];
+                assert_eq!(count, 2, "detached terminal leaked header material");
+                view.host_view = None;
+            });
+            let _: () = msg_send![host, removeFromSuperview];
+            let _: () = msg_send![host, release];
+            let _: () = msg_send![gpui, release];
+            let _: () = msg_send![parent, release];
+            Fixture
+        });
+    }
 
     #[gpui::test]
     fn cached_layout_checks_actual_host_geometry_and_mask_attachment() {

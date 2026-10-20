@@ -52,6 +52,96 @@ static char kConTerminalCanvasMaskKey;
 @end
 static char kConTerminalCanvasSafeAreaKey;
 static char kConTerminalPaneClipKey;
+static char kConTerminalPaneHeaderKey;
+
+// Header material lives beside the native terminal, not in GPUI's transparent
+// overlay. Text and controls remain GPUI elements above this noninteractive view.
+@interface ConTerminalPaneHeader : NSView
+@property(nonatomic) BOOL materialVisible;
+@property(nonatomic) CGFloat red;
+@property(nonatomic) CGFloat green;
+@property(nonatomic) CGFloat blue;
+@property(nonatomic) CGFloat alpha;
+@end
+
+void con_terminal_canvas_apply_clip(void *host_ptr);
+@implementation ConTerminalPaneHeader
+- (NSView *)hitTest:(NSPoint)point { return nil; }
+- (BOOL)acceptsFirstResponder { return NO; }
+@end
+
+bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
+                                 double width, double height, double radius,
+                                 double red, double green, double blue, double alpha) {
+    NSView *host = (__bridge NSView *)host_ptr;
+    if (host == nil || host.superview == nil ||
+        !isfinite(x) || !isfinite(y) || !isfinite(width) || !isfinite(height) ||
+        !isfinite(radius) || !isfinite(red) || !isfinite(green) ||
+        !isfinite(blue) || !isfinite(alpha) || width < 0 || height < 0 || radius < 0) return false;
+    ConTerminalPaneHeader *header = objc_getAssociatedObject(host, &kConTerminalPaneHeaderKey);
+    if (height == 0 || width == 0) {
+        if (header == nil) return false;
+        header.materialVisible = NO;
+        if (header.hidden) return false;
+        header.hidden = YES;
+        return true;
+    }
+    NSRect rect = NSMakeRect(x, host.superview.bounds.size.height - y - height, width, height);
+    radius = fmin(radius, fmin(width * 0.5, height));
+    CGFloat scale = host.window != nil ? host.window.backingScaleFactor : 1.0;
+    if (header != nil && header.superview == host.superview &&
+        NSEqualRects(header.frame, rect) && header.layer.cornerRadius == radius &&
+        header.layer.contentsScale == scale && header.layer.backgroundColor != NULL &&
+        header.layer.masksToBounds &&
+        header.layer.maskedCorners == (kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner) &&
+        header.red == red && header.green == green && header.blue == blue && header.alpha == alpha &&
+        header.materialVisible && header.hidden == host.hidden) {
+        con_terminal_canvas_apply_clip((__bridge void *)header);
+        return false;
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (header == nil) {
+        header = [[ConTerminalPaneHeader alloc] initWithFrame:rect];
+        header.wantsLayer = YES;
+        header.autoresizingMask = NSViewNotSizable;
+        objc_setAssociatedObject(host, &kConTerminalPaneHeaderKey, header, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (header.superview != host.superview) {
+        [header removeFromSuperview];
+        [host.superview addSubview:header positioned:NSWindowAbove relativeTo:host];
+    }
+    header.frame = rect;
+    header.layer.masksToBounds = YES;
+    header.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+    header.layer.cornerCurve = kCACornerCurveCircular;
+    header.layer.contentsScale = scale;
+    header.layer.cornerRadius = radius;
+    header.layer.backgroundColor = [NSColor colorWithSRGBRed:red green:green blue:blue alpha:alpha].CGColor;
+    header.red = red;
+    header.green = green;
+    header.blue = blue;
+    header.alpha = alpha;
+    header.materialVisible = YES;
+    header.hidden = host.hidden;
+    [CATransaction commit];
+    con_terminal_canvas_apply_clip((__bridge void *)header);
+    return true;
+}
+
+void con_terminal_pane_header_set_visible(void *host_ptr, bool visible) {
+    NSView *host = (__bridge NSView *)host_ptr;
+    ConTerminalPaneHeader *header = objc_getAssociatedObject(host, &kConTerminalPaneHeaderKey);
+    BOOL hidden = !visible || !header.materialVisible;
+    if (header != nil && header.hidden != hidden) header.hidden = hidden;
+}
+
+void con_terminal_pane_remove_header(void *host_ptr) {
+    NSView *host = (__bridge NSView *)host_ptr;
+    ConTerminalPaneHeader *header = objc_getAssociatedObject(host, &kConTerminalPaneHeaderKey);
+    [header removeFromSuperview];
+    objc_setAssociatedObject(host, &kConTerminalPaneHeaderKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
 // Pane bounds use the same parent coordinate system as the workspace clip.
 // Keeping them on each host leaves the window-wide transition underlay alone.
