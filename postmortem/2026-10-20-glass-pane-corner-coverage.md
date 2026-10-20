@@ -351,3 +351,46 @@ whitespace checks passed. This is an independent experimental worktree, not a
 production-pin commit. The window-level captures and a separately prepared
 white backdrop do not certify full-desktop/high-contrast compositor behavior;
 the maintainer must still inspect the actual visible result.
+
+### Dark-Theme Recheck: Coverage Handoff Remains Open
+
+The maintainer reports light appearance acceptable but a dark-theme edge still
+visible. Further local switches were tested only in the independent Con worktree;
+they are not production settings or changes included in this PR.
+
+- Suppressing the contour removes much of the line but not the bright corner
+  sample: one inspected RGB point remains approximately 60/59/57 against the
+  adjacent 37/36/34 gutter. Removing the contour alone is not the fix.
+- Rectangular native pane/header coverage removes that bright sample but exposes
+  a differently coloured exterior tip beneath the translucent GPUI cutout.
+- Opaque exterior tint avoids that extra transparency but introduces a material
+  discontinuity. This candidate is also not accepted. Do not ship it as the
+  solution or change the terminal's glass to disguise it.
+
+One intermediate diagnostic mistakenly used `Hsla::opacity(1.0)` to force opaque
+coverage. The pinned API multiplies existing alpha; `Hsla::alpha(1.0)` sets an
+absolute alpha. That intermediate comparison was a no-op, not evidence about an
+opaque mask. The corrected comparison still did not justify production delivery.
+
+These observations implicate native/GPU coverage handoff; they do not certify
+every corner or display. Two independently antialiased complementary masks do
+not form a complete surface when composited source-over: their overlap changes
+both terminal coverage and the backdrop contribution. Changing mask colour or
+removing just one layer exchanges bright leakage for another material defect.
+
+A next design to validate is shared raster coverage, retaining the configured
+chrome opacity. If `n` is the desired inside coverage and `a` the chrome alpha,
+the native mask needs `n / (1 - a * (1 - n))` before the GPU paints exterior
+coverage `a * (1 - n)`. This recovers the intended terminal/chrome/backdrop
+weights; define zero coverage explicitly at the singular endpoint. Generate both
+from the same sampled mask, not independent Core Animation and SVG curves.
+Cache only small corner tiles by physical radius, scale and opacity; do not add
+full-pane readback, per-output rasterization or OS-version guesses.
+
+An analytical model over dark/light colours and opacity endpoints bounds an
+8-bit compensated mask's error below half a colour level. This is mathematical
+validation only, not a native GPU/CA integration test. Implementation still needs
+verified sampling/coordinate parity, native mask lifecycle and caching tests,
+integrated light/dark checks, opacity endpoints and transition inspection. The
+existing baseline tests do not cover this unimplemented design. PR #502 remains
+draft, and the rejected diagnostic switches remain outside production.
