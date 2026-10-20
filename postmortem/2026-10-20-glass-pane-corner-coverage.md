@@ -309,3 +309,21 @@ The existing temporary fork authorization does not include it. A separate
 public experiment branch needs explicit authorization; neither the current
 production pin nor the previously submitted upstream branch should be changed
 to run that comparison.
+
+### Separately Authorized Alpha A/B
+
+The maintainer authorized the independent public experiment on October 20.
+Its immutable revision is `94f3f2c80f3e55170d485b228ad8e5107922b90b` on
+`wey-gu/zed:fix/con-corner-alpha-ab-20261020`. The original presentation and
+upstream-source branches are unchanged. The experiment changes two Metal
+destination-alpha blend factors and adds native GPU tests, with no Windows or
+Linux renderer changes.
+
+All three new tests fail against the original snapshot: compositing source
+coverage 0.25 over destination alpha 0.4 produces alpha 166 instead of about
+140. The same tests pass after the two-line correction for quads, monochrome
+coverage and paths, also checking transparent and opaque destination controls.
+All eight Apple library tests pass. This establishes the blend-state defect
+and the correction, not final visual acceptance of Con pane corners. The
+separate Con preview experiment must still verify the integrated result; no
+production dependency change is authorized by this A/B permission.

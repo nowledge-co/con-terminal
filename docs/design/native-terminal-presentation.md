@@ -285,6 +285,33 @@ Related investigations:
 
 ## Temporary Fork Exit Criteria
 
+### Independent Alpha Experiment (2026-10-20)
+
+The maintainer separately authorized an independent public experiment branch,
+not production integration or modification of the existing presentation branch.
+The candidate is
+[`94f3f2c80f3e55170d485b228ad8e5107922b90b`](https://github.com/wey-gu/zed/commit/94f3f2c80f3e55170d485b228ad8e5107922b90b),
+on `fix/con-corner-alpha-ab-20261020`, based on the unchanged `655ce8b` snapshot.
+It ports only the two Apple destination-alpha factors from official Zed #65571
+and adds native GPU readback regressions. It does not port Windows/wgpu changes
+or replace the compatible snapshot with Zed main.
+
+The same three GPU tests fail before the correction: at destination alpha 0.4
+and source coverage 0.25, quads, monochrome sprites and paths return alpha 166
+instead of approximately 140. All three pass afterward, including transparent
+and opaque destination controls. All eight Apple library tests pass with the
+correction, including the existing native-presentation test. The build reports
+unchanged Cocoa deprecation warnings; they were not suppressed.
+
+The Con A/B worktree changes only the Apple package's Git revision; production
+manifests and the original public branches remain unchanged. Both previews must
+share the same Con code, pane fixture, geometry, glass, blur and appearance.
+Compare them sequentially with the same backdrop: putting one translucent
+preview behind another is not a matched visual test. GPU correctness does not
+prove that every visible corner artifact is fixed. Production integration still
+requires explicit acceptance and authorization, affected-consumer verification,
+and the usual platform coverage disclosure.
+
 Before production integration, record the public repository, full immutable
 revision, upstream submission URL, and exact snapshot/package identities here.
 The authorization is not evidence that those steps have already happened.
