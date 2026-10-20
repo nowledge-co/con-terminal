@@ -990,13 +990,7 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
-        let terminal_area = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
+        let terminal_area = frame::canvas_viewport()
             .child(self.canvas_surround.render(
                 top_bar_surface_color,
                 canvas_depth,

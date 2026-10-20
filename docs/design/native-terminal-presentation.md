@@ -285,6 +285,31 @@ Related investigations:
 
 ## Temporary Fork Exit Criteria
 
+### Accepted Corner Integration (2026-10-20)
+
+After accepting the shared-coverage preview and caption-material refinement,
+the maintainer requested integration and release. The Apple package now uses
+the public `wey-gu/zed` revision
+[`94f3f2c80f3e55170d485b228ad8e5107922b90b`](https://github.com/wey-gu/zed/commit/94f3f2c80f3e55170d485b228ad8e5107922b90b).
+Core `gpui-pre` and `gpui-pre-macos` remain at `655ce8b`; all three snapshot
+packages remain version 0.3.7 and paired components retain their existing pins.
+This preserves one core GPUI type identity rather than upgrading to Zed main.
+The original public presentation branch is unchanged.
+
+The Apple revision adds the two destination-alpha factors already merged in
+[official Zed #65571](https://github.com/zed-industries/zed/pull/65571), with GPU
+readback tests, to the existing presentation snapshot. It does not change
+Windows/wgpu. The presentation API submission remains
+[Zed Discussion #65433](https://github.com/zed-industries/zed/discussions/65433).
+The independent alpha-only comparison was not itself a visual fix: Con also
+needed shared native/GPU corner coverage and non-overlapping caption paint.
+
+The final candidate passed all 659 linked macOS app tests and local dark/light
+visual checks; the maintainer accepted its appearance. macOS 27 appearance,
+1x hardware and frame-rate performance are not certified by those checks.
+Replace the fork only when a compatible official package graph contains both
+the presentation contract and alpha correction, using the exit checks below.
+
 ### Independent Alpha Experiment (2026-10-20)
 
 The maintainer separately authorized an independent public experiment branch,

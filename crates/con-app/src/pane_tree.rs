@@ -3256,7 +3256,14 @@ impl PaneTree {
                 .id(("terminal-pane-card", pane_id))
                 .on_prepaint(move |bounds, window, cx| {
                     for terminal in &terminals {
-                        terminal.set_pane_clip(bounds, radius, header_color, window, cx);
+                        terminal.set_pane_clip(
+                            bounds,
+                            radius,
+                            header_color,
+                            _surround_color.a,
+                            window,
+                            cx,
+                        );
                     }
                 });
             div()
@@ -3812,6 +3819,7 @@ mod tests {
                 Bounds::new(point(px(100.0), px(0.0)), size(px(200.0), px(300.0))),
                 7.0,
                 gpui::white(),
+                1.0,
                 window,
                 cx,
             );

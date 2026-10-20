@@ -114,6 +114,10 @@ the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
   exception (2026-10-10): a public GPUI fork may carry the reviewed frame-scoped
   presentation fix at an immutable revision. Preserve the compatible snapshot
   and component graph; do not replace it with an incompatible Zed Git package.
+  The maintainer extended this exception on 2026-10-20 to integrate the accepted
+  corner preview with the official Apple source-over alpha correction at public
+  revision `94f3f2c80f3e55170d485b228ad8e5107922b90b`; core/macOS packages keep
+  their original compatible snapshot. This does not authorize unrelated changes.
   Record the upstream submission and official replacement condition in
   `docs/design/native-terminal-presentation.md` before production integration.
   This is not authorization for local patches, `3pp/` dependencies, or unrelated

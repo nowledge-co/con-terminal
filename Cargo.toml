@@ -112,5 +112,5 @@ codegen-units = 1
 # See docs/design/native-terminal-presentation.md for provenance and exit criteria.
 [patch.crates-io]
 gpui-pre = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }
-gpui-pre-apple = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }
+gpui-pre-apple = { git = "https://github.com/wey-gu/zed", rev = "94f3f2c80f3e55170d485b228ad8e5107922b90b" }
 gpui-pre-macos = { git = "https://github.com/wey-gu/zed", rev = "655ce8bbc10e1f1ef3d1d5bdf5a3405008157792" }

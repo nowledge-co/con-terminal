@@ -81,6 +81,15 @@ const NS_VIEW_HEIGHT_SIZABLE: usize = 1 << 4;
 const NS_VIEW_LAYER_CONTENTS_REDRAW_DURING_VIEW_RESIZE: isize = 2;
 #[cfg(target_os = "macos")]
 const NATIVE_SEAM_OVERDRAW_PT: f64 = 2.0;
+#[repr(C)]
+struct NativeCornerTile {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    side: usize,
+    bytes: *const u8,
+}
 #[cfg(target_os = "macos")]
 const SCROLLBAR_INSET_PX: f32 = 6.0;
 #[cfg(target_os = "macos")]
@@ -130,6 +139,11 @@ unsafe extern "C" {
     ) -> bool;
     fn con_terminal_pane_header_set_visible(host: *mut c_void, visible: bool);
     fn con_terminal_pane_remove_header(host: *mut c_void);
+    fn con_terminal_pane_set_coverage(
+        view: *mut c_void,
+        tiles: *const NativeCornerTile,
+        count: usize,
+    ) -> bool;
     fn con_terminal_pane_set_clip_corners(
         view: *mut c_void,
         x: f64,
@@ -393,6 +407,7 @@ pub struct GhosttyView {
     native_pane_clip: Option<(Bounds<Pixels>, f32)>,
     #[cfg(target_os = "macos")]
     native_pane_header_color: Option<Hsla>,
+    native_pane_chrome_alpha: Option<f32>,
     #[cfg(target_os = "macos")]
     mouse_cursor: CursorStyle,
     #[cfg(target_os = "macos")]
@@ -498,6 +513,7 @@ impl GhosttyView {
             native_pane_clip: None,
             #[cfg(target_os = "macos")]
             native_pane_header_color: None,
+            native_pane_chrome_alpha: None,
             #[cfg(target_os = "macos")]
             mouse_cursor: CursorStyle::IBeam,
             #[cfg(target_os = "macos")]
@@ -1856,6 +1872,10 @@ impl GhosttyView {
         self.native_pane_header_color = Some(color);
     }
 
+    pub(crate) fn set_pane_chrome_alpha(&mut self, alpha: f32) {
+        self.native_pane_chrome_alpha = Some(alpha);
+    }
+
     #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn pane_clip_for_test(&self) -> Option<(Bounds<Pixels>, f32)> {
         self.native_pane_clip
@@ -1870,7 +1890,7 @@ impl GhosttyView {
         // individual terminal host belongs to this pane.
         if let Some(view) = self.host_view {
             let radii = crate::workspace::frame::window_concentric_corners(bounds, radius, window);
-            let changed = unsafe {
+            let mut changed = unsafe {
                 con_terminal_pane_set_clip_corners(
                     view as *mut c_void,
                     f64::from(bounds.left()),
@@ -1885,6 +1905,37 @@ impl GhosttyView {
                     f64::from(radii.bottom_left),
                 )
             };
+            if let Some(alpha) = self.native_pane_chrome_alpha {
+                match crate::workspace::frame::native_corner_coverage(
+                    bounds,
+                    radii,
+                    window.scale_factor(),
+                    alpha,
+                ) {
+                    Ok(coverage) => {
+                        let tiles = coverage
+                            .iter()
+                            .map(|tile| NativeCornerTile {
+                                x: tile.bounds.left().into(),
+                                y: tile.bounds.top().into(),
+                                width: tile.bounds.size.width.into(),
+                                height: tile.bounds.size.height.into(),
+                                side: tile.side,
+                                bytes: tile.rgba.as_ptr(),
+                            })
+                            .collect::<Vec<_>>();
+                        changed |= unsafe {
+                            con_terminal_pane_set_coverage(view.cast(), tiles.as_ptr(), tiles.len())
+                        };
+                    }
+                    Err(error) => {
+                        log::error!("failed to prepare shared pane coverage: {error}");
+                        changed |= unsafe {
+                            con_terminal_pane_set_coverage(view.cast(), std::ptr::null(), 0)
+                        };
+                    }
+                }
+            }
             if changed {
                 window.request_native_surface_presentation_sync();
                 unsafe {
@@ -3661,6 +3712,37 @@ mod tests {
                         "header material lost a per-corner radius"
                     );
                 }
+                view.set_pane_chrome_alpha(0.82);
+                view.set_pane_clip(bounds, 8.0, window);
+                let shared_mask: cocoa::base::id = msg_send![mask, mask];
+                let tiles: cocoa::base::id = msg_send![shared_mask, sublayers];
+                let count: usize = msg_send![tiles, count];
+                assert_eq!(
+                    count, 4,
+                    "native clip did not adopt the shared coverage tiles"
+                );
+                let first: cocoa::base::id = msg_send![tiles, objectAtIndex:0usize];
+                let contents: cocoa::base::id = msg_send![first, contents];
+                assert!(!contents.is_null());
+                let header_mask: cocoa::base::id = msg_send![header_layer, mask];
+                assert!(!header_mask.is_null(), "header did not adopt pane coverage");
+                let header_shared: cocoa::base::id = msg_send![header_mask, mask];
+                let header_tiles: cocoa::base::id = msg_send![header_shared, sublayers];
+                let header_count: usize = msg_send![header_tiles, count];
+                assert_eq!(header_count, 4);
+                view.set_pane_clip(bounds, 8.0, window);
+                let reused_tiles: cocoa::base::id = msg_send![shared_mask, sublayers];
+                let reused: cocoa::base::id = msg_send![reused_tiles, objectAtIndex:0usize];
+                assert_eq!(first, reused, "idle prepaint rebuilt native tile layers");
+                view.set_pane_chrome_alpha(0.25);
+                view.set_pane_clip(bounds, 8.0, window);
+                let changed_tiles: cocoa::base::id = msg_send![shared_mask, sublayers];
+                let changed: cocoa::base::id = msg_send![changed_tiles, objectAtIndex:0usize];
+                let changed_contents: cocoa::base::id = msg_send![changed, contents];
+                assert_ne!(
+                    contents, changed_contents,
+                    "opacity change reused stale coverage"
+                );
                 view.native_view_visible.set(false);
                 view.apply_native_visibility();
                 let hidden: bool = msg_send![header, isHidden];

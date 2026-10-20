@@ -394,3 +394,71 @@ verified sampling/coordinate parity, native mask lifecycle and caching tests,
 integrated light/dark checks, opacity endpoints and transition inspection. The
 existing baseline tests do not cover this unimplemented design. PR #502 remains
 draft, and the rejected diagnostic switches remain outside production.
+
+### Shared Coverage Experiment
+
+The maintainer authorized a separate public renderer experiment. The alpha-only
+comparison did not resolve the dark edge. Suppressing the contour left bright
+corner samples; rectangular native clipping, with either translucent or opaque
+exterior tint, instead left a material discontinuity. None was accepted.
+
+The next candidate shares the GPU SVG raster with the native clip. If `m` is
+the sampled exterior coverage and `a` is Window Chrome alpha, the native inside
+coverage is `(1-m)/(1-a*m)`. At the fully exterior pixel it is zero, including
+the otherwise undefined opaque-chrome endpoint. Source-over then leaves native
+content with exactly its intended `1-m` weight instead of introducing an extra
+backdrop contribution. This is a coverage handoff, not an opaque backing patch.
+The exterior tint, terminal opacity and blur remain unchanged.
+
+The native host and passive header share parent-coordinate coverage tiles; the
+header no longer antialiases another independent curve. Tiles follow the pinned
+SVG renderer's 2x raster and physical-centre linear sampling, with nearest native
+sampling and mirrored corners. The cache is bounded to 16 tiles, at most 256px
+per side (4MiB of cached RGBA data). Moving a tile retains its native image;
+unchanged geometry/material retains its layers. This still has native mask and
+layer costs; no zero-overhead or frame-rate claim follows from it.
+
+A same-window macOS 15 dark comparison shows the bright corner chain reduced:
+one unchanged coordinate went from RGB 55/54/52 to 40/39/37, with adjacent chrome
+37/36/34. A light/glass preview was also inspected, including zoom/restore,
+new split/exit, sidebar and agent-panel toggles. These are local observations,
+not maintainer acceptance or macOS 27/1x hardware certification. The first linked
+candidate run passed all 658 app tests, including material weights at simulated
+1x/1.5x/2x, four corner reflections, opacity changes, native header adoption and
+idle layer reuse. Native builds and formatting passed. The independent preview
+still uses experimental Apple revision `94f3f2c80f3e55170d485b228ad8e5107922b90b`;
+production integration is not authorized by the A/B permission.
+
+### Caption Material Overlap
+
+The maintainer accepted the shared-coverage corner appearance, then reported a
+dark strip between the compact caption and upper panes. Both attached theme
+captures place it at the same boundary. The dark capture contains four physical
+rows of RGB 25/24/24 below caption RGB 37/36/35, before the pane's own edge begins.
+
+Compact layout deliberately uses a -2pt top margin, compensated by the pane's
+2pt padding. Pane content therefore starts at the intended caption boundary,
+but its translucent top gutter extended above the centre viewport and repainted
+the caption material. That duplicate source-over fill is much more apparent
+in the dark theme. Changing the corner coverage or tint cannot fix ownership
+of this straight strip.
+
+Contain the macOS canvas overlay's paint in its actual viewport. Preserve the
+negative layout margin and native pane geometry; workspace-level menus and
+completion popups remain siblings outside this clip. A GPUI regression checks
+that the child still starts at 28pt below a 30pt caption while its paint mask
+starts at 30pt and includes the pane interior. This refinement does not change
+the shared corner tiles, glass/blur settings, or portable rendering paths.
+
+The native build and all 659 linked app tests passed with no exclusions. The
+updated dark preview's previously darkened four rows now match the caption at
+RGB 37/36/34; its pane edge still begins at the same physical row. Light glass
+and the command palette were also inspected. The independent B preview remains
+open in dark mode for maintainer review; no production pin, merge or release
+is implied by these local checks.
+
+The maintainer then accepted the refined preview and requested PR merge and a
+release. PR #502 integrates this exact runtime source and dependency graph;
+the experimental switches are absent. Native Windows/Linux CI remains the
+portable gate, and the macOS 27/1x/FPS verification gaps remain explicit rather
+than being inferred from local acceptance.

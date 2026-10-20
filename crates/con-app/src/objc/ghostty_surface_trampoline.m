@@ -5,6 +5,7 @@
 #include <objc/runtime.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 extern void ghostty_surface_set_content_scale(void *surface, double x, double y);
 extern void ghostty_surface_set_display_id(void *surface, uint32_t display_id);
@@ -58,6 +59,9 @@ static CGPathRef con_terminal_corner_path(CGRect rect, ConTerminalCornerRadii ra
 @property(nonatomic) uint64_t generation;
 @property(nonatomic) CGFloat scale;
 @property(nonatomic) ConTerminalCornerRadii radii;
+@property(nonatomic, strong) NSArray<NSData *> *coverageBytes;
+@property(nonatomic, strong) NSArray *coverageImages;
+@property(nonatomic, strong) NSArray<NSValue *> *coverageRects;
 @end
 @implementation ConTerminalCanvasClip
 @end
@@ -72,6 +76,7 @@ static CGPathRef con_terminal_corner_path(CGRect rect, ConTerminalCornerRadii ra
 @property(nonatomic) ConTerminalCornerRadii paneRadii;
 @property(nonatomic) CGFloat radius;
 @property(nonatomic) CGFloat scale;
+@property(nonatomic) uint64_t paneGeneration;
 @end
 @implementation ConTerminalCanvasMask
 @end
@@ -126,6 +131,8 @@ bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
     NSRect rect = NSMakeRect(x, host.superview.bounds.size.height - y - height, width, height);
     CGFloat limit = fmin(width * 0.5, height);
     ConTerminalCornerRadii radii = {fmin(top_left, limit), fmin(top_right, limit), 0, 0};
+    ConTerminalCanvasClip *paneClip = objc_getAssociatedObject(host, &kConTerminalPaneClipKey);
+    if (paneClip.coverageImages.count > 0) radii = (ConTerminalCornerRadii){0};
     CGFloat scale = host.window != nil ? host.window.backingScaleFactor : 1.0;
     CAShapeLayer *material = (CAShapeLayer *)header.layer;
     if (header != nil && header.superview == host.superview &&
@@ -133,6 +140,7 @@ bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
         material.contentsScale == scale && material.path != NULL && material.fillColor != NULL &&
         header.red == red && header.green == green && header.blue == blue && header.alpha == alpha &&
         header.materialVisible && header.hidden == host.hidden) {
+        objc_setAssociatedObject(header, &kConTerminalPaneClipKey, paneClip, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         con_terminal_canvas_apply_clip((__bridge void *)header);
         return false;
     }
@@ -162,6 +170,7 @@ bool con_terminal_pane_set_header(void *host_ptr, double x, double y,
     header.alpha = alpha;
     header.materialVisible = YES;
     header.hidden = host.hidden;
+    objc_setAssociatedObject(header, &kConTerminalPaneClipKey, paneClip, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [CATransaction commit];
     con_terminal_canvas_apply_clip((__bridge void *)header);
     return true;
@@ -211,6 +220,72 @@ bool con_terminal_pane_set_clip(void *host_ptr, double x, double y,
                                 double width, double height, double radius) {
     return con_terminal_pane_set_clip_corners(host_ptr, x, y, width, height,
         radius, radius, radius, radius);
+}
+
+typedef struct {
+    double x, y, width, height;
+    size_t side;
+    const uint8_t *bytes;
+} ConNativeCornerTile;
+
+// Only radius/material changes upload tiny tiles. Their coordinates are in the
+// shared parent, so host and header consume one coverage field.
+bool con_terminal_pane_set_coverage(void *host_ptr, const ConNativeCornerTile *tiles, size_t count) {
+    NSView *host = (__bridge NSView *)host_ptr;
+    ConTerminalCanvasClip *clip = objc_getAssociatedObject(host, &kConTerminalPaneClipKey);
+    if (clip == nil || count > 4 || (count > 0 && tiles == NULL)) return false;
+    BOOL unchanged = clip.coverageBytes != nil && clip.coverageBytes.count == count;
+    BOOL sameRaster = unchanged;
+    for (size_t i = 0; i < count; ++i) {
+        ConNativeCornerTile t = tiles[i];
+        if (t.bytes == NULL || t.side == 0 || t.side > 256 || !isfinite(t.x) || !isfinite(t.y) ||
+            !isfinite(t.width) || !isfinite(t.height) || t.width <= 0 || t.height <= 0) return false;
+        NSRect rect = NSMakeRect(t.x, host.superview.bounds.size.height - t.y - t.height, t.width, t.height);
+        if (sameRaster) {
+            NSData *old = clip.coverageBytes[i];
+            sameRaster = old.length == t.side * t.side * 4 && memcmp(old.bytes, t.bytes, old.length) == 0;
+        }
+        unchanged = unchanged && sameRaster && NSEqualRects([clip.coverageRects[i] rectValue], rect);
+    }
+    if (unchanged) return false;
+    if (sameRaster) {
+        NSMutableArray *rects = [NSMutableArray arrayWithCapacity:count];
+        for (size_t i = 0; i < count; ++i) {
+            ConNativeCornerTile t = tiles[i];
+            [rects addObject:[NSValue valueWithRect:NSMakeRect(t.x,
+                host.superview.bounds.size.height - t.y - t.height, t.width, t.height)]];
+        }
+        clip.coverageRects = rects;
+        clip.generation += 1;
+        return true;
+    }
+    NSMutableArray *bytes = [NSMutableArray arrayWithCapacity:count];
+    NSMutableArray *rects = [NSMutableArray arrayWithCapacity:count];
+    for (size_t i = 0; i < count; ++i) {
+        ConNativeCornerTile t = tiles[i];
+        if (t.bytes == NULL || t.side == 0 || t.side > 256 || !isfinite(t.x) || !isfinite(t.y) ||
+            !isfinite(t.width) || !isfinite(t.height) || t.width <= 0 || t.height <= 0) return false;
+        [bytes addObject:[NSData dataWithBytes:t.bytes length:t.side * t.side * 4]];
+        NSRect r = NSMakeRect(t.x, host.superview.bounds.size.height - t.y - t.height, t.width, t.height);
+        [rects addObject:[NSValue valueWithRect:r]];
+    }
+    NSMutableArray *images = [NSMutableArray arrayWithCapacity:count];
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    for (size_t i = 0; i < count; ++i) {
+        CGDataProviderRef provider = CGDataProviderCreateWithCFData((__bridge CFDataRef)bytes[i]);
+        size_t side = tiles[i].side;
+        CGImageRef image = CGImageCreate(side, side, 8, 32, side * 4, space,
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big, provider, NULL, false, kCGRenderingIntentDefault);
+        CGDataProviderRelease(provider);
+        if (image == NULL) { CGColorSpaceRelease(space); return false; }
+        [images addObject:CFBridgingRelease(image)];
+    }
+    CGColorSpaceRelease(space);
+    clip.coverageBytes = bytes;
+    clip.coverageRects = rects;
+    clip.coverageImages = images;
+    clip.generation += 1;
+    return true;
 }
 
 static NSView *con_terminal_parent(NSView *gpui) {
@@ -280,7 +355,7 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
         mask.paneLayer.fillColor = NSColor.blackColor.CGColor;
         objc_setAssociatedObject(host, &kConTerminalCanvasMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } else if (NSEqualRects(mask.rect, rect) && NSEqualRects(mask.bounds, host.bounds) &&
-               mask.radius == clip.radius && mask.scale == scale &&
+               mask.radius == clip.radius && mask.scale == scale && mask.paneGeneration == pane.generation &&
                con_terminal_radii_equal(mask.paneRadii, paneRadii) && NSEqualRects(mask.paneRect, paneRect)) {
         if (clean ? host.layer.mask != nil : (host.layer.mask != mask.layer ||
                 mask.targetLayer != host.layer || mask.layer.mask != (paneMaskNeeded ? mask.paneLayer : nil))) {
@@ -304,6 +379,7 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
     mask.scale = scale;
     mask.paneRadii = paneRadii;
     mask.paneRect = paneRect;
+    mask.paneGeneration = pane.generation;
     if (clean) {
         // Clean mode needs no extra offscreen mask for an already-contained host.
         [CATransaction begin];
@@ -324,6 +400,27 @@ void con_terminal_canvas_apply_clip(void *host_ptr) {
     mask.layer.path = path;
     if (paneMaskNeeded) {
         CGPathRef panePath = con_terminal_corner_path(NSRectToCGRect(paneRect), paneRadii);
+        mask.paneLayer.sublayers = nil;
+        mask.paneLayer.fillRule = kCAFillRuleNonZero;
+        if (pane.coverageImages.count > 0) {
+            CGPathRelease(panePath);
+            CGMutablePathRef sharedPath = CGPathCreateMutable();
+            CGPathAddRect(sharedPath, NULL, NSRectToCGRect(paneRect));
+            for (NSUInteger i = 0; i < pane.coverageImages.count; ++i) {
+                NSRect tileRect = [host convertRect:[pane.coverageRects[i] rectValue] fromView:host.superview];
+                CGPathAddRect(sharedPath, NULL, NSRectToCGRect(tileRect));
+                CALayer *tile = [CALayer layer];
+                tile.frame = tileRect;
+                tile.contents = pane.coverageImages[i];
+                tile.contentsScale = scale;
+                tile.minificationFilter = kCAFilterNearest;
+                tile.magnificationFilter = kCAFilterNearest;
+                tile.actions = @{ @"contents": [NSNull null], @"bounds": [NSNull null], @"position": [NSNull null] };
+                [mask.paneLayer addSublayer:tile];
+            }
+            panePath = sharedPath;
+            mask.paneLayer.fillRule = kCAFillRuleEvenOdd;
+        }
         mask.paneLayer.frame = host.bounds;
         mask.paneLayer.contentsScale = scale;
         mask.paneLayer.path = panePath;

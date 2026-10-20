@@ -215,11 +215,13 @@ impl TerminalPane {
         bounds: Bounds<Pixels>,
         radius: f32,
         header_color: Hsla,
+        chrome_alpha: f32,
         window: &Window,
         cx: &mut App,
     ) {
         self.entity.update(cx, |view, _| {
             view.set_pane_header_color(header_color);
+            view.set_pane_chrome_alpha(chrome_alpha);
             view.set_pane_clip(bounds, radius, window);
         });
     }
