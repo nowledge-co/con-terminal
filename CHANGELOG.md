@@ -16,11 +16,6 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
-**macOS**
-
-- Rounded pane edges render more evenly in dark glass themes.
-  _(PR [#502](https://github.com/nowledge-co/con-terminal/pull/502) by [@wey-gu](https://github.com/wey-gu))_
-
 **Linux**
 
 - Terminal output can be scrolled back. The mouse wheel and touchpad move

@@ -283,3 +283,29 @@ comparison is visibly more even; maintainer acceptance of this new preview is
 still pending. These checks do not certify macOS 27 appearance, transition-frame
 timing, 1x hardware or Windows/Linux runtime behavior. Changed runtime code is
 confined to the macOS-only frame module.
+
+### Maintainer Recheck: Still Not Accepted
+
+The maintainer inspected the shared-mask preview and still reported rough,
+light-leaking corners in the dark theme. They also observed that light-theme
+dark edging and dark-theme bright edging appeared to trade off. This is useful
+cross-theme evidence, not proof of one cause. The earlier local impression of
+improvement and the passing raster tests do not establish a completed fix.
+PR #502 stays in draft; its pending user-facing changelog claim is removed.
+
+The October 20 source audit confirms that both the common and path-sprite
+Metal pipelines in Con's pinned Apple snapshot still add destination alpha
+with factor `One`. The SVG mask uses the common pipeline, so changing its
+rasterization does not correct this known compositing defect. The independent
+GPU readback evidence and its limits are recorded in the October 8 transparency
+postmortem. Official Zed #65571 merged the correction on October 14, but the
+registry index still lists `gpui-pre-apple` 0.3.9, published October 12, as the
+latest package. The October 18 archive audit found that it lacks the correction.
+
+The next informative experiment is a matched renderer A/B changing only the
+two destination-alpha factors, with the same scene, glass, blur and backdrop.
+This is not an assertion that the alpha correction fixes all corner artifacts.
+The existing temporary fork authorization does not include it. A separate
+public experiment branch needs explicit authorization; neither the current
+production pin nor the previously submitted upstream branch should be changed
+to run that comparison.
