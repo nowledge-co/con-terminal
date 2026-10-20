@@ -219,3 +219,31 @@ high-frame-rate acceptance. The maintainer noticed remaining rough dark pane
 edges in this preview and requested that #496/#499 merge first, followed by a
 separate rendering fix before the next release. Do not treat the geometry tests
 or the initial local inspection as acceptance of that outstanding visual issue.
+
+## Follow-up: Dark Corner Antialiasing
+
+The maintainer localized the remaining roughness to pane corners. A separate
+candidate moves only the pane contour inward by one physical pixel and reduces
+its radii by the same amount. Corner centres, native clipping, exterior cutouts,
+glass, blur and the presentation dependency are unchanged. The straight contour
+also moves inward; this is not a corner-only geometry change. Input trays and
+agent composers retain their existing contours. All changed runtime call sites
+are macOS-only.
+
+The pinned quad shader uses a half-physical-pixel coverage threshold. Separating
+the contour from the exterior curve tests whether overlapping coverage ramps
+contribute to the roughness; it does not establish their causal contribution to
+every visible pixel. The candidate adds no layers, timers or full-pane paint.
+
+All 657 linked macOS app tests passed serially, including a geometry regression
+at 1x, 1.5x and 2x. Its first assertion used exact float equality and failed at
+1.5x due to a roughly 0.00001pt rounding difference; the corrected assertion uses
+a 0.0001pt tolerance. No production geometry or test deadline changed to pass it.
+The embedded-assets dev build and formatting/whitespace checks also passed.
+
+Separate baseline/candidate bundles were inspected with the same three-pane
+fixture, surface headers, bottom input tray, 0.82 glass/chrome opacity and blur
+on macOS 15. Light appearance remains quiet, but the dark comparison still has
+visible fine edge artifacts. This experiment is not accepted as the completed
+visual fix and must not be merged or released on geometry tests alone. There is
+no local Windows/Linux, macOS 27, 1x-display or high-frame-rate visual acceptance.

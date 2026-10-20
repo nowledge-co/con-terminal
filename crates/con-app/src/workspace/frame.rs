@@ -64,6 +64,19 @@ pub(crate) fn card_edge(radius: f32, foreground: Hsla, dark: bool) -> gpui::Div 
         foreground.opacity(if dark { 0.12 } else { 0.075 }),
         false,
         true,
+        0.0,
+    )
+}
+
+/// Keep the contour's antialiasing separate from the native clip and exterior
+/// cutout. Each coverage ramp extends half a physical pixel from its curve.
+pub(crate) fn pane_edge(radius: f32, foreground: Hsla, dark: bool) -> gpui::Div {
+    edge(
+        radius,
+        foreground.opacity(if dark { 0.12 } else { 0.075 }),
+        false,
+        true,
+        1.0,
     )
 }
 
@@ -137,10 +150,16 @@ fn window_corner_radius(window: &Window) -> f32 {
 
 /// Shared fine edge with a short, diagonal contact shadow. Never shade native content.
 pub(crate) fn surface_edge(radius: f32, color: Hsla, raised: bool) -> gpui::Div {
-    edge(radius, color, raised, false)
+    edge(radius, color, raised, false, 0.0)
 }
 
-fn edge(radius: f32, color: Hsla, raised: bool, concentric: bool) -> gpui::Div {
+fn edge(
+    radius: f32,
+    color: Hsla,
+    raised: bool,
+    concentric: bool,
+    coverage_inset_pixels: f32,
+) -> gpui::Div {
     use gpui::ParentElement;
     gpui::div().absolute().child(
         gpui::canvas(
@@ -176,6 +195,7 @@ fn edge(radius: f32, color: Hsla, raised: bool, concentric: bool) -> gpui::Div {
                         }
                     }
                 }
+                let (bounds, radii) = inset_contour(bounds, radii, width * coverage_inset_pixels);
                 // Clip before rasterization: a transparent full-window quad
                 // would still shade its interior on every frame.
                 for strip in outline_strips(bounds, radii, width) {
@@ -191,6 +211,20 @@ fn edge(radius: f32, color: Hsla, raised: bool, concentric: bool) -> gpui::Div {
         )
         .absolute()
         .size_full(),
+    )
+}
+
+fn inset_contour(
+    bounds: Bounds<Pixels>,
+    radii: gpui::Corners<Pixels>,
+    inset: Pixels,
+) -> (Bounds<Pixels>, gpui::Corners<Pixels>) {
+    let inset = inset
+        .max(px(0.0))
+        .min(bounds.size.width.min(bounds.size.height) * 0.5);
+    (
+        bounds.inset(inset),
+        radii.map(|radius| (*radius - inset).max(px(0.0))),
     )
 }
 
@@ -657,6 +691,53 @@ pub(crate) fn header_background(color: Hsla) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_contour_keeps_its_coverage_inside_the_native_curve() {
+        let assert_close = |actual: Pixels, expected: Pixels| {
+            assert!(
+                (actual - expected).abs() <= px(0.0001),
+                "{actual:?} != {expected:?}"
+            );
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let bounds = Bounds::new(point(px(5.0), px(5.0)), gpui::size(px(200.0), px(120.0)));
+            let radii = gpui::Corners {
+                top_left: px(11.0),
+                top_right: px(8.0),
+                bottom_right: px(11.0),
+                bottom_left: px(8.0),
+            };
+            let pixel = px(1.0 / scale);
+            let (inner, inner_radii) = inset_contour(bounds, radii, pixel);
+            assert_close(inner.left(), bounds.left() + pixel);
+            assert_close(inner.right(), bounds.right() - pixel);
+            assert_close(
+                inner.top() + inner_radii.top_left,
+                bounds.top() + radii.top_left,
+            );
+            assert_close(
+                inner.left() + inner_radii.top_left,
+                bounds.left() + radii.top_left,
+            );
+            assert_close(
+                inner.right() - inner_radii.bottom_right,
+                bounds.right() - radii.bottom_right,
+            );
+            assert_close(
+                inner.bottom() - inner_radii.bottom_right,
+                bounds.bottom() - radii.bottom_right,
+            );
+            for strip in outline_strips(inner, inner_radii, pixel) {
+                assert!(strip.left() >= inner.left() && strip.right() <= inner.right());
+                assert!(strip.top() >= inner.top() && strip.bottom() <= inner.bottom());
+            }
+        }
+        let tiny = Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(1.0), px(0.5)));
+        let (inner, radii) = inset_contour(tiny, gpui::Corners::all(px(0.0)), px(1.0));
+        assert!(inner.size.width >= px(0.0) && inner.size.height >= px(0.0));
+        assert_eq!(radii, gpui::Corners::all(px(0.0)));
+    }
 
     #[test]
     fn agent_edges_follow_terminal_cards_and_the_visible_input_tray() {
