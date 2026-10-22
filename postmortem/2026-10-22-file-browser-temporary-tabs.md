@@ -43,5 +43,6 @@ Maintainer follow-up on the final implementation:
   title distinction. Light-theme checks also confirmed replacement in place
   and protection of edited files.
 - User-facing workflow and implementation docs were updated. Windows/Linux
-  runtime behavior was not tested locally; their native CI must cover the
-  updated head before merge.
+  native CI now runs the editor test group as well as compiling it. Their
+  runtime behavior was not tested locally; native CI must cover the updated
+  head before merge.
