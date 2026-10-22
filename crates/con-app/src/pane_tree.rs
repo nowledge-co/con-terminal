@@ -2642,6 +2642,7 @@ impl PaneTree {
             .overflow_x_scroll()
             .track_scroll(editor.file_tab_scroll_handle());
         for (index, (name, dirty)) in tabs.into_iter().enumerate() {
+            let temporary = editor.is_temporary_tab(index);
             let is_active = index == active_index;
             let label_color = if is_active {
                 theme.foreground
@@ -2689,12 +2690,15 @@ impl PaneTree {
                 .cursor_pointer()
                 .bg(tab_bg)
                 .hover(move |s| s.bg(hover_bg))
-                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                     cx.stop_propagation();
                     focus_cb_tab(pane_id, window, cx);
                     activate_view.update(cx, |editor, cx| {
                         editor.focus_handle(cx).focus(window, cx);
                         editor.activate_tab_and_emit(index, cx);
+                        if event.click_count == 2 {
+                            editor.keep_tab(index, cx);
+                        }
                     });
                 });
 
@@ -2720,6 +2724,7 @@ impl PaneTree {
                     .line_height(mono_px(theme, 14.0))
                     .font_family(theme.mono_font_family.clone())
                     .font_weight(FontWeight::MEDIUM)
+                    .map(|label| if temporary { label.italic() } else { label })
                     .text_color(label_color)
                     .child(SharedString::from(name)),
             );
@@ -4097,6 +4102,36 @@ mod tests {
                 cx,
             ))
         }
+    }
+
+    #[gpui::test]
+    fn editor_file_tab_double_click_keeps_temporary_file(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        editor.update(cx, |editor, cx| {
+            editor.open_temporary_file("/tmp/con-preview-double-click.png".into(), cx);
+        });
+        let (_root, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone(), false));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let tab = cx.debug_bounds("editor-file-tab").unwrap();
+        cx.simulate_click(tab.center(), Modifiers::default());
+        editor.read_with(cx, |editor, _| assert!(editor.is_temporary_tab(0)));
+        cx.simulate_event(MouseDownEvent {
+            position: tab.center(),
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: Modifiers::default(),
+            first_mouse: false,
+        });
+        cx.simulate_mouse_up(tab.center(), MouseButton::Left, Modifiers::default());
+        editor.read_with(cx, |editor, _| assert!(!editor.is_temporary_tab(0)));
+        editor.update(cx, |editor, cx| {
+            editor.open_temporary_file("/tmp/con-preview-next.png".into(), cx);
+            assert_eq!(editor.tab_count(), 2);
+        });
     }
 
     #[gpui::test]

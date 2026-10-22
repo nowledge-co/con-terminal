@@ -1065,13 +1065,24 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_path_at_in_active_editor(path, None, window, cx);
+        self.open_path_in_active_editor_with_mode(path, None, true, window, cx);
     }
 
     pub(crate) fn open_path_at_in_active_editor(
         &mut self,
         path: PathBuf,
         position: Option<(usize, usize)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_path_in_active_editor_with_mode(path, position, false, window, cx);
+    }
+
+    fn open_path_in_active_editor_with_mode(
+        &mut self,
+        path: PathBuf,
+        position: Option<(usize, usize)>,
+        temporary: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1131,7 +1142,11 @@ impl ConWorkspace {
         self.tabs[active_tab].pane_tree.focus_pane(pane_id);
         let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
         editor_view.update(cx, |editor: &mut EditorView, cx| {
-            editor.open_file_at(path.clone(), position, cx);
+            if temporary {
+                editor.open_temporary_file(path.clone(), cx);
+            } else {
+                editor.open_file_at(path.clone(), position, cx);
+            }
         });
         editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);

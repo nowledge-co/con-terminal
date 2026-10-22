@@ -337,6 +337,8 @@ pub struct EditorTab {
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
     save_enabled: bool,
+    /// A file-browser tab that can be replaced until kept or edited.
+    temporary: bool,
     preview: bool,
     preview_cache: Option<(u64, Arc<ParsedChatMarkdown>)>,
 }
@@ -391,6 +393,7 @@ impl EditorTab {
             image_dimensions: None,
             buffer,
             render_cache: EditorRenderCache::default(),
+            temporary: false,
             save_enabled: true,
             preview: false,
             preview_cache: None,
@@ -412,6 +415,7 @@ impl EditorTab {
             image_dimensions: metadata.dimensions,
             buffer: EditorBuffer::from_text(String::new()),
             render_cache: EditorRenderCache::default(),
+            temporary: false,
             save_enabled: false,
             preview: false,
             preview_cache: None,
@@ -427,6 +431,7 @@ impl EditorTab {
             image_dimensions: None,
             buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
             render_cache: EditorRenderCache::default(),
+            temporary: false,
             save_enabled: false,
             preview: false,
             preview_cache: None,
@@ -619,11 +624,29 @@ impl EditorView {
         position: Option<(usize, usize)>,
         cx: &mut Context<Self>,
     ) {
+        self.open_file_at_with_mode(path, position, false, cx);
+    }
+
+    /// File-browser navigation reuses the unkept tab; explicit opens stay permanent.
+    pub fn open_temporary_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_file_at_with_mode(path, None, true, cx);
+    }
+
+    fn open_file_at_with_mode(
+        &mut self,
+        path: PathBuf,
+        position: Option<(usize, usize)>,
+        temporary: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.open_generation = self.open_generation.wrapping_add(1);
         let generation = self.open_generation;
         if let Some(index) = self.tabs.iter().position(|tab| {
             tab.path == path || tab.path.canonicalize().ok().as_ref() == Some(&path)
         }) {
+            if !temporary {
+                self.tabs[index].temporary = false;
+            }
             self.active_tab = index;
             self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
@@ -640,7 +663,12 @@ impl EditorView {
         // `IMAGE_SIZE_LIMIT`, or images whose headers declare too many pixels,
         // are refused up front so GPUI never decodes a huge RGBA buffer.
         if editor_syntax::is_image_path(&path) {
-            let apply = self.open_file_from_image_with_activation(path, true);
+            let apply = if temporary {
+                let metadata = ImageMetadata::inspect(&path);
+                self.open_temporary_tab(EditorTab::image(path, metadata))
+            } else {
+                self.open_file_from_image_with_activation(path, true)
+            };
             if apply.active_file_changed {
                 cx.emit(ActiveFileChanged);
             }
@@ -656,13 +684,24 @@ impl EditorView {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 let activate = this.open_generation == generation;
+                // Superseded browser clicks must not leave background tabs behind.
+                if temporary && !activate {
+                    return;
+                }
                 match content {
                     Ok(content) => {
-                        let apply = this.open_file_from_content_with_activation(
-                            path.clone(),
-                            content,
-                            activate,
-                        );
+                        let apply = if temporary {
+                            this.open_temporary_tab(EditorTab::new(
+                                path.clone(),
+                                EditorBuffer::from_text(content),
+                            ))
+                        } else {
+                            this.open_file_from_content_with_activation(
+                                path.clone(),
+                                content,
+                                activate,
+                            )
+                        };
                         this.ensure_lsp_for_path(&path);
                         if activate {
                             this.reveal_source_position(position);
@@ -672,11 +711,11 @@ impl EditorView {
                         }
                     }
                     Err(error) => {
-                        let apply = this.open_file_read_error_with_activation(
-                            path.clone(),
-                            error,
-                            activate,
-                        );
+                        let apply = if temporary {
+                            this.open_temporary_tab(EditorTab::read_error(path.clone(), error))
+                        } else {
+                            this.open_file_read_error_with_activation(path.clone(), error, activate)
+                        };
                         if apply.active_file_changed {
                             cx.emit(ActiveFileChanged);
                         }
@@ -776,6 +815,61 @@ impl EditorView {
         apply
     }
 
+    fn open_temporary_tab(&mut self, mut tab: EditorTab) -> LoadedFileApply {
+        let replaced_path = self
+            .tabs
+            .iter()
+            .find(|tab| tab.temporary && !tab.buffer.is_dirty())
+            .map(|tab| tab.path.clone());
+        tab.temporary = true;
+        let apply = Self::apply_loaded_file_tab(
+            &mut self.tabs,
+            &mut self.active_tab,
+            tab.path.clone(),
+            true,
+            false,
+            |_| tab,
+        );
+        if let Some(path) = replaced_path
+            && !self.tabs.iter().any(|tab| tab.path == path)
+        {
+            self.forget_file(&path);
+        }
+        if apply.activated {
+            self.file_tab_reveal_pending = true;
+            self.dirty_close_blocked_tab = None;
+            self.scroll_handle = UniformListScrollHandle::new();
+            self.preview_scroll_handle = ScrollHandle::new();
+            self.selection_anchor = None;
+            self.pending_source_scroll = None;
+            // A later reopen of the same path must not accept an old Markdown parse.
+            self.preview_parse_generation = self.preview_parse_generation.wrapping_add(1);
+            self.preview_parse_task = None;
+            self.preview_parse_pending = None;
+        }
+        apply
+    }
+
+    fn forget_file(&mut self, path: &Path) {
+        self.lsp_clients.remove(path);
+        self.lsp_diagnostics.remove(path);
+        self.lsp_change_generations.remove(path);
+        self.lsp_change_debounce_tasks.remove(path);
+    }
+
+    pub fn is_temporary_tab(&self, index: usize) -> bool {
+        self.tabs
+            .get(index)
+            .is_some_and(|tab| tab.temporary && !tab.buffer.is_dirty())
+    }
+
+    pub fn keep_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.temporary = false;
+            cx.notify();
+        }
+    }
+
     fn apply_loaded_file_tab(
         tabs: &mut Vec<EditorTab>,
         active_tab: &mut usize,
@@ -796,8 +890,21 @@ impl EditorView {
                 activated = true;
             }
         } else {
-            let index = tabs.len();
-            tabs.push(make_tab(path));
+            let tab = make_tab(path);
+            let index = if tab.temporary {
+                tabs.iter()
+                    .position(|tab| tab.temporary && !tab.buffer.is_dirty())
+            } else {
+                None
+            };
+            let index = if let Some(index) = index {
+                tabs[index] = tab;
+                index
+            } else {
+                let index = tabs.len();
+                tabs.push(tab);
+                index
+            };
             if activate || old_active_path.is_none() {
                 *active_tab = index;
                 activated = true;
@@ -1064,10 +1171,7 @@ impl EditorView {
         self.open_generation = self.open_generation.wrapping_add(1);
         let closed_path = self.tabs[self.active_tab].path.clone();
         self.tabs.remove(self.active_tab);
-        self.lsp_clients.remove(&closed_path);
-        self.lsp_diagnostics.remove(&closed_path);
-        self.lsp_change_generations.remove(&closed_path);
-        self.lsp_change_debounce_tasks.remove(&closed_path);
+        self.forget_file(&closed_path);
         if self.tabs.is_empty() {
             self.active_tab = 0;
             self.scroll_handle = UniformListScrollHandle::new();
@@ -1459,6 +1563,11 @@ impl EditorView {
     }
 
     fn notify_lsp_active_did_change(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.active_tab_mut()
+            && tab.buffer.is_dirty()
+        {
+            tab.temporary = false;
+        }
         let Some(path) = self.active_tab_ref().map(|tab| tab.path.clone()) else {
             return;
         };
@@ -1690,6 +1799,7 @@ impl EditorView {
                 ));
             }
             tab.buffer.save_to(&tab.path)?;
+            tab.temporary = false;
             tab.path.clone()
         };
         self.dirty_close_blocked_tab = None;
@@ -2274,6 +2384,137 @@ mod tests {
     use super::*;
     use gpui::AppContext as _;
     use std::path::Path;
+
+    #[gpui::test]
+    fn temporary_tabs_replace_in_place_and_kept_tabs_survive(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_temporary_tab(EditorTab::new(
+                "first.txt".into(),
+                EditorBuffer::from_text("first"),
+            ));
+            view.open_file_from_content_with_activation("kept.txt".into(), "kept".into(), true);
+            view.lsp_diagnostics.insert("first.txt".into(), Vec::new());
+            let parse_generation = view.preview_parse_generation;
+            view.preview_parse_pending = Some(("first.txt".into(), 0));
+            view.open_temporary_tab(EditorTab::new(
+                "second.txt".into(),
+                EditorBuffer::from_text("second"),
+            ));
+            assert_eq!(view.tab_count(), 2);
+            assert_eq!(view.active_tab_index(), 0);
+            assert_eq!(view.tabs[0].buffer.text(), "second");
+            assert!(!view.lsp_diagnostics.contains_key(Path::new("first.txt")));
+            assert!(view.preview_parse_pending.is_none());
+            assert_ne!(view.preview_parse_generation, parse_generation);
+            assert!(view.is_temporary_tab(0));
+            view.keep_tab(0, cx);
+            view.open_temporary_tab(EditorTab::new(
+                "third.txt".into(),
+                EditorBuffer::from_text("third"),
+            ));
+            assert_eq!(view.tab_count(), 3);
+            assert_eq!(view.tabs[0].path, PathBuf::from("second.txt"));
+            assert!(!view.is_temporary_tab(0));
+            assert!(view.is_temporary_tab(2));
+            view.close_tab(2, cx);
+            view.open_temporary_tab(EditorTab::new(
+                "fourth.txt".into(),
+                EditorBuffer::from_text("fourth"),
+            ));
+            assert_eq!(view.tab_count(), 3);
+            assert_eq!(view.active_tab_index(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn editing_temporary_tab_keeps_it_even_after_undo(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_temporary_tab(EditorTab::new(
+                "first.txt".into(),
+                EditorBuffer::from_text("first"),
+            ));
+            view.insert_text("edited", cx);
+            assert!(!view.is_temporary_tab(0));
+            assert!(view.undo(cx));
+            assert!(!view.tabs[0].buffer.is_dirty());
+            view.open_temporary_tab(EditorTab::new(
+                "second.txt".into(),
+                EditorBuffer::from_text("second"),
+            ));
+            assert_eq!(view.tab_count(), 2);
+            assert_eq!(view.tabs[0].buffer.text(), "first");
+        });
+    }
+
+    #[gpui::test]
+    fn temporary_open_reuses_kept_file_without_replacing_another_preview(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| view.open_file(first.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| view.open_temporary_file(second.clone(), cx));
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            view.open_temporary_file(first.clone(), cx);
+            assert_eq!(view.tab_count(), 2);
+            assert_eq!(view.active_tab_index(), 0);
+            assert!(!view.is_temporary_tab(0));
+            assert!(view.is_temporary_tab(1));
+            // Explicit open promotes the existing temporary tab.
+            view.open_file(second, cx);
+            assert!(!view.is_temporary_tab(1));
+        });
+    }
+
+    #[gpui::test]
+    fn rapid_temporary_opens_discard_stale_reads(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_temporary_file(first, cx);
+            view.open_temporary_file(second.clone(), cx);
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.tab_count(), 1);
+            assert_eq!(view.active_path(), Some(second.as_path()));
+            assert!(view.is_temporary_tab(0));
+        });
+    }
+
+    #[gpui::test]
+    fn temporary_images_and_read_errors_share_the_preview_slot(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_temporary_file("/tmp/con-preview-image.png".into(), cx)
+        });
+        view.update(cx, |view, cx| {
+            assert_eq!(view.tabs[0].kind, EditorTabKind::Image);
+            assert!(view.is_temporary_tab(0));
+            view.open_temporary_file("/nonexistent/con-preview-missing.txt".into(), cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert_eq!(view.tab_count(), 1);
+            assert!(!view.tabs[0].save_enabled);
+            assert!(view.is_temporary_tab(0));
+            view.open_temporary_file("/tmp/con-preview-image-2.png".into(), cx);
+            assert_eq!(view.tab_count(), 1);
+            assert_eq!(view.tabs[0].kind, EditorTabKind::Image);
+        });
+    }
 
     #[gpui::test]
     fn tab_summaries_follow_buffer_dirty_state_and_tab_lifecycle(cx: &mut gpui::TestAppContext) {
