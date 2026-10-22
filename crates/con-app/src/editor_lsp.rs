@@ -483,7 +483,7 @@ impl DiagnosticSeverity {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn language_server_for_path_recognizes_common_code_files() {
@@ -565,16 +565,16 @@ mod tests {
             command: "rust-analyzer",
             args: &[],
         };
-        let path = Path::new("/tmp/main.rs");
+        let path = std::env::temp_dir().join("main.rs");
 
         assert_eq!(
-            initialize_message(path)
+            initialize_message(&path)
                 .get("method")
                 .and_then(|m| m.as_str()),
             Some("initialize")
         );
         assert_eq!(
-            did_open_message(path, &spec, "fn main() {}")
+            did_open_message(&path, &spec, "fn main() {}")
                 .get("method")
                 .and_then(|m| m.as_str()),
             Some("textDocument/didOpen")
@@ -583,7 +583,7 @@ mod tests {
 
     #[test]
     fn diagnostics_from_publish_notification_extracts_file_diagnostics() {
-        let path = PathBuf::from("/tmp/con editor/sample.rs");
+        let path = std::env::temp_dir().join("con editor").join("sample.rs");
         let uri = url::Url::from_file_path(&path).unwrap().to_string();
         let message = json!({
             "jsonrpc": "2.0",

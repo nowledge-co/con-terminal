@@ -3246,15 +3246,10 @@ mod tests {
 
     #[test]
     fn image_file_size_and_limit_boundaries() {
-        let dir = std::env::temp_dir().join(format!(
-            "con-editor-size-test-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("")
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let small = dir.join("small.png");
-        let boundary = dir.join("boundary.png");
-        let large = dir.join("large.png");
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("small.png");
+        let boundary = dir.path().join("boundary.png");
+        let large = dir.path().join("large.png");
         std::fs::write(&small, [0u8; 4]).unwrap();
         std::fs::write(&boundary, [0u8; 8]).unwrap();
         // Sparse file: length says 1024 bytes, nothing is written to disk.
@@ -3266,12 +3261,10 @@ mod tests {
         assert_eq!(image_file_size(&small), Some(4));
         assert_eq!(image_file_size(&boundary), Some(8));
         assert_eq!(image_file_size(&large), Some(1024));
-        assert_eq!(image_file_size(&dir.join("missing.png")), None);
+        assert_eq!(image_file_size(&dir.path().join("missing.png")), None);
         assert!(!image_exceeds_size_limit(Some(IMAGE_SIZE_LIMIT)));
         assert!(image_exceeds_size_limit(Some(IMAGE_SIZE_LIMIT + 1)));
         assert!(!image_exceeds_size_limit(None));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

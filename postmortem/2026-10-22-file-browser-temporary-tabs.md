@@ -46,3 +46,6 @@ Maintainer follow-up on the final implementation:
   native CI now runs the editor test group as well as compiling it. Their
   runtime behavior was not tested locally; native CI must cover the updated
   head before merge.
+- Shared test fixtures now use native absolute paths and a unique temporary
+  directory rather than `/tmp` URI inputs or thread names containing `::`,
+  which are not valid directory names on Windows.
