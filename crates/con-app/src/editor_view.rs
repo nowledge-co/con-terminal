@@ -504,6 +504,12 @@ struct LoadedFileApply {
     active_file_changed: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FileOpenMode {
+    Kept,
+    Temporary,
+}
+
 pub struct EditorView {
     tabs: Vec<EditorTab>,
     active_tab: usize,
@@ -624,21 +630,22 @@ impl EditorView {
         position: Option<(usize, usize)>,
         cx: &mut Context<Self>,
     ) {
-        self.open_file_at_with_mode(path, position, false, cx);
+        self.open_file_at_with_mode(path, position, FileOpenMode::Kept, cx);
     }
 
     /// File-browser navigation reuses the unkept tab; explicit opens stay permanent.
     pub fn open_temporary_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.open_file_at_with_mode(path, None, true, cx);
+        self.open_file_at_with_mode(path, None, FileOpenMode::Temporary, cx);
     }
 
     fn open_file_at_with_mode(
         &mut self,
         path: PathBuf,
         position: Option<(usize, usize)>,
-        temporary: bool,
+        mode: FileOpenMode,
         cx: &mut Context<Self>,
     ) {
+        let temporary = mode == FileOpenMode::Temporary;
         self.open_generation = self.open_generation.wrapping_add(1);
         let generation = self.open_generation;
         if let Some(index) = self.tabs.iter().position(|tab| {
@@ -761,6 +768,7 @@ impl EditorView {
             path,
             activate,
             false,
+            FileOpenMode::Kept,
             |path| EditorTab::new(path, EditorBuffer::from_text(content)),
         );
         if apply.activated {
@@ -783,6 +791,7 @@ impl EditorView {
             path,
             activate,
             false,
+            FileOpenMode::Kept,
             |path| EditorTab::image(path, metadata),
         );
         if apply.activated {
@@ -805,6 +814,7 @@ impl EditorView {
             path,
             activate,
             activate,
+            FileOpenMode::Kept,
             |path| EditorTab::read_error(path, error),
         );
         if apply.activated {
@@ -815,19 +825,19 @@ impl EditorView {
         apply
     }
 
-    fn open_temporary_tab(&mut self, mut tab: EditorTab) -> LoadedFileApply {
+    fn open_temporary_tab(&mut self, tab: EditorTab) -> LoadedFileApply {
         let replaced_path = self
             .tabs
             .iter()
             .find(|tab| tab.temporary && !tab.buffer.is_dirty())
             .map(|tab| tab.path.clone());
-        tab.temporary = true;
         let apply = Self::apply_loaded_file_tab(
             &mut self.tabs,
             &mut self.active_tab,
             tab.path.clone(),
             true,
             false,
+            FileOpenMode::Temporary,
             |_| tab,
         );
         if let Some(path) = replaced_path
@@ -876,6 +886,7 @@ impl EditorView {
         path: PathBuf,
         activate: bool,
         replace_existing: bool,
+        mode: FileOpenMode,
         make_tab: impl FnOnce(PathBuf) -> EditorTab,
     ) -> LoadedFileApply {
         let old_active_path = tabs.get(*active_tab).map(|tab| tab.path.clone());
@@ -884,13 +895,19 @@ impl EditorView {
         if let Some(index) = tabs.iter().position(|tab| tab.path == path) {
             if replace_existing {
                 tabs[index] = make_tab(path);
+                tabs[index].temporary = mode == FileOpenMode::Temporary;
+            } else if mode == FileOpenMode::Kept {
+                // A permanent read may finish after a newer temporary read of
+                // this path. Keep the retained buffer rather than replacing it.
+                tabs[index].temporary = false;
             }
             if activate {
                 *active_tab = index;
                 activated = true;
             }
         } else {
-            let tab = make_tab(path);
+            let mut tab = make_tab(path);
+            tab.temporary = mode == FileOpenMode::Temporary;
             let index = if tab.temporary {
                 tabs.iter()
                     .position(|tab| tab.temporary && !tab.buffer.is_dirty())
@@ -981,8 +998,12 @@ impl EditorView {
     }
 
     pub fn activate_tab(&mut self, index: usize) {
-        if index < self.tabs.len() && self.active_tab != index {
-            self.open_generation = self.open_generation.wrapping_add(1);
+        if index >= self.tabs.len() {
+            return;
+        }
+        // Reselecting the current tab is also an explicit navigation choice.
+        self.open_generation = self.open_generation.wrapping_add(1);
+        if self.active_tab != index {
             self.active_tab = index;
             self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
@@ -2495,6 +2516,76 @@ mod tests {
     }
 
     #[gpui::test]
+    fn permanent_read_completion_keeps_an_existing_temporary_tab(cx: &mut gpui::TestAppContext) {
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, _cx| {
+            // A newer browser selection can finish reading the same path before
+            // an earlier permanent open. Keep its existing buffer, but pin it.
+            view.open_temporary_tab(EditorTab::new(
+                "first.txt".into(),
+                EditorBuffer::from_text("newer content"),
+            ));
+            view.open_file_from_content_with_activation(
+                "first.txt".into(),
+                "older content".into(),
+                false,
+            );
+            assert!(!view.is_temporary_tab(0));
+            assert_eq!(view.tabs[0].buffer.text(), "newer content");
+            view.open_temporary_tab(EditorTab::new(
+                "second.txt".into(),
+                EditorBuffer::from_text("second"),
+            ));
+            assert_eq!(view.tab_count(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn reselecting_current_tab_cancels_a_pending_temporary_open(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let second = dir.path().join("second.txt");
+        std::fs::write(&second, "second").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, cx| {
+            view.open_temporary_tab(EditorTab::new(
+                "first.txt".into(),
+                EditorBuffer::from_text("first"),
+            ));
+            view.open_temporary_file(second, cx);
+            view.activate_tab_and_emit(0, cx);
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.tab_count(), 1);
+            assert_eq!(view.active_path(), Some(Path::new("first.txt")));
+            assert_eq!(view.tabs[0].buffer.text(), "first");
+        });
+    }
+
+    #[gpui::test]
+    fn saving_an_unedited_temporary_file_keeps_it(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        std::fs::write(&first, "saved content").unwrap();
+        let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
+        view.update(cx, |view, _cx| {
+            view.open_temporary_tab(EditorTab::new(
+                first.clone(),
+                EditorBuffer::from_text("saved content"),
+            ));
+            assert_eq!(view.save_active().unwrap(), Some(first.clone()));
+            view.open_temporary_tab(EditorTab::new(
+                dir.path().join("second.txt"),
+                EditorBuffer::from_text("second"),
+            ));
+            assert_eq!(view.tab_count(), 2);
+            assert!(!view.is_temporary_tab(0));
+            assert!(view.is_temporary_tab(1));
+            assert_eq!(std::fs::read_to_string(&first).unwrap(), "saved content");
+        });
+    }
+
+    #[gpui::test]
     fn temporary_images_and_read_errors_share_the_preview_slot(cx: &mut gpui::TestAppContext) {
         let view = cx.new(|cx| EditorView::new_with_font_size(EDITOR_FONT_SIZE, cx));
         view.update(cx, |view, cx| {
@@ -3530,6 +3621,7 @@ mod tests {
             PathBuf::from("src/pending.rs"),
             false,
             false,
+            FileOpenMode::Kept,
             |path| EditorTab::new(path, EditorBuffer::from_text("pending")),
         );
 
@@ -3560,6 +3652,7 @@ mod tests {
             PathBuf::from("src/new.rs"),
             true,
             false,
+            FileOpenMode::Kept,
             |path| EditorTab::new(path, EditorBuffer::from_text("new")),
         );
 
