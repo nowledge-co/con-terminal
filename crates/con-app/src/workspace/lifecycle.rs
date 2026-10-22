@@ -1068,6 +1068,7 @@ impl ConWorkspace {
         self.open_path_in_active_editor_with_mode(path, None, true, window, cx);
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn open_path_at_in_active_editor(
         &mut self,
         path: PathBuf,
