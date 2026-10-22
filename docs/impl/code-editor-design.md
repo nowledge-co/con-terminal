@@ -185,6 +185,25 @@ inline images use, so a file shown in both places decodes once.
 - The viewer never edits the file: no save button, no dirty state, closing
   follows the normal tab flow.
 
+## Temporary file tabs
+
+File-browser rows and search results use a temporary file tab in the editor
+pane. Each pane has at most one replaceable tab. A temporary title is italic;
+double-clicking the tab, editing its buffer or successfully saving makes it
+permanent. Undoing an edit does not make the tab replaceable again. Temporary
+file tabs are independent of the Markdown source/preview toggle.
+
+Replacement keeps the tab's position and releases its old LSP resources, text
+selection and pending Markdown parsing. Dirty buffers are never replaced, even
+if their temporary flag has not yet been updated. Images and read-error tabs
+use the same temporary slot.
+
+Asynchronous browser reads must still match the latest navigation generation
+when they finish. Selecting a file tab cancels a pending browser navigation,
+even when selecting the already-active tab. Explicit opens remain permanent:
+their completion must also keep an existing temporary tab for the same file
+without replacing its buffer or stealing focus from a newer selection.
+
 ## Open in Editor Tab
 
 Each file row in the file explorer shows an "open in editor tab" icon (arrow-square-out phosphor icon) on hover. Directories do not show the icon — only files.
