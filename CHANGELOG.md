@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.152` - 2026-10-23
+
+### Added
+
+**Files**
+
+- Middle-click a file tab to close it, including inactive tabs. Unsaved changes
+  receive the same protection as when using the close button.
+  _(PR [#512](https://github.com/nowledge-co/con-terminal/pull/512) by [@frostming](https://github.com/frostming))_
+
 ## `v0.1.0-beta.151` - 2026-10-23
 
 ### Fixed
