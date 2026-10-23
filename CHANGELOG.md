@@ -4,6 +4,37 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.153` - 2026-10-23
+
+Includes the changes from the cancelled beta.151 and beta.152 release attempts.
+
+### Added
+
+**Files**
+
+- Middle-click a file tab to close it, including inactive tabs. Unsaved changes
+  receive the same protection as when using the close button.
+  _(PR [#512](https://github.com/nowledge-co/con-terminal/pull/512) by [@frostming](https://github.com/frostming))_
+
+### Fixed
+
+**Settings**
+
+- Closing Settings now leaves window destruction to the native close handler,
+  avoiding premature teardown during the close decision. Unsaved-change
+  confirmation and keyboard dismissal keep their existing behavior.
+  _(PR [#515](https://github.com/nowledge-co/con-terminal/pull/515) by [@wey-gu](https://github.com/wey-gu))_
+- Font selectors use the available width and show the complete selected font
+  name below the control, wrapping when needed.
+  _(PR [#515](https://github.com/nowledge-co/con-terminal/pull/515) by [@wey-gu](https://github.com/wey-gu))_
+
+**Panes**
+
+- Rename Current Surface now shows an inline name field even in an unnamed
+  terminal pane. Typing stays in the name field after the command palette closes;
+  Enter and Escape return focus to the terminal.
+  _(PR [#509](https://github.com/nowledge-co/con-terminal/pull/509) by [@Nitjsefnie](https://github.com/Nitjsefnie); integration [#511](https://github.com/nowledge-co/con-terminal/pull/511) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.152` - 2026-10-23
 
 ### Added
