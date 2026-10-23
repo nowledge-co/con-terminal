@@ -378,7 +378,10 @@ impl Render for SidebarSearchView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |_this, _: &MouseDownEvent, _window, cx| {
-                                cx.emit(OpenFile { path: path.clone() });
+                                cx.emit(OpenFile {
+                                    path: path.clone(),
+                                    keep_open: false,
+                                });
                             }),
                         )
                         .child(

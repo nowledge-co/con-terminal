@@ -4706,6 +4706,34 @@ mod tests {
         assert_eq!(tree.zoomed_pane_id(), Some(1));
     }
 
+    #[gpui::test]
+    fn closing_zoomed_editor_restores_survivors_to_the_entire_tree_bounds(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        let mut tree = simple_two_pane_tree();
+        tree.root = PaneNode::Split {
+            split_id: 0,
+            direction: SplitDirection::Horizontal,
+            first: Box::new(empty_leaf(0)),
+            second: Box::new(PaneNode::Leaf {
+                id: 1,
+                content: PaneContent::Editor { view: editor },
+            }),
+            ratio: 0.5,
+        };
+        tree.focus_pane(1);
+        assert!(tree.toggle_zoom_focused());
+        assert!(tree.close_pane(1));
+        assert_eq!(tree.zoomed_pane_id(), None);
+        let bounds = Bounds {
+            origin: point(px(12.0), px(28.0)),
+            size: size(px(800.0), px(600.0)),
+        };
+        assert_eq!(tree.pane_bounds(bounds), vec![(0, bounds)]);
+        assert_eq!(tree.focused_pane_id(), 0);
+    }
+
     #[::core::prelude::v1::test]
     fn merge_tree_assigns_unique_split_ids() {
         let mut target = simple_two_pane_tree();

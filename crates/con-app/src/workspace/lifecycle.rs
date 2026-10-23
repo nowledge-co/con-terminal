@@ -600,7 +600,13 @@ impl ConWorkspace {
             &file_tree_entity,
             window,
             |this, _tree, event: &OpenFile, window, cx| {
-                this.open_path_in_active_editor(event.path.clone(), window, cx);
+                this.open_path_in_active_editor_with_mode(
+                    event.path.clone(),
+                    None,
+                    !event.keep_open,
+                    window,
+                    cx,
+                );
             },
         )
         .detach();
@@ -1151,9 +1157,7 @@ impl ConWorkspace {
         });
         editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);
-        if self.vertical_tabs_enabled() {
-            self.sync_sidebar(cx);
-        }
+        self.sync_sidebar(cx);
         cx.notify();
     }
 

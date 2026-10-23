@@ -849,6 +849,7 @@ impl ConWorkspace {
         }
 
         let pane_count = self.tabs[tab_idx].pane_tree.pane_count();
+        let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         let pane_tree = &mut self.tabs[tab_idx].pane_tree;
 
         if let Some(editor_view) = pane_tree.editor_view_for_pane(pane_id) {
@@ -919,21 +920,24 @@ impl ConWorkspace {
             if tab_is_visible {
                 let surviving_terminals: Vec<TerminalPane> =
                     pane_tree.all_terminals().into_iter().cloned().collect();
-                if let Some(terminal) = surviving_terminals.first() {
+                if let Some(terminal) = pane_tree.try_focused_terminal() {
                     terminal.ensure_surface(window, cx);
                     terminal.focus(window, cx);
                 } else {
-                    // No terminals left — keep keyboard focus on workspace
-                    self.workspace_focus.clone().focus(window, cx);
+                    self.focus_active_editor_or_workspace(window, cx);
                 }
                 for terminal in &surviving_terminals {
                     terminal.notify(cx);
                 }
+                #[cfg(target_os = "macos")]
+                self.mark_active_tab_terminal_native_layout_pending(cx);
+                self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                    was_zoomed, window, cx,
+                );
                 self.sync_active_terminal_focus_states(cx);
             }
-            if self.vertical_tabs_enabled() {
-                self.sync_sidebar(cx);
-            }
+            self.sync_sidebar(cx);
+            self.save_session(cx);
             cx.notify();
             return true;
         }
@@ -995,9 +999,7 @@ impl ConWorkspace {
             self.sync_active_terminal_focus_states(cx);
         }
 
-        if self.vertical_tabs_enabled() {
-            self.sync_sidebar(cx);
-        }
+        self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
         true
