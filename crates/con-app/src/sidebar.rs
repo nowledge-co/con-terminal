@@ -1914,31 +1914,17 @@ impl SessionSidebar {
         let tab_bounds = self.tab_bounds.clone();
 
         let icon_size = px(layout.icon_size);
-        let group_width = crate::assets::tab_identity_group_width(
-            session.identity_icons().len(),
-            icon_size,
-            layout.compact,
-        );
         let identity_width = if layout.compact {
             px(32.0)
         } else {
-            group_width.max(px(32.0))
+            crate::assets::tab_identity_group_width(2, icon_size, false).max(px(32.0))
         };
-        let label_left = layout.icon_center_x
-            + layout.icon_size * 0.5
-            + 8.0
-            + if layout.compact {
-                0.0
-            } else {
-                (group_width - icon_size).as_f32().max(0.0)
-            };
+        // A shared leading well keeps every title on one column, regardless of
+        // how many distinct applications the row happens to contain.
+        let label_left = layout.icon_center_x + identity_width.as_f32() * 0.5 + 8.0;
         let mut icon_stack = div()
             .absolute()
-            .left(if layout.compact {
-                px(layout.icon_center_x - 16.0)
-            } else {
-                px(layout.icon_center_x) - icon_size * 0.5 - (identity_width - group_width) * 0.5
-            })
+            .left(px(layout.icon_center_x) - identity_width * 0.5)
             .top(px((row_h - 32.0) * 0.5))
             .w(identity_width)
             .h(px(32.0))
@@ -3246,6 +3232,20 @@ mod tests {
         assert!(cx.debug_bounds("tab-status-brand").is_some());
         assert!(rendered_rings(&view, cx).is_empty());
         assert_eq!(busy_title, cx.debug_bounds("sidebar-session-name").unwrap());
+        for icons in [
+            vec!["tab-terminal-refined.png", "tab-code.png"],
+            vec!["tab-terminal-refined.png", "tab-code.png", "tab-file.png"],
+        ] {
+            view.update(cx, |sidebar, cx| {
+                sidebar.sessions[0].pane_icons = icons;
+                cx.notify();
+            });
+            assert_eq!(
+                busy_title,
+                cx.debug_bounds("sidebar-session-name").unwrap(),
+                "single-app and multi-app titles must share one column"
+            );
+        }
     }
 
     #[gpui::test]

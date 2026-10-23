@@ -94,11 +94,14 @@ physical-pixel-sized preview cache. Do not decode or resize them during paint,
 read them from the filesystem at runtime, or apply translucent glyph opacity.
 Multi-pane tabs retain a deduplicated identity list from each pane's active
 content. Normalize asset aliases before deduplication; inactive surfaces are not
-additional panes. Keep the primary app at full size in front of a bounded fan
-of secondary cards: at most two behind it in expanded navigation, one in compact
-navigation. Center the cards vertically and reserve the group's actual width
-before the title. Opaque, theme-matched backing separates their transparent
-silhouettes; never stamp a count over their ink. Prefer the tab's current identity
+additional panes. Show one full-size primary app and one smaller, upper-leading
+secondary identity. Keep both whole silhouettes: no cropped fragments, extra
+backing rectangles or overprinted counts. Spread the pair slightly farther in
+expanded navigation than in compact navigation, keeping overlap below half of
+the secondary icon. Reserve the group's actual width before the title; additional
+apps do not grow the group. Expanded sidebar rows share a leading well sized
+for the pair, so titles stay on one column even when neighboring tabs have one
+app. Keep original asset alpha and color. Prefer the tab's current identity
 as primary only when it is present in the real pane identities; preserve the
 remaining layout order. The hover card shows the full deduplicated set without
 layering. Status remains one marker

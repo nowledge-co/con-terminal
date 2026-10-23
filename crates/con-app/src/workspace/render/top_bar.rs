@@ -84,7 +84,6 @@ fn tab_menu_row(
                     ui_icon_px(theme, 16.0),
                     theme.foreground,
                     false,
-                    theme.popover,
                 )),
         )
         .child(div().flex_1().min_w_0().truncate().child(title))

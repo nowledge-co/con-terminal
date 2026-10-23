@@ -179,11 +179,7 @@ impl TabActivity {
                     .h(icon_size)
                     .flex_shrink_0()
                     .child(crate::assets::tab_identity_group(
-                        icons,
-                        icon_size,
-                        color,
-                        compact,
-                        theme.title_bar,
+                        icons, icon_size, color, compact,
                     )),
             );
         }
