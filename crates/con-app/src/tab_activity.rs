@@ -126,9 +126,22 @@ impl TabActivity {
 
     /// Keeps the caller's original icon slot. Compact working states retain the
     /// brand inside a ring; expanded busy states use the shared three-bar loader.
+    #[cfg(test)]
     pub(crate) fn icon(
         &self,
         icon: &'static str,
+        size: Pixels,
+        color: Hsla,
+        status: Option<Status>,
+        theme: &gpui_component::Theme,
+        compact: bool,
+    ) -> AnyElement {
+        self.icon_group(&[icon], size, color, status, theme, compact)
+    }
+
+    pub(crate) fn icon_group(
+        &self,
+        icons: &[&'static str],
         size: Pixels,
         color: Hsla,
         status: Option<Status>,
@@ -146,6 +159,8 @@ impl TabActivity {
         let active = visual != ActivityVisual::None;
         let slot_size = if compact { px(32.0) } else { size };
         let icon_size = if compact { size.min(px(18.0)) } else { size };
+        let group_width = crate::assets::tab_identity_group_width(icons.len(), icon_size, compact);
+        let group_height = crate::assets::tab_identity_group_height(icons.len(), icon_size);
         let mut slot = div()
             .debug_selector(|| "tab-status-slot".into())
             .relative()
@@ -153,16 +168,20 @@ impl TabActivity {
             .items_center()
             .justify_center()
             .flex_shrink_0()
-            .size(slot_size);
+            .w(if compact { slot_size } else { group_width })
+            .h(if compact { slot_size } else { group_height });
         if !active
             || (compact && matches!(visual, ActivityVisual::Busy | ActivityVisual::Progress(_)))
         {
             slot = slot.child(
                 div()
                     .debug_selector(|| "tab-status-brand".into())
-                    .size(icon_size)
+                    .w(group_width)
+                    .h(group_height)
                     .flex_shrink_0()
-                    .child(crate::assets::tab_identity_icon(icon, icon_size, color)),
+                    .child(crate::assets::tab_identity_group(
+                        icons, icon_size, color, compact, theme,
+                    )),
             );
         }
         if active {
@@ -187,7 +206,7 @@ impl TabActivity {
                     .into_any_element();
             }
             let ring_size = if compact {
-                px(24.0)
+                px(if icons.len() > 1 { 32.0 } else { 24.0 })
             } else {
                 slot_size.min(px(18.0))
             };

@@ -210,7 +210,9 @@ impl Render for ConWorkspace {
                 .is_empty();
         let needs_ghostty_hidden = false;
 
-        if self.modal_was_open && !is_modal_open {
+        // A palette action can hand focus to a newly opened inline editor.
+        // Do not override that explicit transfer when dismissing the palette.
+        if self.modal_was_open && !is_modal_open && self.surface_rename.is_none() {
             self.focus_terminal(window, cx);
         }
         // Manage ghostty NSView visibility separately — hide for modals AND skill popup
@@ -1502,6 +1504,19 @@ impl Render for ConWorkspace {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(|this, _: &InputEscape, window, cx| {
+                let rename_focused = this
+                    .surface_rename
+                    .as_ref()
+                    .is_some_and(|editor| editor.input.focus_handle(cx).is_focused(window));
+                if rename_focused {
+                    this.surface_rename = None;
+                    this.refocus_active_terminal(window, cx);
+                    cx.notify();
+                } else {
+                    cx.propagate();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_overlay_visible()
@@ -1514,6 +1529,7 @@ impl Render for ConWorkspace {
                 let key = event.keystroke.key.as_str();
 
                 if key == "escape" && this.surface_rename.take().is_some() {
+                    this.refocus_active_terminal(window, cx);
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();

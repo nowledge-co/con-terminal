@@ -92,11 +92,37 @@ unchanged; action controls and semantic status glyphs retain Phosphor SVGs.
 The PNGs are embedded in the binary and share the existing premultiplied-alpha,
 physical-pixel-sized preview cache. Do not decode or resize them during paint,
 read them from the filesystem at runtime, or apply translucent glyph opacity.
+Multi-pane tabs retain a deduplicated identity list from each pane's active
+content. Normalize asset aliases before deduplication; inactive surfaces are not
+additional panes. Multi-app identities use at most three small cards, with a
+full-size primary logo and two smaller rear logos. Give the cards a consistent
+rounded silhouette, one-point inner padding and solid theme-derived neutral
+fills: a lighter front card and quieter rear cards. This is a deliberately inset
+card material, not a bare dark patch under a logo. Keep logos whole and preserve
+their original alpha and color; do not crop them into strips or stamp counts on
+top. Center every layer on the same vertical axis, with a tighter horizontal
+offset in compact navigation. Reserve the group's actual width and height; further apps
+do not grow it. Expanded sidebar rows share a leading well sized for three
+cards, keeping titles in one column. Compact activity rings surround the whole
+stack without displacing it. Prefer the tab's current identity
+as primary only when it is present in the real pane identities; preserve the
+remaining layout order. The hover card shows the full deduplicated set without
+layering. Status remains one marker
+per tab, not one per icon, and does not change the group's reserved width.
+Collect these identities during metadata synchronization, never on animation
+repaints. Pane counts include editor panes.
+
+The All Tabs menu uses the same retained names and identity row, system UI
+font, solid foreground ink, and a trailing selected check. Rows truncate long
+names inside bounded width. Keep the upstream menu's keyboard, scrolling,
+focus-restoration and click handlers; resolve stable tab IDs when selecting an
+entry, since tabs can close or reorder while the menu remains open.
 Labels use the UI font at
 11.5 points scaled from the configured UI size, preserving original case.
 The six-point gap groups the icon and label
-without adding padding inside the label itself. Larger UI sizes cap the frame at the
-twenty-point identity slot; hover never shifts the slot or label.
+without adding padding inside the label itself. Larger UI sizes cap each base
+identity at twenty points; multi-app groups reserve their own width. Hover never
+shifts the slot or label.
 
 User-assigned accent fills and configured inactive accent opacity remain
 supported. Activity and attention indicators retain their semantic colors.

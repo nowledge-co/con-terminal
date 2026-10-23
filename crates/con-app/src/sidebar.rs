@@ -154,6 +154,8 @@ pub struct SessionEntry {
     pub status_detail: Option<String>,
     pub terminal_titles: Vec<String>,
     pub icon: &'static str,
+    /// Retained, deduplicated identities of the active content in each pane.
+    pub pane_icons: Vec<&'static str>,
     pub has_user_label: bool,
     /// How many panes the tab contains (split count). Surfaced in
     /// the rail's hover card so the user can see "this tab has 3
@@ -161,6 +163,16 @@ pub struct SessionEntry {
     pub pane_count: usize,
     /// Optional accent color set via the tab context menu.
     pub color: Option<con_core::session::TabAccentColor>,
+}
+
+impl SessionEntry {
+    pub(crate) fn identity_icons(&self) -> &[&'static str] {
+        if self.pane_icons.is_empty() {
+            std::slice::from_ref(&self.icon)
+        } else {
+            &self.pane_icons
+        }
+    }
 }
 
 /// Visual state of the panel.
@@ -1209,8 +1221,8 @@ impl SessionSidebar {
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
                 })
-                .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
-                    sidebar_tab_icon(session.icon),
+                .child(self.activity_layer.as_ref().unwrap().read(cx).icon_group(
+                    session.identity_icons(),
                     ui_icon_px(theme, 18.0),
                     if is_active {
                         theme.foreground
@@ -1309,11 +1321,29 @@ impl SessionSidebar {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .child(crate::assets::tab_identity_icon(
-                        sidebar_tab_icon(session.icon),
-                        ui_px(theme, 18.0),
-                        theme.foreground,
-                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap(px(4.0))
+                            .max_w(px(96.0))
+                            .flex_shrink_0()
+                            .children(session.identity_icons().iter().map(|icon| {
+                                crate::assets::tab_identity_icon(
+                                    crate::assets::tab_identity_asset(icon),
+                                    ui_icon_px(
+                                        theme,
+                                        if session.identity_icons().len() > 1 {
+                                            14.0
+                                        } else {
+                                            18.0
+                                        },
+                                    ),
+                                    theme.foreground,
+                                )
+                            })),
+                    )
                     .child(
                         div()
                             .debug_selector(|| "tab-hover-name".into())
@@ -1702,6 +1732,7 @@ impl SessionSidebar {
                 status_detail: self.sessions[i].status_detail.clone(),
                 terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
+                pane_icons: self.sessions[i].pane_icons.clone(),
                 has_user_label: self.sessions[i].has_user_label,
                 pane_count: self.sessions[i].pane_count,
                 color: self.sessions[i].color,
@@ -1883,16 +1914,25 @@ impl SessionSidebar {
         let tab_bounds = self.tab_bounds.clone();
 
         let icon_size = px(layout.icon_size);
+        let identity_width = if layout.compact {
+            px(32.0)
+        } else {
+            crate::assets::tab_identity_group_width(3, icon_size, false).max(px(32.0))
+        };
+        // A shared leading well keeps every title on one column, regardless of
+        // how many distinct applications the row happens to contain.
+        let label_left = layout.icon_center_x + identity_width.as_f32() * 0.5 + 8.0;
         let mut icon_stack = div()
             .absolute()
-            .left(px(layout.icon_center_x - 16.0))
+            .left(px(layout.icon_center_x) - identity_width * 0.5)
             .top(px((row_h - 32.0) * 0.5))
-            .size(px(32.0))
+            .w(identity_width)
+            .h(px(32.0))
             .flex()
             .items_center()
             .justify_center()
-            .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
-                sidebar_tab_icon(session.icon),
+            .child(self.activity_layer.as_ref().unwrap().read(cx).icon_group(
+                session.identity_icons(),
                 icon_size,
                 if is_active {
                     theme.foreground
@@ -2069,10 +2109,10 @@ impl SessionSidebar {
                     .h_full()
                     .flex()
                     .items_center()
-                    .left(px(layout.icon_center_x + layout.icon_size * 0.5 + 8.0))
+                    .left(px(label_left))
                     .w(px((layout.width
                         - 2.0 * layout.row_inset
-                        - (layout.icon_center_x + layout.icon_size * 0.5 + 8.0)
+                        - label_left
                         - (row_h - CLOSE_TARGET_SIZE) * 0.5
                         - CLOSE_TARGET_SIZE
                         - 8.0)
@@ -2852,6 +2892,7 @@ mod tests {
                     status_detail: Some("build/test · blocked · permission · 40% — Apply?".into()),
                     terminal_titles: vec!["build".into(), "logs".into()],
                     icon: "phosphor/terminal.svg",
+                    pane_icons: Vec::new(),
                     has_user_label: true,
                     pane_count: 2,
                     color: None,
@@ -3026,6 +3067,7 @@ mod tests {
             status_detail,
             terminal_titles: Vec::new(),
             icon: "phosphor/terminal.svg",
+            pane_icons: Vec::new(),
             has_user_label: true,
             pane_count: 1,
             color: None,
@@ -3177,6 +3219,20 @@ mod tests {
         assert!(markers[0].size.height > brand.size.height);
 
         view.update(cx, |sidebar, cx| {
+            sidebar.sessions[0].pane_icons =
+                vec!["tab-terminal-refined.png", "tab-code.png", "tab-file.png"];
+            cx.notify();
+        });
+        let stack = cx.debug_bounds("tab-status-brand").unwrap();
+        let slot = cx.debug_bounds("tab-status-slot").unwrap();
+        let markers = rendered_rings(&view, cx);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].center(), slot.center());
+        assert_eq!(stack.center(), slot.center());
+        assert!(markers[0].size.width > stack.size.width);
+        assert!(markers[0].size.height > stack.size.height);
+
+        view.update(cx, |sidebar, cx| {
             sidebar.set_pinned(true, cx);
             sidebar.width_motion = crate::motion::SidebarMotion::new(1.0);
         });
@@ -3190,6 +3246,21 @@ mod tests {
         assert!(cx.debug_bounds("tab-status-brand").is_some());
         assert!(rendered_rings(&view, cx).is_empty());
         assert_eq!(busy_title, cx.debug_bounds("sidebar-session-name").unwrap());
+        for icons in [
+            vec!["tab-terminal-refined.png"],
+            vec!["tab-terminal-refined.png", "tab-code.png"],
+            vec!["tab-terminal-refined.png", "tab-code.png", "tab-file.png"],
+        ] {
+            view.update(cx, |sidebar, cx| {
+                sidebar.sessions[0].pane_icons = icons;
+                cx.notify();
+            });
+            assert_eq!(
+                busy_title,
+                cx.debug_bounds("sidebar-session-name").unwrap(),
+                "single-app and multi-app titles must share one column"
+            );
+        }
     }
 
     #[gpui::test]
@@ -3325,6 +3396,7 @@ mod tests {
                     status_detail: None,
                     terminal_titles: Vec::new(),
                     icon: "phosphor/terminal.svg",
+                    pane_icons: Vec::new(),
                     has_user_label: false,
                     pane_count: 1,
                     color: None,

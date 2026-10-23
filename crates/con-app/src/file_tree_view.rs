@@ -44,9 +44,10 @@ pub struct FileEntry {
     pub is_expanded: bool,
 }
 
-/// Emitted when the user clicks a file row.
+/// Single-click previews; double-click keeps the file in the shared editor pane.
 pub struct OpenFile {
     pub path: PathBuf,
+    pub keep_open: bool,
 }
 
 impl EventEmitter<OpenFile> for FileTreeView {}
@@ -595,6 +596,7 @@ impl Render for FileTreeView {
                     let weak = weak.clone();
                     div()
                         .id(("file-row", idx))
+                        .debug_selector(move || format!("file-tree-row-{idx}"))
                         .h(px(ROW_HEIGHT))
                         .w_full()
                         .flex()
@@ -677,17 +679,23 @@ impl Render for FileTreeView {
                                     .into_any_element()
                             }
                         })
-                        .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx| {
-                            if let Some(view) = weak.upgrade() {
-                                view.update(cx, |this, cx| {
-                                    if is_dir {
-                                        this.toggle_dir(&path, cx);
-                                    } else {
-                                        cx.emit(OpenFile { path: path.clone() });
-                                    }
-                                });
-                            }
-                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            move |event: &MouseDownEvent, _window, cx| {
+                                if let Some(view) = weak.upgrade() {
+                                    view.update(cx, |this, cx| {
+                                        if is_dir {
+                                            this.toggle_dir(&path, cx);
+                                        } else {
+                                            cx.emit(OpenFile {
+                                                path: path.clone(),
+                                                keep_open: event.click_count == 2,
+                                            });
+                                        }
+                                    });
+                                }
+                            },
+                        )
                         .into_any_element()
                 })
                 .collect()
@@ -710,6 +718,72 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct FileTreeTestView(gpui::Entity<FileTreeView>);
+
+    impl Render for FileTreeTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn double_clicking_tree_file_keeps_preview_before_browsing_another(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        fs::write(&first, "first").unwrap();
+        fs::write(&second, "second").unwrap();
+        let editor = cx.new(|cx| crate::editor_view::EditorView::new_with_font_size(14.0, cx));
+        let tree = cx.new(|_| FileTreeView::new());
+        tree.update(cx, |tree, _| {
+            tree.root = Some(dir.path().to_path_buf());
+            tree.entries = Arc::new(build_root_entries(dir.path()))
+        });
+        let editor_for_events = editor.clone();
+        let _observer = cx.new(|cx: &mut Context<Vec<bool>>| {
+            cx.subscribe(&tree, move |events, _, event: &OpenFile, cx| {
+                events.push(event.keep_open);
+                editor_for_events.update(cx, |editor, cx| {
+                    if event.keep_open {
+                        editor.open_file(event.path.clone(), cx);
+                    } else {
+                        editor.open_temporary_file(event.path.clone(), cx);
+                    }
+                });
+            })
+            .detach();
+            Vec::new()
+        });
+        let (_, cx) = cx.add_window_view(|_, _| FileTreeTestView(tree));
+        cx.run_until_parked();
+        let row = cx.debug_bounds("file-tree-row-1").unwrap();
+        cx.simulate_click(row.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| assert!(editor.is_temporary_tab(0)));
+        cx.simulate_event(MouseDownEvent {
+            position: row.center(),
+            button: MouseButton::Left,
+            click_count: 2,
+            modifiers: gpui::Modifiers::default(),
+            first_mouse: false,
+        });
+        cx.simulate_mouse_up(row.center(), MouseButton::Left, gpui::Modifiers::default());
+        cx.run_until_parked();
+        _observer.read_with(cx, |events, _| assert_eq!(events, &[false, true]));
+        editor.read_with(cx, |editor, _| assert!(!editor.is_temporary_tab(0)));
+        let second_row = cx.debug_bounds("file-tree-row-2").unwrap();
+        cx.simulate_click(second_row.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.tab_count(), 2);
+            assert!(!editor.is_temporary_tab(0));
+            assert!(editor.is_temporary_tab(1));
+        });
+    }
 
     #[test]
     fn windows_content_notifications_do_not_refresh_but_structure_changes_do() {

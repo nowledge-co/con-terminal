@@ -4,6 +4,53 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.151` - 2026-10-23
+
+### Fixed
+
+**Panes**
+
+- Rename Current Surface now shows an inline name field even in a default,
+  unnamed terminal pane. It uses the compact pane header and returns to the
+  usual layout when editing ends. Typing stays in the name field after the
+  command palette closes; Enter and Escape return focus to the terminal.
+  _(PR [#509](https://github.com/nowledge-co/con-terminal/pull/509) by [@Nitjsefnie](https://github.com/Nitjsefnie))_
+
+## `v0.1.0-beta.150` - 2026-10-23
+
+### Added
+
+**Tabs**
+
+- Tabs with multiple panes show a compact group of application icons, without
+  repeating the same app. This works in horizontal tabs and both vertical tab
+  layouts, including tabs containing file panes.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Tabs**
+
+- The All Tabs menu uses the same application icons as the tab strip, with
+  clearer typography, consistent spacing and a selected-tab checkmark.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
+**Panes**
+
+- File tabs and terminal headers now share a compact height. Surface tabs sit
+  beside pane controls in one row instead of stacking beneath a second title,
+  with matching typography and quieter close buttons.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Files**
+
+- Closing a zoomed file pane restores the remaining terminal panes and their
+  layout instead of leaving an empty area. Double-clicking a file in the tree
+  now keeps it open, just like double-clicking its editor tab.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.149` - 2026-10-23
 
 ### Fixed

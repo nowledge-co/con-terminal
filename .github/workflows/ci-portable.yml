@@ -128,6 +128,7 @@ jobs:
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::tests::horizontal_tab_reorder
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app input_bar::tests
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app editor_
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app pane_tree::tests::surface_rename_renders_in_its_pane_and_restores_ordinary_chrome
       - name: Program status acceptance fixture tests
         run: |
           python -m unittest discover -s scripts/terminal -p 'test_*.py'
@@ -195,6 +196,7 @@ jobs:
           cargo test --locked -p con --bin con workspace::tests::horizontal_tab_reorder
           cargo test --locked -p con --bin con input_bar::tests
           cargo test --locked -p con --bin con editor_
+          cargo test --locked -p con --bin con pane_tree::tests::surface_rename_renders_in_its_pane_and_restores_ordinary_chrome
       - name: Program status reducer benchmark correctness
         run: cargo test --locked -p con-core --example program_status_bench
       - name: Linux terminal view regression tests

@@ -84,12 +84,26 @@ The visual rule is intentionally scoped:
 
 - A **pane** is the visible split region.
 - A **surface** is a tab-like terminal session selected inside one pane.
-- Ordinary one-surface panes show no surface chrome.
+- Ordinary one-surface panes show no surface chrome, except while their surface
+  name is being edited. Starting rename reveals the same compact header and
+  input used by named surfaces, even with pane titles hidden. Cancelling returns
+  to the original chrome; confirming an empty name removes the temporary header
+  unless other surfaces or an owner still require it.
+  Palette dismissal must preserve the rename input's explicit focus; Enter and
+  Escape end the edit and restore terminal focus.
 - Panes with multiple surfaces, an orchestrator owner, or an explicit surface
-  title show a compact in-pane surface rail. This rail is intentionally inset
-  and pill-sized rather than full-width: pane dividers own layout structure,
-  while surface chrome only identifies terminal sessions inside that pane. The
+  title show compact inset tabs in the pane header, replacing its ordinary
+  title rather than adding a second row. The default header height is 24 points,
+  shared with file tabs and scaled with UI size, not terminal font size. Pane
+  dividers own layout structure, while surface chrome only identifies terminal
+  sessions inside that pane. The
   rail is local to that pane; it never switches surfaces in sibling panes.
+  Tabs scroll within the space before pane zoom/close controls. Surface close
+  buttons use the component control, visible on the active tab or row hover;
+  double-click rename and the context menu remain available. Hiding pane titles
+  does not hide surface navigation. Retain horizontal scroll state for each
+  selected surface. Reveal it after viewport, title-width or surface-count
+  changes, not on every repaint, so manual scrolling is not pulled back.
 
 - `New Surface Tab`: creates a new terminal session inside the focused
   pane, gives it the next stable `Surface N` label, and focuses it.

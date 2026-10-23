@@ -9,9 +9,9 @@
 
 Add a persistent title bar to every pane when there are 2+ panes in the split tree. The bar shows the pane title, direct fullscreen/restore and close controls, and supports drag-to-tab promotion.
 
-> **Update (2026-10-09)**: terminal panes keep this design. **Editor panes no
+> **Update (2026-10-23)**: **Editor panes no
 > longer render this title bar** — their file tab bar and pane controls are
-> merged into a single 28px chrome row (`render_editor_merged_bar` in
+> merged into a single compact chrome row (`render_editor_merged_bar` in
 > `crates/con-app/src/pane_tree.rs`), rendered by PaneTree with data from
 > `EditorView`'s public API. File name appears once (the active tab capsule);
 > ⛶/✕ pane controls and drag-to-tab promotion live in the merged row and only
@@ -19,14 +19,18 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 > File tabs retain their readable widths in a horizontal scroll area; pane
 > controls remain outside that area. Labels and icons use solid semantic theme
 > ink, with focus conveyed by the active fill rather than glyph opacity.
-> The merged bar and label metrics follow the UI mono-font size.
+> Terminal titles, file tabs and surface tabs share the same 24-point default
+> header height, scaled with UI density and label line height. Code/terminal
+> font size does not change the header height.
 
 ---
 
 ## Scope
 
 - **Only shown when `pane_count > 1`** — single-pane layout has no title bar.
-- The existing surface strip (shown when `surfaces.len() > 1`) is preserved and sits below the title bar.
+- Pane-local surface tabs replace the ordinary title in the same row. They also
+  appear for explicitly named/owned single surfaces, even without splits or
+  when pane titles are hidden.
 - No title editing in this iteration.
 
 ---
@@ -35,9 +39,7 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 
 ```
 ┌─────────────────────────────────────────────┐
-│      sundy@m1max: ~/work/con      [⛶][✕] │  ← title bar, h=28px
-├─────────────────────────────────────────────┤
-│  [surface strip — only when surfaces > 1]   │  ← existing, h=28px
+│ [Surface 1] [Surface 2 ×]          [⛶][✕] │  ← one 24pt row
 ├─────────────────────────────────────────────┤
 │                                             │
 │            terminal content                 │
@@ -49,17 +51,16 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 
 | Property | Value |
 |---|---|
-| Height | `px(28)` |
-| Background (focused) | `theme.tab_bar_segmented` |
-| Background (unfocused) | `theme.tab_bar_segmented.opacity(0.78)` |
-| Title font | `theme.font_family`, `px(12)`, `FontWeight::MEDIUM` |
-| Title color (focused) | `theme.foreground.opacity(0.72)` |
-| Title color (unfocused) | `theme.foreground.opacity(0.52)` |
-| Button size | `px(20)` × `px(20)` |
+| Height | `max(ui_space_px(24), ui_px(14) + 6px)` |
+| Background | Native card material on macOS; opaque `theme.title_bar` on Windows/Linux |
+| Title font | System UI, `ui_px(11.5)`, `FontWeight::MEDIUM` |
+| Title color (focused) | `theme.foreground` |
+| Title color (unfocused) | `theme.muted_foreground` |
+| Button size | `ui_space_px(20)` square; surface/file close uses 16 |
 | Button icon size | `px(11)` |
 | Button hover bg | `theme.foreground.opacity(0.08)` |
-| Button rounding | `px(4)` |
-| Button icon color | `theme.foreground.opacity(0.52)` |
+| Button rounding | `px(5)` |
+| Button icon color | `theme.muted_foreground` |
 
 ### Icons (Phosphor)
 
@@ -73,7 +74,9 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 [px(6) pad] [flex-1 centered title] [fullscreen/restore 20px] [✕ 20px] [px(6) pad]
 ```
 
-- Title is centered in the remaining space using `flex-1` + `text_align(center)` (or `justify_center` on a flex row).
+- macOS titles are leading-aligned with an application identity; Windows/Linux
+  retain their centered title layout. Surface tabs replace the title on all
+  platforms, scrolling before reserved trailing controls.
 - Close button is hidden (`display: none` equivalent — just omit from render) when `pane_count == 1`.
 
 ---
@@ -84,8 +87,8 @@ Pane title controls are direct buttons rather than an overflow menu. This keeps 
 
 | Item | Condition | Action |
 |---|---|---|
-| **Fullscreen / Restore** | always shown; icon changes when already zoomed | `toggle_zoom_cb(pane_id)` |
-| **Close Pane** | only when `pane_count > 1` | `close_pane_cb(pane_id)` |
+| **Fullscreen / Restore** | shown on header hover; icon changes when zoomed | `toggle_zoom_cb(pane_id)` |
+| **Close Pane** | on header hover when `pane_count > 1` | `close_pane_cb(pane_id)` |
 
 "Fullscreen / Restore" maps to the existing `toggle_zoom_focused` / `TogglePaneZoom` path.
 "Close Pane" maps to the existing `close_pane_in_tab` path.

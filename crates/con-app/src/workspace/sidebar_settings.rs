@@ -613,7 +613,8 @@ impl ConWorkspace {
     /// Shared by full synchronization and the single-row title update path.
     pub(super) fn sidebar_entry(&self, index: usize, cx: &App) -> SessionEntry {
         let tab = &self.tabs[index];
-        let pane_count = tab.pane_tree.pane_terminals().len();
+        let terminal_pane_count = tab.pane_tree.pane_terminals().len();
+        let pane_count = tab.pane_tree.pane_count();
         let (hostname, title, current_dir) =
             if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
                 (
@@ -633,7 +634,7 @@ impl ConWorkspace {
             title.as_deref(),
             current_dir.as_deref(),
             index,
-            pane_count == 0,
+            terminal_pane_count == 0,
         );
         if !presentation.is_ssh
             && tab.agent_cli.is_none()
@@ -663,6 +664,18 @@ impl ConWorkspace {
                 .filter(|title| !title.is_empty())
                 .collect(),
             icon: presentation.icon,
+            pane_icons: if tab.pane_tree.pane_count() > 1 {
+                let mut icons = Vec::new();
+                for (_, terminal) in tab.pane_tree.pane_terminals() {
+                    icons.push(terminal.presentation_icon());
+                }
+                if tab.pane_tree.find_editor_pane().is_some() {
+                    icons.push("phosphor/file-code.svg");
+                }
+                crate::assets::unique_tab_identities(icons, presentation.icon)
+            } else {
+                vec![crate::assets::tab_identity_asset(presentation.icon)]
+            },
             has_user_label: tab.user_label.is_some(),
             pane_count,
             color: tab.color,
