@@ -3910,7 +3910,7 @@ mod tests {
             ] {
                 let (view, cx) = cx.add_window_view(|_, cx| {
                     let terminal = |cx: &mut App| {
-                        TerminalPane::new(cx.new(|cx| {
+                        let view = cx.new(|cx| {
                             crate::ghostty_view::GhosttyView::new(
                                 app.clone(),
                                 None,
@@ -3920,7 +3920,10 @@ mod tests {
                                 14.0,
                                 cx,
                             )
-                        }))
+                        });
+                        #[cfg(not(target_os = "macos"))]
+                        view.update(cx, |view, _| view.prepare_for_layout_test());
+                        TerminalPane::new(view)
                     };
                     let mut tree = PaneTree::new_with_surface_options(
                         terminal(cx),

@@ -318,6 +318,13 @@ impl GhosttyView {
         self.terminal.as_ref()
     }
 
+    /// Keep layout fixtures independent of ConPTY, GPU setup and worker wakes.
+    #[cfg(test)]
+    pub(crate) fn prepare_for_layout_test(&mut self) {
+        self.init_failed = true;
+        self.terminal = None;
+    }
+
     pub(crate) fn show_terminal_find(
         &mut self,
         needle: String,

@@ -606,6 +606,12 @@ impl GhosttyView {
         self.terminal.as_ref()
     }
 
+    /// Layout fixtures must not spawn a shell that wakes the test scheduler.
+    #[cfg(test)]
+    pub(crate) fn prepare_for_layout_test(&mut self) {
+        self.terminal = None;
+    }
+
     pub(crate) fn show_terminal_find(
         &mut self,
         needle: String,

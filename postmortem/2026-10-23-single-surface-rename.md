@@ -42,6 +42,10 @@ While editing, leave mouse clicks with the input and disable rename reentry.
   rename editors, and different pane/surface IDs.
 - Check cancellation, confirmation and clearing the name restore the appropriate
   ordinary chrome, including the configuration that hides pane title bars.
+- Keep UI-layout fixtures independent of live PTYs and GPU sessions. The first
+  Linux CI run caught real shell output waking GPUI's deterministic scheduler
+  from a reader thread. Test-only preparation now disables terminal startup;
+  production behavior and real terminal integration tests remain unchanged.
 
 Tracking: [#225](https://github.com/nowledge-co/con-terminal/issues/225).
 Fix and regression contribution:
