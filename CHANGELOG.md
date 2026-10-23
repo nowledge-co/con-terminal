@@ -14,7 +14,7 @@ con is still pre-release, so entries may group related beta work while the produ
   unnamed terminal pane. It uses the compact pane header and returns to the
   usual layout when editing ends. Typing stays in the name field after the
   command palette closes; Enter and Escape return focus to the terminal.
-  _(PR [#509](https://github.com/nowledge-co/con-terminal/pull/509) by [@Nitjsefnie](https://github.com/Nitjsefnie))_
+  _(PR [#509](https://github.com/nowledge-co/con-terminal/pull/509) by [@Nitjsefnie](https://github.com/Nitjsefnie); integration [#511](https://github.com/nowledge-co/con-terminal/pull/511) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.150` - 2026-10-23
 
