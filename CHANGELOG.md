@@ -4,6 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.154` - 2026-10-23
+
+### Changed
+
+**Settings**
+
+- Settings has a clearer navigation divider, aligned headings and controls,
+  and more consistent spacing. Forms adapt to narrow windows and larger
+  interface text without crowding labels or fields.
+  _(PR [#516](https://github.com/nowledge-co/con-terminal/pull/516) by [@wey-gu](https://github.com/wey-gu))_
+- App icons and agent avatars use matching preview tiles with aligned names
+  and a separate selection checkmark. Cached thumbnails keep previews crisp
+  at different display scales.
+  _(PR [#516](https://github.com/nowledge-co/con-terminal/pull/516) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.153` - 2026-10-23
 
 Includes the changes from the cancelled beta.151 and beta.152 release attempts.
