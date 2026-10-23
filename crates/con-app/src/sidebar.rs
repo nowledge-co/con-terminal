@@ -154,6 +154,8 @@ pub struct SessionEntry {
     pub status_detail: Option<String>,
     pub terminal_titles: Vec<String>,
     pub icon: &'static str,
+    /// Retained, deduplicated identities of the active content in each pane.
+    pub pane_icons: Vec<&'static str>,
     pub has_user_label: bool,
     /// How many panes the tab contains (split count). Surfaced in
     /// the rail's hover card so the user can see "this tab has 3
@@ -161,6 +163,16 @@ pub struct SessionEntry {
     pub pane_count: usize,
     /// Optional accent color set via the tab context menu.
     pub color: Option<con_core::session::TabAccentColor>,
+}
+
+impl SessionEntry {
+    pub(crate) fn identity_icons(&self) -> &[&'static str] {
+        if self.pane_icons.is_empty() {
+            std::slice::from_ref(&self.icon)
+        } else {
+            &self.pane_icons
+        }
+    }
 }
 
 /// Visual state of the panel.
@@ -1209,8 +1221,8 @@ impl SessionSidebar {
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
                 })
-                .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
-                    sidebar_tab_icon(session.icon),
+                .child(self.activity_layer.as_ref().unwrap().read(cx).icon_group(
+                    session.identity_icons(),
                     ui_icon_px(theme, 18.0),
                     if is_active {
                         theme.foreground
@@ -1702,6 +1714,7 @@ impl SessionSidebar {
                 status_detail: self.sessions[i].status_detail.clone(),
                 terminal_titles: self.sessions[i].terminal_titles.clone(),
                 icon: self.sessions[i].icon,
+                pane_icons: self.sessions[i].pane_icons.clone(),
                 has_user_label: self.sessions[i].has_user_label,
                 pane_count: self.sessions[i].pane_count,
                 color: self.sessions[i].color,
@@ -1891,8 +1904,8 @@ impl SessionSidebar {
             .flex()
             .items_center()
             .justify_center()
-            .child(self.activity_layer.as_ref().unwrap().read(cx).icon(
-                sidebar_tab_icon(session.icon),
+            .child(self.activity_layer.as_ref().unwrap().read(cx).icon_group(
+                session.identity_icons(),
                 icon_size,
                 if is_active {
                     theme.foreground
@@ -2852,6 +2865,7 @@ mod tests {
                     status_detail: Some("build/test · blocked · permission · 40% — Apply?".into()),
                     terminal_titles: vec!["build".into(), "logs".into()],
                     icon: "phosphor/terminal.svg",
+                    pane_icons: Vec::new(),
                     has_user_label: true,
                     pane_count: 2,
                     color: None,
@@ -3026,6 +3040,7 @@ mod tests {
             status_detail,
             terminal_titles: Vec::new(),
             icon: "phosphor/terminal.svg",
+            pane_icons: Vec::new(),
             has_user_label: true,
             pane_count: 1,
             color: None,
@@ -3325,6 +3340,7 @@ mod tests {
                     status_detail: None,
                     terminal_titles: Vec::new(),
                     icon: "phosphor/terminal.svg",
+                    pane_icons: Vec::new(),
                     has_user_label: false,
                     pane_count: 1,
                     color: None,

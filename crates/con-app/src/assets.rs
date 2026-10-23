@@ -108,6 +108,69 @@ pub(crate) fn tab_identity_asset(icon: &'static str) -> &'static str {
     }
 }
 
+/// Normalize aliases before deduplicating so one application occupies one tile.
+pub(crate) fn unique_tab_identities(
+    icons: impl IntoIterator<Item = &'static str>,
+) -> Vec<&'static str> {
+    let mut identities = Vec::new();
+    for icon in icons {
+        let asset = tab_identity_asset(icon);
+        if !identities.contains(&asset) {
+            identities.push(asset);
+        }
+    }
+    identities
+}
+
+/// A bounded, centered stack keeps pane identities inside the existing tab slot.
+pub(crate) fn tab_identity_group(
+    icons: &[&'static str],
+    size: gpui::Pixels,
+    color: gpui::Hsla,
+) -> gpui::AnyElement {
+    use gpui::{IntoElement, ParentElement, Styled};
+    if icons.len() <= 1 {
+        return tab_identity_icon(
+            tab_identity_asset(icons.first().copied().unwrap_or("phosphor/terminal.svg")),
+            size,
+            color,
+        );
+    }
+    let count = icons.len().min(3);
+    let step = size * 0.125;
+    let small = size * 0.75;
+    let extent = small + step * (count - 1) as f32;
+    let mut group = gpui::div().relative().size(size).flex_shrink_0();
+    for (index, icon) in icons.iter().take(count).enumerate() {
+        let offset = step * index as f32 + (size - extent) * 0.5;
+        let mut tile = gpui::div()
+            .absolute()
+            .left(offset)
+            .top(offset)
+            .size(small)
+            .flex()
+            .items_center()
+            .justify_center();
+        if index == 2 && icons.len() > 3 {
+            tile = tile
+                .rounded(gpui::px(3.0))
+                .bg(color.opacity(0.10))
+                .text_color(color)
+                .text_size(gpui::px(8.0))
+                .line_height(small)
+                .child(if icons.len() - 2 > 9 {
+                    "9+".to_string()
+                } else {
+                    format!("+{}", icons.len() - 2)
+                });
+        } else {
+            tile = tile.child(tab_identity_icon(tab_identity_asset(icon), small, color));
+        }
+        group = group.child(tile);
+    }
+    group.into_any_element()
+}
+
 /// Tab identities may be small bitmap objects; action/status glyphs stay SVG.
 pub(crate) fn tab_identity_icon(
     path: &'static str,
@@ -215,6 +278,25 @@ fn preview_bgra(bytes: &[u8], size: u32) -> Result<image::RgbaImage> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pane_identities_deduplicate_final_assets_in_layout_order() {
+        assert_eq!(
+            super::unique_tab_identities([
+                "phosphor/terminal.svg",
+                "phosphor/code.svg",
+                "phosphor/terminal-window.svg",
+                "agents/opencode.svg",
+                "phosphor/code.svg",
+                "phosphor/file-code.svg",
+            ]),
+            vec![
+                "tab-terminal-refined.png",
+                "tab-code.png",
+                "agents/opencode.svg",
+                "tab-file.png"
+            ]
+        );
+    }
     use super::*;
     use gpui::{Context, IntoElement, Render, Styled, Window, img, px};
 

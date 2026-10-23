@@ -391,7 +391,7 @@ impl ConWorkspace {
                         i,
                         is_editor_only,
                     );
-                    let pane_count = tab.pane_tree.pane_terminals().len();
+                    let pane_count = tab.pane_tree.pane_count();
                     SessionEntry {
                         id: tab.summary_id,
                         name: presentation.name,
@@ -402,6 +402,7 @@ impl ConWorkspace {
                         status_detail: None,
                         terminal_titles: Vec::new(),
                         icon: presentation.icon,
+                        pane_icons: Vec::new(),
                         has_user_label: tab.user_label.is_some(),
                         pane_count,
                         color: tab.color,

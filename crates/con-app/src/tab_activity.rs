@@ -126,9 +126,22 @@ impl TabActivity {
 
     /// Keeps the caller's original icon slot. Compact working states retain the
     /// brand inside a ring; expanded busy states use the shared three-bar loader.
+    #[cfg(test)]
     pub(crate) fn icon(
         &self,
         icon: &'static str,
+        size: Pixels,
+        color: Hsla,
+        status: Option<Status>,
+        theme: &gpui_component::Theme,
+        compact: bool,
+    ) -> AnyElement {
+        self.icon_group(&[icon], size, color, status, theme, compact)
+    }
+
+    pub(crate) fn icon_group(
+        &self,
+        icons: &[&'static str],
         size: Pixels,
         color: Hsla,
         status: Option<Status>,
@@ -162,7 +175,7 @@ impl TabActivity {
                     .debug_selector(|| "tab-status-brand".into())
                     .size(icon_size)
                     .flex_shrink_0()
-                    .child(crate::assets::tab_identity_icon(icon, icon_size, color)),
+                    .child(crate::assets::tab_identity_group(icons, icon_size, color)),
             );
         }
         if active {

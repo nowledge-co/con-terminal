@@ -2221,8 +2221,10 @@ impl ConWorkspace {
                                 .justify_center()
                                 .size(tab_identity_icon_size(theme))
                                 .flex_shrink_0()
-                                .child(self.tab_activity.read(cx).icon(
-                                    tab_icon,
+                                .child(self.tab_activity.read(cx).icon_group(
+                                    presentation.map_or(std::slice::from_ref(&tab_icon), |entry| {
+                                        entry.identity_icons()
+                                    }),
                                     tab_identity_icon_size(theme),
                                     if tab_icon == "phosphor/terminal-window.svg" {
                                         tab_secondary_ink
