@@ -35,6 +35,14 @@ propagation and restore editor focus. The status row separates the truncatable
 path (full path on hover) from cursor/image details; an unsaved-close warning
 takes priority over those details at narrow widths.
 
+File tabs, ordinary terminal titles and pane-local surface tabs share one
+24-point header metric at the default UI size. Increase it with UI density and
+label line height, not the terminal/code font size. Surface tabs replace the
+terminal title in that row; they never add a second row above the terminal.
+Keep scrolling tabs separate from the trailing pane controls so long names
+cannot obscure zoom or close. File and surface tabs use the same compact
+rounded fill, UI label metrics and component close-button sizing.
+
 Single-clicking a file-tree row previews the file in the tab's shared editor
 pane. Double-clicking the same row keeps that file open, just like double-clicking
 its editor tab; later browsing may replace only another unkept preview. The

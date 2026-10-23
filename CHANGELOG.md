@@ -23,6 +23,13 @@ con is still pre-release, so entries may group related beta work while the produ
   clearer typography, consistent spacing and a selected-tab checkmark.
   _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
 
+**Panes**
+
+- File tabs and terminal headers now share a compact height. Surface tabs sit
+  beside pane controls in one row instead of stacking beneath a second title,
+  with matching typography and quieter close buttons.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
 ### Fixed
 
 **Files**
