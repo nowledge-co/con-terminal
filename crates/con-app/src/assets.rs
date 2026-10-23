@@ -111,6 +111,7 @@ pub(crate) fn tab_identity_asset(icon: &'static str) -> &'static str {
 /// Normalize aliases before deduplicating so one application occupies one tile.
 pub(crate) fn unique_tab_identities(
     icons: impl IntoIterator<Item = &'static str>,
+    primary: &'static str,
 ) -> Vec<&'static str> {
     let mut identities = Vec::new();
     for icon in icons {
@@ -119,16 +120,37 @@ pub(crate) fn unique_tab_identities(
             identities.push(asset);
         }
     }
+    // Match the tab's current identity only when it names real pane content;
+    // an AI-chosen decorative icon must not invent another application.
+    let primary = tab_identity_asset(primary);
+    if let Some(index) = identities.iter().position(|asset| *asset == primary) {
+        identities[..=index].rotate_right(1);
+    }
     identities
 }
 
-/// A bounded, centered stack keeps pane identities inside the existing tab slot.
+pub(crate) fn tab_identity_group_width(
+    count: usize,
+    size: gpui::Pixels,
+    compact: bool,
+) -> gpui::Pixels {
+    if count <= 1 {
+        size
+    } else {
+        let layers = count.min(if compact { 2 } else { 3 });
+        size + gpui::px((size.as_f32() * 0.28).round()) * (layers - 1) as f32
+    }
+}
+
+/// Keep the primary app intact, with a bounded fan of secondary cards behind it.
 pub(crate) fn tab_identity_group(
     icons: &[&'static str],
     size: gpui::Pixels,
     color: gpui::Hsla,
+    compact: bool,
+    mut material: gpui::Hsla,
 ) -> gpui::AnyElement {
-    use gpui::{IntoElement, ParentElement, Styled};
+    use gpui::{InteractiveElement, IntoElement, ParentElement, Styled};
     if icons.len() <= 1 {
         return tab_identity_icon(
             tab_identity_asset(icons.first().copied().unwrap_or("phosphor/terminal.svg")),
@@ -136,37 +158,40 @@ pub(crate) fn tab_identity_group(
             color,
         );
     }
-    let count = icons.len().min(3);
-    let step = size * 0.125;
-    let small = size * 0.75;
-    let extent = small + step * (count - 1) as f32;
-    let mut group = gpui::div().relative().size(size).flex_shrink_0();
-    for (index, icon) in icons.iter().take(count).enumerate() {
-        let offset = step * index as f32 + (size - extent) * 0.5;
-        let mut tile = gpui::div()
-            .absolute()
-            .left(offset)
-            .top(offset)
-            .size(small)
-            .flex()
-            .items_center()
-            .justify_center();
-        if index == 2 && icons.len() > 3 {
-            tile = tile
-                .rounded(gpui::px(3.0))
-                .bg(color.opacity(0.10))
-                .text_color(color)
-                .text_size(gpui::px(8.0))
-                .line_height(small)
-                .child(if icons.len() - 2 > 9 {
-                    "9+".to_string()
-                } else {
-                    format!("+{}", icons.len() - 2)
-                });
+    let count = icons.len().min(if compact { 2 } else { 3 });
+    let step = gpui::px((size.as_f32() * 0.28).round());
+    // Opaque card backing prevents transparent PNG margins revealing the app
+    // underneath. Only the bounded icon group is covered, never the tab surface.
+    material.a = 1.0;
+    let mut group = gpui::div()
+        .debug_selector(|| "tab-identity-group".into())
+        .relative()
+        .w(tab_identity_group_width(icons.len(), size, compact))
+        .h(size)
+        .flex_shrink_0();
+    for index in (0..count).rev() {
+        let icon = icons[index];
+        let card_size = if index == 0 {
+            size
         } else {
-            tile = tile.child(tab_identity_icon(tab_identity_asset(icon), small, color));
-        }
-        group = group.child(tile);
+            gpui::px((size.as_f32() * 0.9).round())
+        };
+        group = group.child(
+            gpui::div()
+                .debug_selector(move || format!("tab-identity-item-{index}"))
+                .absolute()
+                .left(step * (count - index - 1) as f32)
+                .top((size - card_size) / 2.0)
+                .size(card_size)
+                .rounded(size * 0.2)
+                .bg(material)
+                .flex_shrink_0()
+                .child(tab_identity_icon(
+                    tab_identity_asset(icon),
+                    card_size,
+                    color,
+                )),
+        );
     }
     group.into_any_element()
 }
@@ -281,14 +306,17 @@ mod tests {
     #[test]
     fn pane_identities_deduplicate_final_assets_in_layout_order() {
         assert_eq!(
-            super::unique_tab_identities([
-                "phosphor/terminal.svg",
-                "phosphor/code.svg",
-                "phosphor/terminal-window.svg",
-                "agents/opencode.svg",
-                "phosphor/code.svg",
-                "phosphor/file-code.svg",
-            ]),
+            super::unique_tab_identities(
+                [
+                    "phosphor/terminal.svg",
+                    "phosphor/code.svg",
+                    "phosphor/terminal-window.svg",
+                    "agents/opencode.svg",
+                    "phosphor/code.svg",
+                    "phosphor/file-code.svg",
+                ],
+                "phosphor/terminal-window.svg"
+            ),
             vec![
                 "tab-terminal-refined.png",
                 "tab-code.png",
@@ -296,9 +324,86 @@ mod tests {
                 "tab-file.png"
             ]
         );
+        assert_eq!(
+            super::unique_tab_identities(
+                [
+                    "phosphor/terminal.svg",
+                    "phosphor/code.svg",
+                    "phosphor/file-code.svg"
+                ],
+                "phosphor/code.svg",
+            ),
+            vec!["tab-code.png", "tab-terminal-refined.png", "tab-file.png"]
+        );
+        assert_eq!(
+            super::unique_tab_identities(["phosphor/terminal.svg"], "phosphor/globe.svg"),
+            vec!["tab-terminal-refined.png"]
+        );
     }
     use super::*;
     use gpui::{Context, IntoElement, Render, Styled, Window, img, px};
+
+    struct IdentityGroupTestView {
+        count: usize,
+        compact: bool,
+    }
+
+    impl Render for IdentityGroupTestView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            tab_identity_group(
+                &[
+                    "phosphor/terminal.svg",
+                    "phosphor/code.svg",
+                    "phosphor/file-code.svg",
+                    "phosphor/pulse.svg",
+                ][..self.count],
+                px(18.0),
+                gpui::black(),
+                self.compact,
+                gpui::white(),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn multi_app_groups_keep_primary_intact_and_bound_secondary_cards(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, _| IdentityGroupTestView {
+            count: 2,
+            compact: false,
+        });
+        for compact in [false, true] {
+            for count in [2, 3, 4] {
+                view.update(cx, |view, cx| {
+                    view.count = count;
+                    view.compact = compact;
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                let group = cx.debug_bounds("tab-identity-group").unwrap();
+                let first = cx.debug_bounds("tab-identity-item-0").unwrap();
+                let second = cx.debug_bounds("tab-identity-item-1").unwrap();
+                assert!(first.left() > second.left());
+                assert!(first.left() < second.right());
+                assert_eq!(first.center().y, second.center().y);
+                assert_eq!(first.size.width, px(18.0));
+                assert_eq!(first.right(), group.right());
+                assert!(second.left() >= group.left());
+                assert!(second.size.width >= px(16.0));
+                assert!(group.size.width <= if compact { px(24.0) } else { px(29.0) });
+                assert!(cx.debug_bounds("tab-identity-more").is_none());
+                if compact {
+                    assert!(cx.debug_bounds("tab-identity-item-2").is_none());
+                } else if count >= 3 {
+                    let third = cx.debug_bounds("tab-identity-item-2").unwrap();
+                    assert_eq!(third.left(), group.left());
+                    assert_eq!(first.left() - second.left(), second.left() - third.left());
+                }
+                assert!(cx.debug_bounds("tab-identity-item-3").is_none());
+            }
+        }
+    }
 
     #[test]
     fn tab_identities_are_embedded_small_and_transparent() {

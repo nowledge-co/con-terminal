@@ -94,14 +94,19 @@ physical-pixel-sized preview cache. Do not decode or resize them during paint,
 read them from the filesystem at runtime, or apply translucent glyph opacity.
 Multi-pane tabs retain a deduplicated identity list from each pane's active
 content. Normalize asset aliases before deduplication; inactive surfaces are not
-additional panes. Horizontal, expanded vertical and compact navigation share a
-centered icon stack inside the existing identity slot, without shifting titles
-or close controls. Keep at most three tiles; beyond that, the final tile indicates
-the remaining identities. Status remains one marker per tab, not one per icon.
+additional panes. Keep the primary app at full size in front of a bounded fan
+of secondary cards: at most two behind it in expanded navigation, one in compact
+navigation. Center the cards vertically and reserve the group's actual width
+before the title. Opaque, theme-matched backing separates their transparent
+silhouettes; never stamp a count over their ink. Prefer the tab's current identity
+as primary only when it is present in the real pane identities; preserve the
+remaining layout order. The hover card shows the full deduplicated set without
+layering. Status remains one marker
+per tab, not one per icon, and does not change the group's reserved width.
 Collect these identities during metadata synchronization, never on animation
 repaints. Pane counts include editor panes.
 
-The All Tabs menu uses the same retained names and identity stack, system UI
+The All Tabs menu uses the same retained names and identity row, system UI
 font, solid foreground ink, and a trailing selected check. Rows truncate long
 names inside bounded width. Keep the upstream menu's keyboard, scrolling,
 focus-restoration and click handlers; resolve stable tab IDs when selecting an
@@ -109,8 +114,9 @@ entry, since tabs can close or reorder while the menu remains open.
 Labels use the UI font at
 11.5 points scaled from the configured UI size, preserving original case.
 The six-point gap groups the icon and label
-without adding padding inside the label itself. Larger UI sizes cap the frame at the
-twenty-point identity slot; hover never shifts the slot or label.
+without adding padding inside the label itself. Larger UI sizes cap each base
+identity at twenty points; multi-app groups reserve their own width. Hover never
+shifts the slot or label.
 
 User-assigned accent fills and configured inactive accent opacity remain
 supported. Activity and attention indicators retain their semantic colors.

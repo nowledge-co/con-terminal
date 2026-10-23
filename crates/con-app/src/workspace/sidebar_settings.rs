@@ -672,7 +672,7 @@ impl ConWorkspace {
                 if tab.pane_tree.find_editor_pane().is_some() {
                     icons.push("phosphor/file-code.svg");
                 }
-                crate::assets::unique_tab_identities(icons)
+                crate::assets::unique_tab_identities(icons, presentation.icon)
             } else {
                 vec![crate::assets::tab_identity_asset(presentation.icon)]
             },

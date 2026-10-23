@@ -72,12 +72,19 @@ fn tab_menu_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(22.0))
+                .w(crate::assets::tab_identity_group_width(
+                    icons.len(),
+                    ui_icon_px(theme, 16.0),
+                    false,
+                )
+                .max(px(22.0)))
                 .flex_shrink_0()
                 .child(crate::assets::tab_identity_group(
                     icons,
                     ui_icon_px(theme, 16.0),
                     theme.foreground,
+                    false,
+                    theme.popover,
                 )),
         )
         .child(div().flex_1().min_w_0().truncate().child(title))
@@ -2256,7 +2263,18 @@ impl ConWorkspace {
                     );
                 }
 
+                let identity_icons = presentation
+                    .map_or(std::slice::from_ref(&tab_icon), |entry| {
+                        entry.identity_icons()
+                    });
+                let identity_width = crate::assets::tab_identity_group_width(
+                    identity_icons.len(),
+                    tab_identity_icon_size(theme),
+                    false,
+                )
+                .max(px(TAB_CLOSE_SIZE));
                 let mut tab_content = tab_identity_row()
+                    .pl(px(TAB_CONTENT_INSET) + identity_width - px(TAB_CLOSE_SIZE))
                     .relative()
                     .child(tab_selection_layer(capsule_bg, capsule_hover_bg));
 
@@ -2268,17 +2286,16 @@ impl ConWorkspace {
 
                 tab_content =
                     tab_content.child(
-                        tab_identity_icon_slot().child(
+                        tab_identity_icon_slot().w(identity_width).child(
                             div()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .size(tab_identity_icon_size(theme))
+                                .w(identity_width)
+                                .h(tab_identity_icon_size(theme))
                                 .flex_shrink_0()
                                 .child(self.tab_activity.read(cx).icon_group(
-                                    presentation.map_or(std::slice::from_ref(&tab_icon), |entry| {
-                                        entry.identity_icons()
-                                    }),
+                                    identity_icons,
                                     tab_identity_icon_size(theme),
                                     if tab_icon == "phosphor/terminal-window.svg" {
                                         tab_secondary_ink
