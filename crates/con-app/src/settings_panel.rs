@@ -2804,6 +2804,12 @@ impl SettingsPanel {
         }
     }
 
+    /// AppKit/GPUI owns destruction after a native close has been approved.
+    /// Never remove the window from inside its should-close callback.
+    pub(crate) fn approve_native_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.request_close_internal(cx)
+    }
+
     pub fn request_standalone_close(
         &mut self,
         window: &mut Window,
@@ -4219,13 +4225,13 @@ impl SettingsPanel {
                 .child(group_label("Fonts", theme))
                 .child(
                     card(theme, card_opacity)
-                        .child(searchable_select_row(
+                        .child(font_select_row(
                             "Terminal Font",
                             "Terminal and mono UI like code blocks.",
                             &terminal_font_select,
                             "Search fonts…",
                             theme,
-                            mobile,
+                            cx,
                         ))
                         .child(row_separator(theme))
                         .child(searchable_select_row(
@@ -4238,13 +4244,13 @@ impl SettingsPanel {
                         ))
                         .child(terminal_fallback_list)
                         .child(row_separator(theme))
-                        .child(searchable_select_row(
+                        .child(font_select_row(
                             "UI Font",
                             "Settings, prose, and other UI.",
                             &ui_font_select,
                             "Search fonts…",
                             theme,
-                            mobile,
+                            cx,
                         ))
                         .child(row_separator(theme))
                         .child(row_field("UI Size", &ui_font_size_input, mobile))
@@ -7157,6 +7163,55 @@ fn slider_row(
         )
 }
 
+fn font_select_row(
+    label: &str,
+    hint: &str,
+    select: &Entity<SelectState<SearchableVec<String>>>,
+    placeholder: &str,
+    theme: &gpui_component::Theme,
+    cx: &App,
+) -> Div {
+    let selected = select.read(cx).selected_value().cloned();
+    div()
+        .debug_selector(|| format!("settings-row-{label}"))
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .px(px(16.0))
+        .py(px(12.0))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(label.to_string()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(hint.to_string()),
+        )
+        .child(
+            div().w_full().min_w_0().child(
+                Select::new(select)
+                    .placeholder(placeholder.to_string())
+                    .small(),
+            ),
+        )
+        .when_some(selected, |this, selected| {
+            this.child(
+                div()
+                    .debug_selector(|| format!("settings-selected-font-{label}"))
+                    .w_full()
+                    .min_w_0()
+                    .text_xs()
+                    .line_height(rems(1.125))
+                    .text_color(theme.muted_foreground)
+                    .child(selected),
+            )
+        })
+}
+
 fn searchable_select_row(
     label: &str,
     hint: &str,
@@ -7572,6 +7627,109 @@ mod tests {
         ProviderKind, ProviderOAuthState, ResponsiveMode, SettingsPanel, keybinding_default,
         keybinding_field, keybinding_field_mut, provider_connection_status,
     };
+
+    #[gpui::test]
+    fn native_close_approval_keeps_windows_alive_until_platform_close(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let main_window = cx
+            .add_empty_window()
+            .update(|window, _| window.window_handle());
+        let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (panel, view) = cx.add_window_view(|window, cx| {
+            let mut panel = SettingsPanel::new(
+                &con_core::Config::default(),
+                crate::model_registry::ModelRegistry::new(),
+                runtime,
+                window,
+                cx,
+            );
+            panel.open_standalone(window, cx);
+            panel
+        });
+        view.update(|window, cx| {
+            let panel = panel.clone();
+            window.on_window_should_close(cx, move |_, cx| {
+                panel.update(cx, |panel, cx| panel.approve_native_close(cx))
+            });
+        });
+
+        // This invokes the native decision callback without the later platform close.
+        // Removing the window here also makes simulate_close panic when restoring it.
+        assert!(view.simulate_close());
+        assert_eq!(view.update(|_, cx| cx.windows().len()), 2);
+        panel.update(view, |panel, cx| {
+            assert!(!panel.close_confirmation_visible);
+            panel.preview_snapshot = Some(panel.config.clone());
+            panel
+                .preview_snapshot
+                .as_mut()
+                .unwrap()
+                .appearance
+                .restore_terminal_text = !panel.config.appearance.restore_terminal_text;
+            cx.notify();
+        });
+        assert!(!view.simulate_close());
+        panel.update(view, |panel, _| assert!(panel.close_confirmation_visible));
+        assert_eq!(view.update(|_, cx| cx.windows().len()), 2);
+
+        // Explicit keyboard dismissal still performs removal, unlike native approval.
+        panel.update(view, |panel, cx| {
+            panel.preview_snapshot = Some(panel.config.clone());
+            cx.notify();
+        });
+        view.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                assert!(panel.request_standalone_close(window, cx));
+            });
+        });
+        assert_eq!(cx.update(|cx| cx.windows()), vec![main_window]);
+    }
+
+    #[gpui::test]
+    fn selected_font_names_wrap_without_clipping(cx: &mut gpui::TestAppContext) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let family = "JetBrainsMonoNL Nerd Font Complete Very Long Family Name";
+        for width in [920.0, 375.0] {
+            let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+            let (panel, view) = cx.add_window_view(|window, cx| {
+                let mut config = con_core::Config::default();
+                config.terminal.font_family = family.to_string();
+                let mut panel = SettingsPanel::new(
+                    &config,
+                    crate::model_registry::ModelRegistry::new(),
+                    runtime,
+                    window,
+                    cx,
+                );
+                panel.standalone = true;
+                panel.visible = true;
+                panel.active_section = super::SettingsSection::Appearance;
+                panel
+            });
+            view.simulate_resize(gpui::size(gpui::px(width), gpui::px(680.0)));
+            let row = view.debug_bounds("settings-row-Terminal Font").unwrap();
+            let name = view
+                .debug_bounds("settings-selected-font-Terminal Font")
+                .unwrap();
+            assert!(name.size.height > gpui::px(0.0));
+            assert!(name.left() >= row.left() && name.right() <= row.right());
+            assert!(name.bottom() <= row.bottom());
+            panel.read_with(view, |panel, cx| {
+                assert_eq!(
+                    panel
+                        .terminal_font_select
+                        .read(cx)
+                        .selected_value()
+                        .unwrap(),
+                    family
+                );
+            });
+        }
+    }
 
     #[gpui::test]
     fn long_save_errors_leave_settings_content_visible(cx: &mut gpui::TestAppContext) {

@@ -35,6 +35,15 @@ This is placement recovery, not focus recovery: it must not activate a window,
 change the first responder or move the borderless Quick Terminal, which owns
 its own geometry. Windows/Linux do not compile or install this observer.
 
+## Native window close ownership
+
+`Window::on_window_should_close` is a decision callback, not a dismissal command.
+It may reject closing to show Settings' inline unsaved-change confirmation, but
+must not call `Window::remove_window` when returning true. GPUI's native on-close
+handler owns removal after the platform accepts the decision. Explicit keyboard
+or button dismissal still needs its own removal path. Keeping these paths
+separate prevents native resources being dropped during the close query.
+
 ---
 
 ## Problem 1 — GPUI has no focused element in editor-only tabs
