@@ -4,6 +4,34 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.150`
+
+### Added
+
+**Tabs**
+
+- Tabs with multiple panes show a compact group of application icons, without
+  repeating the same app. This works in horizontal tabs and both vertical tab
+  layouts, including tabs containing file panes.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Tabs**
+
+- The All Tabs menu uses the same application icons as the tab strip, with
+  clearer typography, consistent spacing and a selected-tab checkmark.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Files**
+
+- Closing a zoomed file pane restores the remaining terminal panes and their
+  layout instead of leaving an empty area. Double-clicking a file in the tree
+  now keeps it open, just like double-clicking its editor tab.
+  _(PR [#510](https://github.com/nowledge-co/con-terminal/pull/510) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.149` - 2026-10-23
 
 ### Fixed
