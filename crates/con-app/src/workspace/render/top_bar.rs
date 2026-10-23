@@ -84,6 +84,7 @@ fn tab_menu_row(
                     ui_icon_px(theme, 16.0),
                     theme.foreground,
                     false,
+                    theme,
                 )),
         )
         .child(div().flex_1().min_w_0().truncate().child(title))
@@ -2291,7 +2292,10 @@ impl ConWorkspace {
                                 .items_center()
                                 .justify_center()
                                 .w(identity_width)
-                                .h(tab_identity_icon_size(theme))
+                                .h(crate::assets::tab_identity_group_height(
+                                    identity_icons.len(),
+                                    tab_identity_icon_size(theme),
+                                ))
                                 .flex_shrink_0()
                                 .child(self.tab_activity.read(cx).icon_group(
                                     identity_icons,

@@ -94,14 +94,17 @@ physical-pixel-sized preview cache. Do not decode or resize them during paint,
 read them from the filesystem at runtime, or apply translucent glyph opacity.
 Multi-pane tabs retain a deduplicated identity list from each pane's active
 content. Normalize asset aliases before deduplication; inactive surfaces are not
-additional panes. Show one full-size primary app and one smaller, upper-leading
-secondary identity. Keep both whole silhouettes: no cropped fragments, extra
-backing rectangles or overprinted counts. Spread the pair slightly farther in
-expanded navigation than in compact navigation, keeping overlap below half of
-the secondary icon. Reserve the group's actual width before the title; additional
-apps do not grow the group. Expanded sidebar rows share a leading well sized
-for the pair, so titles stay on one column even when neighboring tabs have one
-app. Keep original asset alpha and color. Prefer the tab's current identity
+additional panes. Multi-app identities use at most three small cards, with a
+full-size primary logo and two smaller rear logos. Give the cards a consistent
+rounded silhouette, one-point inner padding and solid theme-derived neutral
+fills: a lighter front card and quieter rear cards. This is a deliberately inset
+card material, not a bare dark patch under a logo. Keep logos whole and preserve
+their original alpha and color; do not crop them into strips or stamp counts on
+top. Center every layer on the same vertical axis, with a tighter horizontal
+offset in compact navigation. Reserve the group's actual width and height; further apps
+do not grow it. Expanded sidebar rows share a leading well sized for three
+cards, keeping titles in one column. Compact activity rings surround the whole
+stack without displacing it. Prefer the tab's current identity
 as primary only when it is present in the real pane identities; preserve the
 remaining layout order. The hover card shows the full deduplicated set without
 layering. Status remains one marker

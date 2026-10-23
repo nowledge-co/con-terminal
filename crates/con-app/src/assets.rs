@@ -130,7 +130,11 @@ pub(crate) fn unique_tab_identities(
 }
 
 fn tab_identity_card_step(size: gpui::Pixels, compact: bool) -> gpui::Pixels {
-    gpui::px((size.as_f32() * if compact { 0.44 } else { 0.56 }).round())
+    gpui::px((size.as_f32() * if compact { 0.16 } else { 0.22 }).round())
+}
+
+pub(crate) fn tab_identity_group_height(count: usize, size: gpui::Pixels) -> gpui::Pixels {
+    size + gpui::px(if count > 1 { 2.0 } else { 0.0 })
 }
 
 pub(crate) fn tab_identity_group_width(
@@ -141,16 +145,17 @@ pub(crate) fn tab_identity_group_width(
     if count <= 1 {
         size
     } else {
-        size + tab_identity_card_step(size, compact)
+        size + gpui::px(2.0) + tab_identity_card_step(size, compact) * (count.min(3) - 1) as f32
     }
 }
 
-/// One primary app and one secondary identity keep multi-pane tabs legible.
+/// A bounded stack gives unlike application logos a consistent card silhouette.
 pub(crate) fn tab_identity_group(
     icons: &[&'static str],
     size: gpui::Pixels,
     color: gpui::Hsla,
     compact: bool,
+    theme: &gpui_component::Theme,
 ) -> gpui::AnyElement {
     use gpui::{InteractiveElement, IntoElement, ParentElement, Styled};
     if icons.len() <= 1 {
@@ -160,39 +165,51 @@ pub(crate) fn tab_identity_group(
             color,
         );
     }
-    let count = icons.len().min(2);
+    let count = icons.len().min(3);
     let step = tab_identity_card_step(size, compact);
     let mut group = gpui::div()
         .debug_selector(|| "tab-identity-group".into())
         .relative()
         .w(tab_identity_group_width(icons.len(), size, compact))
-        .h(size)
+        .h(tab_identity_group_height(icons.len(), size))
         .flex_shrink_0();
     for index in (0..count).rev() {
         let icon = icons[index];
-        let card_size = if index == 0 {
-            size
-        } else {
-            gpui::px((size.as_f32() * 0.8).round())
-        };
+        let card_size = size + gpui::px(if index == 0 { 2.0 } else { 0.0 });
+        let art_size = card_size - gpui::px(2.0);
+        let mut material = theme
+            .background
+            .opacity(1.0)
+            .blend(
+                theme
+                    .foreground
+                    .opacity(match (theme.is_dark(), index == 0) {
+                        (true, true) => 0.18,
+                        (true, false) => 0.10,
+                        (false, true) => 0.015,
+                        (false, false) => 0.07,
+                    }),
+            );
+        material.a = 1.0;
         let card = gpui::div()
             .debug_selector(move || format!("tab-identity-item-{index}"))
             .absolute()
             .left(step * (count - index - 1) as f32)
-            .top_0()
+            .top((tab_identity_group_height(count, size) - card_size) * 0.5)
             .size(card_size)
+            .rounded(gpui::px((size.as_f32() * 0.22).round()))
+            .bg(material)
+            .flex()
+            .items_center()
+            .justify_center()
             .flex_shrink_0();
         group = group.child(
             card.child(
                 gpui::div()
                     .debug_selector(move || format!("tab-identity-art-{index}"))
-                    .size(card_size)
+                    .size(art_size)
                     .flex_shrink_0()
-                    .child(tab_identity_icon(
-                        tab_identity_asset(icon),
-                        card_size,
-                        color,
-                    )),
+                    .child(tab_identity_icon(tab_identity_asset(icon), art_size, color)),
             ),
         );
     }
@@ -353,7 +370,8 @@ mod tests {
     }
 
     impl Render for IdentityGroupTestView {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            use gpui_component::ActiveTheme;
             tab_identity_group(
                 &[
                     "phosphor/terminal.svg",
@@ -364,14 +382,16 @@ mod tests {
                 px(self.size),
                 gpui::black(),
                 self.compact,
+                cx.theme(),
             )
         }
     }
 
     #[gpui::test]
-    fn multi_app_groups_show_two_whole_identities_without_growing_with_pane_count(
+    fn multi_app_card_stacks_keep_the_primary_whole_and_bound_three_layers(
         cx: &mut gpui::TestAppContext,
     ) {
+        cx.update(gpui_component::init);
         let (view, cx) = cx.add_window_view(|_, _| IdentityGroupTestView {
             count: 2,
             compact: false,
@@ -392,20 +412,30 @@ mod tests {
                     let second = cx.debug_bounds("tab-identity-item-1").unwrap();
                     assert!(first.left() > second.left());
                     assert!(second.right() > first.left());
-                    assert!(second.right() - first.left() <= second.size.width * 0.5);
-                    assert!(first.center().y > second.center().y);
-                    assert_eq!(first.size.width, px(size));
+                    assert_eq!(first.center().y, second.center().y);
+                    assert_eq!(first.size.width, px(size + 2.0));
                     assert_eq!(first.right(), group.right());
+                    assert_eq!(first.bottom(), group.bottom());
                     assert!(second.left() >= group.left());
+                    let primary_art = cx.debug_bounds("tab-identity-art-0").unwrap();
                     let rear_art = cx.debug_bounds("tab-identity-art-1").unwrap();
-                    assert_eq!(rear_art.size.width, px((size * 0.8).round()));
-                    assert_eq!(rear_art, second, "secondary art must not be cropped");
+                    assert_eq!(primary_art.size.width, px(size));
+                    assert_eq!(primary_art.center(), first.center());
+                    assert_eq!(rear_art.size.width, px(size - 2.0));
+                    assert_eq!(rear_art.center(), second.center());
                     assert_eq!(
                         group.size.width,
-                        tab_identity_group_width(2, px(size), compact)
+                        tab_identity_group_width(count.min(3), px(size), compact)
                     );
                     assert!(cx.debug_bounds("tab-identity-more").is_none());
-                    assert!(cx.debug_bounds("tab-identity-item-2").is_none());
+                    if count >= 3 {
+                        let third = cx.debug_bounds("tab-identity-item-2").unwrap();
+                        assert_eq!(third.left(), group.left());
+                        assert_eq!(third.center().y, group.center().y);
+                        assert_eq!(first.left() - second.left(), second.left() - third.left());
+                    } else {
+                        assert!(cx.debug_bounds("tab-identity-item-2").is_none());
+                    }
                     assert!(cx.debug_bounds("tab-identity-item-3").is_none());
                 }
             }

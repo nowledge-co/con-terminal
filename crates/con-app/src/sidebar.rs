@@ -1917,7 +1917,7 @@ impl SessionSidebar {
         let identity_width = if layout.compact {
             px(32.0)
         } else {
-            crate::assets::tab_identity_group_width(2, icon_size, false).max(px(32.0))
+            crate::assets::tab_identity_group_width(3, icon_size, false).max(px(32.0))
         };
         // A shared leading well keeps every title on one column, regardless of
         // how many distinct applications the row happens to contain.
@@ -3219,6 +3219,20 @@ mod tests {
         assert!(markers[0].size.height > brand.size.height);
 
         view.update(cx, |sidebar, cx| {
+            sidebar.sessions[0].pane_icons =
+                vec!["tab-terminal-refined.png", "tab-code.png", "tab-file.png"];
+            cx.notify();
+        });
+        let stack = cx.debug_bounds("tab-status-brand").unwrap();
+        let slot = cx.debug_bounds("tab-status-slot").unwrap();
+        let markers = rendered_rings(&view, cx);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].center(), slot.center());
+        assert_eq!(stack.center(), slot.center());
+        assert!(markers[0].size.width > stack.size.width);
+        assert!(markers[0].size.height > stack.size.height);
+
+        view.update(cx, |sidebar, cx| {
             sidebar.set_pinned(true, cx);
             sidebar.width_motion = crate::motion::SidebarMotion::new(1.0);
         });
@@ -3233,6 +3247,7 @@ mod tests {
         assert!(rendered_rings(&view, cx).is_empty());
         assert_eq!(busy_title, cx.debug_bounds("sidebar-session-name").unwrap());
         for icons in [
+            vec!["tab-terminal-refined.png"],
             vec!["tab-terminal-refined.png", "tab-code.png"],
             vec!["tab-terminal-refined.png", "tab-code.png", "tab-file.png"],
         ] {

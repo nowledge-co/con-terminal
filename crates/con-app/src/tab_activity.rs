@@ -160,6 +160,7 @@ impl TabActivity {
         let slot_size = if compact { px(32.0) } else { size };
         let icon_size = if compact { size.min(px(18.0)) } else { size };
         let group_width = crate::assets::tab_identity_group_width(icons.len(), icon_size, compact);
+        let group_height = crate::assets::tab_identity_group_height(icons.len(), icon_size);
         let mut slot = div()
             .debug_selector(|| "tab-status-slot".into())
             .relative()
@@ -168,7 +169,7 @@ impl TabActivity {
             .justify_center()
             .flex_shrink_0()
             .w(if compact { slot_size } else { group_width })
-            .h(slot_size);
+            .h(if compact { slot_size } else { group_height });
         if !active
             || (compact && matches!(visual, ActivityVisual::Busy | ActivityVisual::Progress(_)))
         {
@@ -176,10 +177,10 @@ impl TabActivity {
                 div()
                     .debug_selector(|| "tab-status-brand".into())
                     .w(group_width)
-                    .h(icon_size)
+                    .h(group_height)
                     .flex_shrink_0()
                     .child(crate::assets::tab_identity_group(
-                        icons, icon_size, color, compact,
+                        icons, icon_size, color, compact, theme,
                     )),
             );
         }
@@ -205,7 +206,7 @@ impl TabActivity {
                     .into_any_element();
             }
             let ring_size = if compact {
-                px(if icons.len() > 1 { 30.0 } else { 24.0 })
+                px(if icons.len() > 1 { 32.0 } else { 24.0 })
             } else {
                 slot_size.min(px(18.0))
             };
