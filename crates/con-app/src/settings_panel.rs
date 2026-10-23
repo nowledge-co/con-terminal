@@ -3324,7 +3324,7 @@ impl SettingsPanel {
                             .child(
                                 div()
                                     .flex()
-                                    .px(px(16.0))
+                                    .px(rems(1.0))
                                     .py(px(14.0))
                                     .flex_col()
                                     .gap(px(12.0))
@@ -3395,7 +3395,7 @@ impl SettingsPanel {
                             )
                             .child(
                                 div()
-                                    .mx(px(16.0))
+                                    .mx(rems(1.0))
                                     .h(px(1.0))
                                     .bg(theme.muted.opacity(0.10)),
                             )
@@ -3405,7 +3405,7 @@ impl SettingsPanel {
                                     .items_end()
                                     .justify_between()
                                     .gap(px(16.0))
-                                    .px(px(16.0))
+                                    .px(rems(1.0))
                                     .pb(px(14.0))
                                     .child(
                                         div()
@@ -3546,7 +3546,7 @@ impl SettingsPanel {
                 .child(group_label("Continuity", theme))
                 .child(card(theme, card_opacity).child(toggle_row(
                     "Restore Terminal Text",
-                    "Keep terminal text on restart continuity.",
+                    "Keep terminal output when you reopen Con.",
                     Switch::new("restore-terminal-text-toggle")
                         .checked(self.config.appearance.restore_terminal_text)
                         .small()
@@ -3586,7 +3586,7 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(
                             div()
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .py(px(13.0))
                                 .flex()
                                 .flex_col()
@@ -3614,7 +3614,7 @@ impl SettingsPanel {
                                 .flex()
                                 .flex_col()
                                 .gap(px(6.0))
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .py(px(12.0))
                                 .child(
                                     div()
@@ -3647,7 +3647,7 @@ impl SettingsPanel {
                                 .flex()
                                 .flex_col()
                                 .gap(px(6.0))
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .py(px(12.0))
                                 .child(
                                     div()
@@ -3855,7 +3855,7 @@ impl SettingsPanel {
         if count == 0 {
             return list.child(
                 div()
-                    .px(px(16.0))
+                    .px(rems(1.0))
                     .py(px(10.0))
                     .text_size(ui_px(cx.theme(), 12.0))
                     .text_color(muted)
@@ -3909,7 +3909,7 @@ impl SettingsPanel {
                     .items_center()
                     .justify_between()
                     .min_h(px(34.0))
-                    .px(px(16.0))
+                    .px(rems(1.0))
                     .hover(|style| style.bg(hover))
                     .child(
                         div()
@@ -3931,7 +3931,7 @@ impl SettingsPanel {
         }
         list.child(
             div()
-                .px(px(16.0))
+                .px(rems(1.0))
                 .pb(px(10.0))
                 .text_size(ui_px(cx.theme(), 12.0))
                 .text_color(muted)
@@ -4147,7 +4147,7 @@ impl SettingsPanel {
         // ── Built-in themes ──
         let mut theme_card_inner = div()
             .debug_selector(|| "settings-terminal-theme".into())
-            .px(px(16.0))
+            .px(rems(1.0))
             .py(px(12.0))
             .child(
                 div()
@@ -4205,11 +4205,8 @@ impl SettingsPanel {
             );
         }
 
-        let mut content = section_content(
-            "Appearance",
-            "Tweak the Con's textures, tastes and feels.",
-            theme,
-        );
+        let mut content =
+            section_content("Appearance", "Fonts, themes, and window appearance.", theme);
 
         content = content.child(
             card(theme, card_opacity)
@@ -4266,7 +4263,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Cursor", theme))
                 .child(
-                    card(theme, card_opacity).child(div().px(px(16.0)).child(select_row(
+                    card(theme, card_opacity).child(div().px(rems(1.0)).child(select_row(
                         "Cursor Style",
                         "Choose how the terminal insertion point is drawn.",
                         &self.cursor_style_select,
@@ -4457,7 +4454,7 @@ impl SettingsPanel {
                     card(theme, card_opacity)
                         .child(
                             div()
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .pt(px(12.0))
                                 .child(
                                     div()
@@ -4504,7 +4501,7 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(
                             div()
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .child(
                                     select_row(
                                         "Fit",
@@ -4517,7 +4514,7 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(
                             div()
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .child(
                                     select_row(
                                         "Position",
@@ -4547,7 +4544,7 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(
                             div()
-                                .px(px(16.0))
+                                .px(rems(1.0))
                                 .pb(px(12.0))
                                 .text_size(ui_px(theme, 12.0))
                                 .line_height(ui_px(theme, 18.0))
@@ -4568,7 +4565,7 @@ impl SettingsPanel {
 
     fn render_agent_avatar_picker(&self, card_opacity: f32, cx: &mut Context<Self>) -> Div {
         let selected = self.config.appearance.agent_avatar.clone();
-        let mut choices = div().flex().flex_wrap().gap(px(10.0));
+        let mut choices = div().flex().flex_wrap().gap(rems(0.5));
         for choice in AGENT_AVATARS {
             choices =
                 choices.child(self.render_agent_avatar_choice(choice, selected == choice.id, cx));
@@ -4584,14 +4581,14 @@ impl SettingsPanel {
                 card(theme, card_opacity)
                     .child(
                         div()
-                            .px(px(16.0))
+                            .px(rems(1.0))
                             .pt(px(12.0))
                             .text_size(ui_px(theme, 12.0))
                             .line_height(ui_px(theme, 18.0))
                             .text_color(theme.muted_foreground)
                             .child("Shown beside replies from Con's built-in agent."),
                     )
-                    .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(choices)),
+                    .child(div().px(rems(1.0)).pt(px(10.0)).pb(px(14.0)).child(choices)),
             )
     }
 
@@ -4601,96 +4598,36 @@ impl SettingsPanel {
         is_selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let avatar_id = choice.id.to_string();
-        let asset = SharedString::from(choice.asset);
-        let style = ButtonCustomVariant::new(cx)
-            .color(if is_selected {
-                theme.primary.opacity(0.10)
-            } else {
-                theme.muted.opacity(0.04)
-            })
-            .foreground(if is_selected {
-                theme.primary
-            } else {
-                theme.muted_foreground
-            })
-            .hover(if is_selected {
-                theme.primary.opacity(0.14)
-            } else {
-                theme.primary.opacity(0.06)
-            })
-            .active(theme.primary.opacity(0.14));
-
-        Button::new(SharedString::from(format!("agent-avatar-{avatar_id}")))
-            .custom(style)
-            .compact()
-            .w(ui_px(theme, 108.0))
-            .h_auto()
-            .p(px(0.0))
-            .rounded(px(10.0))
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.config.appearance.agent_avatar = avatar_id.clone();
-                cx.emit(AppearancePreview);
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .h(px(58.0))
-                            .child(img(asset).size(px(42.0)).object_fit(ObjectFit::Contain)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.0))
-                            .min_h(rems(1.75))
-                            .text_xs()
-                            .font_weight(if is_selected {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::MEDIUM
-                            })
-                            .text_color(if is_selected {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .children(if is_selected {
-                                Some(
-                                    svg()
-                                        .path("phosphor/check.svg")
-                                        .size(ui_icon_px(theme, 11.0))
-                                        .text_color(theme.primary),
-                                )
-                            } else {
-                                None
-                            })
-                            .child(choice.label),
-                    ),
-            )
+        appearance_image_choice(
+            format!("agent-avatar-{avatar_id}").into(),
+            choice.label,
+            choice.asset,
+            is_selected,
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.config.appearance.agent_avatar = avatar_id.clone();
+            cx.emit(AppearancePreview);
+            cx.notify();
+        }))
     }
 
-    /// Render a grid of theme preview cards.
+    /// Keep icon families together without adding a second text inset.
     fn render_app_icon_picker(&self, card_opacity: f32, cx: &mut Context<Self>) -> Div {
         let selected = self.config.appearance.app_icon.clone();
         let mut group_grids = Vec::new();
         for group in APP_ICON_GROUPS {
-            let mut grid = div().flex().flex_wrap().gap(px(10.0));
-            for choice in APP_ICONS.iter().filter(|icon| icon.group == *group) {
+            let members = APP_ICONS
+                .iter()
+                .filter(|icon| icon.group == *group)
+                .collect::<Vec<_>>();
+            let mut grid = div().flex().flex_wrap().gap(rems(0.5));
+            for choice in &members {
                 grid = grid.child(self.render_app_icon_choice(choice, selected == choice.id, cx));
             }
-            group_grids.push((*group, grid));
+            let show_heading = members.len() != 1 || members[0].label != *group;
+            group_grids.push((*group, show_heading, grid));
         }
 
         let theme = cx.theme();
@@ -4702,9 +4639,24 @@ impl SettingsPanel {
             "Previews X11 windows. Save to change the launcher (except Flatpak); your desktop may cache the old icon."
         };
 
-        let mut groups = div().flex().flex_col().gap(px(12.0));
-        for (group, grid) in group_grids {
-            groups = groups.child(group_label(group, theme)).child(grid);
+        let mut groups = div().flex().flex_col().gap(rems(1.0));
+        for (group, show_heading, grid) in group_grids {
+            groups = groups.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(rems(0.375))
+                    .when(show_heading, |this| {
+                        this.child(
+                            group_label(group, theme)
+                                .px(px(0.0))
+                                .pb(px(0.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.muted_foreground),
+                        )
+                    })
+                    .child(grid),
+            );
         }
 
         div()
@@ -4716,14 +4668,14 @@ impl SettingsPanel {
                 card(theme, card_opacity)
                     .child(
                         div()
-                            .px(px(16.0))
+                            .px(rems(1.0))
                             .pt(px(12.0))
                             .text_size(ui_px(theme, 12.0))
                             .line_height(ui_px(theme, 18.0))
                             .text_color(theme.muted_foreground)
                             .child(hint.to_string()),
                     )
-                    .child(div().px(px(16.0)).pt(px(10.0)).pb(px(14.0)).child(groups)),
+                    .child(div().px(rems(1.0)).pt(px(10.0)).pb(px(14.0)).child(groups)),
             )
     }
 
@@ -4733,87 +4685,32 @@ impl SettingsPanel {
         is_sel: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let icon_id = choice.id.to_string();
-        let asset = crate::assets::png_preview(choice.asset, 48.0);
-        let style = ButtonCustomVariant::new(cx)
-            .color(if is_sel {
-                theme.primary.opacity(0.10)
-            } else {
-                theme.muted.opacity(0.04)
-            })
-            .foreground(if is_sel {
-                theme.primary
-            } else {
-                theme.muted_foreground
-            })
-            .hover(if is_sel {
-                theme.primary.opacity(0.14)
-            } else {
-                theme.primary.opacity(0.06)
-            })
-            .active(theme.primary.opacity(0.14));
-
-        Button::new(SharedString::from(format!("app-icon-{icon_id}")))
-            .custom(style)
-            .compact()
-            .w(ui_px(theme, 96.0))
-            .h_auto()
-            .p(px(0.0))
-            .rounded(px(10.0))
-            .overflow_hidden()
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.config.appearance.app_icon = icon_id.clone();
-                crate::app_icon::apply_preview(this.icon_preview_owner, &icon_id);
-                crate::app_icon::sync_window_icons(cx);
-                cx.emit(AppearancePreview);
-                cx.notify();
-            }))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .h(px(72.0))
-                            .child(img(asset).size(px(48.0)).object_fit(ObjectFit::Contain)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .gap(px(4.0))
-                            .min_h(rems(1.75))
-                            .text_xs()
-                            .font_weight(if is_sel {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::MEDIUM
-                            })
-                            .text_color(if is_sel {
-                                theme.primary
-                            } else {
-                                theme.muted_foreground
-                            })
-                            .children(if is_sel {
-                                Some(
-                                    svg()
-                                        .path("phosphor/check.svg")
-                                        .size(ui_icon_px(theme, 10.0))
-                                        .text_color(theme.primary),
-                                )
-                            } else {
-                                None
-                            })
-                            .child(choice.label.to_string()),
-                    ),
-            )
+        let name = if choice.group == choice.label {
+            choice.label.to_string()
+        } else {
+            format!("{} {}", choice.group, choice.label)
+        };
+        appearance_image_choice(
+            format!("app-icon-{icon_id}").into(),
+            choice.label,
+            choice.asset,
+            is_sel,
+            cx,
+        )
+        .accessibility_label(format!(
+            "{}{}",
+            name,
+            if is_sel { ", selected" } else { "" }
+        ))
+        .tooltip(name)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.config.appearance.app_icon = icon_id.clone();
+            crate::app_icon::apply_preview(this.icon_preview_owner, &icon_id);
+            crate::app_icon::sync_window_icons(cx);
+            cx.emit(AppearancePreview);
+            cx.notify();
+        }))
     }
 
     fn render_theme_grid(
@@ -4986,28 +4883,6 @@ impl SettingsPanel {
         let suggestion_provider_select = self.suggestion_provider_select.clone();
         let suggestion_model_select = self.suggestion_model_select.clone();
         let routing_card = card(theme, card_opacity)
-            .child(
-                div()
-                    .px(px(16.0))
-                    .py(px(13.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Routing"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .line_height(rems(1.125))
-                            .text_color(theme.muted_foreground)
-                            .child("Choose a default model for agent and the fast path for inline command suggestions."),
-                    ),
-            )
-            .child(row_separator(theme))
             .child(searchable_select_row(
                     "Active Provider",
                     "Default provider for the agent panel, command palette actions, and AI fallback suggestions.",
@@ -5020,18 +4895,6 @@ impl SettingsPanel {
                     "Model override for the currently active provider.",
                     &active_model_select,
                     "Select a model…",
-                    theme,
-                mobile))
-            .child(toggle_row(
-                    "Auto-Approve Tools",
-                    "Allow the agent to run tools without per-action approval.",
-                    Switch::new("auto-approve-toggle")
-                        .checked(self.auto_approve)
-                        .small()
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.auto_approve = *checked;
-                            cx.notify();
-                        })),
                     theme,
                 mobile))
             .child(toggle_row(
@@ -5069,40 +4932,58 @@ impl SettingsPanel {
                         mobile)),
                 );
 
-        let behavior_card = card(theme, card_opacity).child(
-            div()
-                .px(px(14.0))
-                .py(px(12.0))
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("Behavior"),
-                )
-                .child(stacked_input_field(
-                    "Max Turns",
-                    "Tool-use turns before the session is forced to stop.",
-                    &max_turns_input,
-                    theme,
-                ))
-                .child(stacked_input_field(
-                    "Temperature",
-                    "Blank for provider default.",
-                    &temperature_input,
-                    theme,
-                )),
-        );
+        let behavior_card = card(theme, card_opacity)
+            .child(toggle_row(
+                "Auto-Approve Tools",
+                "Allow the agent to run tools without per-action approval.",
+                Switch::new("auto-approve-toggle")
+                    .checked(self.auto_approve)
+                    .small()
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.auto_approve = *checked;
+                        cx.notify();
+                    })),
+                theme,
+                mobile,
+            ))
+            .child(row_separator(theme))
+            .child(row_input_with_hint(
+                "Max Turns",
+                "Tool-use turns before the session is forced to stop.",
+                &max_turns_input,
+                theme,
+                mobile,
+            ))
+            .child(row_separator(theme))
+            .child(row_input_with_hint(
+                "Temperature",
+                "Blank for provider default.",
+                &temperature_input,
+                theme,
+                mobile,
+            ));
 
         let ai_layout = div()
             .flex()
             .flex_col()
             .flex_1()
-            .gap(px(12.0))
-            .child(routing_card)
-            .child(behavior_card);
+            .gap(rems(1.5))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("Routing", theme))
+                    .child(routing_card),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(group_label("Behavior", theme))
+                    .child(behavior_card),
+            );
 
         section_content("AI", "Model selection and AI harness configuration.", theme)
             .child(ai_layout)
@@ -5138,7 +5019,8 @@ impl SettingsPanel {
             ((viewport_w * 0.76).clamp(680.0, 980.0)).min((viewport_w - 32.0).max(320.0))
         };
         let provider_content_w =
-            (settings_surface_w - settings_sidebar_w - settings_content_pad * 2.0).max(0.0);
+            (settings_surface_w - settings_sidebar_w - settings_content_pad * 2.0)
+                .clamp(0.0, 840.0);
         let provider_sidebar_w = if mobile {
             px(0.0)
         } else if provider_content_w < 600.0 {
@@ -5298,7 +5180,7 @@ impl SettingsPanel {
 
         let model_card_content = card(theme, card_opacity).child(
             div()
-                .px(px(14.0))
+                .px(rems(1.0))
                 .py(px(12.0))
                 .flex()
                 .flex_col()
@@ -5417,7 +5299,7 @@ impl SettingsPanel {
             .child(
                 card(theme, card_opacity).child(
                     div()
-                        .px(px(14.0))
+                        .px(rems(1.0))
                         .py(px(12.0))
                         .flex()
                         .flex_col()
@@ -5674,7 +5556,7 @@ impl SettingsPanel {
             .children((!is_codex_local).then(||
                 card(theme, card_opacity).child(
                     div()
-                        .px(px(14.0))
+                        .px(rems(1.0))
                         .py(px(12.0))
                         .flex()
                         .flex_col()
@@ -5697,7 +5579,7 @@ impl SettingsPanel {
         let provider_column = if mobile {
             div().w_full().min_w_0().child(
                 card(theme, card_opacity).child(
-                    div().px(px(14.0)).py(px(12.0)).child(
+                    div().px(rems(1.0)).py(px(12.0)).child(
                         Select::new(&self.provider_navigation_select)
                             .placeholder("Select a provider…")
                             .small(),
@@ -5867,15 +5749,15 @@ impl SettingsPanel {
                         .justify_between()
                         .when(mobile, |this| this.flex_col().items_start().h_auto())
                         .min_h(rems(2.125))
-                        .px(px(16.0))
+                        .px(rems(1.0))
                         .hover(|s| s.bg(theme.muted.opacity(0.025)))
                         .child(
                             div()
                                 .when(mobile, |this| this.min_w_0().w_full())
-                                .text_xs()
-                                .line_height(rems(1.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.foreground.opacity(0.86))
+                                .min_w_0()
+                                .text_sm()
+                                .line_height(rems(1.25))
+                                .text_color(theme.foreground)
                                 .child(label.to_string()),
                         )
                         .child(badge_and_reset),
@@ -5906,15 +5788,14 @@ impl SettingsPanel {
                 .justify_between()
                 .when(mobile, |this| this.flex_col().items_start())
                 .gap(px(16.0))
-                .px(px(16.0))
+                .px(rems(1.0))
                 .min_h(rems(2.125))
                 .hover(|s| s.bg(theme.muted.opacity(0.025)))
                 .child(
                     div()
-                        .text_xs()
-                        .line_height(rems(1.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground.opacity(0.86))
+                        .text_sm()
+                        .line_height(rems(1.25))
+                        .text_color(theme.foreground)
                         .child("Select Tab by Number"),
                 )
                 .child(
@@ -5973,7 +5854,7 @@ impl SettingsPanel {
 
         let global_summon_card = card(theme, card_opacity).child(
             div()
-                .px(px(16.0))
+                .px(rems(1.0))
                 .py(px(13.0))
                 .flex()
                 .items_start()
@@ -6035,7 +5916,7 @@ impl SettingsPanel {
                 .justify_between()
                 .when(mobile, |this| this.flex_col().items_start().w_full())
                 .gap(px(16.0))
-                .px(px(16.0))
+                .px(rems(1.0))
                 .py(px(11.0))
                 .hover(|s| s.bg(theme.muted.opacity(0.035)))
                 .text_color(if global_summon_enabled {
@@ -6127,7 +6008,7 @@ impl SettingsPanel {
         let quick_terminal_card = card(theme, card_opacity)
             .child(
                 div()
-                    .px(px(16.0))
+                    .px(rems(1.0))
                     .py(px(13.0))
                     .flex()
                     .items_start()
@@ -6185,7 +6066,7 @@ impl SettingsPanel {
                     .justify_between()
                     .when(mobile, |this| this.flex_col().items_start().w_full())
                     .gap(px(16.0))
-                    .px(px(16.0))
+                    .px(rems(1.0))
                     .py(px(11.0))
                     .text_color(if quick_terminal_enabled {
                         theme.foreground
@@ -6395,13 +6276,20 @@ impl Render for SettingsPanel {
 
         // Sidebar
         let mut sidebar = div()
+            .id("settings-navigation-scroll")
+            .debug_selector(|| "settings-navigation".into())
             .flex()
             .flex_col()
             .w(sidebar_w)
+            .bg(theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.035 } else { 0.025 }))
             .pt(px(8.0))
             .pb(px(12.0))
             .px(if narrow { px(4.0) } else { px(8.0) })
             .gap(px(2.0))
+            .min_h_0()
+            .overflow_y_scroll()
             .flex_shrink_0();
 
         for section in ALL_SECTIONS {
@@ -6411,11 +6299,13 @@ impl Render for SettingsPanel {
                 .id(SharedString::from(format!("nav-{}", section.label())))
                 .flex()
                 .items_center()
-                .h(px(32.0))
+                .h(rems(2.25))
                 .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(if is_active {
-                    theme.muted.opacity(0.15)
+                    theme
+                        .foreground
+                        .opacity(if theme.is_dark() { 0.09 } else { 0.065 })
                 } else {
                     theme.transparent
                 })
@@ -6433,7 +6323,7 @@ impl Render for SettingsPanel {
                     if is_active {
                         s
                     } else {
-                        s.bg(theme.muted.opacity(0.08))
+                        s.bg(theme.foreground.opacity(0.04))
                     }
                 })
                 .on_mouse_down(
@@ -6870,6 +6760,18 @@ impl Render for SettingsPanel {
                     .flex_1()
                     .min_h_0()
                     .child(sidebar)
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-navigation-divider".into())
+                            .w(px(1.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .bg(theme.foreground.opacity(if theme.is_dark() {
+                                0.10
+                            } else {
+                                0.08
+                            })),
+                    )
                     .child(content_scroll),
             );
 
@@ -6964,6 +6866,110 @@ fn update_download_url(state: &crate::updater::CheckState) -> Option<String> {
 
 // ── Reusable building blocks ──────────────────────────────────────
 
+fn appearance_image_choice(
+    id: SharedString,
+    label: &str,
+    asset: &'static str,
+    selected: bool,
+    cx: &App,
+) -> Button {
+    let theme = cx.theme();
+    let ink = theme.foreground;
+    let fill = if selected {
+        if theme.is_dark() { 0.10 } else { 0.075 }
+    } else {
+        0.0
+    };
+    let image_size = ui_px(theme, 44.0);
+    let debug_id = format!("settings-choice-{id}");
+    let image_id = format!("{debug_id}-image");
+    let label_id = format!("{debug_id}-label");
+    let selected_id = format!("{debug_id}-selected");
+    Button::new(id)
+        .accessibility_label(format!(
+            "{label}{}",
+            if selected { ", selected" } else { "" }
+        ))
+        .tooltip(label.to_string())
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(ink.opacity(fill))
+                .foreground(if selected {
+                    ink
+                } else {
+                    theme.muted_foreground
+                })
+                .hover(ink.opacity(if selected { fill + 0.025 } else { 0.04 }))
+                .active(ink.opacity(0.14)),
+        )
+        .compact()
+        .w(rems(6.0))
+        .h_auto()
+        .p(px(0.0))
+        .rounded(px(8.0))
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .flex()
+                .flex_col()
+                .p(rems(0.25))
+                .debug_selector(move || debug_id)
+                .child(
+                    div()
+                        .h(rems(3.5))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .debug_selector(move || image_id)
+                        .child(
+                            img(crate::assets::png_preview(asset, image_size.as_f32()))
+                                .size(image_size)
+                                .object_fit(ObjectFit::Contain),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(rems(2.0))
+                        .px(rems(0.25))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .debug_selector(move || label_id)
+                        .text_xs()
+                        .line_height(rems(1.0))
+                        .text_align(TextAlign::Center)
+                        .font_weight(if selected {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        })
+                        .child(div().min_w_0().child(label.to_string())),
+                )
+                .when(selected, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top(rems(0.25))
+                            .right(rems(0.25))
+                            .debug_selector(move || selected_id)
+                            .size(rems(1.0))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(theme.primary.opacity(0.12))
+                            .child(
+                                svg()
+                                    .path("phosphor/check.svg")
+                                    .size(rems(0.625))
+                                    .text_color(theme.primary),
+                            ),
+                    )
+                }),
+        )
+}
+
 fn section_content(title: &str, subtitle: &str, theme: &gpui_component::Theme) -> Div {
     section_content_with_trailing(title, subtitle, None, theme)
 }
@@ -6974,37 +6980,58 @@ fn section_content_with_trailing(
     trailing: Option<AnyElement>,
     theme: &gpui_component::Theme,
 ) -> Div {
-    let mut title_row = div().flex().items_center().justify_between().child(
-        div()
-            .text_size(rems(1.1875))
-            .line_height(rems(1.5))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(title.to_string()),
-    );
+    let mut title_row = div()
+        .flex()
+        .items_start()
+        .justify_between()
+        .gap(rems(1.0))
+        .child(
+            div()
+                .min_w_0()
+                .text_size(rems(1.1875))
+                .line_height(rems(1.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title.to_string()),
+        );
     if let Some(trailing) = trailing {
         title_row = title_row.child(trailing);
     }
 
-    div().flex().flex_col().gap(px(20.0)).child(
-        div().flex().flex_col().gap(px(6.0)).child(title_row).child(
+    div()
+        .w_full()
+        .max_w(px(840.0))
+        .mx_auto()
+        .flex()
+        .flex_col()
+        .gap(rems(1.5))
+        .child(
             div()
-                .max_w(px(520.0))
-                .text_xs()
-                .line_height(rems(1.1875))
-                .text_color(theme.muted_foreground)
-                .child(subtitle.to_string()),
-        ),
-    )
+                .flex()
+                .flex_col()
+                .gap(rems(0.375))
+                .px(rems(1.0))
+                .pb(rems(0.25))
+                .child(title_row)
+                .child(
+                    div()
+                        .max_w(px(520.0))
+                        .text_xs()
+                        .line_height(rems(1.1875))
+                        .text_color(theme.muted_foreground)
+                        .child(subtitle.to_string()),
+                ),
+        )
 }
 
 fn group_label(text: &str, theme: &gpui_component::Theme) -> Div {
     div()
         .debug_selector(|| format!("settings-group-{text}"))
         .text_xs()
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.muted_foreground)
-        .px(px(2.0))
-        .pb(px(2.0))
+        .line_height(rems(1.125))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme.foreground)
+        .px(rems(1.0))
+        .pb(rems(0.125))
         .child(text.to_string())
 }
 
@@ -7012,13 +7039,26 @@ fn card(theme: &gpui_component::Theme, opacity: f32) -> Div {
     div()
         .flex()
         .flex_col()
-        .rounded(px(12.0))
+        .flex_shrink_0()
+        .rounded(px(10.0))
         .overflow_hidden()
-        .bg(theme.background.opacity(opacity.clamp(0.35, 0.98)))
+        .bg(theme
+            .foreground
+            .opacity((if theme.is_dark() { 0.045 } else { 0.025 }) * opacity.clamp(0.35, 1.0)))
 }
 
-fn row_separator(_theme: &gpui_component::Theme) -> Div {
-    div().h(px(6.0))
+fn row_separator(theme: &gpui_component::Theme) -> Div {
+    div().h(px(1.0)).flex_shrink_0().mx(rems(1.0)).bg(theme
+        .foreground
+        .opacity(if theme.is_dark() { 0.07 } else { 0.055 }))
+}
+
+/// One trailing column for fields, menus and sliders; switches stay trailing-aligned.
+fn settings_control(mobile: bool) -> Div {
+    div()
+        .min_w_0()
+        .when(mobile, |this| this.w_full())
+        .when(!mobile, |this| this.w(relative(0.44)).flex_shrink_0())
 }
 
 fn row_field(label: &str, input: &Entity<InputState>, mobile: bool) -> Div {
@@ -7028,7 +7068,7 @@ fn row_field(label: &str, input: &Entity<InputState>, mobile: bool) -> Div {
         .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
         .gap(rems(1.0))
-        .px(px(16.0))
+        .px(rems(1.0))
         .py(rems(0.625))
         .when(!mobile, |this| this.min_h(rems(2.875)))
         .child(
@@ -7036,16 +7076,13 @@ fn row_field(label: &str, input: &Entity<InputState>, mobile: bool) -> Div {
                 .debug_selector(|| format!("settings-field-{label}-label"))
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
-                .flex_shrink_0()
-                .when(!mobile, |this| this.w(rems(7.5)))
+                .min_w_0()
+                .flex_1()
                 .child(label.to_string()),
         )
         .child(
-            div()
+            settings_control(mobile)
                 .debug_selector(|| format!("settings-field-{label}-control"))
-                .flex_1()
-                .when(mobile, |this| this.min_w_0().w_full())
-                .when(!mobile, |this| this.min_w(px(160.0)))
                 .child(Input::new(input)),
         )
 }
@@ -7062,8 +7099,8 @@ fn row_input_with_hint(
         .items_center()
         .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
-        .gap(px(18.0))
-        .px(px(16.0))
+        .gap(rems(1.0))
+        .px(rems(1.0))
         .py(px(10.0))
         .child(
             div()
@@ -7075,6 +7112,7 @@ fn row_input_with_hint(
                 .when(mobile, |this| this.w_full())
                 .child(
                     div()
+                        .debug_selector(|| format!("settings-field-{label}-label"))
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .child(label.to_string()),
@@ -7088,10 +7126,8 @@ fn row_input_with_hint(
                 ),
         )
         .child(
-            div()
-                .flex_1()
-                .when(mobile, |this| this.min_w_0().w_full())
-                .when(!mobile, |this| this.min_w(px(180.0)).max_w(px(320.0)))
+            settings_control(mobile)
+                .debug_selector(|| format!("settings-field-{label}-control"))
                 .child(Input::new(input)),
         )
 }
@@ -7110,8 +7146,8 @@ fn slider_row(
         .items_center()
         .when(mobile, |this| this.flex_col().items_start())
         .justify_between()
-        .gap(px(18.0))
-        .px(px(16.0))
+        .gap(rems(1.0))
+        .px(rems(1.0))
         .py(px(12.0))
         .child(
             div()
@@ -7119,8 +7155,8 @@ fn slider_row(
                 .flex_col()
                 .gap(px(3.0))
                 .min_w_0()
+                .flex_1()
                 .when(mobile, |this| this.w_full())
-                .when(!mobile, |this| this.w(px(380.0)))
                 .child(
                     div()
                         .text_sm()
@@ -7137,13 +7173,11 @@ fn slider_row(
                 ),
         )
         .child(
-            div()
+            settings_control(mobile)
                 .debug_selector(|| format!("settings-control-{label}"))
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .when(mobile, |this| this.w_full().min_w_0())
-                .when(!mobile, |this| this.w(px(260.0)).flex_shrink_0())
                 .child(
                     div().flex().justify_end().child(
                         div()
@@ -7177,7 +7211,7 @@ fn font_select_row(
         .flex()
         .flex_col()
         .gap(px(8.0))
-        .px(px(16.0))
+        .px(rems(1.0))
         .py(px(12.0))
         .child(
             div()
@@ -7226,8 +7260,8 @@ fn searchable_select_row(
         .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
-        .gap(px(16.0))
-        .px(px(16.0))
+        .gap(rems(1.0))
+        .px(rems(1.0))
         .py(px(12.0))
         .child(
             div()
@@ -7235,8 +7269,8 @@ fn searchable_select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .min_w_0()
+                .flex_1()
                 .when(mobile, |this| this.w_full())
-                .when(!mobile, |this| this.w(px(340.0)))
                 .child(
                     div()
                         .text_sm()
@@ -7253,10 +7287,8 @@ fn searchable_select_row(
                 ),
         )
         .child(
-            div()
+            settings_control(mobile)
                 .debug_selector(|| format!("settings-control-{label}"))
-                .when(mobile, |this| this.w_full().min_w_0())
-                .when(!mobile, |this| this.w(px(236.0)).flex_shrink_0())
                 .child(
                     Select::new(select)
                         .placeholder(placeholder.to_string())
@@ -7278,7 +7310,7 @@ fn select_row(
         .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
-        .gap(px(16.0))
+        .gap(rems(1.0))
         .py(px(12.0))
         .child(
             div()
@@ -7286,8 +7318,8 @@ fn select_row(
                 .flex_col()
                 .gap(px(3.0))
                 .min_w_0()
+                .flex_1()
                 .when(mobile, |this| this.w_full())
-                .when(!mobile, |this| this.w(px(320.0)))
                 .child(
                     div()
                         .text_sm()
@@ -7304,10 +7336,8 @@ fn select_row(
                 ),
         )
         .child(
-            div()
+            settings_control(mobile)
                 .debug_selector(|| format!("settings-control-{label}"))
-                .when(mobile, |this| this.w_full().min_w_0())
-                .when(!mobile, |this| this.w(px(188.0)).flex_shrink_0())
                 .child(Select::new(select).small()),
         )
 }
@@ -7325,8 +7355,8 @@ fn toggle_row(
         .when(mobile, |this| this.flex_col().items_start())
         .items_start()
         .justify_between()
-        .gap(px(16.0))
-        .px(px(16.0))
+        .gap(rems(1.0))
+        .px(rems(1.0))
         .py(px(12.0))
         .child(
             div()
@@ -7334,8 +7364,8 @@ fn toggle_row(
                 .flex_col()
                 .gap(px(3.0))
                 .min_w_0()
+                .flex_1()
                 .when(mobile, |this| this.w_full())
-                .when(!mobile, |this| this.w(px(360.0)))
                 .child(
                     div()
                         .text_sm()
@@ -7546,18 +7576,23 @@ fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {
         .flex()
         .items_center()
         .justify_between()
-        .px(px(16.0))
+        .px(rems(1.0))
         .min_h(rems(2.125))
         .hover(|s| s.bg(theme.muted.opacity(0.025)))
         .child(
             div()
-                .text_xs()
-                .line_height(rems(1.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.foreground.opacity(0.86))
+                .min_w_0()
+                .flex_1()
+                .text_sm()
+                .line_height(rems(1.25))
+                .text_color(theme.foreground)
                 .child(action.to_string()),
         )
-        .child(crate::keycaps::keycaps_for_binding(shortcut, theme))
+        .child(
+            div()
+                .flex_shrink_0()
+                .child(crate::keycaps::keycaps_for_binding(shortcut, theme)),
+        )
 }
 
 pub(crate) fn provider_label(provider: &ProviderKind) -> &'static str {
@@ -7627,6 +7662,87 @@ mod tests {
         ProviderKind, ProviderOAuthState, ResponsiveMode, SettingsPanel, keybinding_default,
         keybinding_field, keybinding_field_mut, provider_connection_status,
     };
+
+    #[gpui::test]
+    fn appearance_image_choices_keep_geometry_when_selection_changes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        for (width, font_size, mode) in [
+            (920.0, 16.0, gpui_component::ThemeMode::Light),
+            (920.0, 24.0, gpui_component::ThemeMode::Dark),
+            (375.0, 16.0, gpui_component::ThemeMode::Dark),
+            (375.0, 24.0, gpui_component::ThemeMode::Light),
+        ] {
+            let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+            let (panel, view) = cx.add_window_view(|window, cx| {
+                gpui_component::Theme::change(mode, Some(window), cx);
+                gpui_component::Theme::update(cx, |theme| theme.font_size = gpui::px(font_size));
+                window.set_rem_size(gpui::px(font_size));
+                let mut panel = SettingsPanel::new(
+                    &con_core::Config::default(),
+                    crate::model_registry::ModelRegistry::new(),
+                    runtime,
+                    window,
+                    cx,
+                );
+                panel.standalone = true;
+                panel.visible = true;
+                panel.active_section = super::SettingsSection::Appearance;
+                panel
+            });
+            view.simulate_resize(gpui::size(gpui::px(width), gpui::px(680.0)));
+            let mut tile_size = None;
+            for (tile, image, name) in [
+                (
+                    "settings-choice-app-icon-default",
+                    "settings-choice-app-icon-default-image",
+                    "settings-choice-app-icon-default-label",
+                ),
+                (
+                    "settings-choice-app-icon-raccoon-tail-a6",
+                    "settings-choice-app-icon-raccoon-tail-a6-image",
+                    "settings-choice-app-icon-raccoon-tail-a6-label",
+                ),
+                (
+                    "settings-choice-agent-avatar-raccoon",
+                    "settings-choice-agent-avatar-raccoon-image",
+                    "settings-choice-agent-avatar-raccoon-label",
+                ),
+                (
+                    "settings-choice-agent-avatar-raccoon-girl-longhair",
+                    "settings-choice-agent-avatar-raccoon-girl-longhair-image",
+                    "settings-choice-agent-avatar-raccoon-girl-longhair-label",
+                ),
+            ] {
+                let tile = view
+                    .debug_bounds(tile)
+                    .unwrap_or_else(|| panic!("missing {tile}"));
+                let image = view.debug_bounds(image).expect("image frame");
+                let name = view.debug_bounds(name).expect("name frame");
+                if let Some(size) = tile_size {
+                    assert_eq!(tile.size, size);
+                }
+                tile_size = Some(tile.size);
+                assert!(tile.left() >= gpui::px(0.0) && tile.right() <= gpui::px(width));
+                assert!(image.top() >= tile.top() && image.bottom() <= name.top());
+                assert!(name.bottom() <= tile.bottom());
+                assert_eq!(image.center().x, name.center().x);
+            }
+            let selector = "settings-choice-agent-avatar-raccoon-girl-longhair-label";
+            let before = view.debug_bounds(selector).unwrap();
+            panel.update(view, |panel, cx| {
+                panel.config.appearance.agent_avatar = "raccoon-girl-longhair".into();
+                cx.notify();
+            });
+            assert_eq!(before, view.debug_bounds(selector).unwrap());
+            assert!(
+                view.debug_bounds("settings-choice-agent-avatar-raccoon-girl-longhair-selected")
+                    .is_some()
+            );
+        }
+    }
 
     #[gpui::test]
     fn native_close_approval_keeps_windows_alive_until_platform_close(
@@ -7800,6 +7916,21 @@ mod tests {
             });
             view.simulate_resize(gpui::size(gpui::px(width), gpui::px(680.0)));
 
+            let navigation = view
+                .debug_bounds("settings-navigation")
+                .expect("navigation");
+            let divider = view
+                .debug_bounds("settings-navigation-divider")
+                .expect("navigation divider");
+            let body = view
+                .debug_bounds("settings-content-scroll")
+                .expect("content");
+            assert_eq!(divider.size.width, gpui::px(1.0));
+            assert_eq!(navigation.right(), divider.left());
+            assert_eq!(divider.right(), body.left());
+            assert_eq!(navigation.top(), divider.top());
+            assert_eq!(navigation.bottom(), divider.bottom());
+
             let title = view
                 .debug_bounds("settings-window-title")
                 .expect("window title");
@@ -7869,6 +8000,24 @@ mod tests {
                     "appearance sections out of order: {pair:?}"
                 );
             }
+            let controls = [
+                "settings-field-UI Size-control",
+                "settings-field-Terminal Size-control",
+                "settings-control-Add Fallback",
+                "settings-control-Cursor Style",
+                "settings-control-Terminal Glass",
+            ]
+            .map(|selector| view.debug_bounds(selector).expect("appearance control"));
+            for control in &controls[1..] {
+                assert!(
+                    (control.left() - controls[0].left()).abs() <= gpui::px(1.0),
+                    "control columns differ at {font_size}px / {width}px: {controls:?}"
+                );
+                assert!(
+                    (control.right() - controls[0].right()).abs() <= gpui::px(1.0),
+                    "control trailing edges differ at {font_size}px / {width}px: {controls:?}"
+                );
+            }
             for (row_selector, hint_selector, control_selector) in [
                 (
                     "settings-row-Add Fallback",
@@ -7907,6 +8056,29 @@ mod tests {
                 assert!(
                     hint.bottom() <= row.bottom() - gpui::px(11.0),
                     "{hint_selector} clipped at {font_size}px / {width}px: {hint:?} {row:?}"
+                );
+            }
+            panel.update(view, |panel, cx| {
+                panel.active_section = super::SettingsSection::Ai;
+                cx.notify();
+            });
+            let ai_controls = [
+                "settings-control-Active Provider",
+                "settings-control-Active Model",
+                "settings-control-Suggestions Provider",
+                "settings-control-Suggestions Model",
+                "settings-field-Max Turns-control",
+                "settings-field-Temperature-control",
+            ]
+            .map(|selector| view.debug_bounds(selector).expect("AI control"));
+            for control in &ai_controls[1..] {
+                assert!(
+                    (control.left() - ai_controls[0].left()).abs() <= gpui::px(1.0),
+                    "AI control columns differ at {font_size}px / {width}px: {ai_controls:?}"
+                );
+                assert!(
+                    (control.right() - ai_controls[0].right()).abs() <= gpui::px(1.0),
+                    "AI control edges differ at {font_size}px / {width}px: {ai_controls:?}"
                 );
             }
             panel.update(view, |panel, cx| {

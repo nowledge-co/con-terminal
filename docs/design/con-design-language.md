@@ -65,6 +65,30 @@ The goal is not to imitate any one reference. The goal is to produce a design la
 
 con is light-first (Flexoki Light default) but must excel in both themes.
 
+### Settings Layout
+
+- Navigation has its own quiet foreground-derived fill and a single 1px semantic
+  divider from the scrolling form. Selected navigation uses a neutral fill and
+  solid text, not an accent-colored marker.
+- Page headings, group headings and field labels share the same text inset.
+  Groups have a low-opacity neutral fill; indentation alone must not convey
+  hierarchy. Avoid nested containers for otherwise equivalent settings.
+- Input fields, selects and sliders share a trailing column (44% of the row's
+  inner width). Switches align to the trailing edge. Below 600px, labels and
+  controls stack and controls use the available width. Font-family selectors
+  retain a full-width layout and a wrapping selected-name readout.
+- Keep one content measure across sections, capped at 840px, and use rem-based
+  text insets so larger UI fonts preserve alignment. Headings use weight, not
+  extra indentation, to distinguish groups from fields.
+- These are shared GPUI layout rules, not changes to platform title bars,
+  native Settings close ownership, configuration saving or preview behavior.
+- App Icon and Agent Avatar use the same image-choice geometry and neutral
+  selected/hover fills. A selected check occupies a separate corner slot rather
+  than shifting the name. Image frames preserve aspect ratio; labels have room
+  for two lines. Icon-family headings do not add another text inset. Both
+  pickers use the size/scale-aware PNG preview cache instead of uploading the
+  full source image for a small thumbnail.
+
 ### Light Mode (Default) - Apple Style
 
 - **Base**: Pure white `#ffffff`
