@@ -44,6 +44,60 @@ fn horizontal_tab_icon(icon: &'static str) -> &'static str {
     crate::assets::tab_identity_asset(icon)
 }
 
+fn tab_menu_row(
+    session_id: u64,
+    title: SharedString,
+    icons: &[&'static str],
+    active: bool,
+    theme: &gpui_component::Theme,
+) -> AnyElement {
+    div()
+        .id(("tab-menu-row", session_id))
+        .role(gpui::Role::Label)
+        .aria_label(title.clone())
+        .flex()
+        .items_center()
+        .w_full()
+        .min_w_0()
+        .h(ui_px(theme, 28.0))
+        .px(px(8.0))
+        .gap(px(10.0))
+        .font_family(theme.font_family.clone())
+        .text_size(ui_px(theme, 12.0))
+        .line_height(ui_px(theme, 18.0))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(theme.foreground)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(22.0))
+                .flex_shrink_0()
+                .child(crate::assets::tab_identity_group(
+                    icons,
+                    ui_icon_px(theme, 16.0),
+                    theme.foreground,
+                )),
+        )
+        .child(div().flex_1().min_w_0().truncate().child(title))
+        .child(
+            div()
+                .size(px(16.0))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(active.then(|| {
+                    svg()
+                        .path("phosphor/check.svg")
+                        .size(px(12.0))
+                        .text_color(theme.foreground)
+                })),
+        )
+        .into_any_element()
+}
+
 fn schedule_tab_reveal(
     selection: (u64, usize, usize),
     bounds: Bounds<Pixels>,
@@ -2667,7 +2721,7 @@ impl ConWorkspace {
                     )
                     .debug_selector(|| "horizontal-tab-menu".into())
                     .dropdown_menu(move |menu, _, cx| {
-                        let mut menu = menu.scrollable(true);
+                        let mut menu = menu.min_w(px(248.0)).max_w(px(360.0)).scrollable(true);
                         let Some(entity) = workspace.upgrade() else {
                             return menu;
                         };
@@ -2687,27 +2741,42 @@ impl ConWorkspace {
                                     tab.summary_id,
                                     SharedString::from(name.to_owned()),
                                     index == this.active_tab,
+                                    this.sidebar
+                                        .read(cx)
+                                        .session(index)
+                                        .map(|entry| entry.identity_icons().to_vec())
+                                        .unwrap_or_else(|| vec!["phosphor/terminal.svg"]),
                                 )
                             })
                             .collect::<Vec<_>>();
-                        for (session_id, title, active) in &entries {
+                        for (session_id, title, active, icons) in &entries {
                             let session_id = *session_id;
                             let workspace = workspace.clone();
+                            let title = title.clone();
+                            let active = *active;
+                            let icons = icons.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(title.clone()).checked(*active).on_click(
-                                    move |_, window, cx| {
-                                        let _ = workspace.update(cx, |this, cx| {
-                                            // Resolve identity on click: tabs may close or reorder while the menu is open.
-                                            if let Some(index) = this
-                                                .tabs
-                                                .iter()
-                                                .position(|tab| tab.summary_id == session_id)
-                                            {
-                                                this.activate_tab(index, window, cx);
-                                            }
-                                        });
-                                    },
-                                ),
+                                PopupMenuItem::element(move |_, cx| {
+                                    tab_menu_row(
+                                        session_id,
+                                        title.clone(),
+                                        &icons,
+                                        active,
+                                        cx.theme(),
+                                    )
+                                })
+                                .on_click(move |_, window, cx| {
+                                    let _ = workspace.update(cx, |this, cx| {
+                                        // Resolve identity on click: tabs may close or reorder while the menu is open.
+                                        if let Some(index) = this
+                                            .tabs
+                                            .iter()
+                                            .position(|tab| tab.summary_id == session_id)
+                                        {
+                                            this.activate_tab(index, window, cx);
+                                        }
+                                    });
+                                }),
                             );
                         }
                         menu
