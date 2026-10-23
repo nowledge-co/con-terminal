@@ -2713,6 +2713,8 @@ impl PaneTree {
             };
             let activate_view = view.clone();
             let focus_cb_tab = focus_pane_cb.clone();
+            let middle_close_view = view.clone();
+            let focus_cb_middle = focus_pane_cb.clone();
             let mut tab = div()
                 .id(ElementId::Name(
                     format!("editor-file-tab-{pane_id}-{index}").into(),
@@ -2743,6 +2745,15 @@ impl PaneTree {
                         if event.click_count == 2 {
                             editor.keep_tab(index, cx);
                         }
+                    });
+                })
+                // Middle-click closes the tab, matching the close button.
+                .on_mouse_up(MouseButton::Middle, move |_event, window, cx| {
+                    cx.stop_propagation();
+                    focus_cb_middle(pane_id, window, cx);
+                    middle_close_view.update(cx, |editor, cx| {
+                        editor.focus_handle(cx).focus(window, cx);
+                        editor.close_tab(index, cx);
                     });
                 });
 
@@ -4708,6 +4719,37 @@ mod tests {
         editor.update(cx, |editor, cx| {
             editor.open_temporary_file("/tmp/con-preview-next.png".into(), cx);
             assert_eq!(editor.tab_count(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn editor_file_tab_middle_click_closes_that_tab(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.md");
+        let second = dir.path().join("second.md");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        editor.update(cx, |editor, cx| {
+            editor.open_file(first.clone(), cx);
+            editor.open_file(second.clone(), cx);
+            editor.activate_tab_and_emit(0, cx);
+        });
+        cx.run_until_parked();
+        let (_root, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone(), false));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        // Aim at the inactive second tab's label, left of its close button.
+        let close = cx.debug_bounds("editor-file-close-1").unwrap();
+        let label = gpui::point(close.left() - px(24.0), close.center().y);
+        cx.simulate_mouse_down(label, MouseButton::Middle, Modifiers::default());
+        cx.simulate_mouse_up(label, MouseButton::Middle, Modifiers::default());
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.tab_count(), 1);
+            assert_eq!(editor.active_path(), Some(first.as_path()));
         });
     }
 
