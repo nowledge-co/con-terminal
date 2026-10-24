@@ -77,6 +77,7 @@ mod motion;
 mod mouse_sequence;
 mod pane_tree;
 mod process_name;
+mod provider_icons;
 mod reduced_motion;
 mod settings_panel;
 mod sidebar;

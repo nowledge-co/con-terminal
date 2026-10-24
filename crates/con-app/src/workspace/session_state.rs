@@ -268,6 +268,7 @@ impl ConWorkspace {
             ProviderKind::ChatGPT,
             ProviderKind::GitHubCopilot,
             ProviderKind::OpenAICompatible,
+            ProviderKind::Magpie,
             ProviderKind::MiniMax,
             ProviderKind::MiniMaxAnthropic,
             ProviderKind::Moonshot,

@@ -87,8 +87,13 @@ fn provider_connection_status(
 }
 
 enum ProviderModelFetchRequest {
+    PublicCatalog {
+        registry: ModelRegistry,
+        provider: ProviderKind,
+    },
     CodexLocal,
     OpenAICompatible {
+        provider: ProviderKind,
         base_url: String,
         api_key: Option<String>,
     },
@@ -100,14 +105,28 @@ enum ProviderModelFetchRequest {
 impl ProviderModelFetchRequest {
     async fn fetch(self) -> anyhow::Result<ProviderModelFetchResult> {
         match self {
+            Self::PublicCatalog { registry, provider } => {
+                registry.fetch().await?;
+                Ok(ProviderModelFetchResult::PublicCatalog {
+                    models: registry.public_catalog_models(&provider),
+                })
+            }
             Self::CodexLocal => Ok(ProviderModelFetchResult::CodexLocal {
                 models: con_agent::codex_local::fetch_models().await?,
             }),
-            Self::OpenAICompatible { base_url, api_key } => {
+            Self::OpenAICompatible {
+                provider,
+                base_url,
+                api_key,
+            } => {
                 let models =
                     ModelRegistry::fetch_openai_compatible_models(&base_url, api_key.as_deref())
                         .await?;
-                Ok(ProviderModelFetchResult::OpenAICompatible { base_url, models })
+                Ok(ProviderModelFetchResult::OpenAICompatible {
+                    provider,
+                    base_url,
+                    models,
+                })
             }
             Self::ChatGPT { config } => {
                 let models = ModelRegistry::fetch_chatgpt_subscription_models(&config).await?;
@@ -118,10 +137,14 @@ impl ProviderModelFetchRequest {
 }
 
 enum ProviderModelFetchResult {
+    PublicCatalog {
+        models: Vec<String>,
+    },
     CodexLocal {
         models: Vec<String>,
     },
     OpenAICompatible {
+        provider: ProviderKind,
         base_url: String,
         models: Vec<String>,
     },
@@ -134,6 +157,7 @@ impl ProviderModelFetchResult {
     fn models(&self) -> &[String] {
         match self {
             Self::OpenAICompatible { models, .. }
+            | Self::PublicCatalog { models }
             | Self::ChatGPT { models }
             | Self::CodexLocal { models } => models,
         }
@@ -305,6 +329,7 @@ const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
     ProviderKind::ChatGPT,
     ProviderKind::GitHubCopilot,
     ProviderKind::OpenAICompatible,
+    ProviderKind::Magpie,
     ProviderKind::MiniMax,
     ProviderKind::Moonshot,
     ProviderKind::ZAI,
@@ -503,10 +528,19 @@ impl SettingsPanel {
         preferred
     }
 
+    fn provider_model_placeholder(provider: &ProviderKind) -> &'static str {
+        if *provider == ProviderKind::Magpie {
+            "provider/model or group/name"
+        } else {
+            "Provider default or custom model ID"
+        }
+    }
+
     fn provider_api_key_placeholder(provider: &ProviderKind) -> &'static str {
         match provider {
             ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => "Override for advanced setups",
             ProviderKind::OpenAICompatible => "Optional, or OPENAI_API_KEY",
+            ProviderKind::Magpie => "Optional, or MAGPIE_API_KEY",
             _ => "sk-.. or OPENAI_API_KEY",
         }
     }
@@ -523,6 +557,9 @@ impl SettingsPanel {
         match provider {
             ProviderKind::ChatGPT => "Leave blank for ChatGPT OAuth.",
             ProviderKind::GitHubCopilot => "Leave blank for GitHub OAuth.",
+            ProviderKind::Magpie => {
+                "Leave blank locally; remote gateways need a gateway key or env var."
+            }
             ProviderKind::OpenAICompatible => {
                 "Optional for local endpoints; use a key or env var when required."
             }
@@ -591,32 +628,14 @@ impl SettingsPanel {
     }
 
     fn provider_icon_path(provider: &ProviderKind) -> &'static str {
-        match Self::sidebar_provider_kind(provider) {
-            ProviderKind::Anthropic => "providers/anthropic.svg",
-            ProviderKind::OpenAI => "providers/openai.svg",
-            ProviderKind::CodexLocal => "phosphor/plugs-connected.svg",
-            ProviderKind::ChatGPT => "providers/openai.svg",
-            ProviderKind::GitHubCopilot => "providers/githubcopilot.svg",
-            ProviderKind::OpenAICompatible => "phosphor/plugs-connected.svg",
-            ProviderKind::MiniMax => "providers/minimax.svg",
-            ProviderKind::Moonshot => "providers/moonshot.svg",
-            ProviderKind::ZAI => "providers/zai.svg",
-            ProviderKind::DeepSeek => "providers/deepseek.svg",
-            ProviderKind::Groq => "providers/groq.svg",
-            ProviderKind::Gemini => "providers/gemini.svg",
-            ProviderKind::Ollama => "providers/ollama.svg",
-            ProviderKind::OpenRouter => "providers/openrouter.svg",
-            ProviderKind::Mistral => "providers/mistral.svg",
-            ProviderKind::Together => "providers/together.svg",
-            ProviderKind::Cohere => "providers/cohere.svg",
-            ProviderKind::Perplexity => "providers/perplexity.svg",
-            ProviderKind::XAI => "providers/xai.svg",
-            _ => "phosphor/plugs-connected.svg",
-        }
+        crate::provider_icons::provider_icon_path(provider)
     }
 
     fn provider_config_has_auth_signal(provider: &ProviderKind, config: &ProviderConfig) -> bool {
         // Local Codex owns auth. A stale/ignored Con key is not a readiness signal.
+        if *provider == ProviderKind::Magpie {
+            return config.model.as_ref().is_some_and(|v| !v.trim().is_empty());
+        }
         if *provider == ProviderKind::CodexLocal {
             return false;
         }
@@ -875,7 +894,9 @@ impl SettingsPanel {
     }
 
     fn provider_base_url_hint(provider: &ProviderKind) -> &'static str {
-        if Self::provider_endpoint_presets(provider).is_empty() {
+        if *provider == ProviderKind::Magpie {
+            "Blank for http://127.0.0.1:3425/v1"
+        } else if Self::provider_endpoint_presets(provider).is_empty() {
             "Blank for the default"
         } else {
             "Blank for provider default"
@@ -1170,6 +1191,9 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.model_input.update(cx, |input, cx| {
+            input.set_placeholder(Self::provider_model_placeholder(provider), window, cx);
+        });
         self.api_key_input.update(cx, |input, cx| {
             input.set_placeholder(Self::provider_api_key_placeholder(provider), window, cx);
         });
@@ -1316,7 +1340,11 @@ impl SettingsPanel {
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
-            s.set_placeholder("Provider default or custom model ID", window, cx);
+            s.set_placeholder(
+                Self::provider_model_placeholder(&selected_provider),
+                window,
+                cx,
+            );
             s.set_value(pc.model.clone().unwrap_or_default(), window, cx);
             s
         });
@@ -2508,11 +2536,7 @@ impl SettingsPanel {
     }
 
     fn fetch_selected_provider_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(
-            self.selected_provider,
-            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT | ProviderKind::CodexLocal
-        ) || self.provider_model_fetching
-        {
+        if self.provider_model_fetching {
             return;
         }
 
@@ -2525,12 +2549,13 @@ impl SettingsPanel {
 
         let fetch_request = match provider {
             ProviderKind::CodexLocal => ProviderModelFetchRequest::CodexLocal,
-            ProviderKind::OpenAICompatible => {
+            ProviderKind::OpenAICompatible | ProviderKind::Magpie => {
                 let Some(base_url) = provider_config
                     .base_url
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
+                    .or_else(|| provider.default_base_url())
                     .map(ToOwned::to_owned)
                 else {
                     self.provider_model_status =
@@ -2540,7 +2565,14 @@ impl SettingsPanel {
                     return;
                 };
 
-                let api_key = match Self::resolve_provider_api_key(&provider_config) {
+                let api_key_result = if provider == ProviderKind::Magpie {
+                    con_agent::magpie::api_key(&provider_config)
+                        .map(Some)
+                        .map_err(|e| e.to_string())
+                } else {
+                    Self::resolve_provider_api_key(&provider_config)
+                };
+                let api_key = match api_key_result {
                     Ok(api_key) => api_key,
                     Err(message) => {
                         self.provider_model_status = Some(message);
@@ -2549,12 +2581,19 @@ impl SettingsPanel {
                         return;
                     }
                 };
-                ProviderModelFetchRequest::OpenAICompatible { base_url, api_key }
+                ProviderModelFetchRequest::OpenAICompatible {
+                    provider: provider.clone(),
+                    base_url,
+                    api_key,
+                }
             }
             ProviderKind::ChatGPT => ProviderModelFetchRequest::ChatGPT {
                 config: provider_config,
             },
-            _ => return,
+            _ => ProviderModelFetchRequest::PublicCatalog {
+                registry: self.registry.clone(),
+                provider: provider.clone(),
+            },
         };
 
         self.provider_model_fetching = true;
@@ -2575,19 +2614,18 @@ impl SettingsPanel {
                 let _ = this.update(cx, |panel, cx| {
                     panel.provider_model_fetching = false;
                     match result {
-                        Ok(result) if result.models().is_empty() => {
-                            panel.provider_model_status = Some(
-                                "The endpoint responded, but returned no models. Type the model ID manually."
-                                    .to_string(),
-                            );
-                            panel.provider_model_status_error = true;
-                        }
                         Ok(result) => {
                             let count = result.models().len();
+                            let shared_catalog =
+                                matches!(&result, ProviderModelFetchResult::PublicCatalog { .. });
                             match result {
-                                ProviderModelFetchResult::OpenAICompatible { base_url, models } => {
+                                ProviderModelFetchResult::OpenAICompatible {
+                                    provider: fetched_provider,
+                                    base_url,
+                                    models,
+                                } => {
                                     if let Err(err) = registry.set_provider_models_for_base_url(
-                                        ProviderKind::OpenAICompatible,
+                                        fetched_provider,
                                         &base_url,
                                         models,
                                     ) {
@@ -2597,7 +2635,8 @@ impl SettingsPanel {
                                         return;
                                     }
                                 }
-                                ProviderModelFetchResult::ChatGPT { .. } => {}
+                                ProviderModelFetchResult::ChatGPT { .. }
+                                | ProviderModelFetchResult::PublicCatalog { .. } => {}
                                 ProviderModelFetchResult::CodexLocal { models } => {
                                     registry.set_codex_local_models(models);
                                 }
@@ -2616,7 +2655,7 @@ impl SettingsPanel {
                                     cx,
                                 );
                             }
-                            if panel.config.agent.provider == provider {
+                            if shared_catalog || panel.config.agent.provider == provider {
                                 panel.active_model_select = Self::make_active_model_select(
                                     &panel.config,
                                     &registry,
@@ -2624,7 +2663,9 @@ impl SettingsPanel {
                                     cx,
                                 );
                             }
-                            if Self::effective_suggestion_provider(&panel.config) == provider {
+                            if shared_catalog
+                                || Self::effective_suggestion_provider(&panel.config) == provider
+                            {
                                 panel.suggestion_model_select = Self::make_suggestion_model_select(
                                     &panel.config,
                                     &registry,
@@ -2632,11 +2673,20 @@ impl SettingsPanel {
                                     cx,
                                 );
                             }
-                            panel.provider_model_status = Some(format!(
-                                "Fetched {count} model{}.",
-                                if count == 1 { "" } else { "s" }
-                            ));
-                            panel.provider_model_status_error = false;
+                            panel.provider_model_status = Some(if count == 0 {
+                                "No models returned. Enter a model ID manually.".to_string()
+                            } else {
+                                format!(
+                                    "Fetched {count} model{}{}.",
+                                    if count == 1 { "" } else { "s" },
+                                    if shared_catalog {
+                                        " from models.dev"
+                                    } else {
+                                        ""
+                                    }
+                                )
+                            });
+                            panel.provider_model_status_error = count == 0;
                             let pc = panel.read_provider_inputs(cx);
                             panel.load_reasoning_options(&pc, window, cx);
                         }
@@ -5038,10 +5088,6 @@ impl SettingsPanel {
         let model_select = self.model_select.clone();
         let endpoint_preset_select = self.endpoint_preset_select.clone();
         let endpoint_presets = Self::provider_endpoint_presets(&self.selected_provider);
-        let can_fetch_models = matches!(
-            self.selected_provider,
-            ProviderKind::OpenAICompatible | ProviderKind::ChatGPT | ProviderKind::CodexLocal
-        );
         let is_codex_local = self.selected_provider == ProviderKind::CodexLocal;
         let protocol_switch_label = Self::protocol_switch_label(&self.selected_provider);
         let protocol_switch_hint = Self::protocol_switch_hint(&self.selected_provider);
@@ -5172,7 +5218,10 @@ impl SettingsPanel {
             has_key_override,
         );
 
-        let (connection_ready, connection_label) = if is_codex_local {
+        let (connection_ready, connection_label) = if self.selected_provider == ProviderKind::Magpie
+        {
+            (false, "Gateway-managed")
+        } else if is_codex_local {
             (false, "Codex-managed")
         } else {
             (connection_ready, connection_label)
@@ -5242,7 +5291,7 @@ impl SettingsPanel {
                         )
                 })
                 .children((self.selected_provider == ProviderKind::ChatGPT).then(|| self.subscription_controls(cx)))
-                .children(can_fetch_models.then(|| {
+                .child({
                     div()
                         .flex()
                         .flex_wrap()
@@ -5265,10 +5314,14 @@ impl SettingsPanel {
                                     self.provider_model_status.clone().unwrap_or_else(|| {
                                         if is_codex_local {
                                             "Leave the model blank to use Codex's configured default. Fetch available models from the local app-server.".to_string()
+                                        } else if self.selected_provider == ProviderKind::Magpie {
+                                            "Start Magpie, then fetch models or enter an exact model or group ID.".to_string()
                                         } else if self.selected_provider == ProviderKind::ChatGPT {
                                             "Fetch the current ChatGPT Subscription model list after OAuth sign-in. Or enter the model ID.".to_string()
+                                        } else if self.selected_provider == ProviderKind::OpenAICompatible {
+                                            "Fetch /models from this endpoint, or enter a model ID.".to_string()
                                         } else {
-                                            "Fetch /models when the provider exposes a model list. Or enter the model ID.".to_string()
+                                            "Refresh the models.dev catalog, or enter a model ID.".to_string()
                                         }
                                     }),
                                 ),
@@ -5286,7 +5339,7 @@ impl SettingsPanel {
                                     })),
                             ),
                         )
-                })),
+                }),
         );
 
         let right_col = div()
@@ -7603,6 +7656,7 @@ pub(crate) fn provider_label(provider: &ProviderKind) -> &'static str {
         ProviderKind::ChatGPT => "ChatGPT Subscription",
         ProviderKind::GitHubCopilot => "GitHub Copilot",
         ProviderKind::OpenAICompatible => "OpenAI Compatible",
+        ProviderKind::Magpie => "Magpie",
         ProviderKind::MiniMax => "MiniMax",
         ProviderKind::MiniMaxAnthropic => "MiniMax / Anthropic",
         ProviderKind::Moonshot => "Moonshot",
@@ -8111,6 +8165,53 @@ mod tests {
                 .unwrap()
                 .2;
             assert!(large > normal, "label did not scale at width {width}");
+        }
+    }
+
+    #[tokio::test]
+    async fn magpie_model_fetch_keeps_gateway_ids_and_provider_identity() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|v| v == b"\r\n\r\n") {
+                let mut buffer = [0; 1024];
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let headers = String::from_utf8(request).unwrap().to_ascii_lowercase();
+            assert!(headers.starts_with("get /v1/models http/1.1"));
+            assert!(headers.contains("authorization: bearer magpie-con"));
+            assert!(headers.contains("user-agent: con/"));
+            let body = r#"{"data":[{"id":"group/coding"},{"id":"deepseek/deepseek-chat"},{"id":"group/coding"}]}"#;
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let result = super::ProviderModelFetchRequest::OpenAICompatible {
+            provider: con_agent::ProviderKind::Magpie,
+            base_url: base_url.clone(),
+            api_key: Some("magpie-con".into()),
+        }
+        .fetch()
+        .await
+        .unwrap();
+        server.join().unwrap();
+        match result {
+            super::ProviderModelFetchResult::OpenAICompatible {
+                provider,
+                base_url: actual,
+                models,
+            } => {
+                assert_eq!(provider, con_agent::ProviderKind::Magpie);
+                assert_eq!(actual, base_url);
+                assert_eq!(models, vec!["deepseek/deepseek-chat", "group/coding"]);
+            }
+            _ => panic!("wrong catalog source"),
         }
     }
 

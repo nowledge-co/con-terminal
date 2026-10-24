@@ -126,7 +126,7 @@ The AI section chooses the active provider and model for the agent panel,
 Command Palette AI actions, and AI fallback suggestions.
 
 con supports Anthropic, OpenAI, Codex Local, ChatGPT, GitHub Copilot, OpenAI-compatible
-hosts, MiniMax, Moonshot, Z.AI, DeepSeek, Groq, Gemini, Ollama, OpenRouter,
+hosts, Magpie, MiniMax, Moonshot, Z.AI, DeepSeek, Groq, Gemini, Ollama, OpenRouter,
 Mistral, Together, Cohere, Perplexity, and xAI.
 
 Use the strongest model for agent work when the answer matters. Use a faster or
@@ -138,7 +138,13 @@ those sign-in flows. ChatGPT fetches its subscription model catalog after sign-i
 use **Fetch Models** to refresh it later. Con refreshes expired OAuth access tokens
 before discovery and retains the last successful catalog across restarts, scoped
 to the account and endpoint. OpenAI-compatible hosts can fetch
-models from `/models` when the host supports it. If the host has no models
+models from `/models` when the host supports it. Other hosted providers use
+models.dev: Con fetches its public catalog when a window starts; **Fetch Models**
+refreshes it without restarting. Entries with tool support appear first, ordered
+by release date and then context size. Offline lists are only fallbacks, and
+public catalog entries do not guarantee access on your account. Magpie uses its
+own gateway catalog instead; refreshing Con cannot add a model that Magpie
+does not expose. If the host has no models
 endpoint, type the model ID manually and save it.
 
 ChatGPT Subscription defaults to GPT-5.6 Sol. Its fallback list includes Astra,
@@ -152,6 +158,20 @@ apply to the separate OpenAI API provider.
 
 The provider picker in the agent panel shows configured providers. If a provider
 is missing there, configure it first in Settings.
+
+### Use Magpie
+
+Start Magpie, then choose **Magpie** in Providers and click **Fetch Models**.
+Pick a model from the gateway or enter its exact `provider/model` or `group/name`
+ID. Local connections use `http://127.0.0.1:3425/v1` by default and need no vendor
+key in Con. If Magpie uses another port, set its Base URL including `/v1`.
+Remote gateways require the gateway key supplied by their owner.
+
+Choose Magpie as the active provider in AI and save. Existing tabs keep their
+own provider/model choice; switch them in the agent panel or open a new tab.
+Con keeps its normal tools and approval controls. See
+[Magpie configuration](impl/configuration.md#magpie-gateway) for credentials,
+custom endpoints, and the integration boundary.
 
 ### Use an installed Codex CLI
 

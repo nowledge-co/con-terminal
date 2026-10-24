@@ -142,6 +142,7 @@ pub enum ProviderKind {
     GitHubCopilot,
     #[serde(alias = "openai-compatible")]
     OpenAICompatible,
+    Magpie,
     #[serde(rename = "minimax")]
     MiniMax,
     #[serde(rename = "minimax-anthropic")]
@@ -175,6 +176,7 @@ impl std::fmt::Display for ProviderKind {
             Self::ChatGPT => write!(f, "chatgpt"),
             Self::GitHubCopilot => write!(f, "github-copilot"),
             Self::OpenAICompatible => write!(f, "openai-compatible"),
+            Self::Magpie => write!(f, "magpie"),
             Self::MiniMax => write!(f, "minimax"),
             Self::MiniMaxAnthropic => write!(f, "minimax-anthropic"),
             Self::Moonshot => write!(f, "moonshot"),
@@ -202,6 +204,7 @@ fn display_provider_model(kind: &ProviderKind, model: &str) -> String {
         ProviderKind::CodexLocal => "Codex Local",
         ProviderKind::GitHubCopilot => "GitHub Copilot",
         ProviderKind::OpenAICompatible => "OpenAI-compatible",
+        ProviderKind::Magpie => "Magpie",
         ProviderKind::MiniMax => "MiniMax",
         ProviderKind::MiniMaxAnthropic => "MiniMax Anthropic",
         ProviderKind::Moonshot => "Moonshot",
@@ -1093,12 +1096,20 @@ fn kimi_coding_headers() -> HeaderMap {
 }
 
 impl ProviderKind {
+    pub fn default_base_url(&self) -> Option<&'static str> {
+        match self {
+            Self::Magpie => Some(crate::magpie::BASE_URL),
+            _ => None,
+        }
+    }
+
     pub fn default_api_key_env(&self) -> &str {
         match self {
             Self::Anthropic => "ANTHROPIC_API_KEY",
             Self::ChatGPT => "CHATGPT_ACCESS_TOKEN",
             Self::GitHubCopilot => "GITHUB_COPILOT_API_KEY",
             Self::OpenAICompatible => "OPENAI_API_KEY",
+            Self::Magpie => "MAGPIE_API_KEY",
             Self::OpenAI => "OPENAI_API_KEY",
             Self::CodexLocal => "", // Codex owns authentication; never resolve a Con key.
             Self::MiniMax | Self::MiniMaxAnthropic => "MINIMAX_API_KEY",
@@ -1123,6 +1134,7 @@ impl ProviderKind {
             Self::ChatGPT => crate::chatgpt_subscription::DEFAULT_MODEL,
             Self::GitHubCopilot => "gpt-4o",
             Self::OpenAICompatible => "gpt-4o",
+            Self::Magpie => "", // The gateway catalog is user-specific; require a selection.
             Self::OpenAI => "gpt-4o",
             Self::CodexLocal => "", // Omission preserves Codex's configured default model.
             Self::MiniMax => "MiniMax-M2",
@@ -1666,6 +1678,8 @@ pub struct ProviderMap {
     #[serde(skip_serializing_if = "Option::is_none", alias = "openai-compatible")]
     pub openaicompatible: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub magpie: Option<ProviderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub minimax: Option<ProviderConfig>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "minimax-anthropic")]
     pub minimax_anthropic: Option<ProviderConfig>,
@@ -1712,6 +1726,7 @@ impl ProviderMap {
             ProviderKind::ChatGPT => self.chatgpt.as_ref(),
             ProviderKind::GitHubCopilot => self.github_copilot.as_ref(),
             ProviderKind::OpenAICompatible => self.openaicompatible.as_ref(),
+            ProviderKind::Magpie => self.magpie.as_ref(),
             ProviderKind::MiniMax => self.minimax.as_ref(),
             ProviderKind::MiniMaxAnthropic => self.minimax_anthropic.as_ref(),
             ProviderKind::Moonshot => self.moonshot.as_ref(),
@@ -1743,6 +1758,7 @@ impl ProviderMap {
             ProviderKind::ChatGPT => &mut self.chatgpt,
             ProviderKind::GitHubCopilot => &mut self.github_copilot,
             ProviderKind::OpenAICompatible => &mut self.openaicompatible,
+            ProviderKind::Magpie => &mut self.magpie,
             ProviderKind::MiniMax => &mut self.minimax,
             ProviderKind::MiniMaxAnthropic => &mut self.minimax_anthropic,
             ProviderKind::Moonshot => &mut self.moonshot,
@@ -2026,9 +2042,14 @@ impl AgentConfig {
             .unwrap_or_else(move || kind.default_model())
     }
 
-    /// Effective base URL override for the given provider.
+    /// Effective base URL, including a Con-owned gateway default when available.
     pub fn effective_base_url(&self, kind: &ProviderKind) -> Option<&str> {
-        self.providers.get(kind).and_then(|p| p.base_url.as_deref())
+        self.providers
+            .get(kind)
+            .and_then(|p| p.base_url.as_deref())
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .or_else(|| kind.default_base_url())
     }
 
     /// Effective max tokens for the given provider.
@@ -2401,6 +2422,7 @@ impl AgentProvider {
             ProviderKind::OpenAICompatible => {
                 stream_with!(self.build_openai_compatible_client()?)
             }
+            ProviderKind::Magpie => stream_with!(self.build_openai_compatible_client_for(kind)?),
             ProviderKind::MiniMax => stream_with!(self.build_minimax_client()?),
             ProviderKind::MiniMaxAnthropic => stream_with!(self.build_minimax_anthropic_client()?),
             ProviderKind::Moonshot => stream_with!(self.build_moonshot_client()?),
@@ -2474,7 +2496,15 @@ impl AgentProvider {
         &self,
         kind: &ProviderKind,
     ) -> Result<openai::CompletionsClient<OpenAICompatibleHttpClient>> {
-        let configured_api_key = if self.should_skip_default_env_api_key(kind) {
+        let configured_api_key = if *kind == ProviderKind::Magpie {
+            anyhow::ensure!(
+                !self.config.effective_model(kind).trim().is_empty(),
+                "Choose a Magpie model in Settings → Providers → Magpie. Start Magpie and fetch its models, or enter a provider/model or group/name ID."
+            );
+            Some(crate::magpie::api_key(
+                &self.config.providers.get_or_default(kind),
+            )?)
+        } else if self.should_skip_default_env_api_key(kind) {
             self.resolve_configured_api_key(kind)?
         } else {
             self.resolve_optional_api_key(kind)?
@@ -2485,6 +2515,14 @@ impl AgentProvider {
             .http_client(OpenAICompatibleHttpClient::new(
                 configured_api_key.is_none(),
             ));
+        if *kind == ProviderKind::Magpie {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                http::header::USER_AGENT,
+                HeaderValue::from_static(crate::magpie::USER_AGENT),
+            );
+            builder = builder.http_headers(headers);
+        }
         if let Some(url) = self.config.effective_base_url(kind) {
             builder = builder.base_url(url);
         }
@@ -2843,6 +2881,7 @@ impl AgentProvider {
             ProviderKind::OpenAICompatible => {
                 do_complete!(self.build_openai_compatible_client()?)
             }
+            ProviderKind::Magpie => do_complete!(self.build_openai_compatible_client_for(kind)?),
             ProviderKind::MiniMax => do_complete!(self.build_minimax_client()?),
             ProviderKind::MiniMaxAnthropic => do_complete!(self.build_minimax_anthropic_client()?),
             ProviderKind::Moonshot => do_complete!(self.build_moonshot_client()?),

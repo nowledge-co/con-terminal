@@ -23,6 +23,9 @@ const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour
 fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
     match provider {
         ProviderKind::Anthropic => &[
+            "claude-sonnet-5-5",
+            "claude-opus-5-5",
+            "claude-haiku-5-5",
             "claude-opus-4-6",
             "claude-sonnet-4-6",
             "claude-opus-4-5",
@@ -49,9 +52,12 @@ fn fallback_models(provider: &ProviderKind) -> &'static [&'static str] {
             "claude-sonnet-4.5",
             "gpt-4o",
         ],
-        ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => {
-            &["MiniMax-M2", "MiniMax-M2.1", "MiniMax-M2.5", "MiniMax-M2.7"]
-        }
+        ProviderKind::MiniMax | ProviderKind::MiniMaxAnthropic => &[
+            "MiniMax-M3.1-Flash",
+            "MiniMax-M3",
+            "MiniMax-M2.7",
+            "MiniMax-M2.5",
+        ],
         ProviderKind::Moonshot => &[
             "kimi-for-coding",
             "kimi-k2.5",
@@ -150,7 +156,9 @@ fn models_dev_id_to_providers(id: &str) -> &'static [ProviderKind] {
         "openai" => &[ProviderKind::OpenAI],
         "chatgpt" => &[ProviderKind::ChatGPT],
         "github-copilot" => &[ProviderKind::GitHubCopilot],
-        "minimax" => &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic],
+        "minimax" | "minimax-cn" | "minimax-coding-plan" | "minimax-cn-coding-plan" => {
+            &[ProviderKind::MiniMax, ProviderKind::MiniMaxAnthropic]
+        }
         "moonshot" | "moonshotai" | "moonshotai-cn" => {
             &[ProviderKind::Moonshot, ProviderKind::MoonshotAnthropic]
         }
@@ -182,6 +190,7 @@ struct ApiModel {
     id: String,
     #[serde(default)]
     tool_call: bool,
+    release_date: Option<String>,
     limit: Option<ApiLimit>,
 }
 
@@ -198,6 +207,68 @@ struct OpenAICompatibleModelsResponse {
 #[derive(serde::Deserialize)]
 struct OpenAICompatibleModel {
     id: String,
+}
+
+fn catalog_models(resp: HashMap<String, ApiProvider>) -> HashMap<ProviderKind, Vec<String>> {
+    let mut merged_models: HashMap<ProviderKind, HashMap<String, (bool, String, u64)>> =
+        HashMap::new();
+
+    for (provider_id, provider_data) in &resp {
+        let targets = models_dev_id_to_providers(provider_id);
+        if targets.is_empty() {
+            continue;
+        }
+
+        let Some(models) = &provider_data.models else {
+            continue;
+        };
+
+        for model in models.values() {
+            let ctx = model
+                .limit
+                .as_ref()
+                .and_then(|limit| limit.context)
+                .unwrap_or(0);
+            for target in targets {
+                let entry = merged_models.entry(target.clone()).or_default();
+                entry
+                    .entry(model.id.clone())
+                    .and_modify(|existing| {
+                        existing.0 |= model.tool_call;
+                        existing.1 = existing
+                            .1
+                            .clone()
+                            .max(model.release_date.clone().unwrap_or_default());
+                        existing.2 = existing.2.max(ctx);
+                    })
+                    .or_insert((
+                        model.tool_call,
+                        model.release_date.clone().unwrap_or_default(),
+                        ctx,
+                    ));
+            }
+        }
+    }
+
+    let models_map: HashMap<ProviderKind, Vec<String>> = merged_models
+        .into_iter()
+        .map(|(kind, models)| {
+            let mut model_list: Vec<(String, bool, String, u64)> = models
+                .into_iter()
+                .map(|(id, (tool_call, date, ctx))| (id, tool_call, date, ctx))
+                .collect();
+            model_list.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then_with(|| b.2.cmp(&a.2))
+                    .then_with(|| b.3.cmp(&a.3))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            let ids = model_list.into_iter().map(|(id, _, _, _)| id).collect();
+            (kind, ids)
+        })
+        .collect();
+
+    models_map
 }
 
 // ── Registry ─────────────────────────────────────────────────────────
@@ -272,6 +343,10 @@ impl ModelRegistry {
                 .map(|model| model.id.clone())
                 .collect();
         }
+        let base_url = base_url
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .or_else(|| provider.default_base_url());
         let canonical = canonical_models_provider(provider);
         {
             let custom = self.custom.lock().unwrap();
@@ -323,6 +398,17 @@ impl ModelRegistry {
         Ok(())
     }
 
+    /// Only entries actually returned by the public catalog, without fallback IDs.
+    pub fn public_catalog_models(&self, provider: &ProviderKind) -> Vec<String> {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|entry| entry.models.get(&canonical_models_provider(provider)))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Whether the cache is stale or empty and needs a refresh.
     pub fn needs_refresh(&self) -> bool {
         let guard = self.inner.lock().unwrap();
@@ -335,57 +421,29 @@ impl ModelRegistry {
     /// Fetch model data from models.dev and update the cache.
     /// Intended to be called from a background task.
     pub async fn fetch(&self) -> anyhow::Result<()> {
-        log::info!("Fetching model registry from {API_URL}");
+        self.fetch_from_url(API_URL).await
+    }
+
+    async fn fetch_from_url(&self, endpoint: &str) -> anyhow::Result<()> {
+        log::info!("Fetching model registry from {endpoint}");
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        let resp: HashMap<String, ApiProvider> = client.get(API_URL).send().await?.json().await?;
+        let resp: HashMap<String, ApiProvider> = client
+            .get(endpoint)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
 
-        let mut merged_models: HashMap<ProviderKind, HashMap<String, (bool, u64)>> = HashMap::new();
-
-        for (provider_id, provider_data) in &resp {
-            let targets = models_dev_id_to_providers(provider_id);
-            if targets.is_empty() {
-                continue;
-            }
-
-            let Some(models) = &provider_data.models else {
-                continue;
-            };
-
-            for model in models.values() {
-                let ctx = model
-                    .limit
-                    .as_ref()
-                    .and_then(|limit| limit.context)
-                    .unwrap_or(0);
-                for target in targets {
-                    let entry = merged_models.entry(target.clone()).or_default();
-                    entry
-                        .entry(model.id.clone())
-                        .and_modify(|existing| {
-                            existing.0 |= model.tool_call;
-                            existing.1 = existing.1.max(ctx);
-                        })
-                        .or_insert((model.tool_call, ctx));
-                }
-            }
-        }
-
-        let models_map: HashMap<ProviderKind, Vec<String>> = merged_models
-            .into_iter()
-            .map(|(kind, models)| {
-                let mut model_list: Vec<(String, bool, u64)> = models
-                    .into_iter()
-                    .map(|(id, (tool_call, ctx))| (id, tool_call, ctx))
-                    .collect();
-                model_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-                let ids = model_list.into_iter().map(|(id, _, _)| id).collect();
-                (kind, ids)
-            })
-            .collect();
+        let models_map = catalog_models(resp);
+        anyhow::ensure!(
+            !models_map.is_empty(),
+            "models.dev returned no recognized models; keeping the previous catalog"
+        );
 
         let entry = CacheEntry {
             models: models_map,
@@ -481,7 +539,9 @@ impl ModelRegistry {
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        let mut request = client.get(&endpoint);
+        let mut request = client
+            .get(&endpoint)
+            .header(reqwest::header::USER_AGENT, con_agent::magpie::USER_AGENT);
         if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
             request = request.bearer_auth(api_key);
         }
@@ -571,6 +631,29 @@ impl ModelRegistry {
 mod tests {
     use super::*;
     use con_agent::ProviderKind;
+
+    #[test]
+    fn public_catalog_keeps_new_models_first_and_merges_regional_ids() {
+        let response = serde_json::from_value(serde_json::json!({
+            "anthropic":{"models":{
+                "old":{"id":"claude-sonnet-4-6","tool_call":true,"release_date":"2026-02-17","limit":{"context":2000000}},
+                "new":{"id":"claude-sonnet-5-5","tool_call":true,"release_date":"2026-09-28","limit":{"context":1000000}}
+            }},
+            "minimax-cn":{"models":{
+                "new":{"id":"MiniMax-M3.1-Flash","tool_call":true,"release_date":"2026-10-19"}
+            }}
+        })).unwrap();
+        let models = super::catalog_models(response);
+        assert_eq!(
+            models[&ProviderKind::Anthropic],
+            vec!["claude-sonnet-5-5", "claude-sonnet-4-6"]
+        );
+        assert_eq!(models[&ProviderKind::MiniMax], vec!["MiniMax-M3.1-Flash"]);
+        assert_eq!(
+            models[&ProviderKind::MiniMaxAnthropic],
+            models[&ProviderKind::MiniMax]
+        );
+    }
 
     #[test]
     fn codex_models_stay_separate_from_api_models_and_allow_a_default() {
@@ -769,6 +852,36 @@ mod tests {
             ))
             .unwrap(),
             "https://chatgpt.com/backend-api/codex/models?region=us&client_version=0.155.0"
+        );
+    }
+
+    #[test]
+    fn magpie_catalog_uses_default_gateway_and_stays_isolated() {
+        let registry = ModelRegistry::new();
+        assert!(registry.models_for(&ProviderKind::Magpie).is_empty());
+        registry
+            .set_provider_models_for_base_url(
+                ProviderKind::Magpie,
+                con_agent::magpie::BASE_URL,
+                vec!["deepseek/deepseek-chat".into(), "group/coding".into()],
+            )
+            .unwrap();
+        assert_eq!(
+            registry.models_for(&ProviderKind::Magpie),
+            vec!["deepseek/deepseek-chat", "group/coding"]
+        );
+        assert!(
+            registry
+                .models_for_base_url(&ProviderKind::Magpie, Some("http://127.0.0.1:4444/v1"))
+                .is_empty()
+        );
+        assert!(
+            registry
+                .models_for_base_url(
+                    &ProviderKind::OpenAICompatible,
+                    Some(con_agent::magpie::BASE_URL)
+                )
+                .is_empty()
         );
     }
 

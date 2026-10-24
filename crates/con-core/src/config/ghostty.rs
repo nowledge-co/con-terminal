@@ -151,6 +151,7 @@ fn complete_schema() -> Result<Value> {
         "chatgpt",
         "github-copilot",
         "openaicompatible",
+        "magpie",
         "minimax",
         "minimax-anthropic",
         "moonshot",
@@ -636,6 +637,24 @@ mod tests {
         assert!(!error.contains("definitely-secret"));
         let error = parse("con.agent.provider = definitely-secret", None).unwrap_err();
         assert!(!format!("{error:#}").contains("definitely-secret"));
+    }
+
+    #[test]
+    fn magpie_native_config_round_trip_preserves_gateway_and_routed_model() {
+        let input = "con.version = 1\ncon.agent.provider = magpie\ncon.agent.providers.magpie.model = group/coding\ncon.agent.providers.magpie.base_url = http://127.0.0.1:4444/v1\ncon.agent.providers.magpie.api_key_env = MAGPIE_GATEWAY_KEY\n";
+        let config = parse(input, None).unwrap();
+        assert_eq!(config.agent.provider, con_agent::ProviderKind::Magpie);
+        let restored = parse(&render(&config).unwrap(), None).unwrap();
+        assert_eq!(
+            restored.agent.providers.magpie,
+            config.agent.providers.magpie
+        );
+        assert_eq!(
+            restored
+                .agent
+                .effective_model(&con_agent::ProviderKind::Magpie),
+            "group/coding"
+        );
     }
 
     #[test]

@@ -771,6 +771,7 @@ fn parse_provider_kind(value: Option<&str>) -> Option<ProviderKind> {
         "groq" => Some(ProviderKind::Groq),
         "cohere" => Some(ProviderKind::Cohere),
         "gemini" => Some(ProviderKind::Gemini),
+        "magpie" => Some(ProviderKind::Magpie),
         "ollama" => Some(ProviderKind::Ollama),
         "openrouter" => Some(ProviderKind::OpenRouter),
         "perplexity" => Some(ProviderKind::Perplexity),

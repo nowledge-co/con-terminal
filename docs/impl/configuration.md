@@ -78,6 +78,38 @@ con.experimental.handoff = true
 `con.version = 1` is the current Con schema marker. Native-owned values must use
 their Ghostty names rather than aliases such as `con.terminal.font_size`.
 
+### Magpie gateway
+
+Choose **Magpie** in Settings → Providers. Start the Magpie app (or
+`magpie serve`), click **Fetch Models**, and choose a model or enter its exact
+ID. Magpie exposes models as `provider/model` and routing groups as `group/name`;
+Con forwards those IDs unchanged. There is no built-in model default because
+available providers and groups are configured in Magpie.
+
+```ini
+con.version = 1
+con.agent.provider = magpie
+# Example only: choose an ID returned by your gateway.
+con.agent.providers.magpie.model = deepseek/deepseek-chat
+# Optional: omit for http://127.0.0.1:3425/v1.
+con.agent.providers.magpie.base_url = http://127.0.0.1:3425/v1
+```
+
+Local connections need no vendor key in Con: Magpie owns upstream credentials.
+Con sends the attribution token `magpie-con`, following Magpie's
+[integration contract](https://github.com/yetone/magpie/blob/main/docs/integrating.md).
+For a remote gateway, set its Base URL (including `/v1`) and supply a gateway key
+in Settings, `con.agent.providers.magpie.api_key_env`, or `MAGPIE_API_KEY`.
+An explicit key/env-var setting takes precedence; Con never falls back to
+`OPENAI_API_KEY` for Magpie. Missing explicit environment variables report an
+error instead of silently using the local attribution token.
+
+Inference uses Rig's OpenAI Chat Completions client with streaming and Con's
+existing tools and approval flow. Model discovery reads `/v1/models` from the
+same gateway; fetched catalogs are scoped to the provider and endpoint.
+This integration does not install/start Magpie, edit Magpie's settings, or add
+Con to Magpie's Agents page (that requires an upstream adapter).
+
 ### Local Codex provider
 
 Choose **Codex Local** in Settings → Providers, then select it as the active AI
