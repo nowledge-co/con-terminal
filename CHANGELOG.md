@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.156` - 2026-10-24
+
+### Fixed
+
+**Tabs**
+
+- Long paths in the horizontal All tabs menu stay inside each row, with middle
+  ellipsis preserving both ends. Icons and selection marks stay aligned, and
+  the menu adapts to narrow windows and larger UI fonts. Hover details retain
+  the full name.
+  _(PR [#518](https://github.com/nowledge-co/con-terminal/pull/518) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.155` - 2026-10-24
 
 ### Added
