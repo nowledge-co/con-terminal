@@ -26,16 +26,20 @@ subtracts the intersection of the actual card and reveal bounds collected during
 prepaint. Never infer this hole from a full-height card extending below the
 viewport: that leaves the reveal's bottom inset unpainted during motion.
 
-Horizontal tabs already include bottom clearance inside their fixed-height row.
-Subtract that clearance from the canvas's top margin as the strip appears, so
-the visible tab-to-pane gap matches the 5pt lateral outer inset. The macOS
+Horizontal tabs already include bottom clearance inside their fixed-height row,
+including the selected capsule's two-point inner inset. Subtract that clearance from the canvas's top margin as the strip appears, so
+the visible selected-tab-to-pane gap matches the 5pt lateral outer inset. The macOS
 caption row is 32pt, matching AppKit's titlebar; the traffic lights and the
 22pt controls are both centred in it, leaving 5pt around the controls. Without
 a tab strip, the card starts at the row's bottom edge, so the space below the
 controls equals the space above them. A docked caption gives its row back and
 the card keeps its full 5pt top clearance. The strip's appearance does not
 change caption height or tab/control centering. The native clip, gutter paint and
-agent panel top use the same top geometry.
+agent panel top use the same top geometry. When that places the pane above the
+caption layout boundary, expand the canvas viewport clip only by that amount
+and retain its content origin with matching padding. The agent column stretches
+from the same top with a negative margin, preserving its bottom baseline. Do not
+move the card above an unchanged overflow clip.
 The original divider hit
 targets remain available between them. Following maintainer feedback on 2026-10-17,
 this prototype uses the same restrained, one-physical-pixel outline on panes,

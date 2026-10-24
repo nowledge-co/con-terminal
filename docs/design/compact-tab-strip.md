@@ -5,13 +5,13 @@ configured UI font, while terminal text and code keep their monospace fonts.
 
 ## Layout
 
-- Keep the existing titlebar heights: 28 points on macOS and 36 elsewhere.
+- Keep the existing titlebar heights: 32 points on macOS and 36 elsewhere.
 - Keep tab hit targets at their existing height. Use a twenty-point close control.
 - Center tab hit targets vertically, with matching space above and below.
   One restrained outer capsule groups the targets. Resting tabs do not add
   another fill; selection and hover use inner capsules with equal two-point
   clearance. Targets are 24 points high on macOS, 30 elsewhere.
-  Center the row in the titlebar, leaving two points above/below on macOS
+  Center the row in the titlebar, leaving four points above/below on macOS
   and three elsewhere.
 - Divide the available tab region equally, independent of title length or
   selection. AI summaries and inline renaming must not move neighbouring tabs.
@@ -100,7 +100,9 @@ rounded silhouette, one-point inner padding and solid theme-derived neutral
 fills: a lighter front card and quieter rear cards. This is a deliberately inset
 card material, not a bare dark patch under a logo. Keep logos whole and preserve
 their original alpha and color; do not crop them into strips or stamp counts on
-top. Center every layer on the same vertical axis, with a tighter horizontal
+top. Keep the primary card on the left, paint rear cards first and reveal their
+right edges in order, as a compact stack of real pane identities. Center every
+layer on the same vertical axis, with a tighter horizontal
 offset in compact navigation. Reserve the group's actual width and height; further apps
 do not grow it. Expanded sidebar rows share a leading well sized for three
 cards, keeping titles in one column. Compact activity rings surround the whole

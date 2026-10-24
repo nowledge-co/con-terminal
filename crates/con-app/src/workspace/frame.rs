@@ -42,13 +42,20 @@ pub(super) fn canvas_depth_for_layout(
 
 /// `caption` is the global caption row's presence. Without tabs its controls
 /// sit midway between the window top and the card top, so the row's lower half
-/// is the card's top clearance. Tabs keep the lateral 5pt gap below their fill.
+/// is the card's top clearance. Tabs keep the lateral 5pt gap below their selected surface.
 pub(super) fn canvas_top_inset(depth: f32, horizontal_tabs: f32, caption: f32) -> f32 {
     let tabs = horizontal_tabs.clamp(0.0, 1.0);
-    let tab_bottom_clearance = (super::TOP_BAR_TABS_HEIGHT - super::TOP_BAR_TAB_HEIGHT) * 0.5;
+    let tab_bottom_clearance = (super::TOP_BAR_TABS_HEIGHT - super::TOP_BAR_TAB_HEIGHT) * 0.5
+        + super::TOP_BAR_TAB_SELECTION_INSET;
     let caption_clearance =
         (CANVAS_INSET + PANE_INSET) * (1.0 - tabs) + tab_bottom_clearance * tabs;
     (CANVAS_INSET - caption_clearance * caption.clamp(0.0, 1.0)) * depth
+}
+
+/// Allow the pane's rounded top to enter the caption's unused bottom clearance.
+/// Content retains its original layout origin; only the viewport clip expands.
+pub(super) fn canvas_top_bleed(depth: f32, tabs: f32, caption: f32) -> f32 {
+    -(canvas_top_inset(depth, tabs, caption) + PANE_INSET * depth).min(0.0)
 }
 
 pub(crate) fn pane_card_geometry(split: bool, depth: f32) -> (f32, f32) {
@@ -1201,6 +1208,90 @@ mod tests {
         );
     }
 
+    #[gpui::test]
+    fn selected_tab_clearance_does_not_clip_the_pane_top_or_shift_the_bottom(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{ParentElement, Render, size};
+        struct Fixture(f32);
+        impl Render for Fixture {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let bleed = canvas_top_bleed(1.0, self.0, 1.0);
+                let (agent_top, agent_bottom) = agent_vertical_insets(1.0, false, 0.0, self.0, 1.0);
+                gpui::div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        gpui::div()
+                            .h(px(super::super::TOP_BAR_TABS_HEIGHT))
+                            .flex_shrink_0(),
+                    )
+                    .child(
+                        gpui::div()
+                            .relative()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .child(
+                                canvas_viewport().mt(px(-bleed)).pt(px(bleed)).child(
+                                    gpui::div()
+                                        .relative()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(
+                                            gpui::div()
+                                                .relative()
+                                                .flex_1()
+                                                .m(px(CANVAS_INSET))
+                                                .mt(px(canvas_top_inset(1.0, self.0, 1.0)))
+                                                .child(
+                                                    gpui::div()
+                                                        .absolute()
+                                                        .inset_0()
+                                                        .m(px(PANE_INSET))
+                                                        .debug_selector(|| "pane-clearance".into()),
+                                                ),
+                                        ),
+                                ),
+                            )
+                            .child(
+                                gpui::div()
+                                    .w(px(100.0))
+                                    .mt(px(agent_top.min(0.0)))
+                                    .pt(px(agent_top.max(0.0)))
+                                    .pb(px(agent_bottom))
+                                    .child(
+                                        gpui::div()
+                                            .size_full()
+                                            .debug_selector(|| "agent-clearance".into()),
+                                    ),
+                            ),
+                    )
+            }
+        }
+        let (view, cx) = cx.add_window_view(|_, _| Fixture(1.0));
+        cx.simulate_resize(size(px(600.0), px(400.0)));
+        for tabs in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            view.update(cx, |view, cx| {
+                view.0 = tabs;
+                cx.notify();
+            });
+            let pane = cx.debug_bounds("pane-clearance").unwrap();
+            let agent = cx.debug_bounds("agent-clearance").unwrap();
+            assert_eq!(pane.top(), agent.top());
+            assert_eq!(pane.bottom(), agent.bottom());
+            assert_eq!(pane.bottom(), px(400.0 - CARD_OUTER_INSET));
+            let clip_top = super::super::TOP_BAR_TABS_HEIGHT - canvas_top_bleed(1.0, tabs, 1.0);
+            assert!(
+                pane.top() >= px(clip_top),
+                "pane top must remain inside the viewport"
+            );
+        }
+    }
+
     #[test]
     fn agent_edges_follow_terminal_cards_and_the_visible_input_tray() {
         for depth in [0.0, 0.5, 1.0] {
@@ -1321,13 +1412,14 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_tabs_do_not_double_the_top_clearance() {
+    fn horizontal_tabs_match_selected_surface_clearance_to_pane_gutters() {
         let bounds = Bounds::new(
             point(px(0.0), px(super::super::TOP_BAR_TABS_HEIGHT)),
             gpui::size(px(600.0), px(400.0)),
         );
-        let tab_bottom =
-            (super::super::TOP_BAR_TABS_HEIGHT + super::super::TOP_BAR_TAB_HEIGHT) * 0.5;
+        let tab_bottom = (super::super::TOP_BAR_TABS_HEIGHT + super::super::TOP_BAR_TAB_HEIGHT)
+            * 0.5
+            - super::super::TOP_BAR_TAB_SELECTION_INSET;
         let inner = canvas_inner_bounds(bounds, 1.0, 1.0, 1.0);
         let pane_top = inner.top().as_f32() + PANE_INSET;
         assert_eq!(pane_top - tab_bottom, CANVAS_INSET + PANE_INSET);

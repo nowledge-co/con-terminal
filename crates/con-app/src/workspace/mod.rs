@@ -35,6 +35,8 @@ const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const TOP_BAR_TAB_HEIGHT: f32 = 24.0;
 #[cfg(not(target_os = "macos"))]
 const TOP_BAR_TAB_HEIGHT: f32 = 30.0;
+/// Visible selection clearance inside a horizontal tab target.
+const TOP_BAR_TAB_SELECTION_INSET: f32 = 2.0;
 #[cfg(target_os = "macos")]
 const TAB_DROP_PREVIEW_TOP: f32 = 0.0;
 #[cfg(not(target_os = "macos"))]

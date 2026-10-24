@@ -35,6 +35,11 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Workspace**
 
+- Multi-app tab identities stack behind a whole primary icon, with rear cards
+  revealed to its right. The gap below the selected horizontal tab now matches
+  the 5pt outer inset and pane gutters.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
 - Resize the expanded Sessions sidebar as well as Files/Search. Both sidebar
   dividers use short grips centred between surfaces, with wider transparent
   drag targets and width limits that preserve terminal space. Pressing a grip

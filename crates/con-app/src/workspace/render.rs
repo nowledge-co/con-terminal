@@ -1019,16 +1019,27 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
-        let terminal_area = frame::canvas_viewport()
-            .child(self.canvas_surround.render(
-                top_bar_surface_color,
-                canvas_depth,
-                tab_strip_progress,
-                caption.header,
-                0.0,
-                terminal_surface_color.opacity(self.terminal_opacity),
-            ))
-            .child(terminal_area);
+        let terminal_area = {
+            let bleed = frame::canvas_top_bleed(canvas_depth, tab_strip_progress, caption.header);
+            frame::canvas_viewport().mt(px(-bleed)).pt(px(bleed)).child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(self.canvas_surround.render(
+                        top_bar_surface_color,
+                        canvas_depth,
+                        tab_strip_progress,
+                        caption.header,
+                        0.0,
+                        terminal_surface_color.opacity(self.terminal_opacity),
+                    ))
+                    .child(terminal_area),
+            )
+        };
 
         let mut main_area = div().relative().flex().flex_1().min_h_0();
 
@@ -1149,7 +1160,6 @@ impl Render for ConWorkspace {
                     .relative()
                     .w(px(panel_width))
                     .min_w_0()
-                    .h_full()
                     .overflow_hidden()
                     .flex_shrink_0()
                     .flex()
@@ -1171,11 +1181,15 @@ impl Render for ConWorkspace {
                                 tab_strip_progress,
                                 caption.header,
                             );
-                            panel.pt(px(top)).pb(px(bottom)).bg(top_bar_surface_color)
+                            panel
+                                .mt(px(top.min(0.0)))
+                                .pt(px(top.max(0.0)))
+                                .pb(px(bottom))
+                                .bg(top_bar_surface_color)
                         }
                         #[cfg(not(target_os = "macos"))]
                         {
-                            panel.bg(agent_panel_surface_color)
+                            panel.h_full().bg(agent_panel_surface_color)
                         }
                     })
                     .child(
