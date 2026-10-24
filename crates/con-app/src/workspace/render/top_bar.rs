@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::ui_scale::ui_px;
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
-use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem};
+use gpui_component::menu::{ContextMenuExt, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 
 const CHROME_CONTROL_SIZE: f32 = 22.0;
@@ -44,23 +44,38 @@ fn horizontal_tab_icon(icon: &'static str) -> &'static str {
     crate::assets::tab_identity_asset(icon)
 }
 
+fn tab_picker_width(window: &Window, theme: &gpui_component::Theme) -> Pixels {
+    ui_px(theme, 360.0).min((window.viewport_size().width - px(16.0)).max(px(0.0)))
+}
+
+fn tab_picker_menu(menu: PopupMenu, window: &Window, theme: &gpui_component::Theme) -> PopupMenu {
+    let width = tab_picker_width(window, theme);
+    menu.min_w(width).max_w(width).scrollable(true)
+}
+
 fn tab_menu_row(
     session_id: u64,
     title: SharedString,
     icons: &[&'static str],
     active: bool,
+    window: &Window,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
+    // The pinned PopupMenu adds 4pt outer and 8pt item padding on each side.
+    // Its intrinsic-width wrapper requires a definite child width, not 100%.
+    let width = (tab_picker_width(window, theme) - px(24.0)).max(px(0.0));
+    let detail = title.clone();
     div()
         .id(("tab-menu-row", session_id))
         .role(gpui::Role::Label)
         .aria_label(title.clone())
         .flex()
         .items_center()
-        .w_full()
+        .w(width)
+        .flex_shrink_0()
         .min_w_0()
-        .h(ui_px(theme, 28.0))
-        .px(px(8.0))
+        .min_h(ui_px(theme, 32.0))
+        .debug_selector(move || format!("tab-menu-row-{session_id}").into())
         .gap(px(10.0))
         .font_family(theme.font_family.clone())
         .text_size(ui_px(theme, 12.0))
@@ -72,12 +87,10 @@ fn tab_menu_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(crate::assets::tab_identity_group_width(
-                    icons.len(),
-                    ui_icon_px(theme, 16.0),
-                    false,
+                .w(
+                    crate::assets::tab_identity_group_width(3, ui_icon_px(theme, 16.0), false)
+                        .max(px(22.0)),
                 )
-                .max(px(22.0)))
                 .flex_shrink_0()
                 .child(crate::assets::tab_identity_group(
                     icons,
@@ -87,9 +100,18 @@ fn tab_menu_row(
                     theme,
                 )),
         )
-        .child(div().flex_1().min_w_0().truncate().child(title))
         .child(
             div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_ellipsis_middle()
+                .debug_selector(move || format!("tab-menu-label-{session_id}").into())
+                .child(title),
+        )
+        .child(
+            div()
+                .debug_selector(move || format!("tab-menu-check-{session_id}").into())
                 .size(px(16.0))
                 .flex_shrink_0()
                 .flex()
@@ -102,6 +124,11 @@ fn tab_menu_row(
                         .text_color(theme.foreground)
                 })),
         )
+        .tooltip(move |window, cx| {
+            Tooltip::new(detail.clone())
+                .max_w((window.viewport_size().width - px(32.0)).min(px(640.0)))
+                .build(window, cx)
+        })
         .into_any_element()
 }
 
@@ -945,6 +972,79 @@ mod chrome_tests {
             opened.get(),
             "the dropdown must receive the button's mouse-down"
         );
+    }
+
+    #[gpui::test]
+    fn tab_picker_constrains_long_labels_inside_real_menu_wrappers(cx: &mut gpui::TestAppContext) {
+        use gpui_component::menu::{PopupMenu, PopupMenuItem};
+        cx.update(gpui_component::init);
+        struct MenuFixture;
+        impl Render for MenuFixture {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                    let mut menu = super::tab_picker_menu(menu, window, cx.theme());
+                    for (id, title, icons) in [
+                        (
+                            1,
+                            "/Users/weyl/项目/非常长的路径/".repeat(20),
+                            vec!["phosphor/terminal.svg"],
+                        ),
+                        (
+                            2,
+                            "C:\\workspaces\\".repeat(40),
+                            vec![
+                                "phosphor/terminal.svg",
+                                "phosphor/code.svg",
+                                "phosphor/file-code.svg",
+                            ],
+                        ),
+                        (3, "unbroken".repeat(200), vec!["phosphor/terminal.svg"]),
+                        (4, "Short".into(), vec!["phosphor/terminal.svg"]),
+                    ] {
+                        menu = menu.item(PopupMenuItem::element(move |window, cx| {
+                            super::tab_menu_row(
+                                id,
+                                title.clone().into(),
+                                &icons,
+                                id == 2,
+                                window,
+                                cx.theme(),
+                            )
+                        }));
+                    }
+                    menu
+                });
+                div().size_full().child(menu)
+            }
+        }
+        let (view, cx) = cx.add_window_view(|_, _| MenuFixture);
+        for (width, font_size) in [(600.0, 14.0), (280.0, 14.0), (600.0, 20.0), (280.0, 20.0)] {
+            cx.update(|_, cx| cx.global_mut::<gpui_component::Theme>().font_size = px(font_size));
+            cx.simulate_resize(gpui::size(px(width), px(400.0)));
+            view.update(cx, |_, cx| cx.notify());
+            let mut label_left = None;
+            for (row_name, label_name, check_name) in [
+                ("tab-menu-row-1", "tab-menu-label-1", "tab-menu-check-1"),
+                ("tab-menu-row-2", "tab-menu-label-2", "tab-menu-check-2"),
+                ("tab-menu-row-3", "tab-menu-label-3", "tab-menu-check-3"),
+                ("tab-menu-row-4", "tab-menu-label-4", "tab-menu-check-4"),
+            ] {
+                let row = cx.debug_bounds(row_name).unwrap();
+                let label = cx.debug_bounds(label_name).unwrap();
+                let check = cx.debug_bounds(check_name).unwrap();
+                assert!(
+                    row.right() <= px(width),
+                    "menu row escaped the window: {row:?}"
+                );
+                assert!(row.size.width <= px(width - 16.0));
+                assert!(
+                    label.right() < check.left(),
+                    "label overlapped selection: {label:?} {check:?}"
+                );
+                assert!(check.right() <= row.right());
+                assert_eq!(*label_left.get_or_insert(label.left()), label.left());
+            }
+        }
     }
 
     #[test]
@@ -2740,8 +2840,8 @@ impl ConWorkspace {
                         cx,
                     )
                     .debug_selector(|| "horizontal-tab-menu".into())
-                    .dropdown_menu(move |menu, _, cx| {
-                        let mut menu = menu.min_w(px(248.0)).max_w(px(360.0)).scrollable(true);
+                    .dropdown_menu(move |menu, window, cx| {
+                        let mut menu = tab_picker_menu(menu, window, cx.theme());
                         let Some(entity) = workspace.upgrade() else {
                             return menu;
                         };
@@ -2776,12 +2876,13 @@ impl ConWorkspace {
                             let active = *active;
                             let icons = icons.clone();
                             menu = menu.item(
-                                PopupMenuItem::element(move |_, cx| {
+                                PopupMenuItem::element(move |window, cx| {
                                     tab_menu_row(
                                         session_id,
                                         title.clone(),
                                         &icons,
                                         active,
+                                        window,
                                         cx.theme(),
                                     )
                                 })

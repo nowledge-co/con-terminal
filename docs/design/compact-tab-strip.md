@@ -75,6 +75,16 @@ configured UI font, while terminal text and code keep their monospace fonts.
   middle-click close, context menus, and native caption hit testing retain
   their existing handlers.
 
+## All tabs picker
+
+Keep this component menu at a stable 360-point UI-scaled width, bounded by the
+window with 8-point side clearance. Custom rows use a definite width excluding the pinned menu’s outer/item padding
+so long text cannot expand the component’s intrinsic-width wrapper.
+Reserve matching identity wells and a trailing selection slot on every row.
+Single-line middle ellipsis preserves both ends of paths; full accessible names
+and bounded hover details retain the complete title. Keep component keyboard
+navigation, scrolling, selection and dismissal behavior.
+
 ## States
 
 The outer capsule tints the actual translucent chrome and groups the entire
