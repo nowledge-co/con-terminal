@@ -11,6 +11,50 @@ fn workspace_focus_container(focus: &FocusHandle) -> Div {
         .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
 }
 
+/// A quiet grip in the surface gutter, with a wider hit target that does not
+/// consume layout or paint a full-height stripe over either surface.
+fn column_resize_handle(
+    id: &'static str,
+    center: f32,
+    active: bool,
+    foreground: Hsla,
+    dark: bool,
+) -> Stateful<Div> {
+    let grip_color = foreground.opacity(if active { 0.34 } else { 0.0 });
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .group(id)
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(center - 3.5))
+        .w(px(7.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_col_resize()
+        .occlude()
+        .child(
+            div()
+                .debug_selector(|| "column-resize-grip".into())
+                .w(px(2.0))
+                .h(px(28.0))
+                .max_h(relative(0.35))
+                .rounded_full()
+                .bg(grip_color)
+                .group_hover(id, |style| {
+                    style.bg(foreground.opacity(if active {
+                        0.34
+                    } else if dark {
+                        0.24
+                    } else {
+                        0.18
+                    }))
+                }),
+        )
+}
+
 #[cfg(target_os = "linux")]
 const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(14.0);
 
@@ -68,12 +112,12 @@ impl ConWorkspace {
         let sidebar = self.sidebar.read(cx);
         if self.vertical_tabs_enabled() {
             if self.sidebar_tools_open {
-                sidebar.panel_width() * progress
+                sidebar.effective_panel_width() * progress
             } else {
                 sidebar.rendered_width() * progress
             }
         } else {
-            sidebar.panel_width() * progress
+            sidebar.effective_panel_width() * progress
         }
     }
 
@@ -113,7 +157,8 @@ impl ConWorkspace {
 
         if let Some((start_x, start_width)) = self.agent_panel_drag {
             let delta = start_x - f32::from(event.position.x);
-            let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
+            let leading = self.leading_panel_width_for_pane_resize(cx);
+            let max_width = max_agent_panel_width(win.bounds().size.width.as_f32() - leading);
             let new_width = (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
             if (self.agent_panel_width - new_width).abs() > 1.0 {
                 self.agent_panel_width = new_width;
@@ -444,6 +489,10 @@ impl Render for ConWorkspace {
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
         let agent_panel_reserved_for_layout = self.agent_panel_open || agent_panel_progress > 0.0;
         let agent_panel_outer_width = (effective_agent_panel_width + 1.0) * agent_panel_progress;
+        let sidebar_max_width = max_sidebar_panel_width(window_width, agent_panel_outer_width);
+        self.sidebar.update(cx, |sidebar, _| {
+            sidebar.set_effective_panel_max_width(sidebar_max_width);
+        });
         let vertical_tabs_enabled = self.vertical_tabs_enabled();
         let show_left_panel = self.left_panel_open || left_panel_progress > 0.0;
         let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
@@ -510,7 +559,6 @@ impl Render for ConWorkspace {
         } else {
             0.045
         });
-        let chrome_resize_hover_color = theme.foreground.opacity(0.08);
         let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
             let sidebar = self.sidebar.read(cx);
             let tab_sidebar_width = if vertical_tabs_enabled {
@@ -520,9 +568,9 @@ impl Render for ConWorkspace {
             };
             let sidebar_content_width = if show_sidebar_tools {
                 if vertical_tabs_enabled {
-                    (sidebar.panel_width() - tab_sidebar_width).max(0.0)
+                    (sidebar.effective_panel_width() - tab_sidebar_width).max(0.0)
                 } else {
-                    sidebar.panel_width()
+                    sidebar.effective_panel_width()
                 }
             } else {
                 0.0
@@ -870,11 +918,7 @@ impl Render for ConWorkspace {
             0.0
         };
         #[cfg(target_os = "macos")]
-        let input_popup_progress = if input_bar_reserved_for_layout {
-            1.0
-        } else {
-            0.0
-        };
+        let input_popup_progress = input_bar_progress;
         #[cfg(not(target_os = "macos"))]
         let input_popup_progress = input_bar_progress;
 
@@ -917,16 +961,9 @@ impl Render for ConWorkspace {
             #[cfg(target_os = "macos")]
             {
                 let width = (window_width - left_panel_width - agent_panel_outer_width).max(0.0);
-                let island = theme
-                    .title_bar
-                    .blend(if theme.is_dark() {
-                        theme.foreground.opacity(0.10 * canvas_depth)
-                    } else {
-                        gpui::white().opacity(0.55 * canvas_depth)
-                    })
-                    .opacity(ui_surface_opacity);
-                // The pinned view-cache key includes clipping but not inherited
-                // opacity. Keep only the settled, fully opaque input cached.
+                let island = terminal_surface_color.opacity(self.terminal_opacity);
+                // Keep moving content uncached while the full-size tray slides
+                // through its changing reveal mask. Cache the settled endpoint.
                 let input = if input_bar_transitioning {
                     self.input_bar.clone().into_any_element()
                 } else {
@@ -939,11 +976,12 @@ impl Render for ConWorkspace {
                         )
                         .into_any_element()
                 };
-                // One fixed tray fades as a unit. Reserve its final viewport
-                // immediately instead of resizing again when the fade settles.
+                // Reveal and terminal layout share one progress sample. Keep
+                // content full-sized and clip it rather than scaling typography.
                 terminal_area = terminal_area
                     .child(
                         div()
+                            .relative()
                             .h(px(frame::input_reserved_height(
                                 full_input_bar_height,
                                 self.input_bar_visible,
@@ -951,7 +989,12 @@ impl Render for ConWorkspace {
                                 canvas_depth,
                             )))
                             .flex_shrink_0()
-                            .bg(top_bar_surface_color),
+                            .child(frame::input_tray_surround(
+                                full_input_bar_height,
+                                input_bar_progress,
+                                canvas_depth,
+                                top_bar_surface_color,
+                            )),
                     )
                     .child(
                         frame::input_reveal_clip(
@@ -967,6 +1010,7 @@ impl Render for ConWorkspace {
                                 island,
                                 theme.foreground,
                                 theme.is_dark(),
+                                top_bar_surface_color,
                             )
                             .child(input),
                         ),
@@ -1053,38 +1097,35 @@ impl Render for ConWorkspace {
 
         main_area = main_area.child(main_column);
 
-        if show_sidebar_tools && !left_panel_transitioning {
-            let resize_edge = left_panel_width;
+        let sidebar_resizable = show_left_panel
+            && !left_panel_transitioning
+            && (show_sidebar_tools || self.sidebar.read(cx).has_resizable_content());
+        if sidebar_resizable {
+            // On macOS the terminal starts one card gutter beyond the sidebar.
+            // Center the grip in that gutter instead of on the painted card.
+            #[cfg(target_os = "macos")]
+            let center = left_panel_width + frame::CARD_OUTER_INSET * 0.5 * canvas_depth;
+            #[cfg(not(target_os = "macos"))]
+            let center = left_panel_width;
             main_area = main_area.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px((resize_edge - 1.0).max(0.0)))
-                    .w(px(1.0))
-                    .bg(chrome_edge_color),
-            );
-            main_area = main_area.child(
-                div()
-                    .id("left-sidebar-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px((resize_edge - 3.0).max(0.0)))
-                    .w(px(6.0))
-                    .cursor_col_resize()
-                    .occlude()
-                    .bg(theme.transparent)
-                    .hover(|s| s.bg(chrome_resize_hover_color))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                            this.release_active_terminal_mouse_selection(cx);
-                            let width = this.sidebar.read(cx).panel_width();
-                            this.sidebar_drag = Some((f32::from(event.position.x), width));
-                            cx.notify();
-                        }),
-                    ),
+                column_resize_handle(
+                    "left-sidebar-resize-handle",
+                    center,
+                    self.sidebar_drag.is_some(),
+                    theme.foreground,
+                    theme.is_dark(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                        this.release_active_terminal_mouse_selection(cx);
+                        // Begin at the visible width after any window-size clamp.
+                        let width = this.leading_panel_width_for_pane_resize(cx);
+                        this.sidebar_drag = Some((f32::from(event.position.x), width));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                ),
             );
         } else if show_left_panel {
             main_area = main_area.child(
@@ -1146,50 +1187,15 @@ impl Render for ConWorkspace {
                             .h(px(1.0))
                             .bg(chrome_edge_color),
                     )
-                    .child(
-                        div()
-                            .id("agent-panel-divider")
-                            .relative()
-                            .w(px(if cfg!(target_os = "macos") { 0.0 } else { 1.0 }))
-                            .h_full()
-                            .flex_shrink_0()
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .bottom_0()
-                                    .left_0()
-                                    .w(px(1.0))
-                                    .bg(chrome_edge_color),
-                            )
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .bottom_0()
-                                    .left(px(if cfg!(target_os = "macos") { 0.0 } else { -2.0 }))
-                                    .w(px(5.0))
-                                    .cursor_col_resize()
-                                    .bg(theme.transparent)
-                                    .hover(|s| s.bg(chrome_resize_hover_color))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            move |this, event: &MouseDownEvent, _window, cx| {
-                                                if this.agent_panel_motion.is_animating() {
-                                                    return;
-                                                }
-                                                this.release_active_terminal_mouse_selection(cx);
-                                                this.agent_panel_drag = Some((
-                                                    f32::from(event.position.x),
-                                                    effective_agent_panel_width,
-                                                ));
-                                                cx.notify();
-                                            },
-                                        ),
-                                    ),
-                            ),
-                    )
+                    .when(!cfg!(target_os = "macos"), |panel| {
+                        panel.child(
+                            div()
+                                .w(px(1.0))
+                                .h_full()
+                                .flex_shrink_0()
+                                .bg(chrome_edge_color),
+                        )
+                    })
                     .child(
                         div()
                             .w(px(effective_agent_panel_width
@@ -1214,6 +1220,36 @@ impl Render for ConWorkspace {
                                     .into_any_element(),
                             ),
                     ),
+            );
+        }
+
+        if render_agent_panel && !agent_panel_transitioning {
+            let seam = window_width - agent_panel_outer_width;
+            // Terminal ends 5pt before the layout seam; agent content begins
+            // 2pt after it. Both edges share this 7pt gutter.
+            #[cfg(target_os = "macos")]
+            let center =
+                seam + (frame::AGENT_CONTENT_INSET - frame::CARD_OUTER_INSET) * 0.5 * canvas_depth;
+            #[cfg(not(target_os = "macos"))]
+            let center = seam;
+            main_area = main_area.child(
+                column_resize_handle(
+                    "agent-panel-divider",
+                    center,
+                    self.agent_panel_drag.is_some(),
+                    theme.foreground,
+                    theme.is_dark(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                        this.release_active_terminal_mouse_selection(cx);
+                        this.agent_panel_drag =
+                            Some((f32::from(event.position.x), effective_agent_panel_width));
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                ),
             );
         }
 
@@ -1712,18 +1748,6 @@ impl Render for ConWorkspace {
             );
         }
 
-        if self.sidebar_drag.is_some() {
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(top_bar_height))
-                    .bottom_0()
-                    .left(px((left_panel_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)))
-                    .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
         if agent_panel_snap_guard_active && self.agent_panel_open {
             let agent_panel_seam_right = (effective_agent_panel_width
                 - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
@@ -1747,21 +1771,6 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .right_0()
                     .w(px(effective_agent_panel_width + 1.0))
-                    .bg(chrome_transition_seam_color),
-            );
-        }
-
-        if self.agent_panel_drag.is_some() && self.agent_panel_open {
-            let agent_panel_seam_right = (effective_agent_panel_width
-                - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
-                .max(0.0);
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(top_bar_height))
-                    .bottom_0()
-                    .right(px(agent_panel_seam_right))
-                    .w(px(CHROME_MOTION_SEAM_OVERDRAW))
                     .bg(chrome_transition_seam_color),
             );
         }

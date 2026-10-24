@@ -99,3 +99,65 @@ fn layout_chrome_preserves_input_focus_and_children_can_still_take_focus(
         );
     });
 }
+
+#[gpui::test]
+fn column_resize_targets_cover_gutters_outside_clipped_panels(cx: &mut gpui::TestAppContext) {
+    use gpui::{Modifiers, point};
+    struct Gutters {
+        hits: [usize; 2],
+    }
+    impl Render for Gutters {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().pl(px(30.0)).pt(px(20.0)).child(
+                div()
+                    .relative()
+                    .w(px(600.0))
+                    .h(px(200.0))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(400.0))
+                            .w(px(200.0))
+                            .h_full()
+                            .overflow_hidden()
+                            .occlude(),
+                    )
+                    .children(
+                        [
+                            ("left-sidebar-resize-handle", 202.5),
+                            ("agent-panel-divider", 398.5),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (id, center))| {
+                            super::column_resize_handle(id, center, false, gpui::black(), false)
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(move |this, _, _, _| {
+                                        this.hits[i] += 1;
+                                    }),
+                                )
+                        }),
+                    ),
+            )
+        }
+    }
+    let (view, cx) = cx.add_window_view(|_, _| Gutters { hits: [0; 2] });
+    for (i, (id, center)) in [
+        ("left-sidebar-resize-handle", 202.5),
+        ("agent-panel-divider", 398.5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bounds = cx.debug_bounds(id).unwrap();
+        assert_eq!(bounds.size.width, px(7.0));
+        assert!((bounds.center().x.as_f32() - (30.0 + center)).abs() <= 0.5);
+        // Both edges must deliver mouse-down even where the target overlaps
+        // the adjacent clipped/occluded panel. Do not test only its centre.
+        for x in [bounds.left() + px(0.5), bounds.right() - px(0.5)] {
+            cx.simulate_click(point(x, bounds.center().y), Modifiers::default());
+        }
+        view.read_with(cx, |probe, _| assert_eq!(probe.hits[i], 2));
+    }
+}

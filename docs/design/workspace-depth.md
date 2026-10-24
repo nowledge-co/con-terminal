@@ -14,14 +14,14 @@ from AppKit, less the card's clearance from both window edges, and never below
 radius is derived from painted bounds, so it settles back to 8pt as an adjacent
 sidebar opens rather than switching on a layout flag.
 
-GPUI editor cards and the bottom input tray share `card_material`: one quad
-owns both the rounded fill and its one-physical-pixel contour. Do not combine
-this with native `PaneSurround` cutouts or a separately antialiased outline.
-The editor uses one flat chrome backing outside that quad. The input keeps
-its existing translucent fill and reservation; its fill, edge and content
-live under the same reveal opacity, so the edge cannot appear ahead of the
-surface or lag behind it. Native terminal masks and their complementary
-coverage remain separate and unchanged.
+GPUI editor cards use `card_material`: one quad owns the rounded fill and its
+one-physical-pixel contour, over a flat chrome backing. The bottom input tray
+instead shares the native terminal's exact corner coverage field. Paint its
+body as disjoint rectangles, cache tiny tinted corner images, then paint the
+same complementary SVG cutouts and `card_edge` as the terminal. Do not add a
+second independently antialiased rounded fill beneath that coverage. The tray
+uses terminal background and opacity; chrome paints only the exterior. Keep
+material alpha constant while it moves through the reveal mask.
 
 Horizontal tabs already include bottom clearance inside their fixed-height row.
 Subtract that clearance from the canvas's top margin as the strip appears, so
@@ -73,7 +73,14 @@ contributes the 5pt gap. The sidebar body therefore spans its full column; the
 composer starts at the column boundary and keeps 5pt on the trailing side. Its
 bottom remains on the terminal baseline. Header, transcript and history retain
 their own 2pt horizontal inset so this correction does not move their content.
-Keep the sidebar's full 5pt resize hitbox inside its clipping boundary.
+Sidebar resize uses the same short 2pt × 28pt hover/drag grip as pane splits.
+Its transparent 7pt target belongs to the shared layout overlay, centred between
+visible surface edges; never clip it inside the agent panel or paint a full-height
+hover stripe. Expanded Sessions and Files/Search share the saved width. The
+compact icon rail remains fixed. Pressed resize must not resurrect the old
+full-height opaque seam covers; the short grip is the complete feedback.
+Clamp rendered widths to the current window
+budget and begin drags at the visible width, preserving the saved preference.
 Compact-tab details use a stable tile anchor and one opaque, rounded material.
 The title and identity icon share one row, with the pane count at its trailing
 edge; the path follows below. Keep 12pt horizontal and 10pt vertical padding.
@@ -88,26 +95,26 @@ tray-to-window-bottom gaps are all 5pt at the decorated endpoint, matching
 the visible outer clearance and agent-composer margins. The existing
 1pt split divider plus two 2pt pane insets define that rhythm. The tray sits
 2pt above the inner canvas bottom, plus the 3pt canvas inset. A 44pt tray
-reserves 49pt once throughout its reveal. Its content height stays unchanged.
-It is not a
-centered, capped-width field inside a full-width terminal-colored strip.
-Its popovers share that geometry. The tray uses a lifted Window Chrome fill;
-the space around it belongs to the workspace, not a second native terminal
-material. Its fine edge is painted after the tray fill and separately from its
-content clip, so the material cannot hide the edge or cut off the exterior shadow.
+reserves 49pt at rest and scales that reservation with the reveal progress.
+Its content height stays unchanged. The tray uses the focused terminal's base
+color and opacity, without a white lift or a rectangular chrome backing beneath
+its translucent interior. The exterior gap belongs to the workspace. Its fill
+and fine contour use the terminal's shared coverage and perimeter treatment.
 Sidebar boundaries use the canvas gutter, not a decorative vertical line.
 Compact navigation tools and session identities share the rail's centerline;
 their different hit-target sizes must not introduce a horizontal offset.
 
-Show/hide fades the fixed tray, background and controls together. There is no
-vertical translation or animated height clip. Reserve the final output viewport
-when opening, retain it through closing and reversal, and release it only once
-the tray is fully hidden. In particular, completing a reveal must not trigger
-a second terminal resize. This trades a single viewport change at the opening
-boundary for a stable viewport throughout the fade; it is not a terminal-content
-padding API. The tray must not hide the final terminal row at rest.
-The pinned GPUI view-cache key does not include inherited opacity, so input
-caching is used only at the settled, fully opaque endpoint.
+Show/hide shares one spring sample across the terminal reservation, agent-panel
+bottom clearance, popover anchor and input reveal. Clip the full-size input to
+the revealed height, anchoring the full-size card at the reveal's top so it
+slides below the viewport. Never scale its text or multiply the material alpha
+by animation progress: that turns an intentional glass surface into a hole.
+The terminal must expand throughout closing rather than wait for the end. Reversing the animation preserves the current geometry and
+velocity, and reduced motion reaches both layout and material endpoints in the
+same frame. Native presentation still uses the existing frame-scoped sync.
+Input caching is used only at the settled endpoint. The tinted corner cache
+is bounded and keyed by physical size, orientation, chrome alpha and material;
+moving a card reuses its existing image rather than uploading another texture.
 
 One tab with one pane and both sidebars hidden returns to the original clean terminal:
 no canvas inset, no corner mask and no input-island margin. These dimensions

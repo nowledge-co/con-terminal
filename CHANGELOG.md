@@ -4,6 +4,44 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.155`
+
+### Added
+
+**AI providers**
+
+- Connect to Magpie's local or remote gateway, discover its model and group IDs,
+  and keep Con's tool approval flow. Magpie uses its official icon, and provider
+  marks are consistent between Settings and the agent panel.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Models**
+
+- Refresh provider catalogs from Settings. New releases appear before older
+  large-context models; MiniMax regional catalogs are combined, and offline
+  suggestions include MiniMax M3.1 Flash and Claude 5.5.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Workspace**
+
+- Resize the expanded Sessions sidebar as well as Files/Search. Both sidebar
+  dividers use short grips centred between surfaces, with wider transparent
+  drag targets and width limits that preserve terminal space. Pressing a grip
+  keeps this feedback instead of drawing the old full-height stripe.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
+**macOS**
+
+- The bottom input tray shares the terminal's background, transparency and
+  corner coverage. It slides out at its configured opacity while terminal
+  space expands continuously, avoiding a transparent flash or an endpoint jump.
+  Rounded edges use the same physical-pixel mask as the terminal.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.154` - 2026-10-23
 
 ### Changed

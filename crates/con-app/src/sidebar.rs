@@ -523,21 +523,21 @@ impl SessionSidebar {
     pub fn caption_dock_progress(&self, visibility: f32, minimum_width: f32) -> f32 {
         // Files/Search render a rail plus a tool column whose combined width
         // is panel_width, even though the tab rail itself is compact.
-        let target_width = if self.tools_panel_open {
-            self.panel_width
-        } else {
-            self.effective_panel_width()
-        };
+        let target_width = self.effective_panel_width();
         if (!self.tools_panel_open && self.rail_only_override) || target_width <= minimum_width {
             return 0.0;
         }
         let rendered_width = if self.tools_panel_open {
-            self.panel_width
+            self.effective_panel_width()
         } else {
             self.rendered_width()
         };
         ((rendered_width * visibility - minimum_width) / (target_width - minimum_width))
             .clamp(0.0, 1.0)
+    }
+
+    pub fn has_resizable_content(&self) -> bool {
+        self.tools_panel_open || (self.is_pinned() && !self.rail_only_override)
     }
 
     pub fn panel_width(&self) -> f32 {
@@ -605,7 +605,6 @@ impl SessionSidebar {
         }
     }
 
-    #[allow(dead_code)]
     pub fn set_effective_panel_max_width(&mut self, width: f32) {
         self.effective_panel_max_width = width.max(PANEL_MIN_WIDTH);
     }
@@ -715,7 +714,7 @@ impl SessionSidebar {
         width.clamp(PANEL_MIN_WIDTH, effective_max_width.max(PANEL_MIN_WIDTH))
     }
 
-    fn effective_panel_width(&self) -> f32 {
+    pub(crate) fn effective_panel_width(&self) -> f32 {
         Self::clamped_panel_width(self.panel_width, self.effective_panel_max_width)
     }
 

@@ -1,4 +1,4 @@
-use gpui::{Bounds, Hsla, IntoElement, Pixels, Styled, Window, point, px};
+use gpui::{Bounds, Hsla, InteractiveElement, IntoElement, Pixels, Styled, Window, point, px};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -353,14 +353,10 @@ pub(super) fn input_safe_height(height: f32, progress: f32, depth: f32) -> f32 {
     (height + (CARD_GAP - PANE_INSET + INPUT_BOTTOM_INSET) * depth) * progress.clamp(0.0, 1.0)
 }
 
-pub(super) fn input_reserved_height(height: f32, visible: bool, progress: f32, depth: f32) -> f32 {
-    // Reserve once when opening and retain the viewport through closing. A
-    // second resize at the reveal endpoint makes one interaction look like two.
-    if visible || progress > 0.0 {
-        input_safe_height(height, 1.0, depth)
-    } else {
-        0.0
-    }
+pub(super) fn input_reserved_height(height: f32, _visible: bool, progress: f32, depth: f32) -> f32 {
+    // Geometry follows the same sample as the reveal. Holding the final height
+    // until fade-out completes makes the native terminal expand one beat late.
+    input_safe_height(height, progress, depth)
 }
 
 pub(super) fn caption_width(window: f32, sidebar: f32, dock: f32, leading: f32) -> f32 {
@@ -379,15 +375,51 @@ pub(super) fn input_reveal_clip(height: f32, progress: f32, depth: f32) -> gpui:
     let progress = progress.clamp(0.0, 1.0);
     gpui::div()
         .absolute()
-        .bottom(px(INPUT_BOTTOM_INSET * depth))
+        .bottom(px(INPUT_BOTTOM_INSET * depth * progress))
         .left_0()
         .w_full()
-        .h(px(height))
-        .opacity(progress)
+        .h(px(height * progress))
         .overflow_hidden()
 }
 
-/// Keep the input's fill, contour and content in the same reveal layer.
+/// Paint only the tray's exterior. A full rectangular backdrop underneath
+/// the translucent card would compound opacity and change its material.
+pub(super) fn input_tray_surround(
+    height: f32,
+    progress: f32,
+    depth: f32,
+    color: Hsla,
+) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, window, _| {
+            let bounds =
+                crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
+            let inset = px(PANE_INSET * depth).min(bounds.size.width * 0.5);
+            let card = Bounds::new(
+                point(
+                    bounds.left() + inset,
+                    bounds.bottom() - px((INPUT_BOTTOM_INSET * depth + height) * progress),
+                ),
+                gpui::size((bounds.size.width - 2.0 * inset).max(px(0.0)), px(height)),
+            );
+            (bounds, surround_strips(bounds, card.intersect(&bounds)))
+        },
+        move |_, (bounds, strips), window, _cx| {
+            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                for strip in strips {
+                    if strip.size.width > px(0.0) && strip.size.height > px(0.0) {
+                        window.paint_quad(gpui::fill(strip, color));
+                    }
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+/// Use the native terminal's exact coverage field rather than a second rounded
+/// quad raster. The material stays at its configured alpha throughout reveal.
 pub(super) fn input_card(
     width: f32,
     height: f32,
@@ -395,17 +427,134 @@ pub(super) fn input_card(
     color: Hsla,
     foreground: Hsla,
     dark: bool,
+    surround: Hsla,
 ) -> gpui::Div {
     use gpui::ParentElement;
     let (left, width) = input_island_geometry(width, depth);
     gpui::div()
         .absolute()
-        .bottom_0()
+        .top_0()
         .left(px((left - CANVAS_INSET * depth).max(0.0)))
         .w(px(width))
         .h(px(height))
         .overflow_hidden()
-        .child(card_material(INPUT_RADIUS * depth, color, foreground, dark))
+        .child(input_material(INPUT_RADIUS * depth, color, surround))
+        .child(
+            card_edge(INPUT_RADIUS * depth, foreground, dark)
+                .inset_0()
+                .debug_selector(|| "input-card-edge".into()),
+        )
+}
+
+fn material_body_strips(bounds: Bounds<Pixels>, corners: &[Bounds<Pixels>]) -> Vec<Bounds<Pixels>> {
+    let mut strips = vec![bounds];
+    for corner in corners {
+        strips = strips
+            .into_iter()
+            .flat_map(|strip| {
+                if strip.intersects(corner) {
+                    surround_strips(strip, strip.intersect(corner))
+                        .into_iter()
+                        .filter(|strip| strip.size.width > px(0.0) && strip.size.height > px(0.0))
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![strip]
+                }
+            })
+            .collect();
+    }
+    strips
+}
+
+fn input_corner_image(
+    tile: &NativeCornerCoverage,
+    color: Hsla,
+    chrome_alpha: f32,
+) -> std::sync::Arc<gpui::RenderImage> {
+    type Key = (usize, usize, u32, [u32; 4]);
+    type Cache = Vec<(Key, std::sync::Arc<gpui::RenderImage>)>;
+    thread_local! {
+        static CACHE: RefCell<Cache> = const { RefCell::new(Vec::new()) };
+    }
+    let color: gpui::Rgba = color.into();
+    let key = (
+        tile.side,
+        tile.corner,
+        chrome_alpha.to_bits(),
+        [
+            color.r.to_bits(),
+            color.g.to_bits(),
+            color.b.to_bits(),
+            color.a.to_bits(),
+        ],
+    );
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((_, image)) = cache.iter().find(|(old, _)| *old == key) {
+            return image.clone();
+        }
+        // RenderImage consumes straight-alpha BGRA. Match the native mask's
+        // physical pixels, including its compensation for translucent chrome.
+        let channel = |value: f32| (value * 255.0).round().clamp(0.0, 255.0) as u8;
+        let mut bytes = vec![0; tile.side * tile.side * 4];
+        for (pixel, coverage) in bytes.chunks_exact_mut(4).zip(tile.rgba.chunks_exact(4)) {
+            pixel.copy_from_slice(&[
+                channel(color.b),
+                channel(color.g),
+                channel(color.r),
+                (f32::from(coverage[3]) * color.a).round().clamp(0.0, 255.0) as u8,
+            ]);
+        }
+        let pixels = image::RgbaImage::from_raw(tile.side as u32, tile.side as u32, bytes).unwrap();
+        let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+        if cache.len() >= 32 {
+            cache.remove(0);
+        }
+        cache.push((key, image.clone()));
+        image
+    })
+}
+
+fn input_material(radius: f32, color: Hsla, surround: Hsla) -> impl IntoElement {
+    gpui::canvas(
+        move |bounds, window, _| {
+            let bounds =
+                crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
+            let radii = window_concentric_corners(bounds, radius, window);
+            let coverage = native_corner_coverage(bounds, radii, window.scale_factor(), surround.a)
+                .unwrap_or_else(|error| {
+                    log::error!("failed to prepare input corner coverage: {error}");
+                    Vec::new()
+                });
+            let corners = coverage.iter().map(|tile| tile.bounds).collect::<Vec<_>>();
+            let images = coverage
+                .iter()
+                .map(|tile| (tile.bounds, input_corner_image(tile, color, surround.a)))
+                .collect::<Vec<_>>();
+            (
+                material_body_strips(bounds, &corners),
+                images,
+                corner_cutouts(bounds, radii),
+            )
+        },
+        move |_, (strips, images, corners), window, cx| {
+            for strip in strips {
+                window.paint_quad(gpui::fill(strip, color));
+            }
+            for (bounds, image) in images {
+                if let Err(error) =
+                    window.paint_image(bounds, bounds, Default::default(), image, 0, false)
+                {
+                    log::error!("failed to paint input corner: {error}");
+                }
+            }
+            for corner in corners {
+                corner.paint(surround, window, cx);
+            }
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 #[derive(Default)]
@@ -594,6 +743,7 @@ impl CornerCutout {
 pub(crate) struct NativeCornerCoverage {
     pub bounds: Bounds<Pixels>,
     pub side: usize,
+    corner: usize,
     pub rgba: std::sync::Arc<[u8]>,
 }
 
@@ -684,7 +834,12 @@ pub(crate) fn native_corner_coverage(
                 });
                 bytes
             };
-            Ok(NativeCornerCoverage { bounds, side, rgba })
+            Ok(NativeCornerCoverage {
+                bounds,
+                side,
+                corner: corner.mask,
+                rgba,
+            })
         })
         .collect()
 }
@@ -859,6 +1014,61 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_material_partitions_the_body_and_reuses_native_corner_coverage() {
+        let bounds = Bounds::new(point(px(5.0), px(20.0)), gpui::size(px(120.0), px(44.0)));
+        let radii = gpui::Corners {
+            top_left: px(8.0),
+            top_right: px(4.0),
+            bottom_left: px(10.0),
+            bottom_right: px(6.0),
+        };
+        let rgba = gpui::Rgba {
+            r: 0.2,
+            g: 0.4,
+            b: 0.7,
+            a: 0.63,
+        };
+        let color: Hsla = rgba.into();
+        for scale in [1.0, 1.5, 2.0] {
+            let tiles = native_corner_coverage(bounds, radii, scale, 0.8).unwrap();
+            let corners = tiles.iter().map(|tile| tile.bounds).collect::<Vec<_>>();
+            let strips = material_body_strips(bounds, &corners);
+            for y in 0..(44.0 * scale) as usize {
+                for x in 0..(120.0 * scale) as usize {
+                    let p = point(
+                        bounds.left() + px((x as f32 + 0.5) / scale),
+                        bounds.top() + px((y as f32 + 0.5) / scale),
+                    );
+                    let count = strips
+                        .iter()
+                        .chain(corners.iter())
+                        .filter(|rect| rect.contains(&p))
+                        .count();
+                    assert_eq!(count, 1, "overlap or hole in input material at {p:?}");
+                }
+            }
+            for tile in tiles {
+                let image = input_corner_image(&tile, color, 0.8);
+                let again = input_corner_image(&tile, color, 0.8);
+                assert!(
+                    std::sync::Arc::ptr_eq(&image, &again),
+                    "moving the card must not re-upload its corners"
+                );
+                let bytes = image.as_bytes(0).unwrap();
+                for (pixel, coverage) in bytes.chunks_exact(4).zip(tile.rgba.chunks_exact(4)) {
+                    assert_eq!(&pixel[..3], &[179, 102, 51], "straight-alpha BGRA");
+                    assert!((f32::from(pixel[3]) - f32::from(coverage[3]) * rgba.a).abs() <= 0.51);
+                }
+                let transparent = input_corner_image(&tile, color.opacity(0.2), 0.8);
+                assert!(
+                    !std::sync::Arc::ptr_eq(&image, &transparent),
+                    "opacity changes must invalidate tinted pixels"
+                );
+            }
+        }
+    }
 
     #[test]
     fn gpui_card_material_keeps_fill_alpha_and_a_single_physical_pixel_edge() {
@@ -1160,7 +1370,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn input_fades_without_wiping_or_moving_the_composer(cx: &mut gpui::TestAppContext) {
+    fn input_reveal_preserves_content_size_while_clipping(cx: &mut gpui::TestAppContext) {
         use gpui::{
             Context, InteractiveElement, IntoElement, ParentElement, Render, Window, div, size,
         };
@@ -1181,6 +1391,7 @@ mod tests {
                                 gpui::black().opacity(0.6),
                                 gpui::white(),
                                 true,
+                                gpui::white().opacity(0.8),
                             )
                             .debug_selector(|| "fixed-composer".into())
                             .child(gpui::div().size_full()),
@@ -1206,16 +1417,30 @@ mod tests {
                     view.progress = progress;
                     cx.notify();
                 });
-                assert_eq!(cx.debug_bounds("fixed-composer").unwrap(), fixed);
+                let content = cx.debug_bounds("fixed-composer").unwrap();
+                assert_eq!(content.size, fixed.size);
+                assert_eq!(content.left(), fixed.left());
+                assert_eq!(
+                    content,
+                    cx.debug_bounds("input-card-edge").unwrap(),
+                    "the fine contour must cover the entire moving card"
+                );
+                assert_eq!(
+                    content.top(),
+                    cx.debug_bounds("input-reveal-clip").unwrap().top()
+                );
                 let clip = cx.debug_bounds("input-reveal-clip").unwrap();
-                assert_eq!(clip.bottom(), px(64.0 - INPUT_BOTTOM_INSET * depth));
-                assert_eq!(clip.size.height, px(44.0));
+                assert!(
+                    (clip.bottom().as_f32() - (64.0 - INPUT_BOTTOM_INSET * depth * progress)).abs()
+                        <= 0.51
+                );
+                assert!((clip.size.height.as_f32() - 44.0 * progress).abs() <= 0.51);
             }
         }
     }
 
     #[gpui::test]
-    fn input_viewport_stays_stable_through_reveal_reversal_and_completion(
+    fn input_viewport_tracks_reveal_reversal_without_an_endpoint_jump(
         cx: &mut gpui::TestAppContext,
     ) {
         use gpui::{
@@ -1268,11 +1493,11 @@ mod tests {
         cx.simulate_resize(size(px(500.0), px(400.0)));
         let island = cx.debug_bounds("island-frame").unwrap();
         for (progress, visible, expected_output) in [
-            (0.1, true, 251.0),
-            (0.7, true, 251.0),
+            (0.1, true, 295.1),
+            (0.7, true, 265.7),
             (1.0, true, 251.0),
-            (0.6, false, 251.0),
-            (0.8, true, 251.0),
+            (0.6, false, 270.6),
+            (0.8, true, 260.8),
             (1.0, true, 251.0),
             (0.0, false, 300.0),
         ] {
@@ -1281,10 +1506,16 @@ mod tests {
                 view.visible = visible;
                 cx.notify();
             });
-            assert_eq!(cx.debug_bounds("island-frame").unwrap(), island);
-            assert_eq!(
-                cx.debug_bounds("output-viewport").unwrap().size.height,
-                px(expected_output)
+            assert_eq!(cx.debug_bounds("island-frame").unwrap().size, island.size);
+            assert!(
+                (cx.debug_bounds("output-viewport")
+                    .unwrap()
+                    .size
+                    .height
+                    .as_f32()
+                    - expected_output)
+                    .abs()
+                    <= 0.51
             );
         }
     }

@@ -122,9 +122,11 @@ con is light-first (Flexoki Light default) but must excel in both themes.
   `docs/design/compact-tab-strip.md` for geometry and interaction constraints.
 - Apply the same rule throughout sidebar navigation, file trees and search,
   including disclosure arrows, secondary paths and result line numbers.
-- The titlebar, left sidebar, agent sidebar, and bottom input bar share one
-  translucent chrome material. On macOS, an inset terminal canvas and a
-  floating input island with reserved terminal rows provide depth without borders or shadows;
+- The titlebar and sidebars share translucent chrome. The macOS bottom input
+  card uses the terminal's background color and opacity, with chrome only around
+  its perimeter. Its reserved height follows the same spring sample as its
+  reveal, so the native terminal expands during hiding rather than afterward.
+  The inset canvas and input card provide depth without shadows;
   expanded vertical navigation takes ownership of the caption controls.
   A single tab without sidebars keeps the original flush layout. See
   `docs/design/workspace-depth.md` for geometry and native clipping. Other
