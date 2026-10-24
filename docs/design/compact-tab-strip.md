@@ -97,7 +97,10 @@ content. Normalize asset aliases before deduplication; inactive surfaces are not
 additional panes. Multi-app identities use at most three small cards, with a
 full-size primary logo and two smaller rear logos. Give the cards a consistent
 rounded silhouette, one-point inner padding and solid theme-derived neutral
-fills: a lighter front card and quieter rear cards. This is a deliberately inset
+fills: a lighter front card and quieter rear cards. Each stacked card has a
+quiet, one-physical-pixel inset contour to distinguish overlapping edges in
+both themes. Paint fill and contour in one quad, without changing art or layout
+bounds; single identities retain their freestanding treatment. This is a deliberately inset
 card material, not a bare dark patch under a logo. Keep logos whole and preserve
 their original alpha and color; do not crop them into strips or stamp counts on
 top. Keep the primary card on the left, paint rear cards first and reveal their

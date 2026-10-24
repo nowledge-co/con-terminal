@@ -197,8 +197,13 @@ pub(crate) fn tab_identity_group(
             .left(step * index as f32 + gpui::px(if index == 0 { 0.0 } else { 2.0 }))
             .top((tab_identity_group_height(count, size) - card_size) * 0.5)
             .size(card_size)
-            .rounded(gpui::px((size.as_f32() * 0.22).round()))
-            .bg(material)
+            .child(tab_identity_card_material(
+                gpui::px((size.as_f32() * 0.22).round()),
+                material,
+                theme
+                    .foreground
+                    .opacity(if theme.is_dark() { 0.22 } else { 0.16 }),
+            ))
             .flex()
             .items_center()
             .justify_center()
@@ -214,6 +219,30 @@ pub(crate) fn tab_identity_group(
         );
     }
     group.into_any_element()
+}
+
+/// Fill and contour share one antialiased quad; the inset edge consumes no
+/// layout space and stays one physical pixel on every display.
+fn tab_identity_card_material(
+    radius: gpui::Pixels,
+    material: gpui::Hsla,
+    edge: gpui::Hsla,
+) -> impl gpui::IntoElement {
+    use gpui::Styled;
+    gpui::canvas(
+        |bounds, window, _| {
+            crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor())
+        },
+        move |_, bounds, window, _| {
+            let mut quad = gpui::fill(bounds, material);
+            quad.corner_radii = gpui::Corners::all(radius);
+            quad.border_widths = gpui::Edges::all(gpui::px(1.0 / window.scale_factor()));
+            quad.border_color = edge;
+            window.paint_quad(quad);
+        },
+    )
+    .absolute()
+    .inset_0()
 }
 
 /// Tab identities may be small bitmap objects; action/status glyphs stay SVG.
