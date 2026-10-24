@@ -21,7 +21,10 @@ body as disjoint rectangles, cache tiny tinted corner images, then paint the
 same complementary SVG cutouts and `card_edge` as the terminal. Do not add a
 second independently antialiased rounded fill beneath that coverage. The tray
 uses terminal background and opacity; chrome paints only the exterior. Keep
-material alpha constant while it moves through the reveal mask.
+material alpha constant while it moves through the reveal mask. Exterior chrome
+subtracts the intersection of the actual card and reveal bounds collected during
+prepaint. Never infer this hole from a full-height card extending below the
+viewport: that leaves the reveal's bottom inset unpainted during motion.
 
 Horizontal tabs already include bottom clearance inside their fixed-height row.
 Subtract that clearance from the canvas's top margin as the strip appears, so

@@ -1,4 +1,5 @@
 use super::super::*;
+use gpui_component::scroll::ScrollableElement;
 
 use super::super::chrome_actions::PANE_SCOPE_GAP;
 
@@ -173,7 +174,11 @@ impl ConWorkspace {
         let sel = self.input_bar.read(cx).skill_selection();
         let sel = sel.min(skills.len().saturating_sub(1));
 
+        let scroll = self.input_bar.read(cx).skill_popup_scroll_handle();
         let mut popup = div()
+            .id("skill-popup")
+            .role(Role::ListBox)
+            .debug_selector(|| "skill-popup".into())
             .absolute()
             .bottom(popup_bottom)
             .left(px(terminal_content_left + 24.0))
@@ -186,7 +191,9 @@ impl ConWorkspace {
             .border_1()
             .border_color(theme.muted.opacity(0.16))
             .py(px(6.0))
-            .overflow_hidden()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
+            .occlude()
             .font_family(theme.font_family.clone());
 
         for (i, (name, desc)) in skills.iter().enumerate() {
@@ -195,8 +202,12 @@ impl ConWorkspace {
             popup = popup.child(
                 div()
                     .id(SharedString::from(format!("skill-{name}")))
+                    .role(Role::ListBoxOption)
+                    .aria_selected(is_sel)
+                    .aria_label(format!("/{name}"))
                     .flex()
                     .flex_col()
+                    .flex_shrink_0()
                     .gap(px(2.0))
                     .mx(px(6.0))
                     .px(px(12.0))
@@ -237,7 +248,7 @@ impl ConWorkspace {
                     ),
             );
         }
-        Some(popup.into_any_element())
+        Some(popup.vertical_scrollbar(&scroll).into_any_element())
     }
 
     pub(super) fn render_path_popup(

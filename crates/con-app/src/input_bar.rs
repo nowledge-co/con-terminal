@@ -163,6 +163,7 @@ pub struct InputBar {
     skills: Vec<SkillEntry>,
     /// Index of the highlighted skill in the filtered list (for arrow-key nav)
     skill_selection: usize,
+    skill_popup_scroll: ScrollHandle,
     inline_suggestion_prefix: Option<String>,
     inline_suggestion_suffix: Option<String>,
     inline_suggestion_source: Option<SuggestionSource>,
@@ -323,6 +324,7 @@ impl InputBar {
                             this.skill_selection =
                                 this.skill_selection.min(matches.len().saturating_sub(1));
                         }
+                        this.skill_popup_scroll.scroll_to_item(this.skill_selection);
                         cx.emit(SkillAutocompleteChanged);
                         cx.emit(InputEdited);
                         cx.notify();
@@ -388,6 +390,7 @@ impl InputBar {
         match key {
             "up" if has_completions => {
                 self.skill_selection = self.skill_selection.saturating_sub(1);
+                self.skill_popup_scroll.scroll_to_item(self.skill_selection);
                 cx.emit(SkillAutocompleteChanged);
                 cx.notify();
                 true
@@ -399,6 +402,7 @@ impl InputBar {
             "down" if has_completions => {
                 self.skill_selection =
                     (self.skill_selection + 1).min(matches.len().saturating_sub(1));
+                self.skill_popup_scroll.scroll_to_item(self.skill_selection);
                 cx.emit(SkillAutocompleteChanged);
                 cx.notify();
                 true
@@ -462,6 +466,7 @@ impl InputBar {
             history_nav_draft: None,
             skills: Vec::new(),
             skill_selection: 0,
+            skill_popup_scroll: ScrollHandle::new(),
             inline_suggestion_prefix: None,
             inline_suggestion_suffix: None,
             inline_suggestion_source: None,
@@ -542,6 +547,11 @@ impl InputBar {
             return;
         }
         self.skills = skills;
+        self.skill_selection = 0;
+        self.skill_popup_scroll.scroll_to_item(0);
+        // The workspace owns the popup. A scan may finish after `/` was typed,
+        // without another input event to invalidate that overlay.
+        cx.emit(SkillAutocompleteChanged);
         cx.notify();
     }
 
@@ -778,12 +788,12 @@ impl InputBar {
     /// Public so the workspace can render the popup at overlay level.
     pub fn filtered_skills(&self, cx: &App) -> Vec<&SkillEntry> {
         let text = self.current_input_state().read(cx).value().to_string();
-        let trimmed = text.trim();
+        let trimmed = text.trim_start();
         if !trimmed.starts_with('/') {
             return Vec::new();
         }
         let query = &trimmed[1..].to_lowercase();
-        if query.contains(' ') {
+        if query.contains(char::is_whitespace) {
             // Already has args — no autocomplete
             return Vec::new();
         }
@@ -791,6 +801,31 @@ impl InputBar {
             .iter()
             .filter(|s| query.is_empty() || s.name.to_lowercase().starts_with(query))
             .collect()
+    }
+
+    fn accept_tab_completion(
+        &mut self,
+        backward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let skill = self
+            .filtered_skills(cx)
+            .get(self.skill_selection)
+            .map(|skill| skill.name.clone());
+        if let Some(name) = skill {
+            self.complete_skill(&name, window, cx);
+            true
+        } else if self.has_path_completion_candidates() {
+            self.navigate_path_completion(backward, cx)
+        } else {
+            self.accept_selected_path_completion(window, cx)
+                || self.accept_inline_suggestion(window, cx)
+        }
+    }
+
+    pub(crate) fn skill_popup_scroll_handle(&self) -> ScrollHandle {
+        self.skill_popup_scroll.clone()
     }
 
     pub fn skill_selection(&self) -> usize {
@@ -1425,7 +1460,7 @@ impl Render for InputBar {
             // The PressEnter subscription owns completion and submission.
             .on_action(|_: &gpui_component::input::Enter, _, _| {})
             .on_action(cx.listener(|this, _: &AcceptSuggestion, window, cx| {
-                let _ = this.accept_inline_suggestion(window, cx);
+                let _ = this.accept_tab_completion(false, window, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &AcceptSuggestionOrMoveEnd, window, cx| {
@@ -1445,10 +1480,10 @@ impl Render for InputBar {
                 this.delete_previous_word(window, cx);
             }))
             .on_action(cx.listener(|this, _: &HistoryPrevious, window, cx| {
-                let _ = this.navigate_history(true, window, cx);
+                let _ = this.handle_history_navigation_key("up", window, cx);
             }))
             .on_action(cx.listener(|this, _: &HistoryNext, window, cx| {
-                let _ = this.navigate_history(false, window, cx);
+                let _ = this.handle_history_navigation_key("down", window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let matches = this.filtered_skills(cx);
@@ -1457,29 +1492,9 @@ impl Render for InputBar {
                 let key = event.keystroke.key.as_str();
 
                 match key {
-                    "tab" => {
-                        if has_completions {
-                            let idx = this.skill_selection.min(matches.len().saturating_sub(1));
-                            let name = matches[idx].name.clone();
-                            this.complete_skill(&name, window, cx);
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        } else if this.has_path_completion_candidates() {
-                            let moved = if mods.shift {
-                                this.navigate_path_completion(true, cx)
-                            } else {
-                                this.navigate_path_completion(false, cx)
-                            };
-                            if moved {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                            }
-                        } else if this.accept_selected_path_completion(window, cx)
-                            || this.accept_inline_suggestion(window, cx)
-                        {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
+                    "tab" if this.accept_tab_completion(mods.shift, window, cx) => {
+                        window.prevent_default();
+                        cx.stop_propagation();
                     }
                     "escape" => {
                         if has_completions {
@@ -1650,8 +1665,9 @@ impl Render for InputBar {
 #[cfg(test)]
 mod tests {
     use super::{
-        INPUT_BAR_MAX_ROWS, InputBar, SkillEntry, SubmitInput, append_ask_ai_context,
-        input_bar_content_rows, input_bar_rendered_height_for_rows, text_end_position,
+        INPUT_BAR_MAX_ROWS, InputBar, InputMode, SkillAutocompleteChanged, SkillEntry, SubmitInput,
+        append_ask_ai_context, input_bar_content_rows, input_bar_rendered_height_for_rows,
+        text_end_position,
     };
     use gpui::{Entity, Focusable as _, VisualTestContext};
     use gpui_component::input::Position;
@@ -1736,6 +1752,100 @@ mod tests {
             assert_eq!(submit_count.get(), 0, "completion must win over submission");
             assert!(bar.read(cx).focus_handle(cx).is_focused(window));
         });
+    }
+
+    #[gpui::test]
+    fn skill_scan_results_invalidate_an_open_slash_overlay_without_more_typing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (bar, cx, _) = test_input_bar(cx);
+        cx.simulate_input("/");
+        let changes = Rc::new(Cell::new(0));
+        let observed = changes.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(&bar, move |_, _: &SkillAutocompleteChanged, _| {
+                observed.set(observed.get() + 1);
+            })
+            .detach();
+        });
+        let skills = vec![SkillEntry {
+            name: "late-scan".into(),
+            description: "Loaded after typing".into(),
+        }];
+        bar.update(cx, |bar, cx| bar.set_skills(skills.clone(), cx));
+        assert_eq!(
+            changes.get(),
+            1,
+            "the workspace popup must hear catalog arrival"
+        );
+        bar.update(cx, |bar, cx| bar.set_skills(skills, cx));
+        assert_eq!(
+            changes.get(),
+            1,
+            "render-time sync must not create a notification loop"
+        );
+        bar.update(cx, |bar, cx| bar.set_skills(Vec::new(), cx));
+        assert_eq!(
+            changes.get(),
+            2,
+            "removing the catalog must dismiss stale rows"
+        );
+    }
+
+    #[gpui::test]
+    fn bound_keys_navigate_and_complete_skills_before_history_or_ghost_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (bar, cx, submits) = test_input_bar(cx);
+        cx.update(|_, cx| InputBar::init(cx));
+        for mode in [InputMode::Smart, InputMode::Shell, InputMode::Agent] {
+            let previous_submits = submits.get();
+            cx.update(|window, cx| {
+                bar.update(cx, |bar, cx| {
+                    bar.set_mode(mode, window, cx);
+                    bar.set_skills(
+                        vec![
+                            SkillEntry {
+                                name: "build".into(),
+                                description: "Build".into(),
+                            },
+                            SkillEntry {
+                                name: "check".into(),
+                                description: "Check".into(),
+                            },
+                        ],
+                        cx,
+                    );
+                    bar.set_recent_commands(vec!["echo history".into()], cx);
+                    bar.current_input_state()
+                        .update(cx, |input, cx| input.set_value("/", window, cx));
+                    bar.focus_handle(cx).focus(window, cx);
+                });
+            });
+            cx.simulate_keystrokes("down tab");
+            cx.update(|window, cx| {
+                assert_eq!(
+                    bar.read(cx).current_input_state().read(cx).value(),
+                    "/check "
+                );
+                assert_eq!(
+                    submits.get(),
+                    previous_submits,
+                    "completion must not execute the skill"
+                );
+                assert!(
+                    bar.read(cx).filtered_skills(cx).is_empty(),
+                    "the separator must close completion instead of trapping Enter"
+                );
+                assert!(bar.read(cx).focus_handle(cx).is_focused(window));
+            });
+            cx.simulate_keystrokes("enter");
+            assert_eq!(
+                submits.get(),
+                previous_submits + 1,
+                "a completed slash command must be submittable"
+            );
+        }
     }
 
     #[gpui::test]

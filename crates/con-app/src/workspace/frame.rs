@@ -1,5 +1,5 @@
 use gpui::{Bounds, Hsla, InteractiveElement, IntoElement, Pixels, Styled, Window, point, px};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 // A split includes its 1pt divider; exterior canvas + pane padding must match it.
@@ -382,40 +382,89 @@ pub(super) fn input_reveal_clip(height: f32, progress: f32, depth: f32) -> gpui:
         .overflow_hidden()
 }
 
-/// Paint only the tray's exterior. A full rectangular backdrop underneath
-/// the translucent card would compound opacity and change its material.
-pub(super) fn input_tray_surround(
-    height: f32,
-    progress: f32,
-    depth: f32,
-    color: Hsla,
-) -> impl IntoElement {
-    gpui::canvas(
-        move |bounds, window, _| {
-            let bounds =
-                crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor());
-            let inset = px(PANE_INSET * depth).min(bounds.size.width * 0.5);
-            let card = Bounds::new(
-                point(
-                    bounds.left() + inset,
-                    bounds.bottom() - px((INPUT_BOTTOM_INSET * depth + height) * progress),
-                ),
-                gpui::size((bounds.size.width - 2.0 * inset).max(px(0.0)), px(height)),
-            );
-            (bounds, surround_strips(bounds, card.intersect(&bounds)))
-        },
-        move |_, (bounds, strips), window, _cx| {
-            window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                for strip in strips {
-                    if strip.size.width > px(0.0) && strip.size.height > px(0.0) {
-                        window.paint_quad(gpui::fill(strip, color));
+#[derive(Clone, Copy, Default)]
+struct InputTrayBounds {
+    card: Option<Bounds<Pixels>>,
+    reveal: Option<Bounds<Pixels>>,
+}
+
+impl InputTrayBounds {
+    fn surround_regions(self, bounds: Bounds<Pixels>) -> [Bounds<Pixels>; 4] {
+        let visible = self
+            .card
+            .zip(self.reveal)
+            .map(|(card, reveal)| card.intersect(&reveal).intersect(&bounds))
+            .filter(|visible| visible.size.width > px(0.0) && visible.size.height > px(0.0))
+            .unwrap_or_else(|| Bounds::new(bounds.origin, gpui::size(px(0.0), px(0.0))));
+        surround_strips(bounds, visible)
+    }
+}
+
+/// Frame-local geometry shared between the tray and its exterior chrome.
+/// All prepaint completes before paint: sample actual snapped layout bounds,
+/// then subtract only the *visible* card, not the full card sliding below it.
+#[derive(Default)]
+pub(super) struct InputTray {
+    bounds: Rc<Cell<InputTrayBounds>>,
+}
+
+impl InputTray {
+    pub fn track_card(&self, card: gpui::Div) -> gpui::Div {
+        self.track(card, true)
+    }
+
+    pub fn track_reveal(&self, reveal: gpui::Div) -> gpui::Div {
+        self.track(reveal, false)
+    }
+
+    fn track(&self, element: gpui::Div, card: bool) -> gpui::Div {
+        use gpui::ParentElement;
+        let geometry = self.bounds.clone();
+        element.child(
+            gpui::canvas(
+                move |bounds, window, _| {
+                    let bounds = crate::terminal_geometry::snap_terminal_bounds(
+                        bounds,
+                        window.scale_factor(),
+                    );
+                    let mut next = geometry.get();
+                    if card {
+                        next.card = Some(bounds);
+                    } else {
+                        next.reveal = Some(bounds);
                     }
-                }
-            });
-        },
-    )
-    .absolute()
-    .size_full()
+                    geometry.set(next);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+    }
+
+    pub fn surround(&self, color: Hsla) -> impl IntoElement + use<> {
+        let geometry = self.bounds.clone();
+        gpui::canvas(
+            |bounds, window, _| {
+                crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor())
+            },
+            move |_, bounds, window, _| {
+                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                    for strip in geometry.get().surround_regions(bounds) {
+                        if strip.size.width > px(0.0) && strip.size.height > px(0.0) {
+                            window.paint_quad(gpui::fill(strip, color));
+                        }
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
 }
 
 /// Use the native terminal's exact coverage field rather than a second rounded
@@ -1449,9 +1498,12 @@ mod tests {
         struct Reveal {
             progress: f32,
             visible: bool,
+            geometry: Rc<Cell<InputTrayBounds>>,
         }
         impl Render for Reveal {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let tray = InputTray::default();
+                self.geometry = tray.bounds.clone();
                 div()
                     .relative()
                     .flex()
@@ -1466,22 +1518,35 @@ mod tests {
                     )
                     .child(
                         div()
+                            .relative()
+                            .debug_selector(|| "input-reservation".into())
                             .h(px(input_reserved_height(
                                 44.0,
                                 self.visible,
                                 self.progress,
                                 1.0,
                             )))
-                            .flex_shrink_0(),
+                            .flex_shrink_0()
+                            .child(tray.surround(gpui::black().opacity(0.9))),
                     )
                     .child(
-                        input_reveal_clip(44.0, self.progress, 1.0).child(
-                            div()
-                                .absolute()
-                                .bottom_0()
-                                .h(px(44.0))
-                                .w_full()
-                                .debug_selector(|| "island-frame".into()),
+                        tray.track_reveal(
+                            input_reveal_clip(44.0, self.progress, 1.0)
+                                .debug_selector(|| "actual-input-reveal".into())
+                                .child(
+                                    tray.track_card(
+                                        input_card(
+                                            500.0,
+                                            44.0,
+                                            1.0,
+                                            gpui::black().opacity(0.8),
+                                            gpui::white(),
+                                            true,
+                                            gpui::black().opacity(0.9),
+                                        )
+                                        .debug_selector(|| "island-frame".into()),
+                                    ),
+                                ),
                         ),
                     )
             }
@@ -1489,6 +1554,7 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, _| Reveal {
             progress: 0.0,
             visible: false,
+            geometry: Rc::default(),
         });
         cx.simulate_resize(size(px(500.0), px(400.0)));
         let island = cx.debug_bounds("island-frame").unwrap();
@@ -1517,6 +1583,42 @@ mod tests {
                     .abs()
                     <= 0.51
             );
+            let reservation = cx.debug_bounds("input-reservation").unwrap();
+            let card = cx.debug_bounds("island-frame").unwrap();
+            let reveal = cx.debug_bounds("actual-input-reveal").unwrap();
+            let geometry = view.read_with(cx, |view, _| view.geometry.get());
+            if progress > 0.0 {
+                assert_eq!(geometry.card, Some(card));
+                assert_eq!(geometry.reveal, Some(reveal));
+            }
+            // A full card extends below the viewport during closing. Chrome
+            // must cover the gap below its reveal mask, even at fractional DPI.
+            for scale in [1.0, 1.5, 2.0] {
+                let snap = |bounds| crate::terminal_geometry::snap_terminal_bounds(bounds, scale);
+                let reservation = snap(reservation);
+                let geometry = InputTrayBounds {
+                    card: geometry.card.map(snap),
+                    reveal: geometry.reveal.map(snap),
+                };
+                let regions = geometry.surround_regions(reservation);
+                for y in 0..(reservation.size.height.as_f32() * scale).round() as usize {
+                    for x in [0.5, 250.5, 499.5] {
+                        let p = point(px(x), reservation.top() + px((y as f32 + 0.5) / scale));
+                        if !reservation.contains(&p) {
+                            continue;
+                        }
+                        let visible = geometry
+                            .card
+                            .zip(geometry.reveal)
+                            .is_some_and(|(card, reveal)| card.contains(&p) && reveal.contains(&p));
+                        assert_eq!(
+                            regions.iter().filter(|region| region.contains(&p)).count(),
+                            usize::from(!visible),
+                            "exposed or double-painted tray pixel at {p:?}, progress={progress}, scale={scale}"
+                        );
+                    }
+                }
+            }
         }
     }
 

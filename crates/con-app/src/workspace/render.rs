@@ -978,6 +978,7 @@ impl Render for ConWorkspace {
                 };
                 // Reveal and terminal layout share one progress sample. Keep
                 // content full-sized and clip it rather than scaling typography.
+                let tray = frame::InputTray::default();
                 terminal_area = terminal_area
                     .child(
                         div()
@@ -989,30 +990,29 @@ impl Render for ConWorkspace {
                                 canvas_depth,
                             )))
                             .flex_shrink_0()
-                            .child(frame::input_tray_surround(
+                            .child(tray.surround(top_bar_surface_color)),
+                    )
+                    .child(
+                        tray.track_reveal(
+                            frame::input_reveal_clip(
                                 full_input_bar_height,
                                 input_bar_progress,
                                 canvas_depth,
-                                top_bar_surface_color,
-                            )),
-                    )
-                    .child(
-                        frame::input_reveal_clip(
-                            full_input_bar_height,
-                            input_bar_progress,
-                            canvas_depth,
-                        )
-                        .child(
-                            frame::input_card(
-                                width,
-                                full_input_bar_height,
-                                canvas_depth,
-                                island,
-                                theme.foreground,
-                                theme.is_dark(),
-                                top_bar_surface_color,
                             )
-                            .child(input),
+                            .child(
+                                tray.track_card(
+                                    frame::input_card(
+                                        width,
+                                        full_input_bar_height,
+                                        canvas_depth,
+                                        island,
+                                        theme.foreground,
+                                        theme.is_dark(),
+                                        top_bar_surface_color,
+                                    )
+                                    .child(input),
+                                ),
+                            ),
                         ),
                     );
             }

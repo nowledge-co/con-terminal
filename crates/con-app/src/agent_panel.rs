@@ -1511,12 +1511,12 @@ impl AgentPanel {
             return Vec::new();
         };
         let text = input.read(cx).value().to_string();
-        let trimmed = text.trim();
+        let trimmed = text.trim_start();
         if !trimmed.starts_with('/') {
             return Vec::new();
         }
         let query = &trimmed[1..].to_lowercase();
-        if query.contains(' ') {
+        if query.contains(char::is_whitespace) {
             return Vec::new();
         }
         self.skills
@@ -5775,6 +5775,54 @@ mod tests {
             assert!(send.right() < surface.right());
             assert!(send.bottom() < surface.bottom());
         }
+    }
+
+    #[gpui::test]
+    fn completed_inline_skill_leaves_completion_and_can_submit(cx: &mut gpui::TestAppContext) {
+        use gpui::Focusable;
+        use std::{cell::RefCell, rc::Rc};
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let submits = Rc::new(RefCell::new(Vec::new()));
+        let observed = submits.clone();
+        let (panel, cx) = cx.add_window_view(|window, cx| {
+            let mut panel = AgentPanel::new(window, cx);
+            panel.set_show_inline_input(true, cx);
+            panel.set_skills(
+                vec![crate::input_bar::SkillEntry {
+                    name: "build".into(),
+                    description: "Build".into(),
+                }],
+                cx,
+            );
+            panel
+                .inline_input_state
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+            panel
+        });
+        cx.update(|_, cx| {
+            cx.subscribe(&panel, move |_, event: &super::InlineInputSubmit, _| {
+                observed.borrow_mut().push(event.text.clone());
+            })
+            .detach();
+        });
+        cx.simulate_input("/bu");
+        cx.simulate_keystrokes("enter");
+        cx.update(|_, cx| {
+            let panel = panel.read(cx);
+            assert_eq!(
+                panel.inline_input_state.as_ref().unwrap().read(cx).value(),
+                "/build "
+            );
+            assert!(panel.filtered_inline_skills(cx).is_empty());
+            assert!(submits.borrow().is_empty());
+        });
+        cx.simulate_keystrokes("enter");
+        assert_eq!(*submits.borrow(), vec!["/build ".to_string()]);
     }
 
     #[gpui::test]

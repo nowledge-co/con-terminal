@@ -26,6 +26,13 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Input**
+
+- Slash skills respond to Tab and arrow keys, scroll the selected match into
+  view, and close completion after inserting the skill name so Enter can submit.
+  Skills arriving after a background scan appear without further typing.
+  _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
+
 **Workspace**
 
 - Resize the expanded Sessions sidebar as well as Files/Search. Both sidebar
@@ -39,7 +46,8 @@ con is still pre-release, so entries may group related beta work while the produ
 - The bottom input tray shares the terminal's background, transparency and
   corner coverage. It slides out at its configured opacity while terminal
   space expands continuously, avoiding a transparent flash or an endpoint jump.
-  Rounded edges use the same physical-pixel mask as the terminal.
+  Rounded edges use the same physical-pixel mask as the terminal. The reveal's
+  bottom gap stays covered during motion over bright backdrops.
   _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.154` - 2026-10-23
