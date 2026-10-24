@@ -27,3 +27,20 @@ pane and agent top/bottom alignment and ensures the pane top stays inside the
 expanded clip throughout tab reveal. Native light/dark horizontal-tab and split
 previews verify the result. Compare painted boundaries, and inspect overflow
 clips whenever a negative margin reclaims space above a layout boundary.
+
+## Follow-up: overlapping caption material
+
+Native dark screenshots exposed a seam missed during the initial corner review.
+The expanded viewport corrected clipping but left the caption's full-height
+background behind the reclaimed band. Two physical rows at 2x became RGB 23
+instead of the adjacent chrome's approximately RGB 30: the caption and pane
+chrome both composited there. This affected the spacing change, independently
+of the later stacked-icon outlines.
+
+Keep the full-height caption layout spacer, but subtract the strip owned by the
+expanded canvas and agent column from its paint. Collect the actual viewport
+bounds during prepaint rather than infer them from animation progress: layout
+rounding can otherwise leave a gap at fractional progress. Preserve backing over
+the left sidebar. The GPUI fixture now checks exactly one material owner at
+every caption pixel across reveal progress, sidebar widths and 1x/1.5x/2x
+scales. Layout-only assertions cannot establish correct translucent composition.

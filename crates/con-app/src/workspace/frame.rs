@@ -58,6 +58,77 @@ pub(super) fn canvas_top_bleed(depth: f32, tabs: f32, caption: f32) -> f32 {
     -(canvas_top_inset(depth, tabs, caption) + PANE_INSET * depth).min(0.0)
 }
 
+fn caption_background_regions(
+    bounds: Bounds<Pixels>,
+    canvas: Option<Bounds<Pixels>>,
+    scale: f32,
+) -> [Bounds<Pixels>; 4] {
+    let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, scale);
+    let owned_by_canvas = canvas
+        .map(|canvas| {
+            let canvas = crate::terminal_geometry::snap_terminal_bounds(canvas, scale);
+            // The agent column shares the canvas's top and owns its own chrome.
+            Bounds::from_corners(
+                point(
+                    canvas.left().max(bounds.left()),
+                    canvas.top().max(bounds.top()),
+                ),
+                bounds.bottom_right(),
+            )
+            .intersect(&bounds)
+        })
+        .filter(|overlap| overlap.size.width > px(0.0) && overlap.size.height > px(0.0))
+        .unwrap_or_else(|| Bounds::new(bounds.bottom_right(), gpui::size(px(0.0), px(0.0))));
+    surround_strips(bounds, owned_by_canvas)
+}
+
+/// Frame-local paint ownership. All prepaint completes before paint, so the
+/// caption can exclude the actual canvas clip rather than infer its rounding.
+#[derive(Default)]
+pub(super) struct CaptionBackground {
+    canvas: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+impl CaptionBackground {
+    pub fn track_canvas(&self, viewport: gpui::Div) -> gpui::Div {
+        use gpui::ParentElement;
+        let geometry = self.canvas.clone();
+        viewport.child(
+            gpui::canvas(
+                move |bounds, window, _| {
+                    geometry.set(Some(crate::terminal_geometry::snap_terminal_bounds(
+                        bounds,
+                        window.scale_factor(),
+                    )));
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+    }
+
+    pub fn render(&self, color: Hsla) -> impl IntoElement + use<> {
+        let geometry = self.canvas.clone();
+        gpui::canvas(
+            |bounds, window, _| {
+                crate::terminal_geometry::snap_terminal_bounds(bounds, window.scale_factor())
+            },
+            move |_, bounds, window, _| {
+                for strip in
+                    caption_background_regions(bounds, geometry.get(), window.scale_factor())
+                {
+                    if strip.size.width > px(0.0) && strip.size.height > px(0.0) {
+                        window.paint_quad(gpui::fill(strip, color));
+                    }
+                }
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+}
+
 pub(crate) fn pane_card_geometry(split: bool, depth: f32) -> (f32, f32) {
     let depth = if split { 1.0 } else { depth.clamp(0.0, 1.0) };
     (PANE_INSET * depth, PANE_RADIUS * depth)
@@ -1213,9 +1284,11 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         use gpui::{ParentElement, Render, size};
-        struct Fixture(f32);
+        struct Fixture(f32, Rc<Cell<Option<Bounds<Pixels>>>>);
         impl Render for Fixture {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let backing = CaptionBackground::default();
+                self.1 = backing.canvas.clone();
                 let bleed = canvas_top_bleed(1.0, self.0, 1.0);
                 let (agent_top, agent_bottom) = agent_vertical_insets(1.0, false, 0.0, self.0, 1.0);
                 gpui::div()
@@ -1234,28 +1307,32 @@ mod tests {
                             .flex_1()
                             .min_h_0()
                             .child(
-                                canvas_viewport().mt(px(-bleed)).pt(px(bleed)).child(
-                                    gpui::div()
-                                        .relative()
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .child(
-                                            gpui::div()
-                                                .relative()
-                                                .flex_1()
-                                                .m(px(CANVAS_INSET))
-                                                .mt(px(canvas_top_inset(1.0, self.0, 1.0)))
-                                                .child(
-                                                    gpui::div()
-                                                        .absolute()
-                                                        .inset_0()
-                                                        .m(px(PANE_INSET))
-                                                        .debug_selector(|| "pane-clearance".into()),
-                                                ),
-                                        ),
-                                ),
+                                backing
+                                    .track_canvas(canvas_viewport().mt(px(-bleed)).pt(px(bleed)))
+                                    .child(
+                                        gpui::div()
+                                            .relative()
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .child(
+                                                gpui::div()
+                                                    .relative()
+                                                    .flex_1()
+                                                    .m(px(CANVAS_INSET))
+                                                    .mt(px(canvas_top_inset(1.0, self.0, 1.0)))
+                                                    .child(
+                                                        gpui::div()
+                                                            .absolute()
+                                                            .inset_0()
+                                                            .m(px(PANE_INSET))
+                                                            .debug_selector(|| {
+                                                                "pane-clearance".into()
+                                                            }),
+                                                    ),
+                                            ),
+                                    ),
                             )
                             .child(
                                 gpui::div()
@@ -1272,23 +1349,59 @@ mod tests {
                     )
             }
         }
-        let (view, cx) = cx.add_window_view(|_, _| Fixture(1.0));
+        let (view, cx) = cx.add_window_view(|_, _| Fixture(1.0, Rc::default()));
         cx.simulate_resize(size(px(600.0), px(400.0)));
-        for tabs in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            view.update(cx, |view, cx| {
-                view.0 = tabs;
-                cx.notify();
-            });
-            let pane = cx.debug_bounds("pane-clearance").unwrap();
-            let agent = cx.debug_bounds("agent-clearance").unwrap();
-            assert_eq!(pane.top(), agent.top());
-            assert_eq!(pane.bottom(), agent.bottom());
-            assert_eq!(pane.bottom(), px(400.0 - CARD_OUTER_INSET));
-            let clip_top = super::super::TOP_BAR_TABS_HEIGHT - canvas_top_bleed(1.0, tabs, 1.0);
-            assert!(
-                pane.top() >= px(clip_top),
-                "pane top must remain inside the viewport"
-            );
+        for scale in [1.0, 1.5, 2.0] {
+            cx.simulate_scale_factor_change(scale);
+            for tabs in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                view.update(cx, |view, cx| {
+                    view.0 = tabs;
+                    cx.notify();
+                });
+                let pane = cx.debug_bounds("pane-clearance").unwrap();
+                let agent = cx.debug_bounds("agent-clearance").unwrap();
+                assert_eq!(pane.top(), agent.top());
+                assert_eq!(pane.bottom(), agent.bottom());
+                assert!(
+                    (pane.bottom().as_f32() - (400.0 - CARD_OUTER_INSET)).abs() <= 0.51 / scale,
+                    "preserve the bottom baseline within layout's physical-pixel rounding"
+                );
+                // Geometry alone misses source-over seams. The caption must give
+                // the reclaimed band to the canvas/agent instead of painting it
+                // again beneath their translucent chrome. Sidebar chrome starts
+                // below the caption and must keep its original backing.
+                let caption = Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    size(px(600.0), px(super::super::TOP_BAR_TABS_HEIGHT)),
+                );
+                let canvas = view.read_with(cx, |view, _| view.1.get()).unwrap();
+                let pane_top = crate::terminal_geometry::snap_terminal_bounds(pane, scale).top();
+                for sidebar in [0.0, 100.0] {
+                    let canvas = Bounds::from_corners(
+                        point(px(sidebar), canvas.top()),
+                        canvas.bottom_right(),
+                    );
+                    let strips = caption_background_regions(caption, Some(canvas), scale);
+                    for x in [50.0, 200.0, 550.0] {
+                        for y in 0..(super::super::TOP_BAR_TABS_HEIGHT * scale) as usize {
+                            let p = point(px(x), px((y as f32 + 0.5) / scale));
+                            let caption_layers =
+                                strips.iter().filter(|strip| strip.contains(&p)).count();
+                            let canvas_layers = usize::from(x >= sidebar && p.y >= pane_top);
+                            assert_eq!(
+                                caption_layers + canvas_layers,
+                                1,
+                                "caption/canvas overlap or hole at {p:?}, tabs={tabs}, scale={scale}"
+                            );
+                        }
+                    }
+                }
+                let clip_top = canvas.top();
+                assert!(
+                    pane_top >= clip_top,
+                    "pane top must remain inside the viewport"
+                );
+            }
         }
     }
 

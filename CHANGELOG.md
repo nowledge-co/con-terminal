@@ -37,7 +37,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Multi-app tab identities stack behind a whole primary icon, with rear cards
   revealed to its right and fine contours separating the layers. The gap below
-  the selected horizontal tab now matches the 5pt outer inset and pane gutters.
+  the selected horizontal tab now matches the 5pt outer inset and pane gutters,
+  without double-painting a dark seam along the titlebar.
   _(PR [#517](https://github.com/nowledge-co/con-terminal/pull/517) by [@wey-gu](https://github.com/wey-gu))_
 
 - Resize the expanded Sessions sidebar as well as Files/Search. Both sidebar

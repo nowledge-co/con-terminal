@@ -881,6 +881,8 @@ impl Render for ConWorkspace {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        let caption_background = frame::CaptionBackground::default();
         let mut terminal_area = div()
             .flex()
             .flex_col()
@@ -1021,24 +1023,26 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let terminal_area = {
             let bleed = frame::canvas_top_bleed(canvas_depth, tab_strip_progress, caption.header);
-            frame::canvas_viewport().mt(px(-bleed)).pt(px(bleed)).child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .child(self.canvas_surround.render(
-                        top_bar_surface_color,
-                        canvas_depth,
-                        tab_strip_progress,
-                        caption.header,
-                        0.0,
-                        terminal_surface_color.opacity(self.terminal_opacity),
-                    ))
-                    .child(terminal_area),
-            )
+            caption_background
+                .track_canvas(frame::canvas_viewport().mt(px(-bleed)).pt(px(bleed)))
+                .child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .child(self.canvas_surround.render(
+                            top_bar_surface_color,
+                            canvas_depth,
+                            tab_strip_progress,
+                            caption.header,
+                            0.0,
+                            terminal_surface_color.opacity(self.terminal_opacity),
+                        ))
+                        .child(terminal_area),
+                )
         };
 
         let mut main_area = div().relative().flex().flex_1().min_h_0();
@@ -1625,9 +1629,10 @@ impl Render for ConWorkspace {
         {
             root = root.child(
                 div()
+                    .relative()
                     .h(px(top_bar_height))
                     .flex_shrink_0()
-                    .bg(top_bar_surface_color),
+                    .child(caption_background.render(top_bar_surface_color)),
             );
         }
         if show_compact_top_bar_separator {

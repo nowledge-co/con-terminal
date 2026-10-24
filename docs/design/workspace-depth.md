@@ -39,7 +39,11 @@ agent panel top use the same top geometry. When that places the pane above the
 caption layout boundary, expand the canvas viewport clip only by that amount
 and retain its content origin with matching padding. The agent column stretches
 from the same top with a negative margin, preserving its bottom baseline. Do not
-move the card above an unchanged overflow clip.
+move the card above an unchanged overflow clip. The caption backing must
+exclude the reclaimed strip over the canvas and agent columns; otherwise their
+translucent chrome composites twice and draws a dark horizontal seam. Sample
+that strip from actual viewport prepaint bounds, including layout snapping. Keep the
+caption backing over the left sidebar, which does not reclaim that strip.
 The original divider hit
 targets remain available between them. Following maintainer feedback on 2026-10-17,
 this prototype uses the same restrained, one-physical-pixel outline on panes,
