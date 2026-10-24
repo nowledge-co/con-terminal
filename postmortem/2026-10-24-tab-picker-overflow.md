@@ -30,7 +30,7 @@ identities and narrow windows together.
 ## Verification
 
 The real PopupMenu fixture passes at 600pt and 280pt window widths with 14pt
-and 20pt UI fonts, including POSIX/Windows paths, Chinese names, unbroken long
+and 20pt UI fonts, with the production Root’s rem sizing, including POSIX/Windows paths, Chinese names, unbroken long
 strings and mixed identity counts. All 17 focused top-bar tests pass. Native
 Light/Dark previews confirm the final geometry; pointer selection, Down/Enter
 activation and Escape dismissal were exercised against the isolated app.

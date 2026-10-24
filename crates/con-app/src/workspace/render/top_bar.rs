@@ -61,9 +61,10 @@ fn tab_menu_row(
     window: &Window,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
-    // The pinned PopupMenu adds 4pt outer and 8pt item padding on each side.
-    // Its intrinsic-width wrapper requires a definite child width, not 100%.
-    let width = (tab_picker_width(window, theme) - px(24.0)).max(px(0.0));
+    // The pinned PopupMenu adds 0.25rem outer and 8pt item padding per side.
+    // Root scales rem with the UI font; keep the wrapper within that padding.
+    let padding = window.rem_size() * 0.5 + px(16.0);
+    let width = (tab_picker_width(window, theme) - padding).max(px(0.0));
     let detail = title.clone();
     div()
         .id(("tab-menu-row", session_id))
@@ -1019,7 +1020,11 @@ mod chrome_tests {
         }
         let (view, cx) = cx.add_window_view(|_, _| MenuFixture);
         for (width, font_size) in [(600.0, 14.0), (280.0, 14.0), (600.0, 20.0), (280.0, 20.0)] {
-            cx.update(|_, cx| cx.global_mut::<gpui_component::Theme>().font_size = px(font_size));
+            cx.update(|window, cx| {
+                cx.global_mut::<gpui_component::Theme>().font_size = px(font_size);
+                // Match the production Root, which scales rem-based menu padding.
+                window.set_rem_size(px(font_size));
+            });
             cx.simulate_resize(gpui::size(px(width), px(400.0)));
             view.update(cx, |_, cx| cx.notify());
             let mut label_left = None;
@@ -1037,6 +1042,12 @@ mod chrome_tests {
                     "menu row escaped the window: {row:?}"
                 );
                 assert!(row.size.width <= px(width - 16.0));
+                let menu_width =
+                    cx.update(|window, cx| super::tab_picker_width(window, cx.theme()));
+                assert!(
+                    (menu_width - row.right() - row.left()).abs() <= px(1.0),
+                    "menu padding must stay balanced at UI font {font_size}: {row:?}"
+                );
                 assert!(
                     label.right() < check.left(),
                     "label overlapped selection: {label:?} {check:?}"
