@@ -4,6 +4,22 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.158` - 2026-10-26
+
+### Fixed
+
+**macOS workspace chrome**
+
+- Clean horizontal workspaces with one tab, one pane and both sidebars hidden
+  reclaim the original 4pt of titlebar space. Controls follow the caption height;
+  horizontal multi-tab, split-pane and vertical navigation layouts retain their
+  current spacing.
+  _(PR [#522](https://github.com/nowledge-co/con-terminal/pull/522) by [@wey-gu](https://github.com/wey-gu))_
+- Preserve visible terminal and input-bar corner coverage when other corners
+  shrink below one physical pixel during sidebar transitions, preventing the
+  brief backdrop flash near the end of the animation.
+  _(PR [#522](https://github.com/nowledge-co/con-terminal/pull/522) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.157` - 2026-10-25
 
 ### Fixed
