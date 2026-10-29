@@ -1368,6 +1368,9 @@ mod tests {
         fs::write(source.join("LICENSE"), "prefetch round-trip fixture\n").unwrap();
         let git = |args: &[&str]| {
             let output = Command::new("git")
+                // Archives honor core.autocrlf too. Keep this fixture's
+                // bytes independent of the runner's/user's Git settings.
+                .args(["-c", "core.autocrlf=false"])
                 .args(args)
                 .current_dir(&source)
                 .output()

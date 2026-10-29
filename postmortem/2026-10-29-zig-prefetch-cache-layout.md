@@ -33,6 +33,8 @@ the real helper, then builds with a separate empty package directory. That
 forces verification of the cached archive rather than reuse of an unpacked
 tree. Its dependency URL is deliberately unavailable, so an unexpected network
 fallback cannot conceal a broken cache round trip.
+The fixture's Git commands explicitly disable `core.autocrlf`: Git archive
+otherwise converts its bytes under Windows defaults, obscuring the cache check.
 
 ## Lessons
 
