@@ -25,6 +25,15 @@ the official Zig download index. The default optimization spelling is `fast`;
 existing `CON_GHOSTTY_OPTIMIZE=Debug`, `ReleaseFast`, `ReleaseSafe` and
 `ReleaseSmall` overrides are translated to the Zig 0.17 spellings.
 
+The curl/git prefetch fallback uses `zig fetch --save-exact` in a disposable
+manifest, with `--pkg-dir` pointing to the build's local package directory
+(`zig-pkg`, or `ZIG_LOCAL_PKG_DIR`). Save mode activates local storage;
+`--pkg-dir` alone does not. Standalone
+Zig 0.17 fetch otherwise recompresses an archive's outer directory into the
+global cache; a later build rejects it with a content-hash mismatch. Keep
+upstream hashes unchanged. The build-script integration test verifies a
+prefetched archive through a second, empty local package directory, offline.
+
 ## Why the bridge remains
 
 Official 1.4.0 and the official main source inspected on 2026-10-29 still ignore
@@ -105,8 +114,9 @@ Host: macOS 15.7.9, Apple M3 Max, arm64. The normal pinned-source path was used
 after publishing the candidate; the final con build/tests did not depend on
 `CON_GHOSTTY_SOURCE_DIR`.
 
-- Workspace tests: **1,289 passed, 1 existing ignored test**, including 717 app,
-  35 macOS con-ghostty, 220 core and 16 terminal tests.
+- Workspace tests with proactive package prefetch enabled: **1,295 passed,
+  1 existing ignored test**, including 717 app, 35 macOS con-ghostty,
+  6 build-script integration, 220 core and 16 terminal tests.
 - Real con-test session: **27 assertions passed across 8 files** using an
   isolated home/configuration and control socket.
 - Upstream `test-lib-vt`: **6,961 passed, 56 upstream skips** across the Zig and

@@ -82,6 +82,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_OPTIMIZE");
     println!("cargo:rerun-if-env-changed=TARGET");
     println!("cargo:rerun-if-env-changed=ZIG_GLOBAL_CACHE_DIR");
+    println!("cargo:rerun-if-env-changed=ZIG_LOCAL_PKG_DIR");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -1023,10 +1024,7 @@ fn warn_zig_failure(context: &str, output: &std::process::Output) {
 }
 
 fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir: Option<&Path>) {
-    let Some(cache_dir) = resolve_zig_global_cache_dir(zig_bin, zig_global_cache_dir) else {
-        println!("cargo:warning=con-ghostty: could not resolve Zig global cache dir for prefetch");
-        return;
-    };
+    let package_dir = zig_local_package_dir(root);
 
     let mut zon_queue = VecDeque::new();
     collect_zon_files(root, &mut zon_queue);
@@ -1062,7 +1060,7 @@ fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir:
             match prefetch_zig_url(zig_bin, root, &url, zig_global_cache_dir) {
                 Some(package_hash) => {
                     fetched += 1;
-                    let package_root = cache_dir.join("p").join(package_hash);
+                    let package_root = package_dir.join(package_hash);
                     collect_zon_files(&package_root, &mut zon_queue);
                 }
                 None => {
@@ -1277,60 +1275,53 @@ fn zig_fetch_path(
 ) -> Option<String> {
     let mut cmd = Command::new(zig_bin);
     configure_zig_command(&mut cmd, zig_global_cache_dir);
-    // Zig 0.16 resolves fetch configuration through the surrounding build
-    // project even without `--save`, so invoke it from Ghostty's root.
-    let output = cmd
-        .arg("fetch")
-        .arg(path)
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        println!(
-            "cargo:warning=con-ghostty: zig fetch {} failed: {stderr}",
-            path.display()
-        );
-        return None;
-    }
+    // Zig 0.17's standalone fetch without local package storage recompresses
+    // the archive's outer directory into the global cache. A later build
+    // then hashes that extra directory and rejects its own cached package.
+    // Local storage is only activated in save mode, even with --pkg-dir.
+    // Save into a disposable manifest, never the upstream project, while
+    // populating the build's package directory with verified package roots.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    let scratch = env::temp_dir().join(format!("con-zig-fetch-{}-{unique}", std::process::id()));
+    fs::create_dir(&scratch).ok()?;
+    let result = (|| {
+        fs::write(scratch.join("build.zig"), "").ok()?;
+        let output = cmd
+            .arg("fetch")
+            .arg("--save-exact=con_prefetch")
+            .arg("--pkg-dir")
+            .arg(zig_local_package_dir(project_root))
+            .arg(path)
+            .current_dir(&scratch)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            println!(
+                "cargo:warning=con-ghostty: zig fetch {} failed: {stderr}",
+                path.display()
+            );
+            return None;
+        }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_string)
+        let manifest = fs::read_to_string(scratch.join("build.zig.zon")).ok()?;
+        manifest
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with(".hash ="))?
+            .split('"')
+            .nth(1)
+            .map(str::to_string)
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result
 }
 
-fn resolve_zig_global_cache_dir(zig_bin: &OsStr, configured_dir: Option<&Path>) -> Option<PathBuf> {
-    if let Some(dir) = configured_dir {
-        return Some(dir.to_path_buf());
-    }
-    if let Some(dir) = env::var_os("ZIG_GLOBAL_CACHE_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-
-    let output = Command::new(zig_bin).arg("env").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.starts_with(".global_cache_dir") {
-            continue;
-        }
-        let Some(start) = line.find('"') else {
-            continue;
-        };
-        let rest = &line[start + 1..];
-        let Some(end) = rest.find('"') else {
-            continue;
-        };
-        return Some(PathBuf::from(&rest[..end]));
-    }
-    None
+fn zig_local_package_dir(project_root: &Path) -> PathBuf {
+    project_root.join(env::var_os("ZIG_LOCAL_PKG_DIR").unwrap_or_else(|| "zig-pkg".into()))
 }
 
 fn sanitize_filename(input: &str) -> String {
@@ -1348,7 +1339,96 @@ fn sanitize_filename(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{cargo_target_to_zig_target, extract_zon_urls, parse_git_package_url};
+    use super::{
+        cargo_target_to_zig_target, extract_zon_urls, parse_git_package_url, zig_fetch_path,
+    };
+
+    #[test]
+    fn prefetched_archive_survives_global_cache_reuse() {
+        use std::{env, fs, process::Command, time::SystemTime};
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fixture = Fixture(
+            env::temp_dir().join(format!("con-zig-prefetch-{}-{unique}", std::process::id())),
+        );
+        fs::create_dir(&fixture.0).unwrap();
+        let project = fixture.0.join("project");
+        let source = fixture.0.join("source");
+        let cache = fixture.0.join("cache");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("LICENSE"), "prefetch round-trip fixture\n").unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&source)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output
+        };
+        git(&["init", "--quiet"]);
+        git(&["add", "LICENSE"]);
+        let tree = git(&["write-tree"]);
+        let tree = String::from_utf8(tree.stdout).unwrap();
+        let archive = fixture.0.join("package.tar");
+        git(&[
+            "archive",
+            "--format=tar",
+            "--prefix=outer/",
+            "--output",
+            archive.to_str().unwrap(),
+            tree.trim(),
+        ]);
+        let zig = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| "zig".into());
+        let hash =
+            zig_fetch_path(&zig, &project, &archive, Some(&cache)).expect("prefetch fixture");
+        fs::write(project.join("build.zig"), "const std = @import(\"std\"); pub fn build(b: *std.Build) void { _ = b.dependency(\"fixture\", .{}).path(\"LICENSE\"); }\n").unwrap();
+        fs::write(
+            project.join("build.zig.zon"),
+            format!(
+                r#".{{
+            .name = .ghostty, .version = "0.0.0", .fingerprint = 0x64407a2a0b4147e5,
+            .paths = .{{"build.zig"}},
+            .dependencies = .{{ .fixture = .{{
+                .url = "https://invalid.example/prefetch-fixture.tar", .hash = "{hash}",
+            }} }},
+        }}"#
+            ),
+        )
+        .unwrap();
+        // A separate package directory forces the build to unpack and verify
+        // the global cached tarball, rather than reuse the prefetched tree.
+        let output = Command::new(&zig)
+            .args(["build", "--fetch", "--pkg-dir"])
+            .arg(fixture.0.join("reused-packages"))
+            .env("ZIG_GLOBAL_CACHE_DIR", &cache)
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("reused-packages").join(hash).join("LICENSE"))
+                .unwrap(),
+            "prefetch round-trip fixture\n"
+        );
+    }
 
     #[test]
     fn maps_linux_targets_to_generic_zig_targets() {
