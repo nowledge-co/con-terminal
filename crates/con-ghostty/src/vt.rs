@@ -9103,13 +9103,22 @@ mod tests {
         .unwrap();
         screen.feed(b"\x1b]7501;state=done:id=job\x07");
         screen.take_program_events();
-        for query in [b"\x1b]7501;?\x07".as_slice(), b"\x1b]7501;?\x1b\\"] {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\"] {
+            let query = [b"\x1b]7501;?".as_slice(), terminator].concat();
+            // Ghostty 1.4 advertises accepted states/kinds and preserves
+            // the query's terminator. A reply is not user input.
+            let reply = [
+                b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth"
+                    .as_slice(),
+                terminator,
+            ]
+            .concat();
             output.lock().clear();
             // A query may be split across arbitrary PTY reads.
-            for byte in query {
+            for byte in &query {
                 screen.feed(std::slice::from_ref(byte));
             }
-            assert_eq!(output.lock().as_slice(), query);
+            assert_eq!(output.lock().as_slice(), reply);
             assert!(screen.take_program_events().is_empty());
         }
 

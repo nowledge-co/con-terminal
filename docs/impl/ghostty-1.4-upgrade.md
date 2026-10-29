@@ -76,6 +76,13 @@ the Windows/Linux runtime ABI-manifest test must still pass. The new render-stat
 image iterator is not adopted here: con retains its existing bounded placement
 snapshot path, so it does not draw both old and new placement lists.
 
+VT support-query replies now advertise accepted states and kinds after `?`,
+preserving the query's BEL/ST terminator. The retained full embedded bridge
+still sends the minimal support reply. Both signal support; neither reply is
+user input or acknowledges a completed program. Keep the fragmented-query
+regression aligned with the VT protocol rather than expecting a byte-for-byte
+echo of the query.
+
 Use the same immutable source for every check. Required evidence includes:
 
 - linked con-ghostty tests and affected core/terminal/CLI/app tests;
