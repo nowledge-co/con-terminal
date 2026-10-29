@@ -601,6 +601,9 @@ pub struct TerminalState {
     /// Surface handle — stored so clipboard callbacks can complete requests.
     pub surface: ffi::ghostty_surface_t,
     clipboard_write_policy: Arc<ClipboardWritePolicy>,
+    /// The pinned paste API invokes confirmation synchronously. A denied
+    /// request must not acknowledge a completed program's notification.
+    paste_denied: bool,
     /// Pending host-side events emitted by Ghostty actions for this surface.
     pub pending_events: VecDeque<GhosttySurfaceEvent>,
     /// OSC 8 URI under the pointer. Ghostty reports it on every mouse move
@@ -637,6 +640,7 @@ impl Default for TerminalState {
             surface: std::ptr::null_mut(),
             clipboard_write_policy: Arc::new(ClipboardWritePolicy::new(false)),
             pending_events: VecDeque::new(),
+            paste_denied: false,
             hovered_osc8_link_url: None,
             scrollbar: None,
             mouse_shape: None,
@@ -1388,6 +1392,28 @@ impl GhosttyTerminal {
         }
         // If text contains NUL bytes, we silently drop it — this matches
         // terminal semantics where NUL in text input is meaningless.
+    }
+
+    /// Paste user clipboard/drop text through Ghostty's paste protection.
+    /// IME commits and explicit control-plane writes use their existing paths.
+    pub fn paste_text(&self, text: &str) {
+        let Ok(text) = CString::new(text) else {
+            return;
+        };
+        if text.as_bytes().is_empty() {
+            return;
+        }
+        self.mark_input_observed();
+        self.state.lock().paste_denied = false;
+        // Ghostty copies the NUL-terminated input before returning; its
+        // confirmation callback is synchronous and fails closed below.
+        unsafe {
+            ffi::ghostty_surface_paste_text(self.surface, text.as_ptr(), text.as_bytes().len());
+        }
+        let denied = self.state.lock().paste_denied;
+        if !denied {
+            self.note_program_key();
+        }
     }
 
     pub fn set_preedit(&self, text: Option<&str>) {
@@ -2411,7 +2437,11 @@ unsafe extern "C" fn confirm_read_clipboard_callback(
             return;
         }
         let state = &*(userdata as *const StateRef);
-        let surface = state.lock().surface;
+        let surface = {
+            let mut state = state.lock();
+            state.paste_denied = true;
+            state.surface
+        };
         if surface.is_null() {
             return;
         }

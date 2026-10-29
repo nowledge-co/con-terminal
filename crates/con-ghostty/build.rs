@@ -13,7 +13,7 @@ use std::process::Command;
 /// forward is merged upstream.
 const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// Pinned Ghostty revision. Bump together when updating either the
-/// macOS full-libghostty build or the Windows libghostty-vt build —
+/// macOS full-libghostty build or the Windows/Linux libghostty-vt build —
 /// both consume the same source tree to keep VT semantics in sync.
 ///
 /// 2026-08-26 bump: from `8867c37c55...` to `5f5b988c52...`. The 27 upstream
@@ -42,6 +42,12 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// are unchanged. The optional synchronous ingress appends a runtime callback
 /// at offset 72 (runtime config size 80). The initial_output anchors still match.
 ///
+/// 2026-10-29 bump: Ghostty 1.4.0 (`83fb95624b`) plus the same scoped
+/// OSC 7501 bridge, ported to Zig 0.17. `ghostty.h` adds paste_text;
+/// existing action/layout assertions remain valid. The portable VT ABI
+/// manifest is checked by linked tests on Windows/Linux. See
+/// docs/impl/ghostty-1.4-upgrade.md for security coverage and provenance.
+///
 /// Ghostty's internal macOS embedding API and libghostty-vt API are not
 /// stable. Future bumps must update the handwritten FFI bindings, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
@@ -49,12 +55,12 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 // Temporary public-fork exception authorized on 2026-10-09; #444 tracks
 // replacement with official upstream. This revision includes IO-thread
 // ingress and close/shutdown/incarnation fixes, not just the initial bridge.
-const GHOSTTY_REV: &str = "8b0ac6c4bc2b0977ef81f80d0c189b2e540f4077";
+const GHOSTTY_REV: &str = "6e68c5f446eb929f03a17bf736b56ebc0d46731b";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
-const REQUIRED_ZIG_VERSION: &str = "0.16.0";
+const REQUIRED_ZIG_VERSION: &str = "0.17.0";
 const MAX_PREFETCH_PACKAGES: usize = 256;
 const MAX_PREFETCH_ARCHIVE_BYTES: &str = "134217728";
 
@@ -235,7 +241,15 @@ fn build_macos() {
 }
 
 fn ghostty_optimize() -> String {
-    env::var("CON_GHOSTTY_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".to_string())
+    let value = env::var("CON_GHOSTTY_OPTIMIZE").unwrap_or_else(|_| "fast".to_string());
+    // Zig 0.17 renamed these modes. Keep existing developer overrides usable.
+    match value.as_str() {
+        "Debug" => "debug".to_string(),
+        "ReleaseFast" => "fast".to_string(),
+        "ReleaseSafe" => "safe".to_string(),
+        "ReleaseSmall" => "small".to_string(),
+        _ => value,
+    }
 }
 
 fn env_flag_enabled(name: &str) -> bool {
@@ -317,13 +331,13 @@ fn build_vt_backend(target_os: &str) {
     // `CON_GHOSTTY_VT_EMIT_OPTION=1` (force the option-based path).
     let invocation = pick_vt_invocation(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
 
-    // `-Doptimize=ReleaseFast` for terminal-class throughput. Default
+    // `-Doptimize=fast` for terminal-class throughput. Default
     // matches macOS so debug Rust builds still get a release-grade VT
     // parser — past macOS lag (resize/reflow stalls of seconds) was
     // traced to building libghostty *without* an explicit optimize
-    // flag, which left it at zig's `-ODebug`. Same risk applies on
+    // flag, which left it at Zig's debug mode. Same risk applies on
     // Windows, so default it on regardless of cargo profile and let
-    // `CON_GHOSTTY_OPTIMIZE=Debug` opt back in for VT-debugging.
+    // `CON_GHOSTTY_OPTIMIZE=debug` opt back in for VT-debugging.
     //
     // `-Dsimd`: Linux libghostty-vt must be built with libc enabled. Ghostty's
     // non-libc Wuffs module (`pkg/wuffs/src/main.zig`) exports hidden weak
@@ -762,7 +776,7 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         "Con: macOS may deny directory open/stat preflight for privacy-protected cwd",
         &[(
             "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n",
-            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.target.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n",
         )],
     )?;
     patch_text_once(
@@ -780,7 +794,7 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         "Con: trust macOS cwd after embedded surface validation",
         &[(
             "            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
-            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (comptime builtin.target.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.Io.Dir.cwd().access(global.io(), proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
         )],
     )?;
     patch_text_once(

@@ -52,7 +52,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Zig 0.16.0
+      - name: Install Zig 0.17.0
         shell: bash
         timeout-minutes: 12
         run: |

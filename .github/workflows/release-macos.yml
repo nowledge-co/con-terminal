@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: bash scripts/macos/prepare-dependencies.sh
 
-      - name: Install Zig 0.16.0
+      - name: Install Zig 0.17.0
         timeout-minutes: 12
         shell: bash
         run: |

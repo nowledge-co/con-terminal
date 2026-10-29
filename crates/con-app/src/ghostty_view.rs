@@ -1080,7 +1080,7 @@ impl GhosttyView {
 
         match payload {
             TerminalPastePayload::Text(text) if !text.is_empty() => {
-                terminal.send_text(&text);
+                terminal.paste_text(&text);
                 true
             }
             TerminalPastePayload::ForwardCtrlV => {

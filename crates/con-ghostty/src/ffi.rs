@@ -768,6 +768,7 @@ unsafe extern "C" {
     // Surface input
     pub fn ghostty_surface_key(surface: ghostty_surface_t, key: ghostty_input_key_s) -> bool;
     pub fn ghostty_surface_text(surface: ghostty_surface_t, text: *const c_char, len: usize);
+    pub fn ghostty_surface_paste_text(surface: ghostty_surface_t, text: *const c_char, len: usize);
     pub fn ghostty_surface_preedit(surface: ghostty_surface_t, text: *const c_char, len: usize);
     pub fn ghostty_surface_ime_point(
         surface: ghostty_surface_t,

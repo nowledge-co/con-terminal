@@ -40,7 +40,7 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
 
 - Rust (stable, edition 2024)
 - `cmake`
-- **Zig**: use **Zig 0.16.0 exactly** for full terminal builds.
+- **Zig**: use **Zig 0.17.0 exactly** for full terminal builds.
   The pinned Ghostty revision requires this version; older Zig releases
   cannot build it, and newer releases may change the build APIs again.
 
@@ -51,7 +51,7 @@ pins the exact Zig version. Run:
 
 ```bash
 mise install              # installs the pinned toolchain
-mise exec -- just build   # runs with Zig 0.16.0 on PATH
+mise exec -- just build   # runs with Zig 0.17.0 on PATH
 ```
 
 Run the `just` commands below through `mise exec --` so the pinned tools are
@@ -63,12 +63,12 @@ already activates mise, you can use `just` directly.
 
 If you do not use mise, install the prerequisites yourself:
 
-- **Zig**: download the official 0.16.0 archive from
-  `https://ziglang.org/download/0.16.0/` and put the directory on
+- **Zig**: download the official 0.17.0 archive from
+  `https://ziglang.org/download/0.17.0/` and put the directory on
   `PATH`, or set `CON_ZIG_BIN=/path/to/zig`.
-- **macOS**: `cmake` plus Zig 0.16.0. The macOS release workflow installs Zig 0.16.0 explicitly before building embedded libghostty.
-- **Windows**: Zig 0.16.0, Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run full builds from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — Zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
-- **Linux**: Zig 0.16.0, plus the GPUI runtime apt deps the CI job already installs:
+- **macOS**: `cmake` plus Zig 0.17.0. The macOS release workflow installs Zig 0.17.0 explicitly before building embedded libghostty.
+- **Windows**: Zig 0.17.0, Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run full builds from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — Zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
+- **Linux**: Zig 0.17.0, plus the GPUI runtime apt deps the CI job already installs:
   ```sh
   sudo apt-get install -y --no-install-recommends \
     libxcb-composite0-dev libxcb-dri2-0-dev libxcb-glx0-dev \
@@ -79,7 +79,7 @@ If you do not use mise, install the prerequisites yourself:
   The `mesa-vulkan-drivers` line gives you a software ICD (llvmpipe) as a fallback for headless / VM environments; on a real desktop with a hardware GPU you can skip it.
 
 CI mirrors this deliberately:
-- `release-macos.yml`, `release-linux.yml`, and `release-windows.yml` install Zig 0.16.0 before release builds.
+- `release-macos.yml`, `release-linux.yml`, and `release-windows.yml` install Zig 0.17.0 before release builds.
 - macOS app packaging sets `CON_GHOSTTY_PREFETCH_DEPS=1` to populate Zig's
   package cache through curl/git and local `zig fetch` before building. This
   avoids a reproducible Zig direct Git-fetch failure in release CI. Ordinary
@@ -88,7 +88,7 @@ CI mirrors this deliberately:
 - `ci-macos-ghostty.yml` builds the native Ghostty binding on an Intel runner
   when the build path changes. Its manual dispatch also builds the full release
   binaries without signing.
-- The Linux PR smoke check in `ci-portable.yml` also installs Zig 0.16.0 because it type-checks `con-ghostty` with `libghostty-vt`.
+- The Linux PR smoke check in `ci-portable.yml` also installs Zig 0.17.0 because it type-checks `con-ghostty` with `libghostty-vt`.
 - The Windows and Linux PR jobs build and link the real libghostty-vt backend, then run `con-ghostty` tests. Do not replace these with `CON_SKIP_GHOSTTY_VT` or check-only coverage: removed symbols and calling-convention drift otherwise remain invisible until release.
 
 ## Build

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Keep in sync with mise.toml. Checksums: https://ziglang.org/download/index.json
-ZIG_VERSION=0.16.0
+ZIG_VERSION=0.17.0
 
 download_zig_archive() {
   local archive="$1" expected="$2" base actual
@@ -46,9 +46,9 @@ install_zig() (
     esac
   fi
   case "$target" in
-    aarch64-macos) expected=b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489 ;;
-    x86_64-macos) expected=0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7 ;;
-    x86_64-linux) expected=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;;
+    aarch64-macos) expected=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a ;;
+    x86_64-macos) expected=4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6 ;;
+    x86_64-linux) expected=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;;
     *) echo "Unsupported Zig target: $target" >&2; return 1 ;;
   esac
   : "${GITHUB_PATH:?GITHUB_PATH must be set by the CI runner}"

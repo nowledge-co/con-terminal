@@ -100,10 +100,11 @@ jobs:
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.local" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionPath $env:ZIG_GLOBAL_CACHE_DIR -ErrorAction SilentlyContinue
 
-      - name: Install Zig 0.16.0
+      - name: Install Zig 0.17.0
         shell: pwsh
         run: |
-          $ZigVersion = "0.16.0"
+          $ZigVersion = "0.17.0"
+          $ZigSha256 = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428"
           $ZigDir    = "zig-x86_64-windows-$ZigVersion"
           $ZigZip    = "$ZigDir.zip"
           $Dest      = "$env:USERPROFILE\.local"
@@ -124,6 +125,11 @@ jobs:
               try {
                 Invoke-WebRequest -Uri $Url -OutFile $Out -TimeoutSec 120
                 if ((Test-Path $Out) -and ((Get-Item $Out).Length -gt 0)) {
+                  if ((Get-FileHash -Algorithm SHA256 $Out).Hash.ToLowerInvariant() -ne $ZigSha256) {
+                    Write-Warning "Zig checksum mismatch from $Url"
+                    Remove-Item -Force $Out
+                    continue
+                  }
                   $Downloaded = $true
                   break
                 }

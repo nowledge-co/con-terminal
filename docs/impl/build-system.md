@@ -188,6 +188,9 @@ members = [
   [Provenance and removal criteria](../design/native-terminal-presentation.md)
   track the upstream submission and compatible official replacement.
 - Ghostty source is fetched by `con-ghostty/build.rs` when needed, unless an override source directory is provided for local development.
+  The [Ghostty 1.4 integration record](ghostty-1.4-upgrade.md) documents the
+  shared immutable pin, Zig 0.17 toolchain, OSC bridge, security applicability
+  and native verification/rollback requirements.
 
 ## Platform boundary
 

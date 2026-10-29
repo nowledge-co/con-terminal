@@ -87,10 +87,10 @@ jobs:
         working-directory: C:\
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path $env:ZIG_GLOBAL_CACHE_DIR | Out-Null
-      - name: Install Zig 0.16.0
+      - name: Install Zig 0.17.0
         uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: PowerShell installer parse check
         shell: pwsh
         run: |
@@ -165,7 +165,7 @@ jobs:
           bash scripts/ci/test-install-zig.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install Zig 0.16.0
+      - name: Install Zig 0.17.0
         shell: bash
         timeout-minutes: 12
         run: bash scripts/ci/install-zig.sh
