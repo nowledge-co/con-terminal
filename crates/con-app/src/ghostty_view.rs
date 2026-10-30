@@ -73,6 +73,51 @@ use objc::{class, msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 
+/// GPUI owns the animation clock. Native geometry and synchronous IOSurface
+/// replacement must be one non-animated AppKit/Core Animation transaction.
+#[cfg(target_os = "macos")]
+pub(crate) struct NativeGeometryTransaction;
+
+#[cfg(target_os = "macos")]
+impl NativeGeometryTransaction {
+    pub(crate) fn hold_for_frame(pending: &Rc<Cell<bool>>, cx: &mut App) {
+        if pending.replace(true) {
+            return;
+        }
+        let transaction = Self::begin();
+        let pending = pending.clone();
+        // In the pinned GPUI frame callback, draw() and present() run inside
+        // one App update. Deferred effects run after that callback returns,
+        // so the native edits and Metal presentation commit together.
+        cx.defer(move |_| {
+            drop(transaction);
+            pending.set(false);
+        });
+    }
+
+    fn begin() -> Self {
+        unsafe {
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: YES];
+            let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+            let context: id = msg_send![class!(NSAnimationContext), currentContext];
+            let _: () = msg_send![context, setDuration: 0.0f64];
+            let _: () = msg_send![context, setAllowsImplicitAnimation: NO];
+        }
+        Self
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for NativeGeometryTransaction {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+            let _: () = msg_send![class!(CATransaction), commit];
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 const NS_VIEW_WIDTH_SIZABLE: usize = 1 << 1;
 #[cfg(target_os = "macos")]
@@ -3501,6 +3546,101 @@ mod tests {
         font, prelude::*, px,
     };
     use gpui_component::Theme;
+
+    #[gpui::test]
+    fn native_geometry_transaction_does_not_inherit_or_escape_implicit_animation() {
+        use cocoa::base::{NO, YES, id};
+        use cocoa::foundation::{NSPoint, NSRect, NSSize};
+        use objc::{class, msg_send, sel, sel_impl};
+        unsafe {
+            let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+            let outer: id = msg_send![class!(NSAnimationContext), currentContext];
+            let _: () = msg_send![outer, setDuration: 1.0f64];
+            let _: () = msg_send![outer, setAllowsImplicitAnimation: YES];
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions: NO];
+            let layer: id = msg_send![class!(CALayer), layer];
+            for width in [400.0, 600.0, 300.0] {
+                {
+                    let _transaction = super::NativeGeometryTransaction::begin();
+                    let current: id = msg_send![class!(NSAnimationContext), currentContext];
+                    let duration: f64 = msg_send![current, duration];
+                    let allowed: cocoa::base::BOOL = msg_send![current, allowsImplicitAnimation];
+                    let disabled: cocoa::base::BOOL =
+                        msg_send![class!(CATransaction), disableActions];
+                    assert_eq!(duration, 0.0);
+                    assert_eq!(allowed, NO);
+                    assert_eq!(disabled, YES);
+                    let _: () = msg_send![layer, setFrame: NSRect::new(NSPoint::new(width * 0.1, 4.0), NSSize::new(width, 300.0))];
+                    let keys: id = msg_send![layer, animationKeys];
+                    let count: usize = if keys.is_null() {
+                        0
+                    } else {
+                        msg_send![keys, count]
+                    };
+                    assert_eq!(
+                        count, 0,
+                        "GPUI geometry must not acquire a second CA animation"
+                    );
+                }
+                let current: id = msg_send![class!(NSAnimationContext), currentContext];
+                let duration: f64 = msg_send![current, duration];
+                let allowed: cocoa::base::BOOL = msg_send![current, allowsImplicitAnimation];
+                let disabled: cocoa::base::BOOL = msg_send![class!(CATransaction), disableActions];
+                assert_eq!(duration, 1.0, "native scope changed the caller's timing");
+                assert_eq!(allowed, YES);
+                assert_eq!(
+                    disabled, NO,
+                    "native scope escaped into unrelated GPUI work"
+                );
+            }
+            let _: () = msg_send![class!(CATransaction), commit];
+            let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+        }
+    }
+
+    #[gpui::test]
+    fn native_frame_transaction_stays_open_through_paint_and_closes_after_update(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        struct Fixture(std::rc::Rc<std::cell::Cell<bool>>);
+        impl Render for Fixture {
+            fn render(
+                &mut self,
+                _: &mut Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let pending = self.0.clone();
+                let paint_pending = pending.clone();
+                gpui::canvas(
+                    move |_, _, cx| {
+                        super::NativeGeometryTransaction::hold_for_frame(&pending, cx);
+                        super::NativeGeometryTransaction::hold_for_frame(&pending, cx);
+                    },
+                    move |_, _, _, _| {
+                        assert!(
+                            paint_pending.get(),
+                            "prepaint must not commit native changes before scene presentation"
+                        );
+                    },
+                )
+                .size_full()
+            }
+        }
+        let pending = std::rc::Rc::new(std::cell::Cell::new(false));
+        let (_, cx) = cx.add_window_view(|_, _| Fixture(pending.clone()));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(
+                pending.get(),
+                "transaction must span draw until platform presentation returns"
+            );
+        });
+        assert!(
+            !pending.get(),
+            "deferred effects must close the transaction without waiting for another frame"
+        );
+    }
 
     #[gpui::test]
     fn decorated_pane_removes_native_pixels_from_the_exterior_corners(

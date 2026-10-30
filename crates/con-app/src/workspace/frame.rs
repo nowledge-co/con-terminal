@@ -698,6 +698,7 @@ fn input_material(radius: f32, color: Hsla, surround: Hsla) -> impl IntoElement 
 #[derive(Default)]
 pub(super) struct CanvasSurround {
     cache: Rc<RefCell<Option<SurroundGeometry>>>,
+    native_transaction_pending: Rc<Cell<bool>>,
 }
 
 /// Small, cached cutouts only. A full-size fill would make terminal glass
@@ -774,8 +775,14 @@ impl CanvasSurround {
         glass: Hsla,
     ) -> impl IntoElement + use<> {
         let cache = self.cache.clone();
+        let native_transaction_pending = self.native_transaction_pending.clone();
         gpui::canvas(
-            move |bounds, window, _| {
+            move |bounds, window, cx| {
+                // This canvas precedes terminal children. Keep their native
+                // geometry/masks and this GPUI scene in one CA transaction.
+                crate::ghostty_view::NativeGeometryTransaction::hold_for_frame(
+                    &native_transaction_pending, cx,
+                );
                 let scale = window.scale_factor();
                 let bounds = crate::terminal_geometry::snap_terminal_bounds(bounds, scale);
                 let inner = canvas_inner_bounds(bounds, depth, horizontal_tabs, caption);
