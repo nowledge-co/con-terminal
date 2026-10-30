@@ -5,104 +5,117 @@ description: Prevent and investigate backdrop leaks, seams, stale clipping and r
 
 # Native surface coverage
 
-Use this for terminal-adjacent layout and motion changes, including regressions
-that appear for only a few frames. Preserve con's intended glass material;
-a darker screenshot alone is not evidence of a coverage fix.
+Preserve con's glass material while keeping each moving pixel covered by its
+correct owner. A darker result, passing layout test or clean log is insufficient.
 
-## Establish the failing boundary
+## Identify the failure before choosing a fix
 
-Record the transition and direction, tab orientation, compact/pinned/hover state,
-pane/surface layout, theme, background opacity and display scale. Distinguish
-these cases before editing:
+Record direction and trigger, tab orientation, compact/pinned/hover state,
+pane/surface layout, input-bar visibility, theme, terminal/UI opacity, blur,
+macOS version, display scale and release versus preview binary.
 
-- Intended transparency: the terminal and surrounding chrome naturally reveal
-  different parts of the same backdrop. Compare at the same position/backdrop.
-- Missing coverage: a strip or corner briefly shows the backdrop through an area
-  that its current material should cover.
-- Mismatched alpha/rounding: geometry is present but overlapping or independently
-  antialiased layers create a seam. Making everything opaque can conceal this.
-- Stale presentation: masks, native frames and GPUI paint describe different
-  layout samples, particularly on reversal or the last animation frame.
+| Observation | Investigate |
+| --- | --- |
+| Different backdrop colors visible through adjacent surfaces at rest | Intended transparency; compare the same position and backdrop |
+| A stable hairline or jagged curve | Physical-pixel endpoints, shared corner coverage, overlapping alpha |
+| A broad moving strip, especially one that also clips text | Native frame/mask/GPUI presentation timing; measure successive video frames |
+| Correct model bounds but wrong native output after reuse | Attached masks, native backing-layer replacement and actual framebuffer dimensions |
 
-Remote desktop, different macOS versions and 1x/2x screens can change observation
-quality. Record them as verification limits, not an assumed cause.
+Remote desktop or OS differences are verification limits, not presumed causes.
+For a transient report, inspect a recording before treating a helper-level bug
+as the root cause. A strip advancing with per-frame travel is evidence of a
+presentation mismatch, not a reason to thicken its edge.
 
-## Trace ownership and prepaint order
+## Trace the real rendering path
 
-Read the relevant parts of:
+Read the relevant sections, not every historical investigation:
 
-- [Pane composition](../../crates/con-app/src/pane_tree.rs): native clip prepaint,
-  pane headers and local surrounds, including the undecorated single-pane path.
-- [Frame composition](../../crates/con-app/src/workspace/frame.rs): canvas and
-  pane surrounds, shared corner coverage and physical-pixel snapping.
-- [Native host](../../crates/con-app/src/ghostty_view.rs) and
-  [AppKit masks](../../crates/con-app/src/objc/ghostty_surface_trampoline.m): host
-  frames, canvas/pane mask intersection, coverage tiles, layer replacement.
-- [Workspace layout](../../crates/con-app/src/workspace/render.rs) and
-  [presentation contract](../../docs/design/native-terminal-presentation.md).
+- [Workspace composition](../../crates/con-app/src/workspace/render.rs) and
+  [frame geometry](../../crates/con-app/src/workspace/frame.rs).
+- [Pane ownership](../../crates/con-app/src/pane_tree.rs),
+  [native host](../../crates/con-app/src/ghostty_view.rs) and
+  [AppKit masks](../../crates/con-app/src/objc/ghostty_surface_trampoline.m).
+- [Native presentation contract](../../docs/design/native-terminal-presentation.md).
+- For cache/opacity changes, [GPUI cache guidance](../gpui-cache-aware/SKILL.md).
 
-Write down who covers each affected pixel and when its geometry becomes final.
-GPUI `.occlude()` controls hit testing; it does not paint an opaque cover.
-GPUI `.overflow_hidden()` does not by itself clip an AppKit terminal sibling.
+Write down each pixel's owner and when its geometry becomes final. Check actual
+callback order: CanvasSurround currently precedes terminal content. GPUI
+`.occlude()` controls hit testing, not visual coverage; `.overflow_hidden()`
+does not itself clip an AppKit terminal sibling.
 
-The canvas surround prepaints after terminal children. If it changes the shared
-canvas clip, already-registered native masks must consume that clip **in the same
-frame**, even if a terminal has already completed prepaint or is otherwise idle.
-Keep native frame/mask changes within the existing frame-scoped presentation
-sync contract. A request for another frame does not repair the current frame.
+Keep these independent contracts intact:
 
-Preserve these ownership rules:
+- Shared canvas changes refresh registered native masks in the same frame,
+  including already-prepainted or idle consumers. Local pane clips must not
+  escape into siblings, shared underlays or GPUI itself.
+- Host reuse after split closure, zoom or tab/surface changes still executes
+  native clip prepaint. A Metal-backed descendant does not imply parent backing;
+  AppKit may replace a layer without changing model bounds.
+- Native and GPUI corner coverage share snapped physical endpoints and a raster.
+  Omit individual zero-area corner tiles near animation endpoints; do not discard
+  other visible corners or suppress real raster-budget errors.
+- A geometry-correct native mask and correctly sized IOSurface still need to
+  **present with the matching GPUI scene**.
 
-- Window canvas clips constrain every registered consumer; local pane clips
-  must not escape into other panes, the shared underlay or GPUI itself.
-- Reused hosts still need valid clipping after split closure, zoom, tab/surface
-  switches and same-size AppKit layer replacement. Model state alone does not
-  prove that the layer currently has the expected mask.
-- Native and GPUI curves share physical-pixel endpoints and corner coverage.
-  A corner tile snapping to zero area is omitted individually; it must not
-  discard the other visible corners or hide real raster errors.
-- Keep configured glass alpha throughout transitions. The window-wide opaque
-  transition underlay is restricted to opaque terminals. Do not extend it to
-  translucent terminals as a shortcut.
-- Keep surrounds narrow and avoid overlapping material fills. Do not enlarge
-  masks, thicken borders, add full-pane covers or lengthen release timers to
-  disguise a lifecycle or geometry mismatch.
+## Keep native edits and platform presentation in one transaction
 
-For caching or inherited opacity changes, also read
-[GPUI cache-aware guidance](../gpui-cache-aware/SKILL.md).
+The accepted Con boundary is `NativeGeometryTransaction::hold_for_frame`, opened
+by CanvasSurround before terminal children. It spans native frame/mask changes,
+synchronous Ghostty drawing and GPUI's platform presentation. A retained pending
+flag coalesces opens, and RAII closes the transaction through App deferred effects.
 
-## Prove the corrected invariant
+This relies on the **resolved GPUI implementation**: its frame callback runs
+`window.draw(cx)` and `window.present()` within one App update; deferred effects
+flush after that callback returns. Recheck that ordering on GPUI upgrades.
+`Window::draw` alone builds a scene; it is not proof of platform presentation.
+Do not assume every defer callback runs after presentation in arbitrary callers.
 
-Choose tests for the affected boundary, rather than adding a broad screenshot
-checklist to every UI edit. Existing linked tests live in `workspace/frame.rs`,
-`ghostty_view.rs` and `pane_tree.rs`.
+Preserve the existing frame-scoped presentation request as well. Repeating that
+request at paint does not reunite native transactions already committed during
+prepaint; this approach passed tests but failed maintainer visual acceptance.
+Do not replace the transaction boundary with `on_next_frame`, longer timers or
+extra redraws. Close within the current update, restore the caller's animation
+context, suppress a second native implicit animation, and keep ordinary output
+on the asynchronous renderer path. Do not modify pinned dependencies or registry
+sources to manufacture a passing preview.
 
-For a clip-order fix, reproduce terminal prepaint against the old canvas, then
-update the canvas without a second host callback. Inspect the actual attached
-mask/path immediately. Exercise both directions and reversal; ensure unrelated
-siblings remain untouched. The regression is
-`late_canvas_prepaint_refreshes_registered_masks_in_the_same_frame`.
+## Preserve material and ownership
 
-For corner changes, include fractional/end-of-animation radii, mixed visible and
-empty tiles, material alpha and physical scale. For host reuse, exercise the real
-render/prepaint path rather than only calling a native setter in isolation.
+Keep configured alpha, blur, rounding and animation timing. The opaque transition
+underlay is for opaque terminals only. Do not cover a translucent terminal with
+it, enlarge masks, add full-pane fills, overlap translucent strips or add borders
+and shadows to disguise the gap. Keep surround paint narrow; viewport-sized paths
+with holes still incur large Metal blits.
 
-Run linked macOS tests for native changes (`cargo test -p con --bin con`, with the
-project's pinned toolchain), plus Rust formatting. Type checking cannot establish
-AppKit mask attachment or FFI linkage. Inspect the relevant CI jobs for portable
-paths; a macOS result does not validate Windows/Linux rendering.
+## Verify the failing boundary and the moving result
 
-## Native confirmation and stopping point
+Choose linked tests for the changed contract:
 
-Use an isolated app/home/session with a contrasting backdrop. Batch the relevant
-states: dark/light, compact↔pinned, hover pinning, tools and whole-panel toggles,
-rapid reversal, single/split panes and affected surface headers. Include opacity
-and scale endpoints in logic/native tests; only claim hardware actually used.
-Do not change the user's live session or OS appearance for a fixture.
+- `native_frame_transaction_stays_open_through_paint_and_closes_after_update`:
+  transaction lifetime and coalescing; no wait for another frame/user action.
+- `native_geometry_transaction_does_not_inherit_or_escape_implicit_animation`:
+  inherited animation suppression and restoration of the caller's context.
+- `late_canvas_prepaint_refreshes_registered_masks_in_the_same_frame`:
+  late canvas changes refresh actual attached paths; unrelated siblings stay free.
+- Corner/reuse tests in `workspace/frame.rs`, `ghostty_view.rs` and `pane_tree.rs`:
+  mixed visible/empty corners, fractional radii, alpha/scale endpoints and the
+  actual render path after topology changes.
 
-Inspect moving edges as well as settled corners. Use transition captures when
-available; a final screenshot or successful socket command cannot prove that
-intermediate frames were covered. Check logs for shared corner-coverage errors.
-After a bounded fix/confirmation pass, report the invariant tested, native
-interactions performed and remaining capture/hardware limits. Do not claim a
-frame-rate guarantee from manual switching or sampled screenshots.
+Run affected linked macOS tests and Rust formatting with the pinned toolchain.
+Type checking cannot prove FFI linkage, attached-mask correctness or presentation.
+Match the reporter's binary/configuration/backdrop in an isolated home/session;
+near-opaque Flexoki with input visible does not validate translucent Kanagawa
+with input hidden. Exercise **Cmd+B and Cmd+L themselves**: compact↔pinned,
+hover pinning and tools are different paths. Include the affected opposite
+transition, rapid reversal, pane/surface variants and Reduce Motion as appropriate.
+Use a bright contrasting backdrop when the report has one. Never alter the
+user's live configuration/session or OS appearance for a fixture.
+
+Confirm moving frames, not only endpoints. Green tests, correct texture sizes,
+empty coverage-error logs and sparse automatic screenshots are supporting
+evidence, not visual acceptance. If automation misses an intermittent defect,
+use the supplied recording and maintainer reproduction to close the loop.
+Record the exact accepted build/configuration and delivery state. Scope claims
+to actual OS/hardware: no inferred FPS, 1x, Intel, remote-desktop or Windows/Linux
+certification. Once the relevant checks and matched acceptance pass, stop testing
+unless new changes, failures or feedback justify another pass.
