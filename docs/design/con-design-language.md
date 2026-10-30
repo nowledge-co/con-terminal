@@ -290,6 +290,22 @@ It should feel like the best place to do terminal-native work in the AI era.
 - Set the UI font on tab navigation and file-tree containers, not only their text labels:
   deferred context menus inherit their trigger's text style. Keep directory
   metadata and code explicitly monospace.
+- When the file tree sits beside the vertical rail, center its root row on the
+  rail's first control using their actual heights. Keep this leading inset in
+  the workspace composition; horizontal drawers and Search keep their own layout.
+- Files/Search reveal and retract through the same sidebar spring. Pinned
+  navigation and tool width use complementary channels sampled from one clock,
+  so swapping them keeps the total extent stable. Keep outgoing content mounted
+  through dismissal and reuse the native transition underlay for opaque
+  terminals only. For geometry, masks and glass coverage, follow
+  `skills/native-surface-coverage/SKILL.md` (from the repository root).
+  Reveal a fixed-width content viewport rather than reflowing labels each frame.
+  Crossfade tool content briefly; retain each tool entity, tree scroll handle and
+  search query. Keep the opacity-animated views uncached. Respect Reduce Motion
+  and preserve continuity when either motion is reversed. An outgoing search
+  input must stop receiving text when Files or tab navigation becomes active.
+  Dismiss tool-owned popups when their tool hides; preserve focus already moved
+  to the incoming tool.
 - Pane-local file and terminal-surface tabs share one height, selection/hover
   fill, corner treatment, and circular close target. Their header height stays
   unchanged. Hover remains quieter than selection even in an unfocused pane;
