@@ -8,6 +8,29 @@ alpha correction does not replace its presentation API; see the replacement
 audit below. Source publication, package availability, and Con delivery remain
 separate states.
 
+## Con-owned frame transaction boundary
+
+The accepted local follow-up on 2026-10-30 adds a Con-owned transaction lifetime
+in addition to the pinned presentation API; it does not change dependencies.
+`NativeGeometryTransaction::hold_for_frame` opens before canvas/terminal prepaint
+and closes from App deferred effects after the current scene's platform present.
+The resolved GPUI frame callback runs `draw` and `present` within one App update;
+its deferred effects flush after that callback. Recheck this dependency ordering
+on upgrades rather than treating defer as a universal presentation callback.
+
+Native setters may retain their nested transactions. They must not become
+independent commits preceding the GPUI scene. Repeating synchronization requests
+at paint did not fix the reporter's Cmd+B/Cmd+L animation gaps; holding the native
+transaction through platform presentation passed the maintainer's matched preview
+check. Preserve caller animation context and asynchronous ordinary rendering;
+do not hold transactions until another frame or hide the gap with opaque fills.
+
+All 733 linked macOS app tests and the app/CLI build passed. The maintainer
+accepted con Atomic Frame Review with the matched Kanagawa/0.82/blur configuration
+and hidden input bar. Acceptance was recorded before production integration. See the [follow-up investigation](../../postmortem/2026-10-30-chrome-presentation-boundary-followup.md)
+and [coverage skill](../../skills/native-surface-coverage/SKILL.md) for evidence,
+verification limits and the recurring workflow.
+
 ## Isolated Experiment
 
 On 2026-10-10 the maintainer authorized an isolated GPUI experiment, not a
