@@ -111,11 +111,7 @@ impl ConWorkspace {
 
         let sidebar = self.sidebar.read(cx);
         if self.vertical_tabs_enabled() {
-            if self.sidebar_tools_open {
-                sidebar.effective_panel_width() * progress
-            } else {
-                sidebar.rendered_width() * progress
-            }
+            sidebar.rendered_panel_width() * progress
         } else {
             sidebar.effective_panel_width() * progress
         }
@@ -390,6 +386,14 @@ impl Render for ConWorkspace {
             });
         }
 
+        if !self.left_panel_open
+            || self.activity_slot != ActivitySlot::Files
+            || (self.vertical_tabs_enabled() && !self.sidebar_tools_open)
+        {
+            self.file_tree_view
+                .update(cx, |tree, cx| tree.dismiss_context_menu(window, cx));
+        }
+
         // Resolve boolean state here so all reveal paths (keyboard, Files,
         // agent requests, restored state) share the same motion contract.
         self.left_panel_motion
@@ -397,11 +401,10 @@ impl Render for ConWorkspace {
         self.agent_panel_motion
             .set_target(if self.agent_panel_open { 1.0 } else { 0.0 });
         let left_panel_progress = self.left_panel_motion.value(window, cx);
-        #[cfg(target_os = "macos")]
+        let tools_were_visible = left_panel_progress > 0.0
+            && (!self.vertical_tabs_enabled() || self.sidebar.read(cx).tools_visible());
         {
-            let tools_open = (self.left_panel_open || left_panel_progress > 0.0)
-                && self.vertical_tabs_enabled()
-                && self.sidebar_tools_open;
+            let tools_open = self.vertical_tabs_enabled() && self.sidebar_tools_open;
             let slot = self.activity_slot;
             self.sidebar.update(cx, |sidebar, cx| {
                 if sidebar.set_tools_panel_open(tools_open, slot) {
@@ -520,14 +523,17 @@ impl Render for ConWorkspace {
         let show_left_panel = self.left_panel_open || left_panel_progress > 0.0;
         let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
         let show_sidebar_tools =
-            show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
+            show_left_panel && (!vertical_tabs_enabled || self.sidebar.read(cx).tools_visible());
+        let tool_blend = self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.tool_slot_blend(self.activity_slot, tools_were_visible, window, cx)
+        });
         #[cfg(not(target_os = "macos"))]
         let terminal_gutter = 0.0;
         #[cfg(target_os = "macos")]
-        let terminal_gutter = if show_sidebar_tools {
-            0.0
-        } else {
+        let terminal_gutter = if vertical_tabs_enabled {
             frame::CARD_OUTER_INSET * canvas_depth
+        } else {
+            0.0
         };
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_effective_panel_max_width(sidebar_max_width);
@@ -535,18 +541,6 @@ impl Render for ConWorkspace {
                 cx.notify();
             }
         });
-        #[cfg(not(target_os = "macos"))]
-        {
-            let activity_slot = self.activity_slot;
-            self.sidebar.update(cx, |sidebar, cx| {
-                if sidebar.set_tools_panel_open(
-                    show_left_panel && vertical_tabs_enabled && show_sidebar_tools,
-                    activity_slot,
-                ) {
-                    cx.notify();
-                }
-            });
-        }
 
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
@@ -607,7 +601,7 @@ impl Render for ConWorkspace {
             };
             let sidebar_content_width = if show_sidebar_tools {
                 if vertical_tabs_enabled {
-                    (sidebar.effective_panel_width() - tab_sidebar_width).max(0.0)
+                    sidebar.rendered_tools_width()
                 } else {
                     sidebar.effective_panel_width()
                 }
@@ -1111,10 +1105,6 @@ impl Render for ConWorkspace {
                 );
             }
             if show_sidebar_tools {
-                let sidebar_content: AnyElement = match self.activity_slot {
-                    ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
-                    ActivitySlot::Search => self.search_view.clone().into_any_element(),
-                };
                 let mut sidebar_panel = div()
                     .w(px(sidebar_content_width))
                     .h_full()
@@ -1126,7 +1116,60 @@ impl Render for ConWorkspace {
                 if !vertical_tabs_enabled {
                     sidebar_panel = sidebar_panel.child(self.activity_bar.clone());
                 }
-                left_sidebar = left_sidebar.child(sidebar_panel.child(sidebar_content));
+                let sidebar = self.sidebar.read(cx);
+                let content_width = if vertical_tabs_enabled {
+                    sidebar.effective_panel_width() - crate::sidebar::RAIL_WIDTH
+                } else {
+                    sidebar.effective_panel_width()
+                };
+                let reveal = if vertical_tabs_enabled {
+                    sidebar.tools_progress()
+                } else {
+                    1.0
+                };
+                let root_inset = (sidebar.first_control_center_y()
+                    - crate::file_tree_view::ROW_HEIGHT * 0.5)
+                    .max(0.0);
+                let mut content = div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    // Reveal a stable viewport rather than reflowing the tree
+                    // or search field on every spring sample.
+                    .w(px(content_width));
+                let slots = if self.activity_slot == ActivitySlot::Files {
+                    [ActivitySlot::Search, ActivitySlot::Files]
+                } else {
+                    [ActivitySlot::Files, ActivitySlot::Search]
+                };
+                for slot in slots {
+                    let opacity = if slot == ActivitySlot::Files {
+                        1.0 - tool_blend
+                    } else {
+                        tool_blend
+                    };
+                    let current = slot == self.activity_slot;
+                    if opacity <= 0.0 && !current {
+                        continue;
+                    }
+                    let view: AnyElement = match slot {
+                        ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
+                        ActivitySlot::Search => self.search_view.clone().into_any_element(),
+                    };
+                    content = content.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .opacity(opacity * reveal)
+                            .when(current, |layer| layer.occlude())
+                            .when(
+                                vertical_tabs_enabled && slot == ActivitySlot::Files,
+                                |layer| layer.pt(px(root_inset)),
+                            )
+                            .child(view),
+                    );
+                }
+                left_sidebar = left_sidebar.child(sidebar_panel.child(content));
             }
             main_area = main_area.child(
                 div()

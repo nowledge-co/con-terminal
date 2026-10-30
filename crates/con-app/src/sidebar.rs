@@ -14,7 +14,7 @@
 //! - Surface separation comes from quiet foreground-derived fills, not borders.
 
 use crate::activity_bar::ActivitySlot;
-use crate::motion::SidebarMotion;
+use crate::motion::{MotionValue, SidebarMotion};
 use crate::ui_scale::{ui_icon_px, ui_px};
 use con_core::terminal_status::Status;
 use gpui::{
@@ -362,6 +362,10 @@ pub struct SessionSidebar {
     peek_menu_open: bool,
     peek_menu_subscription: Option<gpui::Subscription>,
     rail_scroll: gpui::ScrollHandle,
+    panel_scroll: gpui::ScrollHandle,
+    tools_motion: SidebarMotion,
+    tool_slot_motion: MotionValue,
+    tool_slot_initialized: bool,
     /// Smooth width animation between rail (0.0) and pinned (1.0).
     width_motion: SidebarMotion,
     /// Pinning a wide hover preview still starts with compact icon geometry.
@@ -474,6 +478,10 @@ impl EventEmitter<SidebarOpenToolSlot> for SessionSidebar {}
 impl EventEmitter<SidebarShowSessions> for SessionSidebar {}
 
 impl SessionSidebar {
+    pub(crate) fn first_control_center_y(&self) -> f32 {
+        self.leading_top_pad + RAIL_BUTTON_SIZE * 0.5
+    }
+
     pub(crate) fn set_terminal_gutter(&mut self, gutter: f32) -> bool {
         let gutter = gutter.max(0.0);
         let changed = (self.terminal_gutter - gutter).abs() > f32::EPSILON;
@@ -482,14 +490,11 @@ impl SessionSidebar {
     }
 
     fn navigation_content_offset(&self) -> f32 {
-        if self.tools_panel_open {
-            return 0.0;
-        }
-        self.terminal_gutter * 0.5
+        self.terminal_gutter * 0.5 * (1.0 - self.tools_progress())
     }
 
     fn can_peek(&self) -> bool {
-        self.renders_rail_only() && !self.tools_panel_open && self.rename.is_none()
+        self.renders_rail_only() && !self.tools_visible() && self.rename.is_none()
     }
 
     fn peek_active(&self) -> bool {
@@ -573,6 +578,10 @@ impl SessionSidebar {
             peek_menu_open: false,
             peek_menu_subscription: None,
             rail_scroll: gpui::ScrollHandle::new(),
+            panel_scroll: gpui::ScrollHandle::new(),
+            tools_motion: SidebarMotion::new(0.0),
+            tool_slot_motion: MotionValue::new(0.0),
+            tool_slot_initialized: false,
             width_motion: SidebarMotion::new(0.0),
             peek_pin_layout_motion: None,
             panel_width: PANEL_WIDTH,
@@ -639,7 +648,11 @@ impl SessionSidebar {
             self.mode = new_mode;
             self.cancel_rename(cx);
             self.hovered_rail = None;
-            let target = if pinned { 1.0 } else { 0.0 };
+            let target = if pinned && !self.tools_panel_open {
+                1.0
+            } else {
+                0.0
+            };
             if let Some(progress) = preview_progress {
                 self.width_motion = SidebarMotion::new(progress);
             } else if pinned && had_rail_only_override {
@@ -665,14 +678,10 @@ impl SessionSidebar {
         // Files/Search render a rail plus a tool column whose combined width
         // is panel_width, even though the tab rail itself is compact.
         let target_width = self.effective_panel_width();
-        if (!self.tools_panel_open && self.rail_only_override) || target_width <= minimum_width {
+        if (!self.tools_visible() && self.rail_only_override) || target_width <= minimum_width {
             return 0.0;
         }
-        let rendered_width = if self.tools_panel_open {
-            self.effective_panel_width()
-        } else {
-            self.rendered_width()
-        };
+        let rendered_width = self.rendered_panel_width();
         ((rendered_width * visibility - minimum_width) / (target_width - minimum_width))
             .clamp(0.0, 1.0)
     }
@@ -686,30 +695,95 @@ impl SessionSidebar {
     }
 
     pub fn rendered_width(&self) -> f32 {
-        if self.tools_panel_open || self.rail_only_override {
+        if self.rail_only_override {
             return RAIL_WIDTH;
         }
         RAIL_WIDTH + (self.effective_panel_width() - RAIL_WIDTH) * self.width_motion.current()
     }
 
+    pub(crate) fn tools_progress(&self) -> f32 {
+        self.tools_motion.current()
+    }
+
+    pub(crate) fn tools_visible(&self) -> bool {
+        self.tools_panel_open || self.tools_progress() > 0.0
+    }
+
+    pub(crate) fn rendered_tools_width(&self) -> f32 {
+        (self.effective_panel_width() - RAIL_WIDTH) * self.tools_progress()
+    }
+
+    pub(crate) fn rendered_panel_width(&self) -> f32 {
+        self.rendered_width() + self.rendered_tools_width()
+    }
+
+    pub(crate) fn tool_slot_blend(
+        &mut self,
+        slot: ActivitySlot,
+        animate: bool,
+        window: &mut Window,
+        cx: &App,
+    ) -> f32 {
+        self.target_tool_slot_at(slot, animate, std::time::Instant::now());
+        self.tool_slot_motion.value(window, cx)
+    }
+
+    fn target_tool_slot_at(&mut self, slot: ActivitySlot, animate: bool, now: std::time::Instant) {
+        let target = if slot == ActivitySlot::Search {
+            1.0
+        } else {
+            0.0
+        };
+        if animate && self.tool_slot_initialized {
+            self.tool_slot_motion
+                .set_target_at(target, Duration::from_millis(140), now);
+        } else {
+            self.tool_slot_motion = MotionValue::new(target);
+        }
+        self.tool_slot_initialized = true;
+    }
+
     pub fn advance_width_motion(&mut self, window: &mut Window, cx: &App) -> bool {
         self.width_motion.value(window, cx);
+        self.tools_motion.value(window, cx);
         let layout_animating = self.peek_pin_layout_motion.as_mut().is_some_and(|motion| {
             motion.value(window, cx);
             motion.is_animating()
         });
-        self.width_motion.is_animating() || layout_animating
+        self.width_motion.is_animating() || self.tools_motion.is_animating() || layout_animating
     }
 
     pub fn set_tools_panel_open(&mut self, open: bool, active_slot: ActivitySlot) -> bool {
+        self.set_tools_panel_open_at(open, active_slot, std::time::Instant::now())
+    }
+
+    fn set_tools_panel_open_at(
+        &mut self,
+        open: bool,
+        active_slot: ActivitySlot,
+        now: std::time::Instant,
+    ) -> bool {
         let changed = self.tools_panel_open != open || self.active_tool_slot != active_slot;
         if self.tools_panel_open != open {
             self.tools_panel_open = open;
             self.hovered_rail = None;
             if open {
                 self.dismiss_navigation_peek();
+                if self.rail_only_override {
+                    self.width_motion = SidebarMotion::new(0.0);
+                    self.peek_pin_layout_motion = None;
+                }
                 self.rail_only_override = false;
             }
+        }
+        // Complementary channels share one timestamp so a pinned navigator
+        // swaps with a tool column without pulsing the combined width.
+        let navigation = if self.is_pinned() && !open { 1.0 } else { 0.0 };
+        self.tools_motion
+            .retarget_at(if open { 1.0 } else { 0.0 }, now);
+        self.width_motion.retarget_at(navigation, now);
+        if let Some(motion) = self.peek_pin_layout_motion.as_mut() {
+            motion.retarget_at(navigation, now);
         }
         self.active_tool_slot = active_slot;
         changed
@@ -1591,7 +1665,9 @@ impl SessionSidebar {
     ) -> Div {
         let mode_label = format!(
             "{} tabs ({})",
-            if layout.preview {
+            if self.tools_panel_open {
+                "Show"
+            } else if layout.preview {
                 "Keep expanded"
             } else if self.is_pinned() {
                 "Compact"
@@ -1603,6 +1679,22 @@ impl SessionSidebar {
         let preview = layout
             .preview
             .then_some((layout.width, layout.label_opacity));
+        let mode_color = if self.tools_panel_open {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
+        let files_color = if self.tools_panel_open && self.active_tool_slot == ActivitySlot::Files {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
+        let search_color = if self.tools_panel_open && self.active_tool_slot == ActivitySlot::Search
+        {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
         let header = div()
             .relative()
             .w_full()
@@ -1614,9 +1706,13 @@ impl SessionSidebar {
                 mode_label.into(),
                 layout.controls[0],
                 preview,
+                mode_color,
                 cx,
                 cx.listener(move |this, _, _, cx| {
-                    if layout.preview {
+                    if this.tools_panel_open {
+                        this.set_pinned(false, cx);
+                        cx.emit(SidebarShowSessions);
+                    } else if layout.preview {
                         this.set_pinned(true, cx);
                     } else {
                         this.toggle_pinned(cx);
@@ -1629,6 +1725,7 @@ impl SessionSidebar {
                 "Files".into(),
                 layout.controls[1],
                 preview,
+                files_color,
                 cx,
                 cx.listener(|_, _, _, cx| {
                     cx.emit(SidebarOpenToolSlot {
@@ -1642,6 +1739,7 @@ impl SessionSidebar {
                 "Search across files".into(),
                 layout.controls[2],
                 preview,
+                search_color,
                 cx,
                 cx.listener(|_, _, _, cx| {
                     cx.emit(SidebarOpenToolSlot {
@@ -1655,6 +1753,7 @@ impl SessionSidebar {
                 "New tab".into(),
                 layout.controls[3],
                 preview,
+                cx.theme().muted_foreground,
                 cx,
                 cx.listener(|_, _, _, cx| cx.emit(NewSession)),
             ));
@@ -1680,7 +1779,11 @@ impl SessionSidebar {
             .px(px(layout.row_inset))
             .gap(px(2.0))
             .overflow_y_scroll()
-            .when(layout.preview, |list| list.track_scroll(&self.rail_scroll))
+            .track_scroll(if layout.preview {
+                &self.rail_scroll
+            } else {
+                &self.panel_scroll
+            })
             // Body-level drag_move ONLY runs the "below last row"
             // detection — the per-row handlers handle every cursor
             // position that's actually over a row. We fire the
@@ -2241,6 +2344,7 @@ impl Render for SessionSidebar {
         }
         // The workspace samples this too, so terminal reservation follows
         // the same animated compact/expanded extent.
+        let tools = self.tools_motion.value(window, cx);
         let progress = self.width_motion.value(window, cx);
         let layout_progress = self
             .peek_pin_layout_motion
@@ -2255,7 +2359,7 @@ impl Render for SessionSidebar {
             self.peek_pin_layout_motion = None;
         }
 
-        if self.tools_panel_open || self.rail_only_override {
+        if tools >= 1.0 || self.rail_only_override {
             return div()
                 .font_family(ui_font.clone())
                 .relative()
@@ -2979,6 +3083,7 @@ fn navigation_button<F>(
     label: SharedString,
     origin: (f32, f32),
     preview: Option<(f32, f32)>,
+    color: Hsla,
     cx: &App,
     handler: F,
 ) -> Button
@@ -2995,7 +3100,7 @@ where
         .debug_selector(move || id.into())
         .custom(
             ButtonCustomVariant::new(cx)
-                .foreground(cx.theme().muted_foreground)
+                .foreground(color)
                 .hover(cx.theme().foreground.opacity(NAV_CONTROL_HOVER_ALPHA))
                 .active(cx.theme().foreground.opacity(NAV_CONTROL_PRESS_ALPHA)),
         )
@@ -3023,12 +3128,7 @@ where
                         .left((px(RAIL_BUTTON_SIZE) - icon_size) * 0.5)
                         .top((px(RAIL_BUTTON_SIZE) - icon_size) * 0.5)
                         .size(icon_size)
-                        .child(
-                            svg()
-                                .path(icon)
-                                .size(icon_size)
-                                .text_color(cx.theme().muted_foreground),
-                        ),
+                        .child(svg().path(icon).size(icon_size).text_color(color)),
                 )
                 .when_some(preview, |content, (_, opacity)| {
                     content.child(
@@ -3240,6 +3340,97 @@ fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tools_swap_with_pinned_navigation_at_one_extent_and_reverse_without_jumping() {
+        use std::time::{Duration, Instant};
+        let mut sidebar = super::SessionSidebar::default_state();
+        sidebar.mode = super::PanelMode::Pinned;
+        sidebar.width_motion = crate::motion::SidebarMotion::new(1.0);
+        let start = Instant::now();
+        sidebar.set_tools_panel_open_at(true, crate::activity_bar::ActivitySlot::Files, start);
+        for ms in [0, 16, 48, 96] {
+            let now = start + Duration::from_millis(ms);
+            let nav = sidebar.width_motion.update_at(now, false, || {});
+            let tool = sidebar.tools_motion.update_at(now, false, || {});
+            assert!((nav + tool - 1.0).abs() < 0.00001);
+        }
+        let turn = start + Duration::from_millis(70);
+        let nav = sidebar.width_motion.update_at(turn, false, || {});
+        let tool = sidebar.tools_motion.update_at(turn, false, || {});
+        sidebar.set_tools_panel_open_at(false, crate::activity_bar::ActivitySlot::Files, turn);
+        assert!((sidebar.width_motion.update_at(turn, false, || {}) - nav).abs() < 0.00001);
+        assert!((sidebar.tools_motion.update_at(turn, false, || {}) - tool).abs() < 0.00001);
+        for ms in [0, 16, 48, 160, 800] {
+            let now = turn + Duration::from_millis(ms);
+            let nav = sidebar.width_motion.update_at(now, false, || {});
+            let tool = sidebar.tools_motion.update_at(now, false, || {});
+            assert!((nav + tool - 1.0).abs() < 0.00001);
+        }
+        assert_eq!(
+            sidebar.rendered_panel_width(),
+            sidebar.effective_panel_width()
+        );
+    }
+
+    #[test]
+    fn tools_close_to_a_stable_rail_and_rail_only_opening_does_not_jump() {
+        use std::time::{Duration, Instant};
+        let mut sidebar = super::SessionSidebar::default_state();
+        sidebar.tools_panel_open = true;
+        sidebar.tools_motion = crate::motion::SidebarMotion::new(1.0);
+        let start = Instant::now();
+        sidebar.set_tools_panel_open_at(false, crate::activity_bar::ActivitySlot::Files, start);
+        let mut previous = 1.0;
+        for ms in [0, 16, 48, 160, 800] {
+            let now = start + Duration::from_millis(ms);
+            assert_eq!(sidebar.width_motion.update_at(now, false, || {}), 0.0);
+            let tool = sidebar.tools_motion.update_at(now, false, || {});
+            assert!(tool <= previous);
+            previous = tool;
+        }
+        assert_eq!(sidebar.rendered_panel_width(), super::RAIL_WIDTH);
+        sidebar.mode = super::PanelMode::Pinned;
+        sidebar.rail_only_override = true;
+        sidebar.width_motion = crate::motion::SidebarMotion::new(1.0);
+        let start = Instant::now() + Duration::from_secs(1);
+        sidebar.set_tools_panel_open_at(true, crate::activity_bar::ActivitySlot::Files, start);
+        assert_eq!(sidebar.rendered_panel_width(), super::RAIL_WIDTH);
+        assert!(!sidebar.can_peek());
+        sidebar.width_motion.update_at(start, true, || {});
+        sidebar.tools_motion.update_at(start, true, || {});
+        assert_eq!(
+            sidebar.rendered_panel_width(),
+            sidebar.effective_panel_width()
+        );
+    }
+
+    #[test]
+    fn tool_content_fades_reverse_continuously_and_skip_hidden_or_reduced_motion() {
+        use crate::activity_bar::ActivitySlot;
+        use std::time::{Duration, Instant};
+        let mut sidebar = super::SessionSidebar::default_state();
+        let start = Instant::now();
+        sidebar.target_tool_slot_at(ActivitySlot::Search, true, start);
+        assert_eq!(sidebar.tool_slot_motion.current_at(start), 1.0);
+        let start = start + Duration::from_secs(1);
+        sidebar.target_tool_slot_at(ActivitySlot::Files, true, start);
+        let turn = start + Duration::from_millis(40);
+        let value = sidebar.tool_slot_motion.current_at(turn);
+        assert!(value > 0.0 && value < 1.0);
+        sidebar.target_tool_slot_at(ActivitySlot::Search, true, turn);
+        assert_eq!(sidebar.tool_slot_motion.current_at(turn), value);
+        assert!(
+            sidebar
+                .tool_slot_motion
+                .current_at(turn + Duration::from_millis(10))
+                > value
+        );
+        assert_eq!(sidebar.tool_slot_motion.update_at(turn, true, || {}), 1.0);
+        sidebar.target_tool_slot_at(ActivitySlot::Files, false, turn);
+        assert_eq!(sidebar.tool_slot_motion.current_at(turn), 0.0);
+        assert!(!sidebar.tool_slot_motion.is_animating());
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn caption_reaches_its_endpoint_with_navigation_and_never_overhangs_a_rail() {
@@ -3285,8 +3476,14 @@ mod tests {
             sidebar.clear_rail_only_override(cx);
             assert_eq!(sidebar.caption_dock_progress(1.0, 168.0), 1.0);
             sidebar.set_tools_panel_open(true, crate::activity_bar::ActivitySlot::Files);
+            // This test checks endpoint policy. Clocked complementary-channel
+            // continuity is covered by tools_swap_with_pinned_navigation.
+            sidebar.width_motion = crate::motion::SidebarMotion::new(0.0);
+            sidebar.tools_motion = crate::motion::SidebarMotion::new(1.0);
             assert_eq!(sidebar.caption_dock_progress(1.0, 168.0), 1.0);
             sidebar.set_tools_panel_open(false, crate::activity_bar::ActivitySlot::Files);
+            sidebar.width_motion = crate::motion::SidebarMotion::new(1.0);
+            sidebar.tools_motion = crate::motion::SidebarMotion::new(0.0);
             sidebar.set_pinned(false, cx);
             assert!(
                 sidebar.caption_dock_progress(1.0, 168.0) > 0.99,
@@ -3313,11 +3510,13 @@ mod tests {
                 crate::activity_bar::ActivitySlot::Search,
             ] {
                 sidebar.set_tools_panel_open(true, slot);
+                sidebar.tools_motion = crate::motion::SidebarMotion::new(1.0);
                 assert_eq!(sidebar.rendered_width(), super::RAIL_WIDTH);
                 assert_eq!(sidebar.caption_dock_progress(1.0, 168.0), 1.0);
                 assert_eq!(sidebar.caption_dock_progress(0.5, 168.0), 0.0);
             }
             sidebar.set_tools_panel_open(false, crate::activity_bar::ActivitySlot::Search);
+            sidebar.tools_motion = crate::motion::SidebarMotion::new(0.0);
             assert_eq!(
                 sidebar.caption_dock_progress(1.0, 168.0),
                 0.0,
@@ -4095,6 +4294,7 @@ mod tests {
     #[gpui::test]
     fn navigation_balances_the_terminal_gutter_in_both_modes(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (view, cx) = cx.add_window_view(|_, cx| {
             let mut sidebar = SessionSidebar::new(cx);
             let mut entry = session(None, None);
@@ -4545,6 +4745,7 @@ mod tests {
     #[gpui::test]
     fn sessions_have_one_navigation_list_and_keep_drag_bounds(cx: &mut gpui::TestAppContext) {
         cx.update(gpui_component::init);
+        cx.update(|cx| cx.set_reduce_motion(true));
         let (view, cx) = cx.add_window_view(|_, cx| {
             let mut sidebar = SessionSidebar::new(cx);
             sidebar.sessions = (0..2)

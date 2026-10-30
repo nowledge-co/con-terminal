@@ -3,9 +3,9 @@
 use crate::file_tree_view::OpenFile;
 use crate::ui_scale::{ui_icon_px, ui_px, ui_space_px};
 use gpui::{
-    ClickEvent, Context, Div, Entity, EventEmitter, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    StyledText, TextStyle, WhiteSpace, Window, div, prelude::*, px, svg,
+    ClickEvent, Context, Div, Entity, EventEmitter, Focusable, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, StyledText, TextStyle, WhiteSpace, Window, div, prelude::*, px, svg,
 };
 use gpui_component::{
     ActiveTheme, Selectable as _, Sizable as _,
@@ -139,6 +139,10 @@ impl SidebarSearchView {
 
     pub fn focus_query(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.query.update(cx, |query, cx| query.focus(window, cx));
+    }
+
+    pub(crate) fn query_is_focused(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.query.focus_handle(cx).contains_focused(window, cx)
     }
 
     fn request_search(&mut self, cx: &mut Context<Self>) {

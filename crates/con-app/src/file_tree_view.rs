@@ -32,13 +32,14 @@ use std::time::Duration;
 use crate::file_icons::{FILE_ICON_FONT_FAMILY, FileIcon, icon_for_path};
 use crate::ui_scale::ui_icon_px;
 
-const ROW_HEIGHT: f32 = 24.0;
+pub(crate) const ROW_HEIGHT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 12.0;
 const ICON_SIZE: f32 = 13.0;
 
 struct FileContextMenu {
     menu: Entity<PopupMenu>,
     position: Point<Pixels>,
+    previous_focus: Option<gpui::FocusHandle>,
     _dismiss: Subscription,
     _observe: Subscription,
 }
@@ -79,6 +80,7 @@ pub struct FileTreeView {
     watcher: Option<Arc<Mutex<TreeWatcher>>>,
     watch_task: Option<gpui::Task<()>>,
     context_menu: Option<FileContextMenu>,
+    scroll: gpui::UniformListScrollHandle,
 }
 
 impl FileTreeView {
@@ -93,6 +95,7 @@ impl FileTreeView {
             watcher: None,
             watch_task: None,
             context_menu: None,
+            scroll: gpui::UniformListScrollHandle::new(),
         }
     }
 
@@ -132,8 +135,9 @@ impl FileTreeView {
         cx: &mut Context<Self>,
     ) {
         let previous_focus = window.focused(cx);
+        let action_context = previous_focus.clone();
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-            let menu = if let Some(handle) = previous_focus {
+            let menu = if let Some(handle) = action_context {
                 menu.action_context(handle)
             } else {
                 menu
@@ -149,9 +153,23 @@ impl FileTreeView {
         self.context_menu = Some(FileContextMenu {
             menu,
             position,
+            previous_focus,
             _dismiss: dismiss,
             _observe: observe,
         });
+        cx.notify();
+    }
+
+    /// A retained tree must not bring an old popup back when its tool reopens.
+    pub(crate) fn dismiss_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.context_menu.take() else {
+            return;
+        };
+        if state.menu.focus_handle(cx).is_focused(window)
+            && let Some(previous_focus) = state.previous_focus
+        {
+            previous_focus.focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -781,6 +799,7 @@ impl Render for FileTreeView {
                 })
                 .collect()
         })
+        .track_scroll(&self.scroll)
         .flex_1();
 
         div()
@@ -872,6 +891,60 @@ mod tests {
     }
 
     #[gpui::test]
+    fn tree_scroll_survives_switching_to_another_tool(cx: &mut gpui::TestAppContext) {
+        struct Fixture {
+            tree: Entity<FileTreeView>,
+            visible: bool,
+        }
+        impl Render for Fixture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .when(self.visible, |root| root.child(self.tree.clone()))
+            }
+        }
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let tree = cx.new(|_| FileTreeView::new());
+        tree.update(cx, |tree, _| {
+            tree.root = Some(dir.path().to_path_buf());
+            tree.entries = Arc::new(
+                (0..80)
+                    .map(|i| FileEntry {
+                        path: dir.path().join(format!("item-{i}.txt")),
+                        name: format!("item-{i}.txt"),
+                        depth: 1,
+                        is_dir: false,
+                        is_expanded: false,
+                    })
+                    .collect(),
+            );
+        });
+        let (view, cx) = cx.add_window_view(|_, _| Fixture {
+            tree: tree.clone(),
+            visible: true,
+        });
+        cx.simulate_resize(gpui::size(px(300.0), px(200.0)));
+        tree.update(cx, |tree, cx| {
+            tree.scroll.scroll_to_item(50, gpui::ScrollStrategy::Top);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let before = cx.debug_bounds("file-tree-row-50").unwrap();
+        view.update(cx, |view, cx| {
+            view.visible = false;
+            cx.notify();
+        });
+        assert!(cx.debug_bounds("file-tree-row-50").is_none());
+        view.update(cx, |view, cx| {
+            view.visible = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("file-tree-row-50").unwrap(), before);
+    }
+
+    #[gpui::test]
     fn row_copy_menu_targets_the_clicked_entry_without_opening_or_collapsing(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -938,6 +1011,42 @@ mod tests {
         cx.simulate_keystrokes("escape");
         assert!(cx.debug_bounds("file-copy-menu-surface").is_none());
         assert!(cx.update(|window, _| previous_focus.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn hiding_tree_dismisses_menu_without_stealing_new_tool_focus(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let tree = cx.new(|_| FileTreeView::new());
+        let (_, cx) = cx.add_window_view(|_, _| FileTreeTestView(tree.clone()));
+        let original = cx.update(|window, cx| {
+            let handle = cx.focus_handle();
+            handle.focus(window, cx);
+            handle
+        });
+        for focus_already_moved in [false, true] {
+            cx.update(|window, cx| {
+                original.focus(window, cx);
+                tree.update(cx, |tree, cx| {
+                    tree.open_context_menu(
+                        PathBuf::from("notes.txt"),
+                        Point::default(),
+                        window,
+                        cx,
+                    );
+                });
+                let next_tool = cx.focus_handle();
+                if focus_already_moved {
+                    next_tool.focus(window, cx);
+                }
+                tree.update(cx, |tree, cx| tree.dismiss_context_menu(window, cx));
+                assert!(tree.read(cx).context_menu.is_none());
+                assert!(if focus_already_moved {
+                    next_tool.is_focused(window)
+                } else {
+                    original.is_focused(window)
+                });
+            });
+        }
     }
 
     #[gpui::test]
