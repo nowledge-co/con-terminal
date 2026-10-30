@@ -24,6 +24,59 @@ fn pane_bar_height(theme: &gpui_component::Theme) -> Pixels {
     ui_space_px(theme, 24.0).max(ui_px(theme, 14.0) + px(6.0))
 }
 
+fn pane_tab_height(theme: &gpui_component::Theme) -> Pixels {
+    pane_bar_height(theme) - ui_space_px(theme, 4.0)
+}
+
+/// File and terminal-surface tabs are peers inside the same pane header.
+/// Hover stays quieter than selection, including in an unfocused pane.
+fn pane_tab_fill(
+    theme: &gpui_component::Theme,
+    selected: bool,
+    pane_focused: bool,
+    hovered: bool,
+) -> Hsla {
+    let alpha = match (theme.is_dark(), selected, pane_focused, hovered) {
+        (false, true, true, _) => 0.035,
+        (false, true, false, _) => 0.025,
+        (true, true, true, _) => 0.075,
+        (true, true, false, _) => 0.05,
+        (false, false, _, true) => 0.02,
+        (true, false, _, true) => 0.035,
+        (_, false, _, false) => 0.0,
+    };
+    theme.foreground.opacity(alpha)
+}
+
+fn pane_tab_close_button(id: ElementId, label: &'static str, cx: &App) -> Button {
+    let theme = cx.theme();
+    let size = ui_space_px(theme, 16.0);
+    Button::new(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(theme.muted_foreground)
+                .hover(
+                    theme
+                        .foreground
+                        .opacity(if theme.is_dark() { 0.08 } else { 0.05 }),
+                )
+                .active(theme.foreground.opacity(0.12)),
+        )
+        .size(size)
+        .w(size)
+        .h(size)
+        .p_0()
+        .rounded_full()
+        .flex_shrink_0()
+        .tab_stop(false)
+        .accessibility_label(label)
+        .tooltip(label)
+        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+            window.prevent_default();
+            cx.stop_propagation();
+        })
+}
+
 #[cfg(target_os = "macos")]
 fn pane_resize_handle(
     id: SplitId,
@@ -2710,23 +2763,8 @@ impl PaneTree {
             } else {
                 theme.muted_foreground
             };
-            let active_fill = theme.foreground.opacity(if chrome.dim_active_fill {
-                0.045
-            } else if theme.is_dark() {
-                0.085
-            } else {
-                0.065
-            });
-            let tab_bg = if is_active {
-                active_fill
-            } else {
-                theme.transparent
-            };
-            let hover_bg = if is_active {
-                active_fill
-            } else {
-                theme.foreground.opacity(0.08)
-            };
+            let tab_bg = pane_tab_fill(theme, is_active, !chrome.dim_active_fill, false);
+            let hover_bg = pane_tab_fill(theme, is_active, !chrome.dim_active_fill, true);
             let activate_view = view.clone();
             let focus_cb_tab = focus_pane_cb.clone();
             let middle_close_view = view.clone();
@@ -2743,12 +2781,12 @@ impl PaneTree {
                 .flex_shrink_0()
                 .min_w_0()
                 .max_w(px(190.0))
-                .h(bar_height - px(6.0))
+                .h(pane_tab_height(theme))
                 .items_center()
                 .gap(px(6.0))
                 .pl(px(8.0))
                 .pr(px(6.0))
-                .rounded(px(6.0))
+                .rounded(px(7.0))
                 .cursor_pointer()
                 .bg(tab_bg)
                 .hover(move |s| s.bg(hover_bg))
@@ -2822,14 +2860,12 @@ impl PaneTree {
 
             let close_view = view.clone();
             let focus_cb_close = focus_pane_cb.clone();
-            let mut close = action(
+            let mut close = pane_tab_close_button(
                 ElementId::Name(format!("editor-file-close-{pane_id}-{index}").into()),
-                "Close file".into(),
+                "Close file",
+                cx,
             )
-            .debug_selector(move || format!("editor-file-close-{index}"))
-            .size(crate::ui_scale::ui_space_px(theme, 16.0))
-            .w(crate::ui_scale::ui_space_px(theme, 16.0))
-            .h(crate::ui_scale::ui_space_px(theme, 16.0));
+            .debug_selector(move || format!("editor-file-close-{index}"));
             if !is_active {
                 close = close
                     .invisible()
@@ -3178,23 +3214,13 @@ impl PaneTree {
                 } else {
                     theme.muted_foreground
                 };
-                let bg = if is_active {
-                    theme
-                        .foreground
-                        .opacity(if theme.is_dark() { 0.085 } else { 0.065 })
-                } else {
-                    theme.transparent
-                };
+                let bg = pane_tab_fill(theme, is_active, pane_id == focused_id, false);
                 let icon_color = if is_active {
                     theme.foreground
                 } else {
                     theme.muted_foreground
                 };
-                let hover_bg = if is_active {
-                    bg
-                } else {
-                    theme.foreground.opacity(0.08)
-                };
+                let hover_bg = pane_tab_fill(theme, is_active, pane_id == focused_id, true);
                 let sid = surface.id;
                 let focus_cb = focus_surface_cb.clone();
                 let rename_cb = rename_surface_cb.clone();
@@ -3216,13 +3242,13 @@ impl PaneTree {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .h(pane_bar_height(theme) - px(6.0))
+                    .h(pane_tab_height(theme))
                     .max_w(px(190.0))
                     .min_w_0()
                     .flex_shrink_0()
                     .pl(px(8.0))
-                    .pr(if can_close { px(4.0) } else { px(8.0) })
-                    .rounded(px(6.0))
+                    .pr(if can_close { px(6.0) } else { px(8.0) })
+                    .rounded(px(7.0))
                     .bg(bg)
                     .when(!is_editing, |tab| tab.cursor_pointer())
                     .hover(move |s| s.bg(hover_bg))
@@ -3284,33 +3310,13 @@ impl PaneTree {
                     );
 
                 if can_close {
-                    let close_size = ui_space_px(theme, 16.0);
-                    let mut close = Button::new(("surface-close", sid))
-                        .debug_selector(move || format!("surface-close-action-{sid}"))
-                        .custom(
-                            ButtonCustomVariant::new(cx)
-                                .color(theme.transparent)
-                                .foreground(theme.muted_foreground)
-                                .hover(theme.foreground.opacity(0.08))
-                                .active(theme.foreground.opacity(0.12)),
-                        )
-                        .size(close_size)
-                        .w(close_size)
-                        .h(close_size)
-                        .p_0()
-                        .rounded(px(5.0))
-                        .flex_shrink_0()
-                        .tab_stop(false)
-                        .accessibility_label("Close surface")
-                        .tooltip("Close surface")
-                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        })
-                        .on_click(move |_event, window, cx| {
-                            close_cb_for_button(sid, window, cx);
-                            cx.stop_propagation();
-                        });
+                    let mut close =
+                        pane_tab_close_button(("surface-close", sid).into(), "Close surface", cx)
+                            .debug_selector(move || format!("surface-close-action-{sid}"))
+                            .on_click(move |_event, window, cx| {
+                                close_cb_for_button(sid, window, cx);
+                                cx.stop_propagation();
+                            });
                     if !is_active {
                         close = close
                             .invisible()
@@ -3874,6 +3880,26 @@ impl PaneTree {
 mod tests {
     use super::*;
     use ::core::prelude::v1::test;
+
+    #[gpui::test]
+    fn pane_tab_hover_never_overpowers_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            cx.update(|cx| {
+                gpui_component::Theme::change(mode, None, cx);
+                let theme = cx.theme();
+                for focused in [false, true] {
+                    let selected = pane_tab_fill(theme, true, focused, false);
+                    assert_eq!(selected, pane_tab_fill(theme, true, focused, true));
+                    assert!(pane_tab_fill(theme, false, focused, true).a < selected.a);
+                    assert_eq!(pane_tab_fill(theme, false, focused, false).a, 0.0);
+                }
+            });
+        }
+    }
 
     struct SurfaceRenameTestView {
         tree: PaneTree,
@@ -4612,6 +4638,8 @@ mod tests {
                 assert_eq!(rail.center().y, header.center().y);
                 assert!(rail.right() <= zoom.left());
                 let tab = cx.debug_bounds("surface-tab-1").unwrap();
+                let file_tab = cx.debug_bounds("editor-file-tab").unwrap();
+                assert_eq!(tab.size.height, file_tab.size.height);
                 assert!(tab.top() >= header.top() && tab.bottom() <= header.bottom());
                 cx.simulate_click(tab.center(), Modifiers::default());
             }
