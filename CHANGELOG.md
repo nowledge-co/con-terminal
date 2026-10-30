@@ -4,7 +4,28 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.162`
+## `v0.1.0-beta.163`
+
+### Added
+
+**File tree**
+
+- Copy the full path or final name of a file or directory from its row's context
+  menu, including filesystem roots.
+  _(PR [#537](https://github.com/nowledge-co/con-terminal/pull/537) by [@chenweil](https://github.com/chenweil))_
+
+### Changed
+
+**Pane tabs and menus**
+
+- Give file and terminal-surface tabs consistent sizing, lighter selection fills
+  and circular close controls. Hover stays quieter than selection in both themes.
+  _(PR [#537](https://github.com/nowledge-co/con-terminal/pull/537) by [@chenweil](https://github.com/chenweil))_
+- Refine file-copy menu typography and use a quiet surface without the default
+  outline or shadow, retaining keyboard navigation and focus restoration.
+  _(PR [#537](https://github.com/nowledge-co/con-terminal/pull/537) by [@chenweil](https://github.com/chenweil))_
+
+## `v0.1.0-beta.162` - 2026-10-30
 
 ### Changed
 
