@@ -4,7 +4,31 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.163`
+## `v0.1.0-beta.164`
+
+### Changed
+
+**Sidebar**
+
+- Animate Files/Search reveal and tool switching, align the file-tree root with
+  navigation, and retain tree expansion, scroll position and search queries.
+  _(PR [#539](https://github.com/nowledge-co/con-terminal/pull/539) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**macOS**
+
+- Refresh native terminal clipping in the same frame as sidebar geometry changes,
+  preventing stale canvas masks from exposing the backdrop at moving pane edges.
+  _(PR [#539](https://github.com/nowledge-co/con-terminal/pull/539) by [@wey-gu](https://github.com/wey-gu))_
+
+**Sidebar**
+
+- Dismiss outgoing file-copy menus and move focus off hidden search inputs when
+  switching tools or returning to tabs.
+  _(PR [#539](https://github.com/nowledge-co/con-terminal/pull/539) by [@wey-gu](https://github.com/wey-gu))_
+
+## `v0.1.0-beta.163` - 2026-10-30
 
 ### Added
 
