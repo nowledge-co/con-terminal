@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.165`
+
+### Fixed
+
+**macOS**
+
+- Keep native terminal geometry and the matching UI scene in the same presentation
+  transaction, eliminating backdrop strips during left-sidebar (Cmd+B) and agent-panel
+  (Cmd+L) animations while preserving terminal glass and animation timing.
+  _(PR [#540](https://github.com/nowledge-co/con-terminal/pull/540) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.164` - 2026-10-30
 
 ### Changed
