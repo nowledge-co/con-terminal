@@ -525,9 +525,10 @@ impl ConWorkspace {
         &mut self,
         _sidebar: &Entity<SessionSidebar>,
         event: &SidebarOpenToolSlot,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let search_had_focus = self.search_view.read(cx).query_is_focused(window, cx);
         self.activity_slot = event.slot;
         self.left_panel_open = true;
         self.sidebar_tools_open = true;
@@ -536,6 +537,16 @@ impl ConWorkspace {
             bar.left_panel_open = true;
             cx.notify();
         });
+        if event.slot == ActivitySlot::Search {
+            let search_view = self.search_view.clone();
+            cx.on_next_frame(window, move |_, window, cx| {
+                search_view.update(cx, |search, cx| search.focus_query(window, cx));
+            });
+        } else if search_had_focus {
+            // An outgoing search layer remains painted briefly, but must not
+            // keep accepting text once Files is the active tool.
+            self.workspace_focus.clone().focus(window, cx);
+        }
         self.save_session(cx);
         cx.notify();
     }
@@ -589,10 +600,13 @@ impl ConWorkspace {
         &mut self,
         _sidebar: &Entity<SessionSidebar>,
         _event: &SidebarShowSessions,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.sidebar_tools_open = false;
+        if self.search_view.read(cx).query_is_focused(window, cx) {
+            self.workspace_focus.clone().focus(window, cx);
+        }
         self.activity_bar.update(cx, |bar, cx| {
             bar.left_panel_open = false;
             cx.notify();

@@ -314,6 +314,16 @@ bool con_terminal_canvas_set_clip(void *gpui_ptr, double x, double y,
     clip.radius = radius;
     clip.scale = scale;
     clip.generation += 1;
+    // CanvasSurround prepaints after the terminal children. Their masks may
+    // already intersect the previous canvas, so finalize registered native
+    // consumers now, before GPUI presents this frame. Do not mask GPUI itself
+    // or unrelated AppKit siblings; a clean registered host still has a cache.
+    for (NSView *host in parent.subviews) {
+        if (objc_getAssociatedObject(host, &kConTerminalCanvasMaskKey) != nil ||
+            objc_getAssociatedObject(host, &kConTerminalPaneClipKey) != nil) {
+            con_terminal_canvas_apply_clip((__bridge void *)host);
+        }
+    }
     return true;
 }
 

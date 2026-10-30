@@ -2206,6 +2206,78 @@ mod tests {
     }
 
     #[gpui::test]
+    fn late_canvas_prepaint_refreshes_registered_masks_in_the_same_frame() {
+        use cocoa::foundation::{NSPoint, NSRect, NSSize};
+        use objc::{class, msg_send, sel, sel_impl};
+        use std::ffi::c_void;
+        unsafe extern "C" {
+            fn con_terminal_canvas_apply_clip(view: *mut c_void);
+            fn con_terminal_pane_set_clip(
+                view: *mut c_void,
+                x: f64,
+                y: f64,
+                width: f64,
+                height: f64,
+                radius: f64,
+            ) -> bool;
+            fn CGPathContainsPoint(
+                path: *const c_void,
+                transform: *const c_void,
+                point: NSPoint,
+                even_odd: bool,
+            ) -> bool;
+        }
+        unsafe {
+            let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(600.0, 400.0));
+            let parent: *mut objc::runtime::Object = msg_send![class!(NSView), alloc];
+            let parent: *mut objc::runtime::Object = msg_send![parent, initWithFrame: rect];
+            let host: *mut objc::runtime::Object = msg_send![class!(NSView), alloc];
+            let host: *mut objc::runtime::Object = msg_send![host, initWithFrame: rect];
+            let unrelated: *mut objc::runtime::Object = msg_send![class!(NSView), alloc];
+            let unrelated: *mut objc::runtime::Object = msg_send![unrelated, initWithFrame: rect];
+            let _: () = msg_send![parent, addSubview: host];
+            let _: () = msg_send![parent, addSubview: unrelated];
+            let _: () = msg_send![host, setWantsLayer: true];
+            let _: () = msg_send![unrelated, setWantsLayer: true];
+            con_terminal_canvas_set_clip(parent.cast(), 200.0, 0.0, 400.0, 400.0, 0.0);
+            con_terminal_canvas_apply_clip(host.cast());
+            for x in [50.0, 180.0, 44.0, 200.0, 50.0] {
+                let _: () = msg_send![host, setFrame: NSRect::new(NSPoint::new(x, 0.0), NSSize::new(600.0-x, 400.0))];
+                con_terminal_pane_set_clip(host.cast(), x, 0.0, 600.0 - x, 400.0, 8.0);
+                // Terminal children run first against the previous canvas.
+                con_terminal_canvas_apply_clip(host.cast());
+                assert!(con_terminal_canvas_set_clip(
+                    parent.cast(),
+                    x,
+                    0.0,
+                    600.0 - x,
+                    400.0,
+                    0.0
+                ));
+                // No second terminal prepaint or next frame may be required.
+                let layer: *mut objc::runtime::Object = msg_send![host, layer];
+                let mask: *mut objc::runtime::Object = msg_send![layer, mask];
+                let path: *const c_void = msg_send![mask, path];
+                assert!(
+                    CGPathContainsPoint(path, std::ptr::null(), NSPoint::new(10.0, 200.0), false),
+                    "stale canvas clipped the new pane edge at x={x}"
+                );
+                let layer: *mut objc::runtime::Object = msg_send![unrelated, layer];
+                let mask: *mut objc::runtime::Object = msg_send![layer, mask];
+                assert!(
+                    mask.is_null(),
+                    "canvas update must not mask unrelated siblings"
+                );
+            }
+            for view in [host, unrelated] {
+                let _: () = msg_send![view, removeFromSuperview];
+                let _: () = msg_send![view, release];
+            }
+            let _: () = msg_send![parent, release];
+        }
+    }
+
+    #[gpui::test]
     fn native_canvas_clip_tracks_parent_geometry_and_reuses_unchanged_masks() {
         use cocoa::foundation::{NSPoint, NSRect, NSSize};
         use objc::{class, msg_send, sel, sel_impl};

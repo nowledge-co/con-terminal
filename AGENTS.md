@@ -168,6 +168,7 @@ These constraints take precedence over conflicting older examples in linked docs
 | Terminal rendering / ports | `docs/impl/terminal-rendering.md`, `docs/impl/windows-port.md`, `docs/impl/linux-port.md` |
 | UI design / macOS focus | `docs/design/con-design-language.md`, `docs/impl/macos-focus-and-first-responder.md` |
 | Socket API / live E2E / `con-test` tests | `docs/impl/socket-api.md`, `skills/con-cli-e2e/SKILL.md` |
+| Pane/sidebar geometry, animation, transparency or backdrop leaks | `skills/native-surface-coverage/SKILL.md` |
 | UI rendering performance | `skills/gpui-cache-aware/SKILL.md` |
 | Changelog / release notes / release-visible PR descriptions | `skills/changelog-release-notes/SKILL.md` |
 
