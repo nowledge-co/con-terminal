@@ -4,7 +4,20 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.167` (Unreleased)
+## `v0.1.0-beta.168` (Unreleased)
+
+### Fixed
+
+**macOS**
+
+- Restore the normal zsh history path after beta.167 redirected it into con's
+  private shell bridge. On the first new zsh after updating, automatically
+  recover misplaced commands into the final user-selected history file, with
+  private backups, duplicate protection and native history locking. Preserve
+  existing history and explicit agent auto-resume preferences.
+  _(PR [#543](https://github.com/nowledge-co/con-terminal/pull/543) by [@wey-gu](https://github.com/wey-gu))_
+
+## `v0.1.0-beta.167` - 2026-10-31
 
 ### Changed
 
