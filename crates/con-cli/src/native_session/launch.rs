@@ -158,6 +158,12 @@ pub fn prepare_automatic() -> Result<()> {
         write_runtime(&path, script.as_bytes(), true)?;
     }
     let runtime = runtime_dir();
+    let recovery = format!(
+        "#!/bin/sh\nexec {} native-session recover-shell-history --source {} --target \"$1\"\n",
+        shell_quote(&std::env::current_exe()?.canonicalize()?)?,
+        shell_quote(&runtime.join("zsh/.zsh_history"))?,
+    );
+    write_runtime(&runtime.join("recover-history"), recovery.as_bytes(), true)?;
     for (name, script) in [
         ("zsh/.zshenv", include_str!("shell/zshenv")),
         ("zsh/.zprofile", include_str!("shell/zprofile")),

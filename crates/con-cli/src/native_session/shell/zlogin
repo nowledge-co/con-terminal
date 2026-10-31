@@ -4,6 +4,9 @@ else
     builtin unset ZDOTDIR
 fi
 [[ ! -r "$_con_native_zdotdir/.zlogin" ]] || builtin source -- "$_con_native_zdotdir/.zlogin"
+if [[ -n ${HISTFILE-} && -s "$CON_NATIVE_SHELL_ROOT/zsh/.zsh_history" ]]; then
+    "$CON_NATIVE_SHELL_ROOT/recover-history" "$HISTFILE" || builtin print -u2 -- 'con: shell history recovery needs attention; original history files were retained.'
+fi
 case ":$PATH:" in
     ":$CON_NATIVE_SESSION_BIN:"*) ;;
     *) builtin export PATH="$CON_NATIVE_SESSION_BIN:$PATH" ;;

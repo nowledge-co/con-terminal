@@ -13,12 +13,20 @@ use std::{
 
 mod install;
 mod launch;
+mod shell_history;
 
 #[derive(Subcommand)]
 pub enum NativeSessionCommand {
     /// Prepare con-only native launchers before opening local terminals.
     #[command(hide = true)]
     Prepare,
+    #[command(hide = true)]
+    RecoverShellHistory {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        target: PathBuf,
+    },
     /// Install native hooks and, for Codex, an opt-in con-only shell launcher.
     Install {
         #[arg(long, value_parser = ["claude", "codex", "cursor", "qwen", "copilot"])]
@@ -251,6 +259,13 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
         "Native agent session integration currently supports macOS only"
     );
     match command {
+        NativeSessionCommand::RecoverShellHistory { source, target } => {
+            let added = shell_history::recover(&source, &target)?;
+            if json_output {
+                println!("{}", json!({"added_records":added}));
+            }
+            return Ok(());
+        }
         NativeSessionCommand::Prepare => {
             ensure!(
                 cfg!(target_os = "macos"),

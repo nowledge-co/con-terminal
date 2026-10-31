@@ -33,6 +33,20 @@ private and contain no copied user settings or credentials. Aliases/functions,
 absolute native paths, unsupported shells, batch, remote and explicitly disabled
 native customization modes retain their existing behavior.
 
+Startup validation must also cover values derived from the temporary ZDOTDIR
+by system startup files. On macOS, `/etc/zshrc` sets `HISTFILE` before the
+user `.zshrc` runs. The bridge translates only its own temporary default history
+path back to the effective user directory before sourcing that file; custom
+history paths and user overrides retain authority. Verify history reads and
+writes for login/non-login shells and custom ZDOTDIR, not just the final
+ZDOTDIR value or unchanged rc-file bytes.
+
+The beta.167 migration runs after user startup history overrides, appends only
+missing complete records, keeps private backups and a durable deduplication
+checkpoint, and honors native zsh history locks. Never truncate the user history
+or delete the con-owned source during recovery. History repair must remain
+available independently of the agent auto-resume preference.
+
 Automatic recovery uses fixed allowlisted native arguments, not saved commands.
 Cursor/Qwen/Copilot retain explicit hook adapters until verified session-local
 injection contracts can replace their opt-in native profile installation too.
