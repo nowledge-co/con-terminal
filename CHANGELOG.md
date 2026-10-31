@@ -4,6 +4,23 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.166` (Unreleased)
+
+### Added
+
+**Agent workflows**
+
+- Coordinate coding agents with the installable `con-terminal` skill, documented
+  worker workflows, and fresh per-surface OSC 7501 status observations and waits.
+  _(PR [#541](https://github.com/nowledge-co/con-terminal/pull/541) by [@wey-gu](https://github.com/wey-gu))_
+
+**macOS**
+
+- Resume explicitly linked Claude Code and Codex conversations after restarting
+  con, with manual surface actions and an optional automatic recovery setting.
+  Native hooks are required; background process hosting is not included.
+  _(PR [#541](https://github.com/nowledge-co/con-terminal/pull/541) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.165` - 2026-10-30
 
 ### Fixed
