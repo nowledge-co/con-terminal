@@ -219,8 +219,8 @@ The render loop stays authoritative, but the socket never blocks on it directly.
 - no auth modes beyond local socket file permissions yet
 - `agent.ask` assumes one automation request at a time per tab
 - the socket surface only exposes capabilities that already exist in con's runtime and agent layers; it does not yet add a new app-native Codex/OpenCode attachment
-- pane-local surfaces are live-session control primitives; session restore
-  persists the active pane layout as before, not every hidden live surface
+- session restore persists all surface metadata and selection, with optional
+  screen text, but not the original live processes or agent conversations
 
 Those are acceptable limits for phase one. The important part is that the control transport now exists and is wired to real product semantics instead of placeholder CLI text.
 

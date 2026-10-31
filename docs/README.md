@@ -41,7 +41,7 @@ Start with the page that matches what you are trying to do.
 
 | Need | Read |
 | --- | --- |
-| Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
+| Coordinate coding agents, parallel workers, or visible checks | [con-cli and surfaces](con-cli.md) |
 
 ## Platform status
 

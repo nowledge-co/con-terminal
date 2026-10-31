@@ -39,6 +39,35 @@ If you're an old-school terminal user and only want enough AI harness when neede
 - a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
 - terminal-native workflows for CLI work, with `ssh`, `tmux`, and coding-agent-aware orchestration
 
+## Work with coding agents
+
+Use con as a shared terminal workspace for Claude Code, Codex, and other CLI
+agents. Install the **con-terminal** skill into your coding agent:
+
+```sh
+npx skills add nowledge-co/con-terminal --skill con-terminal
+```
+
+con and its companion `con-cli` must already be installed. The skill helps an
+agent inspect the existing workspace, run commands visibly, and coordinate
+workers without taking over your terminal.
+
+- **Parallel implementation:** give each writer a worktree, put workers in
+  surfaces inside one worker pane, then review and integrate their diffs.
+- **Review and verification:** let one agent review while another runs checks;
+  keep reports and logs available in their terminal sessions.
+- **Continue in another agent:** use supported Agent Handoff on macOS to carry
+  context forward; coordinate writers because handoff shares the worktree.
+
+A pane is visible layout; a surface is a specific terminal session. Agents
+address workers by surface ID, observe fresh OSC 7501 reports when available,
+and verify outputs before declaring success. Programs without status reporting
+still work; silence is never treated as completion.
+
+See [the workflow and CLI guide](docs/con-cli.md#agent-workflows) for examples,
+[program status](docs/program-status.md#observe-reports-from-an-agent) for report
+semantics, and [the skill](skills/con-terminal/SKILL.md) for agent instructions.
+
 ## Status
 
 `con` is in active beta development.

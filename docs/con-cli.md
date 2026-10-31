@@ -30,6 +30,96 @@ con-cli --json tree
 `con-cli` asks the running app for state instead of guessing from outside the
 terminal.
 
+## Agent skill
+
+The repository includes a vendor-neutral [con skill](https://github.com/nowledge-co/con-terminal/tree/main/skills/con-terminal)
+for agents that can run `con-cli`. It covers visible shell work, pane-local
+workers, parallel worktrees, and supported Agent Handoff flows.
+
+Install it into your coding agent with:
+
+```sh
+npx skills add nowledge-co/con-terminal --skill con-terminal
+```
+
+Choose the coding agents to install to, or add `-a codex` / `-a claude-code`.
+Add `-g` for user-wide installation. con and `con-cli` must already be installed.
+
+## Agent workflows
+
+Use the skill when you want your coding agent to coordinate work in con:
+
+```text
+Use con to review this change in a separate worker session. Keep the current
+terminal untouched, write a report, and verify the findings before summarizing.
+```
+
+```text
+Use con to split this task between implementation and tests. Give parallel
+writers separate worktrees, keep workers in one pane as surface tabs, and
+review their diffs before integrating anything.
+```
+
+```text
+Continue this Codex task in another installed agent using Agent Handoff.
+Review the transferred context and coordinate the source before editing.
+```
+
+Choose the smallest arrangement that fits the work. Run a single shell check
+with `panes exec`; create a worker split when side-by-side visibility matters;
+add surfaces inside that pane for more sessions. Extra surfaces keep running
+when hidden. Separate worktrees prevent file collisions, while separate ports,
+sockets, and test databases prevent runtime collisions.
+
+Give each worker a specific goal, file ownership, acceptance checks, and a
+unique result/report path. Save the returned tab, pane, and surface identities.
+Only control task-owned sessions or ones the user explicitly names. A surface's
+`owner` label helps bookkeeping but is not an access-control lock.
+
+Observe → submit once → wait for evidence → verify → integrate. A successful
+input write is not proof that the agent accepted the task. A fresh program
+report is not proof that the code works. Review the report, inspect the diff,
+and run relevant checks. Preserve the normal permission flow and leave results
+open when the user may want to inspect them.
+
+### Observe a worker's reported state
+
+```sh
+con-cli --json panes status --tab 1 --pane-id 0
+con-cli --json surfaces status --tab 1 --surface-id 7
+```
+
+Check `con-cli --json capabilities` for `surfaces.status` and
+`surfaces.wait_status`; older app/CLI builds need an update to use these commands.
+Both read the same explicit OSC 7501 facts. The pane form addresses its active
+surface; the surface form keeps targeting that exact session even when hidden.
+`tree` and `surfaces list` also include `program_status` for each surface.
+
+For a reporting worker, capture the cursor **before** sending its next prompt
+(this example uses `jq`):
+
+```sh
+baseline=$(con-cli --json surfaces status --tab 1 --surface-id 7 |
+  jq -er '.program_status.cursor')
+con-cli --json surfaces send-text --tab 1 --surface-id 7 -- \
+  'Read /absolute/path/task.md and write the requested report.'
+con-cli --json surfaces send-key --tab 1 --surface-id 7 enter
+con-cli --json surfaces wait-status --tab 1 --surface-id 7 \
+  --after "$baseline" --timeout 30
+```
+
+Read the result's `status` and `record`, not just its exit code. Defaults match a
+fresh root `done`, `blocked`, or `error`; `--record-id build/test` selects an
+exact child record, and repeated `--state` options customize the states. A
+`blocked` report needs inspection, not automatic approval. Timeouts are valid
+observations and do not submit or cancel anything.
+
+Terminal initialization (`wait-ready`), readiness for agent input, reported
+state, and verified task completion are separate checkpoints. A program that
+never reports OSC 7501 remains unknown; use explicit result artifacts and
+bounded observation rather than guessing from a quiet screen. See
+[program-status semantics](program-status.md#observe-reports-from-an-agent).
+
 ## SSH terminfo cache
 
 Con also provides the cache command used by shell integration. It is a local
