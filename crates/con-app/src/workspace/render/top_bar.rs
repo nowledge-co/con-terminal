@@ -2301,8 +2301,20 @@ impl ConWorkspace {
                             cx.notify();
                         }));
 
-                tab_el = tab_el.tooltip(move |window, cx| {
-                    Tooltip::new(label_detail.clone()).build(window, cx)
+                tab_el = tab_el.tooltip({
+                    let sidebar = self.sidebar.downgrade();
+                    move |window, cx| {
+                        if sidebar.upgrade().is_some() {
+                            crate::sidebar::tab_details_tooltip(
+                                sidebar.clone(),
+                                session_id,
+                                window,
+                                cx,
+                            )
+                        } else {
+                            Tooltip::new(label_detail.clone()).build(window, cx)
+                        }
+                    }
                 });
 
                 // Keep navigation geometry independent of selection and hover paint.

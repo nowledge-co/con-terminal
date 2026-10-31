@@ -2169,17 +2169,7 @@ impl SessionSidebar {
             })
             .tooltip({
                 let sidebar = cx.entity().downgrade();
-                move |window, cx| {
-                    let width = (window.viewport_size().width.as_f32() - 48.0).clamp(1.0, 304.0);
-                    let details = cx
-                        .new(|cx| SidebarHoverDetails::new(sidebar.clone(), session_id, width, cx));
-                    Tooltip::element(move |_, _| details.clone())
-                        .p_0()
-                        .border_0()
-                        .shadow(Vec::new())
-                        .rounded(px(10.0))
-                        .build(window, cx)
-                }
+                move |window, cx| tab_details_tooltip(sidebar.clone(), session_id, window, cx)
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -2434,6 +2424,24 @@ struct SidebarHoverDetails {
     sidebar: WeakEntity<SessionSidebar>,
     session_id: u64,
     width: f32,
+}
+
+/// All tab orientations share the same live information and visual hierarchy.
+/// Resolve by stable session identity so reordering cannot retarget an open card.
+pub(crate) fn tab_details_tooltip(
+    sidebar: WeakEntity<SessionSidebar>,
+    session_id: u64,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyView {
+    let width = (window.viewport_size().width.as_f32() - 48.0).clamp(1.0, 304.0);
+    let details = cx.new(|cx| SidebarHoverDetails::new(sidebar, session_id, width, cx));
+    Tooltip::element(move |_, _| details.clone())
+        .p_0()
+        .border_0()
+        .shadow(Vec::new())
+        .rounded(px(10.0))
+        .build(window, cx)
 }
 
 impl SidebarHoverDetails {
@@ -4130,6 +4138,17 @@ mod tests {
         assert!(
             cx.debug_bounds("tab-notification-dot").is_some(),
             "completion must replace the previous graphic"
+        );
+        sidebar.update(cx, |sidebar, cx| {
+            let mut unrelated = session(None, None);
+            unrelated.id = id + 1;
+            sidebar.sessions.insert(0, unrelated);
+            sidebar.sessions[1].status.as_mut().unwrap().activity = Activity::NeedsInput;
+            cx.notify();
+        });
+        assert!(
+            cx.debug_bounds("tab-status-glyph").is_some(),
+            "an open tab card must retain its session identity after reordering"
         );
     }
 
