@@ -52,7 +52,7 @@ second top-level worker/job abstraction is justified for the initial skill.
 | Built-in agent | One existing conversation per tab via `agent ask` | Serialize; do not treat it as a fresh independent worker |
 | Context transfer | Revisioned durable `handoff` jobs, currently macOS | Separate from fresh workers and parallel editing |
 | Report observation | `surfaces wait-status --after CURSOR` | Fresh exact-record matching; not a causal task receipt or success guarantee |
-| Recovery | Every surface's layout/metadata and optional screen text; new terminal processes | Explicit native references support opt-in macOS resume; live processes are not preserved |
+| Recovery | Every surface's layout/metadata and optional screen text; new terminal processes | Exact native references support default-on macOS resume; live processes are not preserved |
 
 Source checked: `crates/con-cli/src/main.rs`, `crates/con-cli/src/handoff.rs`,
 `crates/con-core/src/control.rs`, and app workspace `control_requests.rs`,
@@ -236,7 +236,7 @@ real geometry. This exception is documented in the native-surface-coverage skill
 ordinary split/zoom control initialization still cannot use estimated geometry.
 
 The UI keeps the terminal-first structure: native continuity appears in existing
-hover information and exact-surface context actions, plus one opt-in General
+hover information and exact-surface context actions, plus one default-on General
 setting. A saved reference does not replace live activity icons or claim that a
 worker is still running. Background process hosting and remote recovery remain
 separate future work.
@@ -270,3 +270,23 @@ The installed Codex launcher also ran under a real PTY against an inert native
 executable: paths/arguments with quotes and spaces, unchanged exit code and exec
 PID, native commands outside con, noninteractive/remote bypass, a different
 terminal HOME, canonical launcher-directory aliases and reversible shell edits.
+
+
+Default-on follow-up (2026-10-31): normal `codex` / `claude` launches in macOS/zsh
+used only con-owned shell resources and session-local hook declarations. Real
+Codex **0.166.0 / GPT-5.6 Luna** and Claude Code **2.1.316 / Haiku 5.5** each
+remembered a marker, reopened the exact conversation automatically after app
+restart, and recalled it. Four model turns and zero tool calls were recorded.
+Both terminal origins changed while native IDs remained stable, including the
+inactive Codex tab. The native agents retained their own onboarding and hook
+trust prompts. Production native profile and shell-file fingerprints stayed
+unchanged; con's automatic integration did not run the legacy installer.
+
+A separate deterministic native-hook fixture also verified default startup and
+restart with no native profile files present. CLI PTY tests preserve existing
+native settings byte-for-byte and exercise user startup order and dynamic
+ZDOTDIR changes. Automatic shell entrypoints are limited to the verified zsh
+bridge: macOS system Bash 3.2 did not execute an ENV bridge, so Bash/fish were
+left unchanged instead of shipping an unverified startup override. Machine
+reboot, Windows/Linux native execution and other shell entrypoints remain
+outside this validation scope.

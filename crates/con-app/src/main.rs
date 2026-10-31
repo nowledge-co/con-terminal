@@ -2702,6 +2702,13 @@ fn main() {
     };
 
     let config = load_validated_config();
+    #[cfg(target_os = "macos")]
+    if let Ok(config) = &config
+        && let Err(error) =
+            native_agent::prepare_automatic_integration(config.appearance.resume_agent_sessions)
+    {
+        log::warn!("Automatic native session integration needs attention: {error}");
+    }
     if let Err(error) = &config {
         eprintln!("con: invalid configuration (file was not modified): {error}");
         log::error!("Cannot start with the current configuration: {error}");

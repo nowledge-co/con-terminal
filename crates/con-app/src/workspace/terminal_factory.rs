@@ -146,6 +146,7 @@ pub(super) fn make_ghostty_terminal(
     command: Option<crate::startup_args::TerminalCommand>,
     font_size: f32,
     handoff_menu_entry_enabled: bool,
+    shell_command: Option<&str>,
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
@@ -182,8 +183,9 @@ pub(super) fn make_ghostty_terminal(
         view.set_handoff_menu_entry_enabled(handoff_menu_entry_enabled);
     });
     #[cfg(not(target_os = "macos"))]
-    let _ = handoff_menu_entry_enabled;
+    let _ = (handoff_menu_entry_enabled, shell_command);
     let pane = TerminalPane::new(view);
+    pane.native_agent.borrow_mut().shell_command = shell_command.map(str::to_owned);
     #[cfg(target_os = "macos")]
     pane.install_native_agent_context(cx);
     subscribe_terminal_pane(&pane, window, cx);

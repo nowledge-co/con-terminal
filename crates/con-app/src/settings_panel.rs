@@ -31,6 +31,8 @@ use std::sync::Arc;
 use url::Url;
 
 mod configuration;
+#[cfg(target_os = "macos")]
+mod native_sessions;
 mod subscription;
 use configuration::{ConfigurationImport, ConfigurationImportStatus};
 mod window_chrome;
@@ -300,6 +302,8 @@ pub struct SettingsPanel {
 
     configuration_sources: Option<Vec<std::path::PathBuf>>,
     configuration_import: ConfigurationImport,
+    #[cfg(target_os = "macos")]
+    native_session_setup: native_sessions::NativeSessionSetup,
 
     // Theme import
     custom_theme_name_input: Entity<InputState>,
@@ -1899,6 +1903,8 @@ impl SettingsPanel {
             close_confirmation_visible: false,
             configuration_sources: None,
             configuration_import: ConfigurationImport::Idle,
+            #[cfg(target_os = "macos")]
+            native_session_setup: native_sessions::NativeSessionSetup::default(),
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
@@ -3614,7 +3620,7 @@ impl SettingsPanel {
                     theme,
                 mobile)).when(cfg!(target_os = "macos"), |card| card.child(toggle_row(
                     "Resume Agent Sessions",
-                    "Reopen linked native agent conversations after restarting con. Native session integration is required.",
+                    "Continue native agent conversations when you reopen con.",
                     Switch::new("resume-agent-sessions-toggle")
                         .checked(self.config.appearance.resume_agent_sessions)
                         .small()
@@ -3623,7 +3629,12 @@ impl SettingsPanel {
                         })),
                     theme,
                     mobile,
-                )))) ,
+                ))).map(|card| {
+                    #[cfg(target_os = "macos")]
+                    { card.child(self.render_native_session_setup(mobile, cx)) }
+                    #[cfg(not(target_os = "macos"))]
+                    { card }
+                })) ,
         )
         .child(
             div()

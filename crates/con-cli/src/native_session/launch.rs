@@ -1,4 +1,4 @@
-//! Opt-in, terminal-local compatibility for Codex versions without client hooks.
+//! Terminal-local integration and Codex compatibility without client callbacks.
 //! The native binary, argv, exit status, signals, history and approvals stay native.
 use super::*;
 use std::ffi::{OsStr, OsString};
@@ -107,45 +107,122 @@ pub fn prepare(
     let profile = shell_quote(directory)?;
     let block = format!("{BEGIN} {profile}\n{body}{END} {profile}\n");
     let new = edit_rc(&old, install.then_some(block.as_str()), &profile)?;
-    let launcher = if install {
-        let executable = std::env::current_exe()?.canonicalize()?;
-        let script = format!(
-            "#!/bin/sh\n# Managed by con native-session install.\nexec {} native-session launch --agent codex --launcher-dir {} -- \"$@\"\n",
-            shell_quote(&executable)?,
-            bin
-        );
-        let path = bin_dir().join("codex");
-        let old = if path.exists() {
-            ensure!(
-                !path.is_symlink(),
-                "Refusing to replace a symlinked Codex launcher"
-            );
-            let old = std::fs::read_to_string(&path)?;
-            ensure!(
-                old.contains("# Managed by con native-session install."),
-                "Refusing to replace an unmanaged Codex launcher"
-            );
-            Some(old)
-        } else {
-            None
-        };
-        Some((path, script, old))
+    let launchers = if install {
+        vec![prepare_launcher("codex")?]
     } else {
-        None
+        Vec::new()
     };
     Ok(ShellIntegration {
         rc,
         old,
         new,
-        launcher,
+        launchers,
     })
+}
+
+fn prepare_launcher(agent: &str) -> Result<(PathBuf, String, Option<String>)> {
+    let executable = std::env::current_exe()?.canonicalize()?;
+    let script = format!(
+        "#!/bin/sh\n# Managed by con native-session install.\nexec {} native-session launch --agent {agent} --launcher-dir {} -- \"$@\"\n",
+        shell_quote(&executable)?,
+        shell_quote(&bin_dir())?,
+    );
+    let adapter = native_agent_adapter(agent).context("Unsupported native agent")?;
+    let path = bin_dir().join(adapter.executable);
+    let old = if path.exists() {
+        ensure!(
+            !path.is_symlink(),
+            "Refusing to replace a symlinked native launcher"
+        );
+        let old = std::fs::read_to_string(&path)?;
+        ensure!(
+            old.contains("# Managed by con native-session install."),
+            "Refusing to replace an unmanaged native launcher"
+        );
+        Some(old)
+    } else {
+        None
+    };
+    Ok((path, script, old))
+}
+
+pub fn runtime_dir() -> PathBuf {
+    con_paths::app_data_dir().join("native-session/runtime")
+}
+
+/// Writes only con-owned resources. User shell startup files and native agent
+/// profiles are never read or modified by automatic preparation.
+pub fn prepare_automatic() -> Result<()> {
+    for agent in ["claude", "codex"] {
+        let (path, script, _) = prepare_launcher(agent)?;
+        write_runtime(&path, script.as_bytes(), true)?;
+    }
+    let runtime = runtime_dir();
+    for (name, script) in [
+        ("zsh/.zshenv", include_str!("shell/zshenv")),
+        ("zsh/.zprofile", include_str!("shell/zprofile")),
+        ("zsh/.zshrc", include_str!("shell/zshrc")),
+        ("zsh/.zlogin", include_str!("shell/zlogin")),
+    ] {
+        write_runtime(&runtime.join(name), script.as_bytes(), false)?;
+    }
+    let plugin = runtime.join("claude-plugin");
+    write_runtime(&plugin.join(".claude-plugin/plugin.json"), br#"{"name":"con-native-session","version":"1.0.0","description":"Link this native conversation to its con terminal"}"#, false)?;
+    let hooks = json!({"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":hook_command("claude")?,"timeout":5}]}]}});
+    write_runtime(
+        &plugin.join("hooks/hooks.json"),
+        &serde_json::to_vec(&hooks)?,
+        false,
+    )?;
+    Ok(())
+}
+
+fn write_runtime(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+    ensure!(
+        !path.is_symlink(),
+        "Refusing to replace a symlinked con integration resource"
+    );
+    if std::fs::read(path).ok().as_deref() != Some(bytes) {
+        install::atomic_replace(path, bytes)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            path,
+            std::fs::Permissions::from_mode(if executable { 0o700 } else { 0o600 }),
+        )?;
+    }
+    Ok(())
+}
+
+fn hook_command(agent: &str) -> Result<String> {
+    Ok(format!(
+        "{} native-session hook --agent {agent}",
+        shell_quote(&std::env::current_exe()?.canonicalize()?)?
+    ))
+}
+
+fn runtime_arguments(agent: &str, runtime: &Path) -> Result<Vec<OsString>> {
+    match agent {
+        "codex" => {
+            let command = toml_edit::Value::from(hook_command(agent)?).to_string();
+            Ok(vec!["--enable".into(), "hooks".into(), "-c".into(),
+                format!("hooks.SessionStart=[{{hooks=[{{type=\"command\",command={command},timeout=5}}]}}]").into()])
+        }
+        "claude" => Ok(vec![
+            "--plugin-dir".into(),
+            runtime.join("claude-plugin").into_os_string(),
+        ]),
+        _ => Ok(Vec::new()),
+    }
 }
 
 pub struct ShellIntegration {
     pub rc: PathBuf,
     old: String,
     new: String,
-    launcher: Option<(PathBuf, String, Option<String>)>,
+    launchers: Vec<(PathBuf, String, Option<String>)>,
 }
 
 impl ShellIntegration {
@@ -159,7 +236,8 @@ impl ShellIntegration {
             !self.rc.is_symlink() && current == self.old,
             "Shell configuration changed during installation; left unchanged"
         );
-        if let Some((path, script, old)) = &self.launcher {
+        // Validate every destination before changing any of them.
+        for (path, _, old) in &self.launchers {
             let current = if path.exists() {
                 Some(std::fs::read_to_string(path)?)
             } else {
@@ -167,21 +245,35 @@ impl ShellIntegration {
             };
             ensure!(
                 !path.is_symlink() && &current == old,
-                "Codex launcher changed during installation; left unchanged"
+                "Native launcher changed during installation; left unchanged"
             );
-            if old.as_ref() != Some(script) {
-                install::atomic_replace(path, script.as_bytes())?;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-            }
         }
-        if self.old != self.new
-            && let Err(error) = install::atomic_replace(&self.rc, self.new.as_bytes())
-        {
-            if let Some((path, _, old)) = &self.launcher {
+        let result = (|| -> Result<()> {
+            for (path, script, old) in &self.launchers {
+                if old.as_ref() != Some(script) {
+                    install::atomic_replace(path, script.as_bytes())?;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+                }
+            }
+            if self.old != self.new {
+                install::atomic_replace(&self.rc, self.new.as_bytes())?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            for (path, script, old) in &self.launchers {
+                let current = std::fs::read_to_string(path).ok();
+                if current.as_ref() == old.as_ref() || current.is_none() {
+                    continue;
+                }
+                ensure!(
+                    current.as_ref() == Some(script),
+                    "Launcher changed during rollback; inspect private backups"
+                );
                 if let Some(old) = old {
                     install::atomic_replace(path, old.as_bytes())?;
                     #[cfg(unix)]
@@ -215,7 +307,7 @@ fn is_interactive(args: &[OsString]) -> bool {
         }
         if matches!(
             arg,
-            "--remote" | "--no-daemon" | "--help" | "-h" | "--version" | "-V"
+            "--remote" | "--no-daemon" | "--help" | "-h" | "--version" | "-V" | "--ephemeral"
         ) || arg.starts_with("--remote=")
         {
             return false;
@@ -271,7 +363,54 @@ fn is_interactive(args: &[OsString]) -> bool {
     })
 }
 
-pub fn run(args: Vec<OsString>, launcher_dir: Option<PathBuf>) -> Result<()> {
+fn native_interactive(agent: &str, args: &[OsString]) -> bool {
+    // Native batch, management, and remote clients keep their existing behavior.
+    !args.iter().any(|arg| {
+        let arg = arg.to_string_lossy();
+        matches!(
+            arg.as_ref(),
+            "--help"
+                | "-h"
+                | "--version"
+                | "-V"
+                | "--print"
+                | "--headless"
+                | "--bare"
+                | "--safe-mode"
+                | "--no-session-persistence"
+                | "--acp"
+                | "--remote"
+                | "--remote-server"
+                | "--cloud"
+                | "--autopilot"
+        ) || arg.starts_with("--remote=")
+            || arg.starts_with("--remote-server=")
+            || arg.starts_with("--print=")
+            || arg.starts_with("--prompt=")
+            || ((agent != "codex") && arg == "-p")
+    }) && !args
+        .first()
+        .and_then(|arg| arg.to_str())
+        .is_some_and(|arg| {
+            matches!(
+                arg,
+                "login"
+                    | "logout"
+                    | "auth"
+                    | "mcp"
+                    | "update"
+                    | "upgrade"
+                    | "install"
+                    | "doctor"
+                    | "help"
+                    | "completion"
+                    | "agent"
+            )
+        })
+}
+
+pub fn run(agent: &str, args: Vec<OsString>, launcher_dir: Option<PathBuf>) -> Result<()> {
+    let adapter = native_agent_adapter(agent).context("Unsupported native agent")?;
     let bin = launcher_dir.unwrap_or_else(bin_dir);
     let original = std::env::var_os("PATH").unwrap_or_default();
     let paths: Vec<_> = std::env::split_paths(&original)
@@ -279,12 +418,11 @@ pub fn run(args: Vec<OsString>, launcher_dir: Option<PathBuf>) -> Result<()> {
         .collect();
     let executable = paths
         .iter()
-        .map(|p| p.join("codex"))
+        .map(|p| p.join(adapter.executable))
         .find(|p| {
-            if p.canonicalize()
-                .ok()
-                .is_some_and(|resolved| Some(resolved) == bin.join("codex").canonicalize().ok())
-            {
+            if p.canonicalize().ok().is_some_and(|resolved| {
+                Some(resolved) == bin.join(adapter.executable).canonicalize().ok()
+            }) {
                 return false;
             }
             #[cfg(unix)]
@@ -299,27 +437,61 @@ pub fn run(args: Vec<OsString>, launcher_dir: Option<PathBuf>) -> Result<()> {
                 p.is_file()
             }
         })
-        .context("Codex is not installed on PATH; the con integration does not install it")?;
-    let enabled = config_dir("codex")
-        .ok()
-        .and_then(|dir| std::fs::read(dir.join("hooks.json")).ok())
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|settings| install::contains_own_hook(&settings, "codex"));
+        .with_context(|| {
+            format!(
+                "{} is not installed on PATH; con does not install it",
+                adapter.label
+            )
+        })?;
     let local = std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && std::env::var("CON_TERMINAL_CONTEXT").is_ok_and(|id| uuid::Uuid::parse_str(&id).is_ok())
         && std::env::var_os("CON_SOCKET_PATH").is_some()
-        && std::env::var_os("CODEX_THREAD_ID").is_none()
+        && (agent != "codex" || std::env::var_os("CODEX_THREAD_ID").is_none())
+        && (agent != "claude" || std::env::var_os("CLAUDECODE").is_none())
         && std::env::var_os("SSH_CONNECTION").is_none();
+    let interactive = if agent == "codex" {
+        is_interactive(
+            &args
+                .iter()
+                .filter(|arg| arg.as_os_str() != "--no-daemon")
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        native_interactive(agent, &args)
+    };
+    let automatic =
+        local && interactive && std::env::var("CON_NATIVE_SESSION_AUTO").as_deref() == Ok("1");
+    let runtime_args = if automatic {
+        runtime_arguments(
+            agent,
+            &bin.parent()
+                .context("Missing launcher parent")?
+                .join("runtime"),
+        )?
+    } else {
+        Vec::new()
+    };
+    let enabled = !automatic
+        && agent == "codex"
+        && config_dir("codex")
+            .ok()
+            .and_then(|dir| std::fs::read(dir.join("hooks.json")).ok())
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .is_some_and(|settings| install::contains_own_hook(&settings, "codex"));
     let mut command = Command::new(executable);
-    if enabled && local && is_interactive(&args) {
+    if agent == "codex" && (enabled || automatic) && local && is_interactive(&args) {
         command.arg("--no-daemon");
     }
-    command.args(args).env("PATH", std::env::join_paths(paths)?);
+    command
+        .args(runtime_args)
+        .args(args)
+        .env("PATH", std::env::join_paths(paths)?);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        Err(command.exec()).context("Could not start Codex")
+        Err(command.exec()).with_context(|| format!("Could not start {}", adapter.label))
     }
     #[cfg(not(unix))]
     {
@@ -331,6 +503,31 @@ pub fn run(args: Vec<OsString>, launcher_dir: Option<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_launch_policy_preserves_batch_and_remote_clients() {
+        for agent in ["claude", "cursor", "qwen", "copilot"] {
+            for args in [vec![], vec!["--resume", "exact-id"]] {
+                assert!(native_interactive(
+                    agent,
+                    &args.into_iter().map(Into::into).collect::<Vec<_>>()
+                ));
+            }
+            for args in [
+                vec!["--help"],
+                vec!["--print", "hello"],
+                vec!["-p", "hello"],
+                vec!["--remote", "host"],
+                vec!["--acp"],
+                vec!["--prompt=hello"],
+                vec!["login"],
+            ] {
+                assert!(!native_interactive(
+                    agent,
+                    &args.into_iter().map(Into::into).collect::<Vec<_>>()
+                ));
+            }
+        }
+    }
     #[test]
     fn launch_policy_preserves_noninteractive_and_explicit_server_commands() {
         for args in [

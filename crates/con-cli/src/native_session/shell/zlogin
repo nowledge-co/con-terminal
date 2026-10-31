@@ -1,0 +1,11 @@
+if [[ $_con_native_zdotdir_set == x ]]; then
+    builtin export ZDOTDIR="$_con_native_zdotdir"
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r "$_con_native_zdotdir/.zlogin" ]] || builtin source -- "$_con_native_zdotdir/.zlogin"
+case ":$PATH:" in
+    ":$CON_NATIVE_SESSION_BIN:"*) ;;
+    *) builtin export PATH="$CON_NATIVE_SESSION_BIN:$PATH" ;;
+esac
+builtin unset _con_native_zdotdir _con_native_zdotdir_set

@@ -70,9 +70,11 @@ after a user switches pane-local tabs, so recheck the active surface first.
 
 For the same native conversation after app or machine restart, inspect the
 surface's `native_agent` reference and read [native recovery](references/handoff.md#resume-the-same-native-conversation-after-restart).
-This initial integration supports macOS Claude Code, Codex, Cursor, Qwen and Copilot, requires explicit
-native hooks, and has opt-in automatic recovery. Codex linking uses
-`codex` after one-time integration setup; saved links and process startup are separate from native
+This integration supports macOS Claude Code, Codex, Cursor, Qwen and Copilot.
+Normal interactive Claude Code/Codex launches use session-local hooks automatically;
+Cursor/Qwen/Copilot currently need explicit native hooks. Linked conversations
+resume by default. Run `codex` normally; con selects terminal-local execution.
+Automatic integration must not edit native profiles or shell startup files. Saved links and process startup remain separate from native
 confirmation and task success.
 
 ## Completion and permissions

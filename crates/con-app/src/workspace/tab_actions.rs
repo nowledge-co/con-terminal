@@ -812,6 +812,7 @@ impl ConWorkspace {
                     None,
                     font_size,
                     handoff_menu_entry_enabled,
+                    self.config.terminal.shell.as_deref(),
                     window,
                     cx,
                 )

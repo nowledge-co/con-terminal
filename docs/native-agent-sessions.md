@@ -5,51 +5,45 @@ surface, then resume that conversation after con or the machine restarts.
 This first implementation supports local macOS terminals. The native CLI and
 its history must remain installed on the same machine.
 
-## Set up once
+## Start normally
 
-Install the companion `con-cli` alongside con. Explicitly install the integration
-for each native agent you use. Supported adapters are Claude Code, Codex,
-Cursor Agent, Qwen Code and GitHub Copilot:
+On macOS, conversation recovery is on by default. With the default zsh shell, open a con terminal and run
+`claude` or `codex` normally. Their native hooks apply only to that launch:
+Claude loads a con-owned local plugin with `--plugin-dir`; Codex uses its
+session-flags configuration layer and terminal-independent `--no-daemon` mode.
+Native hook and workspace trust prompts remain native. No setup command is
+required, and con does not edit their profiles, settings, authentication or
+history, or your shell startup files.
 
-```sh
-con-cli native-session install --agent claude
-con-cli native-session install --agent codex
-```
+con keeps its launchers and shell bridge in its own application data directory.
+The bridge runs your ordinary zsh startup files and the installed
+Ghostty shell integration, then exposes the launchers only in that con terminal.
+It restores the user's effective zsh configuration directory after startup.
+The native CLI still resolves the actual profile, model, permissions and history
+from your normal environment and arguments. No profile or credential copies are
+made. Explicit remote clients, batch commands and nested native tool calls pass
+through. User aliases/functions and absolute binary paths retain their behavior
+and can bypass the launcher.
+The automatic shell entrypoint currently covers zsh. System Bash 3.2 does not
+run the required ENV startup bridge; Bash/fish integration is left unchanged
+until a verified bridge preserves their native startup behavior. Existing
+explicit native hooks remain usable in those shells.
 
-The installer preserves other hooks and settings, makes private backups before
-replacing existing files, and enables Codex's native hooks feature. It does not
-approve hooks on your behalf. Review Codex's native hook prompt when it appears.
-Restart an already running agent after installing. Use `--config-dir /absolute/path`
-if you use a separate native profile; install into each intended profile.
+For Codex 0.166, terminal-local execution is necessary because shared-daemon
+hooks cannot identify the TUI client. This compatibility layer preserves native
+history, arguments, signals and exit status until upstream supplies client-side
+session attachment events; see [the design](design/native-agent-client-link.md).
 
-Start the native agent in a con terminal:
+An old conversation started before integration must be explicitly resumed once
+in a new con terminal to establish its link. con never guesses one from recent
+history. Other shells and explicit native safe/bare/ephemeral modes do not
+acquire automatic links. Missing native history never creates a new conversation
+as a substitute.
 
-```sh
-claude
-codex
-```
-
-The Codex installer also adds a marked, reversible block to your current shell's
-startup file (zsh, bash or fish). Open a **new con terminal** after installing;
-then run `codex` normally. The block prepends con's launcher only inside con.
-Existing aliases/functions keep priority and may bypass the launcher, as do
-absolute native binary paths. For custom startup files use `--shell-rc /absolute/path`.
-On macOS, bash uses `.bash_profile`; other platforms use `.bashrc`.
-
-For Codex 0.166, the launcher automatically selects terminal-independent
-`--no-daemon` execution for local interactive sessions. This preserves native
-history, permissions, arguments, signals and exit status. Explicit remote servers,
-noninteractive commands (`exec`, app-server, login, etc.), SSH and nested Codex
-tool calls pass through. Profiles without con's installed hook also pass through.
-Other terminals keep Codex's shared-daemon behavior. This is an explicit
-compatibility layer until Codex provides client-side session-attachment events;
-see [the integration design](design/native-agent-client-link.md).
-
-If your shell has a custom alias or startup sequence, the explicit entry point is
-`con-cli native-session launch --agent codex --` followed by your usual arguments.
-con's automatic resume helper remains terminal-local as well.
-
-Additional adapters use their native session-start hooks and exact resume flags:
+The native recovery registry also includes Cursor Agent, Qwen Code and GitHub
+Copilot. These additional adapters currently require explicitly installed native
+hooks; automatic profile-free launch integration covers Claude Code and Codex.
+All adapters use exact native resume flags:
 
 | Agent | Install name | Native store override | Exact resume |
 |---|---|---|---|
@@ -59,7 +53,11 @@ Additional adapters use their native session-start hooks and exact resume flags:
 | Qwen Code | `qwen` | `QWEN_HOME` | `qwen --resume ID` |
 | GitHub Copilot | `copilot` | `COPILOT_HOME` | `copilot --resume=ID` |
 
-Install the matching adapter with `--agent NAME`. Cursor requires one local
+For an explicitly requested legacy/profile integration, the companion CLI still
+provides `native-session install --agent NAME [--config-dir /absolute/path]` and
+`uninstall`. Those explicit commands modify native settings, with private backups;
+Codex installation can also edit a specified shell startup file. They are never
+called by the automatic launch path. Cursor requires one local
 workspace root and native transcripts enabled; its native `XDG_CONFIG_HOME/cursor`
 fallback is respected when `CURSOR_CONFIG_DIR` is unset. Qwen histories must remain within
 `QWEN_HOME`; a separate `QWEN_RUNTIME_DIR` outside that store is currently refused
@@ -72,23 +70,24 @@ history. OSC 7501 activity reports and process names do not establish this link.
 
 ## Choose how to restore
 
-By default, con restores the workspace layout and keeps linked conversations
-available for explicit resume. Right-click the terminal or its surface tab and
-choose **Resume Agent Session** (the terminal menu names the agent). The CLI is:
+By default, con restores the workspace and resumes valid linked conversations.
+To restore only the layout without relaunching native agents, turn off
+**Settings → General → Continuity → Resume Agent Sessions** and save Settings,
+or set:
+
+```ini
+con.appearance.resume_agent_sessions = false
+```
+
+This preference is independent of terminal screen replay. Explicit `false`
+settings are preserved. With automatic recovery disabled, linked conversations
+remain available through **Resume Agent Session** in the terminal/surface menu:
 
 ```sh
 con-cli --json surfaces list --tab 1
 con-cli --json surfaces resume-agent --tab 1 --surface-id EXACT_SURFACE_ID
 ```
 
-For automatic restart recovery, enable **Settings → General → Continuity →
-Resume Agent Sessions**, or set:
-
-```ini
-con.appearance.resume_agent_sessions = true
-```
-
-This setting is independent of terminal screen replay and is off by default.
 On restart, con resumes each valid linked surface once, including inactive tabs
 and stacked surfaces. It waits for a proven local shell prompt and launches the
 native CLI visibly in the recorded directory and native store. It selects the

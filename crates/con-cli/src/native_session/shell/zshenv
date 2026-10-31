@@ -1,0 +1,15 @@
+# con-owned startup bridge; source the installed Ghostty integration unchanged.
+if [[ -r "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/.zshenv" ]]; then
+    builtin source -- "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/.zshenv"
+else
+    if [[ $CON_NATIVE_ORIGINAL_ZDOTDIR_SET == 1 ]]; then
+        builtin export ZDOTDIR="$CON_NATIVE_ORIGINAL_ZDOTDIR"
+    else
+        builtin unset ZDOTDIR
+    fi
+    [[ ! -r "${ZDOTDIR-$HOME}/.zshenv" ]] || builtin source -- "${ZDOTDIR-$HOME}/.zshenv"
+fi
+[[ -o interactive ]] || builtin return
+builtin typeset -g _con_native_zdotdir="${ZDOTDIR-$HOME}"
+builtin typeset -g _con_native_zdotdir_set="${ZDOTDIR+x}"
+builtin export ZDOTDIR="$CON_NATIVE_SHELL_ROOT/zsh"

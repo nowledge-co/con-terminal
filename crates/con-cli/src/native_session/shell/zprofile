@@ -1,0 +1,9 @@
+if [[ $_con_native_zdotdir_set == x ]]; then
+    builtin export ZDOTDIR="$_con_native_zdotdir"
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r "$_con_native_zdotdir/.zprofile" ]] || builtin source -- "$_con_native_zdotdir/.zprofile"
+_con_native_zdotdir="${ZDOTDIR-$HOME}"
+_con_native_zdotdir_set="${ZDOTDIR+x}"
+builtin export ZDOTDIR="$CON_NATIVE_SHELL_ROOT/zsh"
