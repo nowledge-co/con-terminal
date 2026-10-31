@@ -33,6 +33,7 @@ Start with the page that matches what you are trying to do.
 | --- | --- |
 | Use the agent panel without leaving the terminal | [Built-in agent](agent.md) |
 | Turn a repeated terminal routine into a slash command | [Skills and workflows](skills-and-workflows.md) |
+| Resume native agents after restarting con | [Native agent sessions](native-agent-sessions.md) |
 | Save or share a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
 | See the app | [Screenshots](screenshots.md) |
 | See what changed | [Changelog](../CHANGELOG.md) |
@@ -41,7 +42,7 @@ Start with the page that matches what you are trying to do.
 
 | Need | Read |
 | --- | --- |
-| Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
+| Coordinate coding agents, parallel workers, or visible checks | [con-cli and surfaces](con-cli.md) |
 
 ## Platform status
 

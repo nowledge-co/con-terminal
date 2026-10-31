@@ -403,6 +403,7 @@ impl ConWorkspace {
                         icon: presentation.icon,
                         pane_icons: Vec::new(),
                         pane_details: Vec::new(),
+                        native_session_hint: None,
                         has_user_label: tab.user_label.is_some(),
                         pane_count,
                         color: tab.color,
@@ -824,6 +825,7 @@ impl ConWorkspace {
                     {
                         workspace.refresh_agent_cli_detection(cx);
                         last_agent_cli_refresh = Some(now);
+                        workspace.refresh_native_session_resumes(cx);
                     }
                 })
                 .ok();
@@ -982,6 +984,7 @@ impl ConWorkspace {
             window_handle: window.window_handle(),
             workspace_handle: cx.weak_entity(),
             window_close_prepared: false,
+            native_session_claims: Default::default(),
             session_save_tx,
             tab_rename: None,
             tab_rename_cancelled_generation: None,

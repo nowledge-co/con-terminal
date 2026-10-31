@@ -2,6 +2,8 @@ pub mod config;
 pub mod control;
 pub mod handoff;
 pub mod harness;
+pub mod native_session;
+pub mod program_observation;
 pub mod program_status;
 pub mod release_channel;
 pub mod session;

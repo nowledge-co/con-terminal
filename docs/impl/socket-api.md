@@ -87,6 +87,8 @@ JSON-RPC 2.0 over a Unix domain socket, one JSON request per line and one JSON r
 ### Tree / Surfaces
 
 - `tree.get`
+- `surfaces.status`
+- `surfaces.wait_status`
 - `surfaces.list`
 - `surfaces.create`
 - `surfaces.split`
@@ -217,8 +219,10 @@ The render loop stays authoritative, but the socket never blocks on it directly.
 - no auth modes beyond local socket file permissions yet
 - `agent.ask` assumes one automation request at a time per tab
 - the socket surface only exposes capabilities that already exist in con's runtime and agent layers; it does not yet add a new app-native Codex/OpenCode attachment
-- pane-local surfaces are live-session control primitives; session restore
-  persists the active pane layout as before, not every hidden live surface
+- session restore persists all surface metadata and selection, with optional
+  screen text. Native agent references support opt-in macOS conversation
+  resume in new processes; original live processes are not retained. See
+  [native sessions](../native-agent-sessions.md)
 
 Those are acceptable limits for phase one. The important part is that the control transport now exists and is wired to real product semantics instead of placeholder CLI text.
 
@@ -244,3 +248,50 @@ Verified behavior notes:
 Current known limitation from the same live run:
 
 - `panes.create` returns promptly with `tab_index`, `pane_index`, `pane_id`, `surface_ready`, `is_alive`, and `has_shell_integration`. Its `observation_support` object distinguishes unsupported process metadata from temporarily unavailable values; on macOS, `foreground_process_group_id` and `tty_name` are supported. Use `pane_id` for follow-up targeting, then confirm the created pane exposes the exact control capabilities you need before driving it further.
+
+## Explicit program report observation
+
+`surfaces.status` accepts the usual tab/surface target. The CLI also offers
+`panes status` as an active-surface alias. Status snapshots are included in
+`tree` and `surfaces list` under `program_status`.
+
+`surfaces.wait_status` requires `after` (a cursor from the target's prior
+snapshot), with optional `record_id` (default empty root), `states` (default
+`done`, `blocked`, `error`) and `timeout_secs` (default 30, range 1–300).
+It returns `status: matched|timeout|exited`, the current `program_status`, and
+`record` only on a match. Missing targets, wrong incarnations, future cursors,
+and malformed parameters are errors. A waiting request pins the tab's internal
+identity and surface ID, so tab position changes cannot redirect it.
+
+The snapshot has `cursor`, `protocol_seen`, `evidence` (`osc_7501` or null),
+and `records`. Records expose exact IDs, accepted-report sequence, state,
+blocked kind, progress, inherited app, title, and message. They exclude title
+motion, progress heuristics, notification acknowledgement, and built-in agent
+state. Freshness is per record; clearing/resetting never refreshes an old done.
+
+The shared bounded backend reducer preserves report sequences through coalesced
+snapshots; no new parser or native ABI is needed. The app's collector drains
+reports on status commands and on bounded wait checks, outside render. The
+current implementation reads retained records, not an event log, so overwritten
+intermediate states may be missed. Cursor freshness does not prove causal
+submission, process identity, permission, or successful task completion.
+
+
+## Native conversation references
+
+`native_sessions.report` accepts an explicit native SessionStart reference for
+an exact terminal incarnation (`origin` UUID), with a fresh report sequence.
+The private hook inherits both the origin and socket endpoint from that native
+terminal; it never falls back to another app's default endpoint. Old origins,
+stale reports, subagent identities and changed identities during resume are
+rejected. Native metadata does not grant harness control authority.
+
+`surfaces.resume_agent` and `surfaces.forget_agent` resolve an exact surface
+using the normal surface target fields. Resume returns `queued`; observe the
+surface's `native_agent` phase and inspect its visible terminal. This response
+is not proof of native startup or task completion. Helper exit reports carry
+an expected native session ID so a late helper cannot overwrite a later link.
+
+Resume adapters are allowlisted, preserve the native store namespace, require
+the exact history file, and run in the existing shell. No arbitrary persisted
+command, most-recent-session lookup, approval bypass or prompt replay is used.

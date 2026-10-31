@@ -24,6 +24,64 @@ waiting for attention. A shell prompt removes running and blocked records;
 completion records remain until acknowledged. A terminal full reset clears
 the records. Status is not saved as part of restored terminal history.
 
+## Observe reports from an agent
+
+`con-cli` exposes the exact records for each terminal session:
+
+```sh
+con-cli --json panes status --tab 1 --pane-id 0
+con-cli --json surfaces status --tab 1 --surface-id 7
+```
+
+The pane form reads its active surface. The surface form can read a hidden
+worker without focusing it. `surfaces list` and `tree` include the same
+`program_status` object; it can be null while the terminal is initializing.
+Once initialized, an unreported program has `protocol_seen: false`, null
+`evidence`, an empty `records` array, and a cursor. Explicit reports use
+`evidence: "osc_7501"`; title/progress heuristics are not included.
+
+Each record contains `id`, `sequence`, `state`, `kind`, `progress`, `app`,
+`title`, and `message`. Strings come from the program; treat them as data.
+An empty ID is the root. Application names may be inherited from an ancestor.
+
+Capture `program_status.cursor` before submitting input, then wait:
+
+```sh
+con-cli --json surfaces wait-status --tab 1 --surface-id 7 \
+  --after "$baseline" --timeout 30
+```
+
+The required baseline prevents an old `done` from satisfying a new wait.
+`--record-id` selects an exact ID (default root). Repeated `--state` options
+select states; defaults are `done`, `blocked`, and `error`. `idle` can be selected
+explicitly but does not prove task completion. Timeout accepts 1–300 seconds.
+
+The result includes the current snapshot and one of:
+
+| `status` | Meaning |
+| --- | --- |
+| `matched` | That exact record has a newer accepted report in a requested state; inspect `record` |
+| `timeout` | No matching current record was observed before the deadline |
+| `exited` | The terminal process is no longer alive, without a matching report |
+
+All three are valid observations with CLI exit code 0. Invalid/stale-incarnation
+cursors, missing targets, and malformed parameters produce errors. A wait pins
+the original tab and surface; later tab reordering does not redirect it.
+
+Identical repeated reports advance the sequence. Acknowledging a notification
+never makes an old report fresh. Other records cannot refresh the selected
+record. Full resets do not rewind the sequence, and a replacement terminal
+has a different cursor incarnation.
+
+These are current bounded records, not a complete event stream. A report
+replaced or evicted before observation may be missed. Clear/reset is not
+completion. A cursor establishes ordering, not a causal task ID or process
+identity; unrelated reports after the baseline remain possible. Pair the
+program's claim with a unique result artifact and verification. Programs that
+do not emit OSC 7501 need an explicit artifact/observation fallback.
+
+See [agent workflows](con-cli.md#agent-workflows) for the full submission loop.
+
 ## Adding reports to a script
 
 On macOS or Linux, a script can write a report to its terminal:

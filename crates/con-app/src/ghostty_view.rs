@@ -246,6 +246,9 @@ pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 /// Emitted when Ghostty requests a new split from this surface.
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
+
+pub struct GhosttyNativeSessionRequested(pub bool);
+impl EventEmitter<GhosttyNativeSessionRequested> for GhosttyView {}
 pub struct GhosttyCwdChanged(pub Option<String>);
 pub struct GhosttyProgressChanged;
 
@@ -466,6 +469,7 @@ pub struct GhosttyView {
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
+    pub(crate) native_agent_state: Option<crate::native_agent::SharedNativeAgent>,
     /// Private screen text restored from the previous app session. This is a
     /// visual continuity layer only; it is cleared on the first user input so
     /// we never replay commands or write synthetic bytes into the shell.
@@ -570,6 +574,7 @@ impl GhosttyView {
             last_cwd: cwd,
             last_progress: None,
             pending_write: None,
+            native_agent_state: None,
             restored_screen_text,
             native_view_visible: Cell::new(true),
             surface_focused: Cell::new(true),
@@ -1531,12 +1536,14 @@ impl GhosttyView {
         let scale =
             Self::view_backing_scale(nsview, f64::from(window.scale_factor().max(f32::EPSILON)));
         self.scale_factor = scale as f32;
-        match self.app.new_surface(
+        let environment = crate::native_agent::launch_environment(self.native_agent_state.as_ref());
+        match self.app.new_surface_with_env(
             nsview as *mut c_void,
             scale,
             self.initial_cwd.as_deref(),
             self.restored_screen_text.as_deref(),
             Some(self.initial_font_size),
+            &environment,
         ) {
             Ok(terminal) => {
                 terminal.set_focus(self.surface_focused.get());
@@ -1750,6 +1757,45 @@ impl GhosttyView {
     pub fn mark_native_layout_pending(&mut self, cx: &mut Context<Self>) {
         self.pending_native_layout = true;
         cx.notify();
+    }
+
+    /// Hidden native resume may bootstrap from a previously confirmed terminal
+    /// size. It remains hidden until the real canvas commits current geometry.
+    /// Ordinary terminal creation keeps requiring authoritative layout bounds.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn ensure_native_resume_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.last_bounds.is_some() || self.initialized {
+            self.ensure_initialized_for_control(window, cx);
+            return;
+        }
+        let saved_size = self.native_agent_state.as_ref().and_then(|state| {
+            state
+                .borrow()
+                .reference
+                .as_ref()
+                .and_then(|r| r.viewport_pixels)
+        });
+        let Some([width, height]) = saved_size else {
+            return;
+        };
+        let scale = window.scale_factor().max(f32::EPSILON);
+        self.native_view_visible.set(false);
+        self.awaiting_first_layout_visibility = true;
+        self.restored_screen_text = None;
+        let bounds = Bounds::new(
+            point(px(0.0), px(0.0)),
+            size(px(width as f32 / scale), px(height as f32 / scale)),
+        );
+        self.ensure_initialized(bounds, window, cx);
+        // Do not publish the bootstrap as current pane layout. Activation must
+        // run on_layout/update_frame before exposing this native view.
+        self.last_bounds = None;
+        self.awaiting_first_layout_visibility = true;
+        self.apply_native_visibility();
     }
 
     #[cfg(target_os = "macos")]
@@ -3135,6 +3181,8 @@ impl Render for GhosttyView {
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
         let right_click_consumed = self.right_click_consumed.clone();
+        let native_agent_for_menu = self.native_agent_state.clone();
+        let native_menu_entity = cx.entity().downgrade();
         let handoff_menu_entry_enabled = self.handoff_menu_entry_enabled.get();
         let ui_font = cx.theme().font_family.clone();
         let entity = cx.entity().downgrade();
@@ -3476,6 +3524,33 @@ impl Render for GhosttyView {
                 // consumed the right-click via mouse reporting.
                 if right_click_consumed.get() {
                     return menu;
+                }
+                let mut menu = menu;
+                if let Some(state) = &native_agent_for_menu
+                    && let Some(reference) = state.borrow().reference.as_ref()
+                {
+                    let entity = native_menu_entity.clone();
+                    menu = menu.item(
+                        gpui_component::menu::PopupMenuItem::new(format!(
+                            "Resume {} Session",
+                            reference.label()
+                        ))
+                        .on_click(move |_, _, cx| {
+                            let _ = entity
+                                .update(cx, |_, cx| cx.emit(GhosttyNativeSessionRequested(false)));
+                        }),
+                    );
+                    let entity = native_menu_entity.clone();
+                    menu = menu
+                        .item(
+                            gpui_component::menu::PopupMenuItem::new("Forget Session Link")
+                                .on_click(move |_, _, cx| {
+                                    let _ = entity.update(cx, |_, cx| {
+                                        cx.emit(GhosttyNativeSessionRequested(true))
+                                    });
+                                }),
+                        )
+                        .separator();
                 }
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),
@@ -3888,6 +3963,13 @@ mod tests {
                 let hidden: bool = msg_send![header, isHidden];
                 assert!(hidden, "inactive terminal retained visible chrome");
                 view.native_view_visible.set(true);
+                view.awaiting_first_layout_visibility = true;
+                view.apply_native_visibility();
+                let bootstrap_hidden: bool = msg_send![host, isHidden];
+                assert!(
+                    bootstrap_hidden,
+                    "a background restore exposed native pixels before committed pane layout"
+                );
                 view.awaiting_first_layout_visibility = false;
                 view.apply_native_visibility();
                 let hidden: bool = msg_send![header, isHidden];

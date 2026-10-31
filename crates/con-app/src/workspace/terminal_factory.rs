@@ -184,6 +184,8 @@ pub(super) fn make_ghostty_terminal(
     #[cfg(not(target_os = "macos"))]
     let _ = handoff_menu_entry_enabled;
     let pane = TerminalPane::new(view);
+    #[cfg(target_os = "macos")]
+    pane.install_native_agent_context(cx);
     subscribe_terminal_pane(&pane, window, cx);
     pane
 }

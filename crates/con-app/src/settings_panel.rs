@@ -3109,6 +3109,14 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    pub fn set_resume_agent_sessions(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.preview_snapshot.is_none() {
+            self.preview_snapshot = Some(self.config.clone());
+        }
+        self.config.appearance.resume_agent_sessions = enabled;
+        cx.notify();
+    }
+
     pub fn set_persisted_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.config.appearance.restore_terminal_text = enabled;
         if let Some(snapshot) = &mut self.preview_snapshot {
@@ -3604,7 +3612,18 @@ impl SettingsPanel {
                             this.set_restore_terminal_text(*checked, cx);
                         })),
                     theme,
-                mobile))),
+                mobile)).when(cfg!(target_os = "macos"), |card| card.child(toggle_row(
+                    "Resume Agent Sessions",
+                    "Reopen linked native agent conversations after restarting con. Native session integration is required.",
+                    Switch::new("resume-agent-sessions-toggle")
+                        .checked(self.config.appearance.resume_agent_sessions)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_resume_agent_sessions(*checked, cx);
+                        })),
+                    theme,
+                    mobile,
+                )))) ,
         )
         .child(
             div()

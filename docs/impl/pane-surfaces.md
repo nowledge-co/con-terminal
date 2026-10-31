@@ -285,6 +285,8 @@ visible pane bounds, Ghostty pixel size, and TUI rows/columns agree.
 
 ## Current Limit
 
-Session restore persists the split layout and active surface cwd, matching the
-existing terminal-session restore behavior. It does not yet restore multiple
-live pane-local surfaces because terminal processes themselves are not restored.
+Session restore persists the split layout, every surface's ID/name/owner/cwd,
+and the selected surface. Optional restored screen text is private runtime
+continuity data and is never exported in workspace profiles. Restored surfaces
+start new terminal processes; restoring their shape or text does not resume an
+agent's native conversation or preserve its original process.

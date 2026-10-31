@@ -137,6 +137,7 @@ mod caption;
 mod chrome;
 mod chrome_actions;
 mod control_agent_tools;
+mod control_program_status;
 mod control_requests;
 mod control_surfaces;
 mod editor_actions;
@@ -145,6 +146,7 @@ pub(crate) mod frame;
 mod helpers;
 mod input_events;
 mod lifecycle;
+mod native_sessions;
 mod pane_actions;
 mod render;
 mod session_state;
@@ -295,6 +297,7 @@ pub struct ConWorkspace {
     workspace_handle: WeakEntity<ConWorkspace>,
     /// Ensures native window-close cleanup only runs once.
     window_close_prepared: bool,
+    native_session_claims: std::collections::HashMap<String, uuid::Uuid>,
     /// Ordered, coalescing session persistence worker.
     session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
     /// Inline rename state for the horizontal tab strip.

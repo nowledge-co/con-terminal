@@ -109,7 +109,84 @@ impl ConWorkspace {
             response_tx,
         } = request;
 
+        // Drain explicit backend reports on the UI event path, never during
+        // rendering. Status reads must not lag a queued report behind input.
+        if matches!(
+            &command,
+            ControlCommand::SurfacesStatus { .. }
+                | ControlCommand::SurfacesWaitStatus { .. }
+                | ControlCommand::SurfacesList { .. }
+                | ControlCommand::TreeGet { .. }
+        ) {
+            self.refresh_terminal_presentation(cx);
+        }
         match command {
+            ControlCommand::NativeSessionReport {
+                started,
+                expected_session_id,
+                origin,
+                sequence,
+                reference,
+                error,
+            } => {
+                let result = self.apply_native_session_report(
+                    &origin,
+                    sequence,
+                    reference,
+                    error,
+                    expected_session_id,
+                    started,
+                    cx,
+                );
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesResumeAgent { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.request_native_session_resume(resolved.terminal, false, cx)
+                    });
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesForgetAgent { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.forget_native_session(&resolved.terminal, cx);
+                        Ok(json!({"status":"forgotten", "surface_id":resolved.surface_id}))
+                    });
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesStatus { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.control_program_status_value(tab_idx, &resolved, "snapshot", None, cx)
+                    });
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesWaitStatus {
+                tab_index,
+                target,
+                after,
+                record_id,
+                states,
+                timeout_secs,
+            } => {
+                self.spawn_control_program_wait(
+                    tab_index,
+                    target,
+                    after,
+                    record_id,
+                    states,
+                    timeout_secs,
+                    response_tx,
+                    cx,
+                );
+            }
             ControlCommand::Handoff(command) => {
                 self.handle_handoff_command(command, response_tx, cx)
             }

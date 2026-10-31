@@ -75,6 +75,7 @@ mod keycaps;
 mod model_registry;
 mod motion;
 mod mouse_sequence;
+mod native_agent;
 mod pane_tree;
 mod process_name;
 mod provider_icons;
@@ -960,6 +961,7 @@ fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> 
             cwd: cwd.clone(),
             active_surface_id: Some(0),
             surfaces: vec![SurfaceState {
+                native_agent_session: None,
                 surface_id: 0,
                 title: Some("Shell".to_string()),
                 // Synthetic Con-owned diagnostic surface. Keep it out of

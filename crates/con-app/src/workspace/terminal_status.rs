@@ -79,6 +79,7 @@ impl Query {
 }
 
 struct Surface {
+    incarnation: uuid::Uuid,
     instance: Weak<GhosttyTerminal>,
     query: Query,
     processes: Vec<ProcessInfo>,
@@ -306,6 +307,20 @@ pub(super) struct TerminalPresentation {
 }
 
 impl ConWorkspace {
+    pub(super) fn explicit_program_observation(
+        &self,
+        terminal: &TerminalPane,
+    ) -> Option<con_core::program_observation::ProgramObservation> {
+        let surface = self
+            .terminal_presentation
+            .surfaces
+            .get(&terminal.entity_id().as_u64())?;
+        Some(con_core::program_observation::ProgramObservation::new(
+            surface.incarnation,
+            surface.status.program_snapshot(),
+        ))
+    }
+
     pub(super) fn observe_terminal_title(
         &mut self,
         entity: &Entity<GhosttyView>,
@@ -358,6 +373,7 @@ impl ConWorkspace {
                 live.insert(id);
                 let query = Query::for_terminal(terminal, cx);
                 let surface = state.surfaces.entry(id).or_insert_with(|| Surface {
+                    incarnation: uuid::Uuid::new_v4(),
                     instance,
                     query: query.clone(),
                     processes: Vec::new(),
@@ -1034,6 +1050,7 @@ mod tests {
     fn process_completion_rejects_aba_revision_but_accepts_current_work() {
         let instance = Weak::new();
         let mut surface = Surface {
+            incarnation: uuid::Uuid::new_v4(),
             instance: instance.clone(),
             query: Query::Unavailable,
             processes: vec![process(9, "codex")],
@@ -1082,6 +1099,7 @@ mod tests {
 
     fn surface(processes: Vec<ProcessInfo>) -> Surface {
         Surface {
+            incarnation: uuid::Uuid::new_v4(),
             instance: Weak::new(),
             query: Query::Unavailable,
             processes,

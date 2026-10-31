@@ -16,6 +16,29 @@ The point is not to hide the terminal. The point is to turn a messy terminal
 routine into something you can rerun with context, panes, SSH, tmux, and
 approvals still visible.
 
+## Let an external coding agent use con
+
+The **con-terminal** skill teaches Claude Code, Codex, and other coding agents
+to use con's terminal workspace through `con-cli`:
+
+```sh
+npx skills add nowledge-co/con-terminal --skill con-terminal
+```
+
+Install con first, then choose the agent destinations in the installer. Add
+`-g` for user-wide installation or `-a codex` / `-a claude-code` to select one.
+The skill is separate from the project routines loaded by con's built-in agent.
+
+Use it for parallel implementation in separate worktrees, independent review,
+visible test runs, or supported cross-agent context handoff. Keep workers in
+pane-local surfaces, give them explicit acceptance criteria, observe fresh
+reported status when available, and independently verify their results. The
+[agent workflow guide](con-cli.md#agent-workflows) explains the method and CLI.
+
+For app or machine restarts, use [native agent session recovery](native-agent-sessions.md)
+to retain exact conversation identities. This is separate from worker completion
+and cross-agent handoff. Automatic recovery is an opt-in macOS setting.
+
 ## Why skills fit con
 
 Most agents can run a prompt. con can run a prompt while seeing the terminal

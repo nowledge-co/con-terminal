@@ -23,6 +23,7 @@
       "items": [
         { "label": "Terminal workflows", "path": "docs/terminal-workflows.md" },
         { "label": "Skills and workflows", "path": "docs/skills-and-workflows.md" },
+        { "label": "Native agent sessions", "path": "docs/native-agent-sessions.md" },
         { "label": "Workspace profiles", "path": "docs/workspace-layout-profiles-guide.md" },
         { "label": "Screenshots", "path": "docs/screenshots.md" }
       ]

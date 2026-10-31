@@ -76,7 +76,7 @@ fn tab_menu_row(
         .flex_shrink_0()
         .min_w_0()
         .min_h(ui_px(theme, 32.0))
-        .debug_selector(move || format!("tab-menu-row-{session_id}").into())
+        .debug_selector(move || format!("tab-menu-row-{session_id}"))
         .gap(px(10.0))
         .font_family(theme.font_family.clone())
         .text_size(ui_px(theme, 12.0))
@@ -107,12 +107,12 @@ fn tab_menu_row(
                 .min_w_0()
                 .truncate()
                 .text_ellipsis_middle()
-                .debug_selector(move || format!("tab-menu-label-{session_id}").into())
+                .debug_selector(move || format!("tab-menu-label-{session_id}"))
                 .child(title),
         )
         .child(
             div()
-                .debug_selector(move || format!("tab-menu-check-{session_id}").into())
+                .debug_selector(move || format!("tab-menu-check-{session_id}"))
                 .size(px(16.0))
                 .flex_shrink_0()
                 .flex()
@@ -2115,7 +2115,9 @@ impl ConWorkspace {
                     presentation.map_or("phosphor/terminal.svg", |entry| entry.icon),
                 );
                 let name = presentation.map_or(tab.title.as_str(), |entry| entry.name.as_str());
-                let status_detail = self.program_status_detail(tab.summary_id);
+                let status_detail = self
+                    .program_status_detail(tab.summary_id)
+                    .or_else(|| presentation.and_then(|entry| entry.native_session_hint.clone()));
 
                 let display_title = name.to_owned();
                 let label_detail = tab_label_detail(

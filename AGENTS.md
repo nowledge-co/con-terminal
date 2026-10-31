@@ -164,9 +164,11 @@ These constraints take precedence over conflicting older examples in linked docs
 | Architecture / boundaries | `DESIGN.md`, `docs/impl/workspace-modules.md` |
 | Build / packaging | `HACKING.md`, `docs/impl/build-system.md` |
 | Agent behavior / tools | `docs/impl/agent-harness.md`, `docs/impl/agent-tool-surface.md` |
+| Native agent conversation recovery | `docs/native-agent-sessions.md`, `docs/study/con-agent-orchestration.md` |
 | Config loading / saving / migration | `docs/impl/configuration.md` |
 | Terminal rendering / ports | `docs/impl/terminal-rendering.md`, `docs/impl/windows-port.md`, `docs/impl/linux-port.md` |
 | UI design / macOS focus | `docs/design/con-design-language.md`, `docs/impl/macos-focus-and-first-responder.md` |
+| External agent orchestration / distributable con skill | `skills/con-terminal/SKILL.md`, `docs/study/con-agent-orchestration.md` |
 | Socket API / live E2E / `con-test` tests | `docs/impl/socket-api.md`, `skills/con-cli-e2e/SKILL.md` |
 | Pane/sidebar geometry, animation, transparency or backdrop leaks | `skills/native-surface-coverage/SKILL.md` |
 | UI rendering performance | `skills/gpui-cache-aware/SKILL.md` |

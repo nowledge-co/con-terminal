@@ -3332,10 +3332,14 @@ impl PaneTree {
                     );
                 }
 
+                let native_hint = surface.terminal.native_agent.borrow().summary();
+                let native_menu_terminal = surface.terminal.clone();
                 let tab = tab
                     .tooltip(move |window, cx| {
-                        Tooltip::new("Surface tab in this pane. Double-click to rename.")
-                            .build(window, cx)
+                        Tooltip::new(native_hint.clone().unwrap_or_else(|| {
+                            "Surface tab in this pane. Double-click to rename.".into()
+                        }))
+                        .build(window, cx)
                     })
                     .context_menu(move |menu, _window, _cx| {
                         let rename_cb = rename_cb_for_menu.clone();
@@ -3346,6 +3350,24 @@ impl PaneTree {
                                 rename_cb(sid, window, cx);
                             }
                         }));
+                        if cfg!(target_os = "macos")
+                            && native_menu_terminal
+                                .native_agent
+                                .borrow()
+                                .reference
+                                .is_some()
+                        {
+                            let terminal = native_menu_terminal.clone();
+                            menu = menu.item(PopupMenuItem::new("Resume Agent Session").on_click(
+                                move |_, _, cx| {
+                                    terminal.request_native_session_action(false, cx);
+                                },
+                            ));
+                            let terminal = native_menu_terminal.clone();
+                            menu = menu.item(PopupMenuItem::new("Forget Session Link").on_click(
+                                move |_, _, cx| terminal.request_native_session_action(true, cx),
+                            ));
+                        }
                         if can_close {
                             menu = menu.item(PopupMenuItem::new("Close Surface").on_click({
                                 let close_cb = close_cb.clone();
@@ -3696,6 +3718,7 @@ impl PaneTree {
                             cx,
                         );
                         SurfaceState {
+                            native_agent_session: surface.terminal.saved_native_session(cx),
                             surface_id: surface.id,
                             title: surface.title.clone(),
                             owner: surface.owner.clone(),
@@ -3783,7 +3806,11 @@ impl PaneTree {
                         used_surface_ids,
                     );
                     let restore_cwd = state.cwd.as_deref().or(cwd.as_deref());
-                    let clamped_screen_text = trim_restored_screen_text(state.screen_text.clone());
+                    let clamped_screen_text = if state.native_agent_session.is_some() {
+                        Vec::new()
+                    } else {
+                        trim_restored_screen_text(state.screen_text.clone())
+                    };
                     let restored_text = if clamped_screen_text.is_empty() {
                         None
                     } else {
@@ -3795,6 +3822,13 @@ impl PaneTree {
                         surface_id,
                         make_terminal(restore_cwd, restored_text, force_restored_screen_text),
                     );
+                    if let Some(reference) = state.native_agent_session.clone() {
+                        surface
+                            .terminal
+                            .native_agent
+                            .borrow_mut()
+                            .restore(reference);
+                    }
                     surface.title = state.title.clone();
                     surface.owner = state.owner.clone();
                     surface.close_pane_when_last = state.close_pane_when_last;

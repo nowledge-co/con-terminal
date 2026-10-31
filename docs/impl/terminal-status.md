@@ -124,8 +124,10 @@ Linux GUI checks and native frame/input-latency profiling remain open in #447.
   read as approval or failure. Bidirectional and other hidden formatting
   characters are removed so they cannot reorder the label outside the
   grid. Joiners needed for emoji and script shaping are preserved. No separate
-  notification is posted for a report. These facts never authorize the harness or complete a
-  control-plane wait. The workspace drops the set when the terminal entity
+  notification is posted for a report. These facts never authorize the harness or complete a shell/task wait.
+  The separate explicit-report API can wait for a newer OSC record using a
+  freshness cursor; it does not consume title/progress heuristics or assert
+  successful work. See [program observations](../program-status.md#observe-reports-from-an-agent). The workspace drops the set when the terminal entity
   is closed or replaced.
 - `workspace/terminal_status.rs` owns live surface incarnations, asynchronous
   batches and tab aggregation. Closed/replaced surfaces and stale completions

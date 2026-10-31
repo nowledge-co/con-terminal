@@ -1084,6 +1084,45 @@ impl GhosttyApp {
         restored_screen_text: Option<&[String]>,
         font_size: Option<f32>,
     ) -> Result<GhosttyTerminal, String> {
+        self.new_surface_with_env(
+            nsview,
+            scale_factor,
+            cwd,
+            restored_screen_text,
+            font_size,
+            &[],
+        )
+    }
+
+    /// Environment overrides belong to this child only. The embedding app's
+    /// process environment is never mutated to select a terminal context.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_surface_with_env(
+        &self,
+        nsview: *mut c_void,
+        scale_factor: f64,
+        cwd: Option<&str>,
+        restored_screen_text: Option<&[String]>,
+        font_size: Option<f32>,
+        environment: &[(String, String)],
+    ) -> Result<GhosttyTerminal, String> {
+        let owned_environment = environment
+            .iter()
+            .map(|(key, value)| {
+                Ok((
+                    CString::new(key.as_str()).map_err(|_| "Invalid environment key")?,
+                    CString::new(value.as_str()).map_err(|_| "Invalid environment value")?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut environment = owned_environment
+            .iter()
+            .map(|(key, value)| ffi::ghostty_env_var_s {
+                key: key.as_ptr(),
+                value: value.as_ptr(),
+            })
+            .collect::<Vec<_>>();
         // Per-surface state — stored as surface userdata so callbacks can
         // update the correct terminal's state. TerminalState carries a raw
         // `ghostty_surface_t`, so it is !Send/!Sync by construction; this Arc
@@ -1105,6 +1144,8 @@ impl GhosttyApp {
         config.scale_factor = scale_factor;
         config.context = ffi::ghostty_surface_context_e::GHOSTTY_SURFACE_CONTEXT_TAB;
         config.font_size = font_size.unwrap_or(14.0);
+        config.env_vars = environment.as_mut_ptr();
+        config.env_var_count = environment.len();
 
         let cwd_cstr = cwd.and_then(|s| CString::new(s).ok());
         if let Some(ref s) = cwd_cstr {
