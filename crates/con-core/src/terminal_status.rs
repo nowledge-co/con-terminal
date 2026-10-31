@@ -1,5 +1,6 @@
 //! Ephemeral terminal presentation. These observations must never authorize
-//! tools, satisfy control-plane waits, or replace the harness runtime tracker.
+//! tools or replace the harness runtime tracker. Only explicit program reports,
+//! independently of presentation heuristics, may satisfy report-observation waits.
 
 use std::time::{Duration, Instant};
 
@@ -186,6 +187,10 @@ impl SurfaceStatus {
 
     pub fn observe_progress(&mut self, progress: Option<Progress>) {
         self.progress = progress;
+    }
+
+    pub fn program_snapshot(&self) -> &SurfaceProgramStatus {
+        &self.program
     }
 
     pub fn program_records(&self) -> Vec<program_status::ProgramRecord> {

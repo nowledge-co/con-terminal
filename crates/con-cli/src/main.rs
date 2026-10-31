@@ -75,6 +75,8 @@ enum TabsCommand {
 
 #[derive(Subcommand)]
 enum PanesCommand {
+    /// Observe explicit program reports on the active surface.
+    Status(PaneTargetArgs),
     List(TabArgs),
     Read(PaneReadArgs),
     Exec(PaneExecArgs),
@@ -86,6 +88,10 @@ enum PanesCommand {
 
 #[derive(Subcommand)]
 enum SurfacesCommand {
+    /// Observe explicit OSC 7501 reports and a freshness cursor.
+    Status(SurfaceTargetArgs),
+    /// Wait for a fresh report, not inferred activity or task success.
+    WaitStatus(SurfaceWaitStatusArgs),
     List(PaneTargetArgs),
     Create(SurfaceCreateArgs),
     Split(SurfaceSplitArgs),
@@ -149,6 +155,23 @@ impl SurfaceTargetArgs {
     fn target(&self) -> SurfaceTarget {
         SurfaceTarget::new(self.pane.pane_index, self.pane.pane_id, self.surface_id)
     }
+}
+
+#[derive(Args, Clone)]
+struct SurfaceWaitStatusArgs {
+    #[command(flatten)]
+    target: SurfaceTargetArgs,
+    /// Cursor captured before submitting input.
+    #[arg(long)]
+    after: String,
+    /// Exact OSC record id; empty string is the root.
+    #[arg(long, default_value = "")]
+    record_id: String,
+    /// Repeat to select states; defaults to done, blocked, error.
+    #[arg(long = "state")]
+    states: Vec<con_core::program_observation::ReportedState>,
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
+    timeout: u64,
 }
 
 #[derive(Args, Clone)]
@@ -399,6 +422,16 @@ fn main() -> Result<()> {
             }
         },
         Command::Panes { command } => match command {
+            PanesCommand::Status(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesStatus {
+                        tab_index: args.tab.tab,
+                        target: SurfaceTarget::new(args.pane_index, args.pane_id, None),
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
             PanesCommand::List(args) => {
                 let result = send_command(
                     &socket_path,
@@ -485,6 +518,35 @@ fn main() -> Result<()> {
             print_result(&result, cli.json, render_tree)?;
         }
         Command::Surfaces { command } => match command {
+            SurfacesCommand::Status(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesStatus {
+                        tab_index: args.pane.tab.tab,
+                        target: args.target(),
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
+            SurfacesCommand::WaitStatus(args) => {
+                let states = if args.states.is_empty() {
+                    con_core::control::default_reported_states()
+                } else {
+                    args.states
+                };
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesWaitStatus {
+                        tab_index: args.target.pane.tab.tab,
+                        target: args.target.target(),
+                        after: args.after,
+                        record_id: args.record_id,
+                        states,
+                        timeout_secs: Some(args.timeout),
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
             SurfacesCommand::List(args) => {
                 let result = send_command(
                     &socket_path,
@@ -1328,5 +1390,72 @@ mod tests {
             None
         );
         assert_eq!(format_pty_details(&json!({})), None);
+    }
+}
+
+#[cfg(test)]
+mod program_status_cli_tests {
+    use super::*;
+
+    #[test]
+    fn wait_status_requires_cursor_and_validates_states_and_deadlines() {
+        assert!(Cli::try_parse_from(["con-cli", "surfaces", "wait-status"]).is_err());
+        for invalid in ["0", "301"] {
+            assert!(
+                Cli::try_parse_from([
+                    "con-cli",
+                    "surfaces",
+                    "wait-status",
+                    "--after",
+                    "cursor",
+                    "--timeout",
+                    invalid
+                ])
+                .is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "con-cli",
+                "surfaces",
+                "wait-status",
+                "--after",
+                "cursor",
+                "--state",
+                "bogus"
+            ])
+            .is_err()
+        );
+        let cli = Cli::try_parse_from([
+            "con-cli",
+            "surfaces",
+            "wait-status",
+            "--tab",
+            "2",
+            "--surface-id",
+            "7",
+            "--after",
+            "cursor",
+            "--state",
+            "done",
+            "--state",
+            "blocked",
+        ])
+        .unwrap();
+        let Command::Surfaces {
+            command: SurfacesCommand::WaitStatus(args),
+        } = cli.command
+        else {
+            panic!("wrong command")
+        };
+        assert_eq!(args.target.pane.tab.tab, Some(2));
+        assert_eq!(args.target.surface_id, Some(7));
+        assert_eq!(
+            args.states,
+            vec![
+                con_core::program_observation::ReportedState::Done,
+                con_core::program_observation::ReportedState::Blocked
+            ]
+        );
     }
 }

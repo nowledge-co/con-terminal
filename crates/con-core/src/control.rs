@@ -177,6 +177,14 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "Return the tab, pane, and pane-local surface tree.",
     ),
     (
+        "surfaces.status",
+        "Read explicit OSC 7501 records and a freshness cursor.",
+    ),
+    (
+        "surfaces.wait_status",
+        "Wait for an exact program record newer than a cursor.",
+    ),
+    (
         "surfaces.list",
         "List pane-local terminal surfaces without changing pane semantics.",
     ),
@@ -318,6 +326,18 @@ pub enum ControlCommand {
     TreeGet {
         tab_index: Option<usize>,
     },
+    SurfacesStatus {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+    },
+    SurfacesWaitStatus {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+        after: String,
+        record_id: String,
+        states: Vec<crate::program_observation::ReportedState>,
+        timeout_secs: Option<u64>,
+    },
     SurfacesList {
         tab_index: Option<usize>,
         pane: PaneTarget,
@@ -447,6 +467,8 @@ impl ControlCommand {
             Self::SurfacesFocus { .. } => "surfaces.focus",
             Self::SurfacesRename { .. } => "surfaces.rename",
             Self::SurfacesClose { .. } => "surfaces.close",
+            Self::SurfacesStatus { .. } => "surfaces.status",
+            Self::SurfacesWaitStatus { .. } => "surfaces.wait_status",
             Self::SurfacesRead { .. } => "surfaces.read",
             Self::SurfacesSendText { .. } => "surfaces.send_text",
             Self::SurfacesSendKey { .. } => "surfaces.send_key",
@@ -570,7 +592,20 @@ impl ControlCommand {
                 "owner": owner,
                 "close_pane_when_last": close_pane_when_last,
             }),
-            Self::SurfacesFocus { tab_index, target } => json!({
+            Self::SurfacesWaitStatus {
+                tab_index,
+                target,
+                after,
+                record_id,
+                states,
+                timeout_secs,
+            } => json!({
+                "tab_index": tab_index, "pane_index": target.pane_index,
+                "pane_id": target.pane_id, "surface_id": target.surface_id,
+                "after": after, "record_id": record_id, "states": states, "timeout_secs": timeout_secs,
+            }),
+            Self::SurfacesStatus { tab_index, target }
+            | Self::SurfacesFocus { tab_index, target } => json!({
                 "tab_index": tab_index,
                 "pane_index": target.pane_index,
                 "pane_id": target.pane_id,
@@ -812,6 +847,25 @@ impl ControlCommand {
                     command: params.command,
                     owner: params.owner,
                     close_pane_when_last: params.close_pane_when_last,
+                })
+            }
+            "surfaces.status" => {
+                let params: SurfaceTargetParams = decode_params(params)?;
+                Ok(Self::SurfacesStatus {
+                    tab_index: params.tab_index,
+                    target: params.target(),
+                })
+            }
+            "surfaces.wait_status" => {
+                let params: SurfaceWaitStatusParams = serde_json::from_value(params)
+                    .map_err(|error| ControlError::invalid_params(error.to_string()))?;
+                Ok(Self::SurfacesWaitStatus {
+                    tab_index: params.target.tab_index,
+                    target: params.target.target(),
+                    after: params.after,
+                    record_id: params.record_id,
+                    states: params.states,
+                    timeout_secs: params.timeout_secs,
                 })
             }
             "surfaces.focus" => {
@@ -1407,6 +1461,23 @@ impl SurfaceTargetParams {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SurfaceWaitStatusParams {
+    #[serde(flatten)]
+    target: SurfaceTargetParams,
+    after: String,
+    #[serde(default)]
+    record_id: String,
+    #[serde(default = "default_reported_states")]
+    states: Vec<crate::program_observation::ReportedState>,
+    timeout_secs: Option<u64>,
+}
+
+pub fn default_reported_states() -> Vec<crate::program_observation::ReportedState> {
+    use crate::program_observation::ReportedState::*;
+    vec![Done, Blocked, Error]
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct SurfaceWaitReadyParams {
@@ -1952,5 +2023,38 @@ mod tests {
                 "release builds should keep the stable production control endpoint"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod program_status_control_tests {
+    use super::*;
+
+    #[test]
+    fn status_wait_requires_a_baseline_and_round_trips_exact_scope_and_states() {
+        assert!(
+            ControlCommand::from_rpc("surfaces.wait_status", json!({"surface_id": 7})).is_err()
+        );
+        assert!(
+            ControlCommand::from_rpc(
+                "surfaces.wait_status",
+                json!({"after": "cursor", "states": ["bogus"]})
+            )
+            .is_err()
+        );
+        let params = json!({"tab_index": 2, "surface_id": 7, "after": "cursor", "record_id": "build/test", "states": ["blocked", "done"], "timeout_secs": 10});
+        let command = ControlCommand::from_rpc("surfaces.wait_status", params.clone()).unwrap();
+        assert_eq!(command.method_name(), "surfaces.wait_status");
+        let result = command.params_json();
+        for (key, value) in params.as_object().unwrap() {
+            assert_eq!(result.get(key), Some(value));
+        }
+        let command =
+            ControlCommand::from_rpc("surfaces.wait_status", json!({"after": "cursor"})).unwrap();
+        assert_eq!(
+            command.params_json()["states"],
+            json!(["done", "blocked", "error"])
+        );
+        assert_eq!(command.params_json()["record_id"], "");
     }
 }

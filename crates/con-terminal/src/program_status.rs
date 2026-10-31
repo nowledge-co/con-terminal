@@ -2,8 +2,9 @@
 //!
 //! Ghostty parses and validates the sequence. This module stores the records
 //! and applies their lifetime. A record is a presentation fact: it does not
-//! authorize a tool, prove which process is running, satisfy a control-plane
-//! wait, or replace the harness tracker.
+//! authorize a tool, prove which process is running, or replace the harness
+//! tracker. Explicit report observations may be queried with a freshness cursor;
+//! they do not establish task success or tool permission.
 
 use std::cmp::Ordering;
 
@@ -149,6 +150,8 @@ pub struct Incoming<'a> {
 /// A stored record with `app` already resolved from the nearest ancestor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramRecord {
+    /// Monotonic accepted-report sequence within this terminal incarnation.
+    pub sequence: u64,
     pub id: RecordId,
     pub state: State,
     pub kind: Option<BlockedKind>,
@@ -238,6 +241,10 @@ impl SurfaceProgramStatus {
         Self::default()
     }
 
+    pub fn sequence(&self) -> u64 {
+        self.generation
+    }
+
     pub fn protocol_seen(&self) -> bool {
         self.protocol_seen
     }
@@ -272,6 +279,7 @@ impl SurfaceProgramStatus {
             .records
             .iter()
             .map(|record| ProgramRecord {
+                sequence: record.updated,
                 id: record.id.clone(),
                 state: record.state,
                 kind: record.kind,
@@ -414,6 +422,7 @@ impl SurfaceProgramStatus {
     pub fn clear(&mut self, id: &str) -> Result<bool, Reject> {
         let id = RecordId::parse(id).ok_or(Reject::Id)?;
         let before = self.contribution();
+        self.bump();
         self.records.retain(|record| !record.id.is_covered_by(&id));
         self.protocol_seen = true;
         Ok(self.contribution() != before)
@@ -433,6 +442,7 @@ impl SurfaceProgramStatus {
     /// RIS (`ESC c`). Drops every record and lets OSC 9;4 contribute again.
     pub fn on_full_reset(&mut self) -> bool {
         let before = self.contribution();
+        self.bump();
         self.records.clear();
         self.protocol_seen = false;
         self.contribution() != before

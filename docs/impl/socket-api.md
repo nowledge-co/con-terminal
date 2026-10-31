@@ -87,6 +87,8 @@ JSON-RPC 2.0 over a Unix domain socket, one JSON request per line and one JSON r
 ### Tree / Surfaces
 
 - `tree.get`
+- `surfaces.status`
+- `surfaces.wait_status`
 - `surfaces.list`
 - `surfaces.create`
 - `surfaces.split`
@@ -244,3 +246,30 @@ Verified behavior notes:
 Current known limitation from the same live run:
 
 - `panes.create` returns promptly with `tab_index`, `pane_index`, `pane_id`, `surface_ready`, `is_alive`, and `has_shell_integration`. Its `observation_support` object distinguishes unsupported process metadata from temporarily unavailable values; on macOS, `foreground_process_group_id` and `tty_name` are supported. Use `pane_id` for follow-up targeting, then confirm the created pane exposes the exact control capabilities you need before driving it further.
+
+## Explicit program report observation
+
+`surfaces.status` accepts the usual tab/surface target. The CLI also offers
+`panes status` as an active-surface alias. Status snapshots are included in
+`tree` and `surfaces list` under `program_status`.
+
+`surfaces.wait_status` requires `after` (a cursor from the target's prior
+snapshot), with optional `record_id` (default empty root), `states` (default
+`done`, `blocked`, `error`) and `timeout_secs` (default 30, range 1–300).
+It returns `status: matched|timeout|exited`, the current `program_status`, and
+`record` only on a match. Missing targets, wrong incarnations, future cursors,
+and malformed parameters are errors. A waiting request pins the tab's internal
+identity and surface ID, so tab position changes cannot redirect it.
+
+The snapshot has `cursor`, `protocol_seen`, `evidence` (`osc_7501` or null),
+and `records`. Records expose exact IDs, accepted-report sequence, state,
+blocked kind, progress, inherited app, title, and message. They exclude title
+motion, progress heuristics, notification acknowledgement, and built-in agent
+state. Freshness is per record; clearing/resetting never refreshes an old done.
+
+The shared bounded backend reducer preserves report sequences through coalesced
+snapshots; no new parser or native ABI is needed. The app's collector drains
+reports on status commands and on bounded wait checks, outside render. The
+current implementation reads retained records, not an event log, so overwritten
+intermediate states may be missed. Cursor freshness does not prove causal
+submission, process identity, permission, or successful task completion.

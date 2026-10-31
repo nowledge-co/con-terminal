@@ -137,6 +137,7 @@ mod caption;
 mod chrome;
 mod chrome_actions;
 mod control_agent_tools;
+mod control_program_status;
 mod control_requests;
 mod control_surfaces;
 mod editor_actions;

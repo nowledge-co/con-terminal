@@ -109,7 +109,46 @@ impl ConWorkspace {
             response_tx,
         } = request;
 
+        // Drain explicit backend reports on the UI event path, never during
+        // rendering. Status reads must not lag a queued report behind input.
+        if matches!(
+            &command,
+            ControlCommand::SurfacesStatus { .. }
+                | ControlCommand::SurfacesWaitStatus { .. }
+                | ControlCommand::SurfacesList { .. }
+                | ControlCommand::TreeGet { .. }
+        ) {
+            self.refresh_terminal_presentation(cx);
+        }
         match command {
+            ControlCommand::SurfacesStatus { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.control_program_status_value(tab_idx, &resolved, "snapshot", None, cx)
+                    });
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesWaitStatus {
+                tab_index,
+                target,
+                after,
+                record_id,
+                states,
+                timeout_secs,
+            } => {
+                self.spawn_control_program_wait(
+                    tab_index,
+                    target,
+                    after,
+                    record_id,
+                    states,
+                    timeout_secs,
+                    response_tx,
+                    cx,
+                );
+            }
             ControlCommand::Handoff(command) => {
                 self.handle_handoff_command(command, response_tx, cx)
             }

@@ -823,6 +823,7 @@ impl ConWorkspace {
             "tty_name": surface.terminal.tty_name(cx),
             "rows": rows,
             "cols": cols,
+            "program_status": self.explicit_program_observation(&surface.terminal),
             "owner": surface.owner,
             "close_pane_when_last": surface.close_pane_when_last,
         })
