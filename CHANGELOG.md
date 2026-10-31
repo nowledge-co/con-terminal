@@ -4,6 +4,27 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.167` (Unreleased)
+
+### Changed
+
+**macOS**
+
+- Resume linked native agent conversations by default, preserving explicit off
+  preferences. Ordinary Codex and Claude Code launches in zsh now link through
+  session-local integration without editing native profiles, settings or shell
+  startup files; native policy and trust prompts remain intact.
+  _(PR [#542](https://github.com/nowledge-co/con-terminal/pull/542) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Tabs**
+
+- Give horizontal tabs the same live hover details as vertical tabs, with
+  consistent hierarchy, wrapped paths, per-pane information and session recovery
+  status. Open cards follow their original tab when tabs are reordered.
+  _(PR [#542](https://github.com/nowledge-co/con-terminal/pull/542) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.166` - 2026-10-31
 
 ### Added
