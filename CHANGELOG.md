@@ -22,6 +22,14 @@ con is still pre-release, so entries may group related beta work while the produ
   `codex` launches in con. Background process hosting is not included.
   _(PR [#541](https://github.com/nowledge-co/con-terminal/pull/541) by [@wey-gu](https://github.com/wey-gu))_
 
+### Changed
+
+**Agent Handoff**
+
+- Refine the handoff window's grouping and text hierarchy, with clearer empty
+  states, compact session identifiers, and a check-again action.
+  _(PR [#541](https://github.com/nowledge-co/con-terminal/pull/541) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.165` - 2026-10-30
 
 ### Fixed

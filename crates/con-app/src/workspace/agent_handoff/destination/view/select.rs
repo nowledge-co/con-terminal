@@ -10,7 +10,9 @@ impl HandoffDestinationPanel {
         cx: &mut Context<Self>,
     ) -> Div {
         let mut source_card = card(palette);
-        if let Some(warning) = &self.binding_warning {
+        if let Some(warning) = &self.binding_warning
+            && !self.sessions.is_empty()
+        {
             source_card = source_card.child(muted_note(warning.clone(), palette));
         }
         if let Some(agent) = self
@@ -25,7 +27,7 @@ impl HandoffDestinationPanel {
                 palette,
             ));
         }
-        if self.source_not_started {
+        if self.source_not_started && !self.sessions.is_empty() {
             source_card = source_card.child(muted_note(
                 "TUI has no session ID — select one below".into(),
                 palette,
@@ -69,7 +71,7 @@ impl HandoffDestinationPanel {
                             .font_family(palette.mono_font_family.clone())
                             .text_color(palette.muted_foreground)
                             .text_ellipsis()
-                            .child(source.id),
+                            .child(compact_session_id(&source.id)),
                     ),
             );
             let needs_current_confirmation = (self.live_source_id.is_some()
@@ -165,10 +167,57 @@ impl HandoffDestinationPanel {
                 ));
             }
         } else {
-            source_card = source_card.child(muted_note(
-                "No saved sessions in this directory".into(),
-                palette,
-            ));
+            source_card = source_card.child(
+                card_row()
+                    .flex_col()
+                    .flex_nowrap()
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(row_icon_tinted(
+                                agent_icon(self.source_agent),
+                                palette.foreground,
+                            ))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("No conversation available"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(px(12.0))
+                            .text_color(palette.muted_foreground)
+                            .child("Start a conversation in this terminal, then check again."),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .text_size(px(11.0))
+                            .font_family(palette.mono_font_family.clone())
+                            .text_color(palette.muted_foreground)
+                            .text_ellipsis()
+                            .child(self.cwd.to_string_lossy().into_owned()),
+                    )
+                    .child(
+                        Button::new("handoff-reload-sessions")
+                            .ghost()
+                            .small()
+                            .disabled(self.busy)
+                            .label("Check again")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.load_sessions(this.source_agent, window, cx);
+                                cx.notify();
+                            })),
+                    ),
+            );
         }
         source_card
     }
@@ -239,7 +288,7 @@ impl HandoffDestinationPanel {
                     format!("handoff-pick-{}", agent.label()),
                     agent_icon(agent),
                     agent.label().to_string(),
-                    "Target: available".into(),
+                    String::new(),
                     !self.busy,
                     selected,
                     palette,
@@ -278,7 +327,7 @@ impl HandoffDestinationPanel {
                             .flex_none()
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Requested model"),
+                            .child("Model preference"),
                     )
                     .child(
                         div().flex_1().min_w_0().child(
@@ -296,7 +345,7 @@ impl HandoffDestinationPanel {
                 card_row()
                     .text_size(px(11.5))
                     .text_color(palette.muted_foreground)
-                    .child("Requested only — the target Agent decides the actual model"),
+                    .child("Optional; the target agent chooses the actual model."),
             );
             if let Some(error) = self.model_error(cx) {
                 destination_card = destination_card.child(
@@ -306,7 +355,7 @@ impl HandoffDestinationPanel {
                         .child(error),
                 );
             }
-            if !self.model_candidates.is_empty() {
+            if !self.model_candidates.is_empty() && !self.model_value(cx).trim().is_empty() {
                 // Suggestion list: capped and scrollable so a long probe
                 // result can never stretch the window; clicking a row
                 // fills the exact-input control above. Typing in that
@@ -320,8 +369,6 @@ impl HandoffDestinationPanel {
                     .flex_col()
                     .mx(px(10.0))
                     .mb(px(6.0))
-                    .rounded(px(8.0))
-                    .bg(palette.background.opacity(0.6))
                     .max_h(ROW_HEIGHT * 3.0)
                     .overflow_y_scroll();
                 if filtered.is_empty() {
@@ -333,7 +380,7 @@ impl HandoffDestinationPanel {
                             .px(px(8.0))
                             .py(px(6.0))
                             .text_size(px(11.5))
-                            .text_color(palette.muted_foreground.opacity(0.7))
+                            .text_color(palette.muted_foreground)
                             .child("No matching models"),
                     );
                 }
@@ -342,9 +389,13 @@ impl HandoffDestinationPanel {
                     let active = query == model;
                     let mut row = div()
                         .id(format!("handoff-model-{model}"))
+                        .role(Role::Button)
+                        .aria_label(model.clone())
                         .flex()
                         .items_center()
                         .w_full()
+                        .min_w_0()
+                        .text_ellipsis()
                         .rounded(px(6.0))
                         .px(px(8.0))
                         .py(px(6.0))

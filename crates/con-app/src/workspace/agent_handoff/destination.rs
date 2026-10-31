@@ -332,7 +332,7 @@ impl HandoffDestinationPanel {
         if self.model_input.is_some() {
             return;
         }
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Default (don't specify)"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Agent default"));
         cx.subscribe_in(&input, window, |_, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();

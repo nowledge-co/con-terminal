@@ -58,7 +58,12 @@ impl HandoffDestinationPanel {
         self.load_sessions(source, window, cx);
     }
 
-    fn load_sessions(&mut self, agent: AgentKind, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn load_sessions(
+        &mut self,
+        agent: AgentKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.loading_sessions = true;
         self.binding_warning = None;
         self.error = None;

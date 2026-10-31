@@ -11,16 +11,15 @@ mod fit;
 mod select;
 
 const HEADER_HEIGHT: Pixels = px(44.0);
-/// Height of one destination row (card_row py(12) + text_sm line); caps the
+/// Height of one destination row (card_row py(10) + text_sm line); caps the
 /// scrollable session-candidate and model-candidate lists.
-pub(super) const ROW_HEIGHT: Pixels = px(44.0);
+pub(super) const ROW_HEIGHT: Pixels = px(40.0);
 /// Page size for progressive disclosure of session candidates; the revealed
 /// list itself scrolls, and a "show more" row extends it in steps.
 pub(super) const CANDIDATE_PAGE: usize = 50;
 
 struct Palette {
     title_bar: gpui::Hsla,
-    background: gpui::Hsla,
     foreground: gpui::Hsla,
     muted: gpui::Hsla,
     muted_foreground: gpui::Hsla,
@@ -35,7 +34,6 @@ impl Palette {
         let theme = cx.theme();
         Self {
             title_bar: theme.title_bar,
-            background: theme.background,
             foreground: theme.foreground,
             muted: theme.muted,
             muted_foreground: theme.muted_foreground,
@@ -86,9 +84,9 @@ fn header(title: &str, palette: &Palette) -> Div {
 
 fn group_label(text: &str, palette: &Palette) -> Div {
     div()
-        .text_size(px(10.0))
+        .text_size(px(11.0))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(palette.muted_foreground.opacity(0.5))
+        .text_color(palette.muted_foreground)
         .px(px(2.0))
         .pb(px(2.0))
         .child(text.to_string())
@@ -101,7 +99,7 @@ fn card(palette: &Palette) -> Div {
         .rounded(px(12.0))
         .overflow_hidden()
         .p(px(6.0))
-        .bg(palette.background.opacity(0.74))
+        .bg(palette.foreground.opacity(0.035))
 }
 
 /// Rows are inset pills: the card's 6px ring plus the row's own 10px padding
@@ -117,7 +115,7 @@ fn card_row() -> Div {
         .w_full()
         .rounded(px(8.0))
         .px(px(10.0))
-        .py(px(12.0))
+        .py(px(10.0))
 }
 
 fn muted_note(text: String, palette: &Palette) -> Div {
@@ -208,6 +206,10 @@ impl HandoffDestinationPanel {
             .clone();
         let mut row = card_row()
             .id(id)
+            .role(if enabled { Role::Button } else { Role::Label })
+            .aria_label(title.clone())
+            .aria_description(detail.clone())
+            .aria_selected(selected)
             .gap_2()
             .child(row_icon_tinted(
                 icon,
@@ -229,6 +231,8 @@ impl HandoffDestinationPanel {
             .child(
                 div()
                     .flex_none()
+                    .max_w(relative(0.42))
+                    .text_ellipsis()
                     .text_size(px(11.5))
                     .font_weight(if selected {
                         FontWeight::MEDIUM
@@ -354,7 +358,10 @@ impl Render for HandoffDestinationPanel {
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
-                    .child(group_label("SOURCE", &palette))
+                    .child(group_label(
+                        &format!("{} conversation", self.source_agent.label()),
+                        &palette,
+                    ))
                     .child(self.render_source_card(&palette, window, cx)),
             );
             body = body.child(
@@ -362,7 +369,7 @@ impl Render for HandoffDestinationPanel {
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
-                    .child(group_label("CONTINUE IN", &palette))
+                    .child(group_label("Continue in", &palette))
                     .child(self.render_destination_card(&palette, window, cx)),
             );
         }
