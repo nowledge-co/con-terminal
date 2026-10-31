@@ -1,6 +1,6 @@
 # Resume native agent conversations
 
-con can keep a Claude Code or Codex conversation linked to its exact terminal
+con can keep a supported native agent conversation linked to its exact terminal
 surface, then resume that conversation after con or the machine restarts.
 This first implementation supports local macOS terminals. The native CLI and
 its history must remain installed on the same machine.
@@ -8,7 +8,8 @@ its history must remain installed on the same machine.
 ## Set up once
 
 Install the companion `con-cli` alongside con. Explicitly install the integration
-for each native agent you use:
+for each native agent you use. Supported adapters are Claude Code, Codex,
+Cursor Agent, Qwen Code and GitHub Copilot:
 
 ```sh
 con-cli native-session install --agent claude
@@ -25,13 +26,44 @@ Start the native agent in a con terminal:
 
 ```sh
 claude
-codex --no-daemon
+codex
 ```
 
-Codex's shared daemon can outlive its originating terminal and does not reliably
-carry the current terminal context into hooks. Use `--no-daemon` for con session
-linking; con's own resume adapter always uses it. Hooks without a terminal-local Codex client in their process ancestry are
-ignored rather than attached to a guessed surface.
+The Codex installer also adds a marked, reversible block to your current shell's
+startup file (zsh, bash or fish). Open a **new con terminal** after installing;
+then run `codex` normally. The block prepends con's launcher only inside con.
+Existing aliases/functions keep priority and may bypass the launcher, as do
+absolute native binary paths. For custom startup files use `--shell-rc /absolute/path`.
+On macOS, bash uses `.bash_profile`; other platforms use `.bashrc`.
+
+For Codex 0.166, the launcher automatically selects terminal-independent
+`--no-daemon` execution for local interactive sessions. This preserves native
+history, permissions, arguments, signals and exit status. Explicit remote servers,
+noninteractive commands (`exec`, app-server, login, etc.), SSH and nested Codex
+tool calls pass through. Profiles without con's installed hook also pass through.
+Other terminals keep Codex's shared-daemon behavior. This is an explicit
+compatibility layer until Codex provides client-side session-attachment events;
+see [the integration design](design/native-agent-client-link.md).
+
+If your shell has a custom alias or startup sequence, the explicit entry point is
+`con-cli native-session launch --agent codex --` followed by your usual arguments.
+con's automatic resume helper remains terminal-local as well.
+
+Additional adapters use their native session-start hooks and exact resume flags:
+
+| Agent | Install name | Native store override | Exact resume |
+|---|---|---|---|
+| Claude Code | `claude` | `CLAUDE_CONFIG_DIR` | `claude --resume ID` |
+| Codex | `codex` | `CODEX_HOME` | `codex resume ID` (con selects local mode) |
+| Cursor Agent | `cursor` | `CURSOR_CONFIG_DIR` | `cursor-agent --resume ID` |
+| Qwen Code | `qwen` | `QWEN_HOME` | `qwen --resume ID` |
+| GitHub Copilot | `copilot` | `COPILOT_HOME` | `copilot --resume=ID` |
+
+Install the matching adapter with `--agent NAME`. Cursor requires one local
+workspace root and native transcripts enabled; its native `XDG_CONFIG_HOME/cursor`
+fallback is respected when `CURSOR_CONFIG_DIR` is unset. Qwen histories must remain within
+`QWEN_HOME`; a separate `QWEN_RUNTIME_DIR` outside that store is currently refused
+at recovery. Unsupported or missing history never falls back to a recent session.
 
 SessionStart links the exact native session ID, working directory, native store
 and history path to that surface. It does not collect prompt text, credentials
@@ -105,7 +137,7 @@ hooks feature enabled because other integrations may need it.
 
 - This resumes conversations in new processes after restart. It does not keep
   processes alive, run a server, or guarantee recovery of an unfinished tool.
-- Initial adapters cover Claude Code and Codex on macOS. Windows/Linux retain
+- Native recovery currently runs on macOS for the adapters listed above. Windows/Linux retain
   references without launching; additional native agents need explicit adapters.
 - Remote hosts, ephemeral sessions, missing histories and unsupported profiles
   are not silently migrated. Profiles requiring extra CLI flags need manual

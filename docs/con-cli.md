@@ -271,8 +271,8 @@ con-cli --socket /tmp/con-alt.sock identify
 
 ## Resume after app or machine restart
 
-On macOS, install the explicit Claude Code/Codex hooks, then use exact native
+On macOS, install the explicit native agent hooks, then use exact native
 conversation links per surface. Automatic resume is off by default and can be
-enabled under General → Continuity. Codex linking requires `codex --no-daemon`.
+enabled under General → Continuity. After Codex integration setup, open a new con terminal and run `codex` normally.
 See [native agent sessions](native-agent-sessions.md) for setup, failure recovery,
 privacy boundaries and the `surfaces resume-agent` / `forget-agent` commands.

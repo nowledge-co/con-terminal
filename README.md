@@ -56,7 +56,7 @@ workers without taking over your terminal.
   surfaces inside one worker pane, then review and integrate their diffs.
 - **Review and verification:** let one agent review while another runs checks;
   keep reports and logs available in their terminal sessions.
-- **Resume after restart:** link Claude Code or Codex conversations to their
+- **Resume after restart:** link supported native agent conversations to their
   surfaces, then resume explicitly or enable automatic recovery on macOS.
   See [native agent sessions](docs/native-agent-sessions.md).
 - **Continue in another agent:** use supported Agent Handoff on macOS to carry

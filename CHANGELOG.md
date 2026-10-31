@@ -16,9 +16,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **macOS**
 
-- Resume explicitly linked Claude Code and Codex conversations after restarting
+- Resume explicitly linked Claude Code, Codex, Cursor, Qwen and Copilot conversations after restarting
   con, with manual surface actions and an optional automatic recovery setting.
-  Native hooks are required; background process hosting is not included.
+  Native integrations are required; Codex needs only one-time setup before ordinary
+  `codex` launches in con. Background process hosting is not included.
   _(PR [#541](https://github.com/nowledge-co/con-terminal/pull/541) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.165` - 2026-10-30

@@ -220,7 +220,7 @@ The render loop stays authoritative, but the socket never blocks on it directly.
 - `agent.ask` assumes one automation request at a time per tab
 - the socket surface only exposes capabilities that already exist in con's runtime and agent layers; it does not yet add a new app-native Codex/OpenCode attachment
 - session restore persists all surface metadata and selection, with optional
-  screen text. Native Claude Code/Codex references support opt-in macOS conversation
+  screen text. Native agent references support opt-in macOS conversation
   resume in new processes; original live processes are not retained. See
   [native sessions](../native-agent-sessions.md)
 

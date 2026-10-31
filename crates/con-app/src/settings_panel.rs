@@ -3614,7 +3614,7 @@ impl SettingsPanel {
                     theme,
                 mobile)).when(cfg!(target_os = "macos"), |card| card.child(toggle_row(
                     "Resume Agent Sessions",
-                    "Reopen linked Claude Code and Codex conversations after restarting con. Native session hooks are required.",
+                    "Reopen linked native agent conversations after restarting con. Native session integration is required.",
                     Switch::new("resume-agent-sessions-toggle")
                         .checked(self.config.appearance.resume_agent_sessions)
                         .small()

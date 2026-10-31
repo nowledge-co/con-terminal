@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use clap::Subcommand;
-use con_core::{ControlCommand, native_session::NativeAgentSession};
+use con_core::{
+    ControlCommand,
+    native_session::{NativeAgentSession, native_agent_adapter},
+};
 use serde_json::{Value, json};
 use std::{
     io::{IsTerminal, Read},
@@ -9,26 +12,42 @@ use std::{
 };
 
 mod install;
+mod launch;
 
 #[derive(Subcommand)]
 pub enum NativeSessionCommand {
-    /// Install only con's native-session hooks, preserving other agent settings.
+    /// Install native hooks and, for Codex, an opt-in con-only shell launcher.
     Install {
-        #[arg(long, value_parser = ["claude", "codex"])]
+        #[arg(long, value_parser = ["claude", "codex", "cursor", "qwen", "copilot"])]
         agent: String,
         #[arg(long)]
         config_dir: Option<PathBuf>,
+        /// Shell startup file for the opt-in Codex launcher (default: current shell).
+        #[arg(long)]
+        shell_rc: Option<PathBuf>,
     },
     /// Remove only con's hooks. Native history and other hooks are retained.
     Uninstall {
-        #[arg(long, value_parser = ["claude", "codex"])]
+        #[arg(long, value_parser = ["claude", "codex", "cursor", "qwen", "copilot"])]
         agent: String,
         #[arg(long)]
         config_dir: Option<PathBuf>,
+        /// Shell startup file for the opt-in Codex launcher (default: current shell).
+        #[arg(long)]
+        shell_rc: Option<PathBuf>,
+    },
+    /// Launch Codex with automatic terminal-local session integration when installed.
+    Launch {
+        #[arg(long, value_parser = ["codex"])]
+        agent: String,
+        #[arg(long, hide = true)]
+        launcher_dir: Option<PathBuf>,
+        #[arg(last = true, allow_hyphen_values = true)]
+        args: Vec<std::ffi::OsString>,
     },
     #[command(hide = true)]
     Hook {
-        #[arg(long, value_parser = ["claude", "codex"])]
+        #[arg(long, value_parser = ["claude", "codex", "cursor", "qwen", "copilot"])]
         agent: String,
     },
     /// Visible, terminal-bound native resume helper; never selects a recent session.
@@ -50,23 +69,17 @@ pub enum NativeSessionCommand {
 }
 
 pub(super) fn config_dir(agent: &str) -> Result<PathBuf> {
-    let key = match agent {
-        "codex" => "CODEX_HOME",
-        "claude" => "CLAUDE_CONFIG_DIR",
-        _ => anyhow::bail!("Unsupported native agent"),
-    };
-    let path = std::env::var_os(key)
+    let adapter = native_agent_adapter(agent).context("Unsupported native agent")?;
+    let path = std::env::var_os(adapter.config_env)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            dirs::home_dir().map(|home| {
-                home.join(if agent == "codex" {
-                    ".codex"
-                } else {
-                    ".claude"
-                })
-            })
+            (agent == "cursor")
+                .then(|| std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()))
+                .flatten()
+                .map(|root| PathBuf::from(root).join("cursor"))
         })
+        .or_else(|| dirs::home_dir().map(|home| home.join(adapter.default_directory)))
         .context("Cannot locate the native agent configuration directory")?;
     path.canonicalize()
         .context("The native agent configuration directory is unavailable")
@@ -102,6 +115,26 @@ fn report(
     Ok(())
 }
 
+fn hook_cwd(agent: &str, input: &Value) -> Result<PathBuf> {
+    let path = if agent == "cursor" {
+        let roots = input
+            .get("workspace_roots")
+            .and_then(Value::as_array)
+            .context("Missing native workspace roots")?;
+        ensure!(
+            roots.len() == 1,
+            "Only single-root local Cursor sessions can be linked"
+        );
+        roots[0].as_str()
+    } else {
+        input.get("cwd").and_then(Value::as_str)
+    }
+    .context("Missing native session directory")?;
+    Path::new(path)
+        .canonicalize()
+        .context("Native session directory is unavailable")
+}
+
 /// Hook input is data. Never relay prompt text, credentials, commands, or a
 /// subagent's identity into the parent's persisted session.
 fn hook_reference(
@@ -109,27 +142,37 @@ fn hook_reference(
     input: &Value,
     directory: PathBuf,
 ) -> Result<Option<NativeAgentSession>> {
-    if input.get("hook_event_name").and_then(Value::as_str) != Some("SessionStart")
+    let event = input
+        .get("hook_event_name")
+        .or_else(|| input.get("hookEventName"))
+        .and_then(Value::as_str);
+    let expected_event = if agent == "cursor" {
+        "sessionStart"
+    } else {
+        "SessionStart"
+    };
+    if event != Some(expected_event)
         || input
             .get("agent_id")
             .and_then(Value::as_str)
             .is_some_and(|id| !id.is_empty())
-        || input.get("cursor_version").is_some()
+        || (agent != "cursor" && input.get("cursor_version").is_some())
+        || (agent == "cursor" && std::env::var("CURSOR_CODE_REMOTE").as_deref() == Ok("true"))
     {
         return Ok(None);
     }
-    let reference = NativeAgentSession {
+    let mut reference = NativeAgentSession {
         agent: agent.into(),
-        session_id: input["session_id"]
-            .as_str()
+        session_id: input
+            .get(if agent == "cursor" {
+                "conversation_id"
+            } else {
+                "session_id"
+            })
+            .and_then(Value::as_str)
             .context("Missing native session ID")?
             .into(),
-        cwd: PathBuf::from(
-            input["cwd"]
-                .as_str()
-                .context("Missing native session directory")?,
-        )
-        .canonicalize()?,
+        cwd: hook_cwd(agent, input)?,
         config_dir: directory,
         transcript_path: input
             .get("transcript_path")
@@ -139,6 +182,17 @@ fn hook_reference(
         title: None,
         viewport_pixels: None,
     };
+    if agent == "copilot" && reference.transcript_path.is_none() {
+        // Validate the ID before constructing a path from it.
+        reference.validate().map_err(anyhow::Error::msg)?;
+        reference.transcript_path = Some(
+            reference
+                .config_dir
+                .join("session-state")
+                .join(&reference.session_id)
+                .join("events.jsonl"),
+        );
+    }
     reference.validate().map_err(anyhow::Error::msg)?;
     Ok(Some(reference))
 }
@@ -197,11 +251,18 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
         NativeSessionCommand::Install {
             agent,
             config_dir: directory,
-        } => return install::update(&agent, directory, true, json_output),
+            shell_rc,
+        } => return install::update(&agent, directory, shell_rc, true, json_output),
         NativeSessionCommand::Uninstall {
             agent,
             config_dir: directory,
-        } => return install::update(&agent, directory, false, json_output),
+            shell_rc,
+        } => return install::update(&agent, directory, shell_rc, false, json_output),
+        NativeSessionCommand::Launch {
+            agent: _,
+            launcher_dir,
+            args,
+        } => return launch::run(args, launcher_dir),
         NativeSessionCommand::Hook { agent } => {
             // Hooks themselves may detach from the TTY. Require a terminal-
             // local Codex ancestor, not /dev/tty on this hook subprocess.
@@ -225,12 +286,7 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
                     "Native session hook payload is oversized"
                 );
                 let input: Value = serde_json::from_str(&input)?;
-                let reported_cwd = input
-                    .get("cwd")
-                    .and_then(Value::as_str)
-                    .map(PathBuf::from)
-                    .context("Missing native session directory")?
-                    .canonicalize()?;
+                let reported_cwd = hook_cwd(&agent, &input)?;
                 ensure!(
                     reported_cwd == std::env::current_dir()?.canonicalize()?,
                     "The native hook directory does not match its reported session"
@@ -343,12 +399,20 @@ fn resume(reference: &NativeAgentSession, started: impl FnOnce() -> Result<()>) 
         transcript.starts_with(&store),
         "The native history is outside the recorded agent store"
     );
-    let file = transcript
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or_default();
     ensure!(
-        file.contains(&reference.session_id),
+        transcript
+            .components()
+            .any(|part| part.as_os_str().to_str().is_some_and(|name| {
+                name == reference.session_id
+                    || name.strip_suffix(".jsonl") == Some(reference.session_id.as_str())
+                    || name.strip_suffix(".txt") == Some(reference.session_id.as_str())
+                    || name
+                        .strip_suffix(".json")
+                        .is_some_and(|stem| stem.ends_with(&reference.session_id))
+                    || name
+                        .strip_suffix(".jsonl")
+                        .is_some_and(|stem| stem.ends_with(&reference.session_id))
+            })),
         "The native history path does not match the exact saved session ID"
     );
     let argv = reference.resume_argv().map_err(anyhow::Error::msg)?;
@@ -384,6 +448,40 @@ fn resume(reference: &NativeAgentSession, started: impl FnOnce() -> Result<()>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cursor_copilot_and_qwen_use_native_payloads_without_cross_agent_aliases() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let cursor = json!({"hook_event_name":"sessionStart", "conversation_id":id,
+            "cursor_version":"fixture", "workspace_roots":[root], "transcript_path":root.join(format!("{id}.txt"))});
+        let reference = hook_reference("cursor", &cursor, root.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(reference.session_id, id);
+        assert!(
+            hook_reference("claude", &cursor, root.clone())
+                .unwrap()
+                .is_none()
+        );
+        let mut multi = cursor.clone();
+        multi["workspace_roots"] = json!([root, root]);
+        assert!(hook_reference("cursor", &multi, root.clone()).is_err());
+        let payload = json!({"hook_event_name":"SessionStart", "session_id":id, "cwd":root});
+        let copilot = hook_reference("copilot", &payload, root.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            copilot.transcript_path,
+            Some(root.join("session-state").join(&id).join("events.jsonl"))
+        );
+        assert_eq!(
+            hook_reference("qwen", &payload, root)
+                .unwrap()
+                .unwrap()
+                .session_id,
+            id
+        );
+    }
     #[test]
     fn hooks_bind_exact_session_and_reject_subagents_or_missing_ids() {
         let root = std::env::temp_dir().canonicalize().unwrap();

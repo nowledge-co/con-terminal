@@ -4,6 +4,66 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Explicit native contracts. Adding a display icon is not resume support.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeAgentAdapter {
+    pub agent: &'static str,
+    pub label: &'static str,
+    pub config_env: &'static str,
+    pub default_directory: &'static str,
+    pub executable: &'static str,
+    pub resume_option: &'static str,
+}
+
+pub const NATIVE_AGENT_ADAPTERS: &[NativeAgentAdapter] = &[
+    NativeAgentAdapter {
+        agent: "claude",
+        label: "Claude Code",
+        config_env: "CLAUDE_CONFIG_DIR",
+        default_directory: ".claude",
+        executable: "claude",
+        resume_option: "--resume",
+    },
+    NativeAgentAdapter {
+        agent: "codex",
+        label: "Codex",
+        config_env: "CODEX_HOME",
+        default_directory: ".codex",
+        executable: "codex",
+        resume_option: "resume",
+    },
+    NativeAgentAdapter {
+        agent: "cursor",
+        label: "Cursor Agent",
+        config_env: "CURSOR_CONFIG_DIR",
+        default_directory: ".cursor",
+        executable: "cursor-agent",
+        resume_option: "--resume",
+    },
+    NativeAgentAdapter {
+        agent: "qwen",
+        label: "Qwen Code",
+        config_env: "QWEN_HOME",
+        default_directory: ".qwen",
+        executable: "qwen",
+        resume_option: "--resume",
+    },
+    NativeAgentAdapter {
+        agent: "copilot",
+        label: "GitHub Copilot",
+        config_env: "COPILOT_HOME",
+        default_directory: ".copilot",
+        executable: "copilot",
+        resume_option: "--resume",
+    },
+];
+
+pub fn native_agent_adapter(agent: &str) -> Option<&'static NativeAgentAdapter> {
+    NATIVE_AGENT_ADAPTERS
+        .iter()
+        .find(|adapter| adapter.agent == agent)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NativeAgentSession {
@@ -24,7 +84,7 @@ pub struct NativeAgentSession {
 
 impl NativeAgentSession {
     pub fn validate(&self) -> Result<(), String> {
-        if !matches!(self.agent.as_str(), "claude" | "codex") {
+        if native_agent_adapter(&self.agent).is_none() {
             return Err("This native agent is not supported for session resume".into());
         }
         if !uuid::Uuid::parse_str(&self.session_id)
@@ -61,20 +121,14 @@ impl NativeAgentSession {
     }
 
     pub fn label(&self) -> &str {
-        match self.agent.as_str() {
-            "claude" => "Claude Code",
-            "codex" => "Codex",
-            _ => "Agent",
-        }
+        native_agent_adapter(&self.agent).map_or("Agent", |adapter| adapter.label)
     }
 
     pub fn config_env(&self) -> Result<&'static str, String> {
         self.validate()?;
-        Ok(if self.agent == "codex" {
-            "CODEX_HOME"
-        } else {
-            "CLAUDE_CONFIG_DIR"
-        })
+        Ok(native_agent_adapter(&self.agent)
+            .expect("validated adapter")
+            .config_env)
     }
 
     /// A structural key, not concatenated shell text or a guessed recent session.
@@ -94,7 +148,19 @@ impl NativeAgentSession {
                 self.session_id.clone(),
             ]
         } else {
-            vec!["claude".into(), "--resume".into(), self.session_id.clone()]
+            let adapter = native_agent_adapter(&self.agent).expect("validated adapter");
+            if self.agent == "copilot" {
+                vec![
+                    adapter.executable.into(),
+                    format!("--resume={}", self.session_id),
+                ]
+            } else {
+                vec![
+                    adapter.executable.into(),
+                    adapter.resume_option.into(),
+                    self.session_id.clone(),
+                ]
+            }
         })
     }
 }
@@ -134,6 +200,32 @@ mod tests {
             vec!["claude", "--resume", reference.session_id.as_str()]
         );
         assert_eq!(reference.config_env().unwrap(), "CLAUDE_CONFIG_DIR");
+    }
+    #[test]
+    fn adapters_select_exact_native_id_and_store() {
+        for (agent, executable, env, expected) in [
+            ("cursor", "cursor-agent", "CURSOR_CONFIG_DIR", "--resume"),
+            ("qwen", "qwen", "QWEN_HOME", "--resume"),
+            ("copilot", "copilot", "COPILOT_HOME", "--resume"),
+        ] {
+            let mut reference = session();
+            reference.agent = agent.into();
+            let argv = reference.resume_argv().unwrap();
+            let expected = if agent == "copilot" {
+                vec![
+                    executable.to_string(),
+                    format!("{expected}={}", reference.session_id),
+                ]
+            } else {
+                vec![
+                    executable.to_string(),
+                    expected.to_string(),
+                    reference.session_id.clone(),
+                ]
+            };
+            assert_eq!(argv, expected);
+            assert_eq!(reference.config_env().unwrap(), env);
+        }
     }
     #[test]
     fn malformed_or_unknown_references_survive_loading_but_never_generate_commands() {

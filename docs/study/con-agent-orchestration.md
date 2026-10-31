@@ -201,16 +201,33 @@ fall back to a new conversation. The helper checks the exact native history and
 runs the native CLI with the recorded store and cwd. It does not save or replay
 arbitrary executable arguments, model prompts or permission bypass flags.
 
-Current Codex has two relevant differences from Claude Code. The managed shared
-daemon loses terminal-local hook context, so con resumes with `--no-daemon` and
-rejects shared-daemon hook ancestry. Hook subprocesses can themselves detach
-from the TTY, so opening `/dev/tty` is not a reliable client-context check. Also SessionStart can be
-lazy until the next turn. Native process startup is therefore an independent
-acknowledgement (`started`), not fake hook confirmation (`observed`). con never
-sends an extra model request just to obtain that confirmation. See the
-[official hook contract](https://learn.chatgpt.com/docs/hooks) for native event
-and trust semantics; installed CLI help and live testing determine adapter
-behavior for the versions below.
+Codex 0.166 executes hooks in the backend and can lose client-local origin
+when using its shared daemon. The user accepted a one-time con-only launch
+integration on 2026-10-31: ordinary `codex` automatically uses terminal-independent
+execution inside con, while noninteractive and remote invocations pass through.
+The native hook remains the exact-ID source. SessionStart may still be lazy
+until a user turn; `started` and `observed` therefore remain separate. con never
+sends an extra paid request solely to establish a link. The replacement contract
+for upstream client-side attachment events is documented in
+[native agent client links](../design/native-agent-client-link.md).
+
+Herdr's allowlisted resume mappings include Claude Code, Codex, Copilot, Devin,
+Droid, Kimi, Mastra Code, Pi, Oh My Pi, Hermes, OpenCode, Qoder, Qwen, Kilo,
+Cursor, Antigravity CLI, Grok and Letta at the reviewed revision. Command mappings
+alone do not establish integration parity. con now adds native adapters for
+Cursor, Qwen and Copilot, based on each native hook schema, store namespace and
+exact-ID command. Cursor uses `sessionStart` and `conversation_id`, with one
+local workspace root; Qwen uses grouped SessionStart hooks; Copilot uses direct
+SessionStart commands and exact `session-state/ID/events.jsonl` history. These
+are distinct from con's cross-agent Handoff source/target support.
+
+Primary contracts checked alongside the reference implementation:
+[Cursor hooks](https://cursor.com/docs/hooks),
+[Cursor configuration](https://cursor.com/docs/cli/reference/configuration),
+[Qwen hooks](https://github.com/QwenLM/qwen-code/blob/main/docs/users/features/hooks.md),
+[Qwen settings](https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/settings.md),
+[Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-reference),
+[Copilot store](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference).
 
 Inactive restored surfaces may initialize while hidden from a previously
 confirmed physical viewport size. They discard those bootstrap bounds as current
@@ -238,3 +255,18 @@ history. Codex confirmed the resumed ID through its real hook on the next test
 turn. A hook outside terminal-local Codex ancestry could not reuse inherited
 context. Light/dark settings and stacked-surface activation were inspected.
 Application restart was exercised; the host machine was not rebooted.
+
+Follow-up verification (2026-10-31): actual Codex 0.166.0 with GPT-5.6 Luna and
+Claude Code 2.1.314 with Haiku 5.5 each completed one short remember-marker turn,
+then one recall turn after automatic app restart recovery. Both returned their
+original markers and kept exact native IDs with new terminal origins. The
+inactive Codex tab recovered too. Four model turns total, no model tool calls.
+User native profiles and shell files were not modified; tests used private
+stores, an isolated con home and existing account authentication. The machine
+was not rebooted. Cursor/Qwen/Copilot adapters have schema, store and argv tests,
+not completed native paid-model E2E certification. Windows/Linux remain untested.
+
+The installed Codex launcher also ran under a real PTY against an inert native
+executable: paths/arguments with quotes and spaces, unchanged exit code and exec
+PID, native commands outside con, noninteractive/remote bypass, a different
+terminal HOME, canonical launcher-directory aliases and reversible shell edits.
