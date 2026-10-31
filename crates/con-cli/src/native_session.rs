@@ -16,6 +16,9 @@ mod launch;
 
 #[derive(Subcommand)]
 pub enum NativeSessionCommand {
+    /// Prepare con-only native launchers before opening local terminals.
+    #[command(hide = true)]
+    Prepare,
     /// Install native hooks and, for Codex, an opt-in con-only shell launcher.
     Install {
         #[arg(long, value_parser = ["claude", "codex", "cursor", "qwen", "copilot"])]
@@ -36,9 +39,9 @@ pub enum NativeSessionCommand {
         #[arg(long)]
         shell_rc: Option<PathBuf>,
     },
-    /// Launch Codex with automatic terminal-local session integration when installed.
+    /// Launch a native agent with terminal-local session integration.
     Launch {
-        #[arg(long, value_parser = ["codex"])]
+        #[arg(long, value_parser = ["claude", "codex"])]
         agent: String,
         #[arg(long, hide = true)]
         launcher_dir: Option<PathBuf>,
@@ -248,6 +251,17 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
         "Native agent session integration currently supports macOS only"
     );
     match command {
+        NativeSessionCommand::Prepare => {
+            ensure!(
+                cfg!(target_os = "macos"),
+                "Native integration currently supports macOS only"
+            );
+            launch::prepare_automatic()?;
+            if json_output {
+                println!("{}", json!({"prepared":true}));
+            }
+            return Ok(());
+        }
         NativeSessionCommand::Install {
             agent,
             config_dir: directory,
@@ -259,10 +273,10 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
             shell_rc,
         } => return install::update(&agent, directory, shell_rc, false, json_output),
         NativeSessionCommand::Launch {
-            agent: _,
+            agent,
             launcher_dir,
             args,
-        } => return launch::run(args, launcher_dir),
+        } => return launch::run(&agent, args, launcher_dir),
         NativeSessionCommand::Hook { agent } => {
             // Hooks themselves may detach from the TTY. Require a terminal-
             // local Codex ancestor, not /dev/tty on this hook subprocess.

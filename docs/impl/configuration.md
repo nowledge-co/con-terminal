@@ -306,7 +306,7 @@ exports must write `workspace.ghostty`; Con never writes the legacy TOML profile
 
 ### Native agent continuity
 
-`con.appearance.resume_agent_sessions` defaults to `false`. On macOS it enables
+`con.appearance.resume_agent_sessions` defaults to `true`. On macOS it enables
 one automatic exact native conversation resume per restored eligible surface,
 independently of terminal screen replay. See [native agent sessions](../native-agent-sessions.md).
 Saved native IDs/store paths belong to private session JSON and are excluded

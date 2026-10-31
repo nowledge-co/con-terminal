@@ -131,6 +131,10 @@ the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
 - Use the real Rig integration and shared Tokio runtime, not a runtime/thread
   per message. Commands run by Con's built-in agent must execute visibly through
   its established execution and approval flow.
+- Automatic native session recovery uses con-owned resources and session-local
+  integration. Never rewrite native agent profiles/settings or shell startup
+  files to enable it. Keep native policy, trust, history and user hooks intact;
+  legacy profile installation requires an explicit user request.
 - Config uses Ghostty line syntax with Con-owned dotted keys and Rust field names
   in `snake_case`; keep `con.version = 1`. If the primary file is absent, copy
   `config.ghostty` verbatim, or migrate `config.toml` only if neither native file

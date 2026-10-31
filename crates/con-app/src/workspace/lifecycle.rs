@@ -269,6 +269,7 @@ impl ConWorkspace {
                 command,
                 font_size,
                 handoff_menu_entry_enabled,
+                config.terminal.shell.as_deref(),
                 window,
                 cx,
             )
@@ -1049,6 +1050,7 @@ impl ConWorkspace {
             None,
             self.font_size,
             self.config.experimental.handoff,
+            self.config.terminal.shell.as_deref(),
             window,
             cx,
         )

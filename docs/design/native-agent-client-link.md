@@ -11,19 +11,33 @@ outlive its originating terminal and serve several TUI clients. Its ambient
 environment cannot identify the current terminal. Herdr's native hook uses that
 environment too; copying it would reproduce this failure.
 
-The maintainer accepted terminal-local execution as the current compatibility
-policy on 2026-10-31. One explicit `native-session install --agent codex` installs
-the native hook and a con-only shell launcher. Users then type `codex` normally.
-The launcher selects `--no-daemon` only for local interactive use, preserves the
-native argv and uses exec so signals and exit status remain native. Native hooks
-still confirm the exact ID. It sends no synthetic model turn to obtain an ID.
-Native trust is never approved by the installer.
+The maintainer accepted terminal-local execution as the compatibility policy
+on 2026-10-31, then required default-on recovery without modifying native profiles
+or shell startup files. con now prepares only con-owned launchers and shell
+bridges. Normal interactive `codex` receives `--no-daemon`, runtime `--enable
+hooks` and a SessionFlags hook declaration. Hook discovery visits each native
+configuration layer separately, so user/project hooks remain independent of the
+con declaration. Native hook trust remains native. No synthetic model turn is
+sent solely to obtain an ID.
 
-The shell block is scoped to the installed profile, reversible and backed up.
-Aliases and functions retain priority. Explicit remote servers, noninteractive
-commands, nested native tools and profiles without the integration bypass the
-policy. No global daemon feature is disabled and con does not host a daemon.
+Claude Code loads a con-owned hook-only plugin through its repeatable
+`--plugin-dir` session option. User `--settings`, plugins, hooks, profile paths,
+permissions and native history are retained. This follows its documented
+[session-only plugin loading](https://code.claude.com/docs/en/cli-reference#cli-flags)
+and [hook merging](https://code.claude.com/docs/en/hooks#hook-locations).
+
+The terminal-local shell bridge chains the shipped Ghostty integration and user
+startup files rather than rewriting either. Its per-surface environment restores
+the effective user ZDOTDIR after startup. Con-owned resources are idempotent,
+private and contain no copied user settings or credentials. Aliases/functions,
+absolute native paths, unsupported shells, batch, remote and explicitly disabled
+native customization modes retain their existing behavior.
+
 Automatic recovery uses fixed allowlisted native arguments, not saved commands.
+Cursor/Qwen/Copilot retain explicit hook adapters until verified session-local
+injection contracts can replace their opt-in native profile installation too.
+The legacy `native-session install` command remains an explicit user action;
+automatic startup and launches must never call that installer.
 
 ## Upstream replacement contract
 

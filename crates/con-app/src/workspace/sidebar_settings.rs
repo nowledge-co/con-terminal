@@ -886,6 +886,15 @@ impl ConWorkspace {
             return;
         }
         let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
+        #[cfg(target_os = "macos")]
+        if self.config.appearance.resume_agent_sessions
+            != full_config.appearance.resume_agent_sessions
+            && let Err(error) = crate::native_agent::prepare_automatic_integration(
+                full_config.appearance.resume_agent_sessions,
+            )
+        {
+            log::warn!("Automatic native session integration needs attention: {error}");
+        }
         let old_keybindings = self.config.keybindings.clone();
         self.config = full_config.clone();
         #[cfg(target_os = "macos")]

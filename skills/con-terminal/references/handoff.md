@@ -43,16 +43,18 @@ the target. A completed handoff means context transfer, not task completion.
 ## Resume the same native conversation after restart
 
 This is separate from cross-agent handoff. On macOS, con can link Claude Code
-and Codex native sessions using explicitly installed native hooks. Installation
-changes the selected agent's settings: do it only when session integration is
-within the user's requested scope. Preserve native approval and hook trust.
-Start Codex with `--no-daemon`; shared daemon hooks cannot reliably identify the
-originating terminal.
+and Codex native sessions using native hooks prepared automatically for normal
+interactive launches in con. These hooks are launch-scoped and do not edit native
+profiles or shell startup files. The legacy explicit installer does modify settings:
+run it only when the user specifically requests that integration. Preserve native
+approval and hook trust.
+Start `codex` normally in con; its launcher selects `--no-daemon` automatically.
+Shared daemon hooks cannot reliably identify the originating terminal.
 
 Inspect `tree` or `surfaces list` for `native_agent`. A saved reference is not a
 live worker and an observed link is not task success. Use exact surface IDs with
 `surfaces resume-agent`; do not type `--last`, infer IDs from a screen, or launch
-again after uncertain delivery. Automatic recovery is opt-in through
-`con.appearance.resume_agent_sessions = true`. Missing native history or an
+again after uncertain delivery. Automatic recovery is on by default; users can opt out with
+`con.appearance.resume_agent_sessions = false`. Missing native history or an
 interaction-needed phase calls for visible inspection, not a fresh conversation.
 `surfaces forget-agent` drops the link only; do not delete native history.

@@ -1,0 +1,17 @@
+if [[ $_con_native_zdotdir_set == x ]]; then
+    builtin export ZDOTDIR="$_con_native_zdotdir"
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r "$_con_native_zdotdir/.zshrc" ]] || builtin source -- "$_con_native_zdotdir/.zshrc"
+case ":$PATH:" in
+    ":$CON_NATIVE_SESSION_BIN:"*) ;;
+    *) builtin export PATH="$CON_NATIVE_SESSION_BIN:$PATH" ;;
+esac
+if [[ -o login ]]; then
+    _con_native_zdotdir="${ZDOTDIR-$HOME}"
+    _con_native_zdotdir_set="${ZDOTDIR+x}"
+    builtin export ZDOTDIR="$CON_NATIVE_SHELL_ROOT/zsh"
+else
+    builtin unset _con_native_zdotdir _con_native_zdotdir_set
+fi
