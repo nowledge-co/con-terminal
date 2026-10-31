@@ -324,6 +324,161 @@ fn private_zsh_bridge_preserves_user_startup_order_and_effective_zdotdir() {
 }
 
 #[test]
+fn private_zsh_bridge_preserves_native_history_and_user_overrides() {
+    for custom_zdotdir in [false, true] {
+        for custom_history in [false, true] {
+            let fixture = Fixture::new();
+            let output = Command::new(env!("CARGO_BIN_EXE_con-cli"))
+                .args(["native-session", "prepare"])
+                .env("HOME", &fixture.home)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let runtime = fixture
+                .launcher
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("runtime");
+            let user_config = if custom_zdotdir {
+                let dir = fixture.root.join("user configuration");
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(
+                    fixture.home.join(".zshenv"),
+                    "export ZDOTDIR=\"$CON_TEST_USER_CONFIG\"\n",
+                )
+                .unwrap();
+                dir
+            } else {
+                fixture.home.clone()
+            };
+            let history_file = if custom_history {
+                fixture.root.join("custom command history")
+            } else {
+                user_config.join(".zsh_history")
+            };
+            fs::write(
+                user_config.join(".zshrc"),
+                if custom_history {
+                    "HISTFILE=\"$CON_TEST_HISTORY\"\n"
+                } else {
+                    "# retain the system history default\n"
+                },
+            )
+            .unwrap();
+            for mode in ["-lic", "-ic"] {
+                let original = ": 1700000000:0;echo preserved-history\n";
+                fs::write(&history_file, original).unwrap();
+                let mut command = Command::new("/bin/zsh");
+                command.args([mode, "print -r -- HISTORY_FILE:$HISTFILE; fc -R; fc -ln -1; print -s -- con-history-new-entry; fc -AI"])
+                    .env("HOME", &fixture.home)
+                    .env("ZDOTDIR", runtime.join("zsh"))
+                    .env("CON_NATIVE_ORIGINAL_ZDOTDIR_SET", "0")
+                    .env("CON_NATIVE_SHELL_ROOT", &runtime)
+                    .env("CON_NATIVE_SESSION_BIN", fixture.launcher.parent().unwrap())
+                    .env("CON_TEST_USER_CONFIG", &user_config)
+                    .env("CON_TEST_HISTORY", &history_file)
+                    .env("GHOSTTY_RESOURCES_DIR", fixture.root.join("no-ghostty-resources"))
+                    .env_remove("GHOSTTY_ZSH_ZDOTDIR")
+                    .env_remove("HISTFILE");
+                let output = command.output().unwrap();
+                let text = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(
+                    text.contains(&format!("HISTORY_FILE:{}", history_file.display())),
+                    "{mode} custom_zdotdir={custom_zdotdir} custom_history={custom_history}: {text}"
+                );
+                assert!(text.contains("echo preserved-history"), "{text}");
+                let saved = fs::read_to_string(&history_file).unwrap();
+                assert!(saved.contains("echo preserved-history"), "{saved}");
+                assert!(saved.contains("con-history-new-entry"), "{saved}");
+                assert!(!runtime.join("zsh/.zsh_history").exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn private_zsh_bridge_recovers_misdirected_history_automatically_once() {
+    for mode in ["-lic", "-ic"] {
+        let fixture = Fixture::new();
+        let output = Command::new(env!("CARGO_BIN_EXE_con-cli"))
+            .args(["native-session", "prepare"])
+            .env("HOME", &fixture.home)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let runtime = fixture
+            .launcher
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("runtime");
+        let source = runtime.join("zsh/.zsh_history");
+        let target = fixture.home.join(".zsh_history");
+        let old = b": 1700000000:0;old-user-command\n";
+        let recent = b": 1700000010:0;recent-con-command\n";
+        fs::write(&target, old).unwrap();
+        fs::write(&source, recent).unwrap();
+        for _ in 0..2 {
+            let output = Command::new("/bin/zsh")
+                .args([mode, "fc -R; fc -ln -10"])
+                .env("HOME", &fixture.home)
+                .env("ZDOTDIR", runtime.join("zsh"))
+                .env("CON_NATIVE_ORIGINAL_ZDOTDIR_SET", "0")
+                .env("CON_NATIVE_SHELL_ROOT", &runtime)
+                .env("CON_NATIVE_SESSION_BIN", fixture.launcher.parent().unwrap())
+                .env(
+                    "GHOSTTY_RESOURCES_DIR",
+                    fixture.root.join("no-ghostty-resources"),
+                )
+                .env_remove("GHOSTTY_ZSH_ZDOTDIR")
+                .env_remove("HISTFILE")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                text.contains("old-user-command") && text.contains("recent-con-command"),
+                "{text}"
+            );
+            // zsh owns subsequent history serialization (e.g. a shell without
+            // EXTENDED_HISTORY drops timestamps on exit). The recovery's raw
+            // byte preservation is checked before that native rewrite in its
+            // unit tests; both commands must remain exactly once here.
+            let saved = fs::read_to_string(&target).unwrap();
+            assert_eq!(saved.matches("old-user-command").count(), 1);
+            assert_eq!(saved.matches("recent-con-command").count(), 1);
+            assert_eq!(fs::read(&source).unwrap(), recent);
+        }
+        let backup_bytes: Vec<_> = fs::read_dir(runtime.join("zsh/history-recovery"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "source" || extension == "target")
+            })
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect();
+        assert_eq!(backup_bytes.len(), 2);
+        assert!(backup_bytes.contains(&old.to_vec()));
+        assert!(backup_bytes.contains(&recent.to_vec()));
+    }
+}
+
+#[test]
 fn installed_launcher_preserves_argv_exit_status_and_other_terminal_behavior() {
     let fixture = Fixture::new();
     let result = fixture.install(true);

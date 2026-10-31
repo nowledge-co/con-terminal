@@ -3,6 +3,12 @@ if [[ $_con_native_zdotdir_set == x ]]; then
 else
     builtin unset ZDOTDIR
 fi
+# macOS /etc/zshrc runs before this bridge and derives its default HISTFILE
+# from our temporary ZDOTDIR. Restore that default before the user's .zshrc
+# runs, so ordinary history and user overrides keep their native behavior.
+if [[ ${HISTFILE-} == "$CON_NATIVE_SHELL_ROOT/zsh/.zsh_history" ]]; then
+    HISTFILE="${ZDOTDIR:-$HOME}/.zsh_history"
+fi
 [[ ! -r "$_con_native_zdotdir/.zshrc" ]] || builtin source -- "$_con_native_zdotdir/.zshrc"
 case ":$PATH:" in
     ":$CON_NATIVE_SESSION_BIN:"*) ;;
@@ -13,5 +19,8 @@ if [[ -o login ]]; then
     _con_native_zdotdir_set="${ZDOTDIR+x}"
     builtin export ZDOTDIR="$CON_NATIVE_SHELL_ROOT/zsh"
 else
+    if [[ -n ${HISTFILE-} && -s "$CON_NATIVE_SHELL_ROOT/zsh/.zsh_history" ]]; then
+        "$CON_NATIVE_SHELL_ROOT/recover-history" "$HISTFILE" || builtin print -u2 -- 'con: shell history recovery needs attention; original history files were retained.'
+    fi
     builtin unset _con_native_zdotdir _con_native_zdotdir_set
 fi

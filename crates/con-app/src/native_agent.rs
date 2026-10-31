@@ -6,6 +6,9 @@ use std::{cell::RefCell, rc::Rc};
 static AUTOMATIC_INTEGRATION: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(target_os = "macos")]
+static SHELL_BRIDGE_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "macos")]
 static INTEGRATION_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 #[cfg(target_os = "macos")]
@@ -30,7 +33,14 @@ pub(crate) fn prepare_automatic_integration(enabled: bool) -> Result<(), String>
 fn prepare_integration(enabled: bool) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     AUTOMATIC_INTEGRATION.store(false, Ordering::Relaxed);
-    if !enabled {
+    SHELL_BRIDGE_READY.store(false, Ordering::Relaxed);
+    // Recover beta.167 history even if the user disabled native agent resume
+    // while troubleshooting it. This bridge keeps automatic hooks disabled.
+    let recovery_pending = con_paths::app_data_dir()
+        .join("native-session/runtime/zsh/.zsh_history")
+        .metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    if !enabled && !recovery_pending {
         return Ok(());
     }
     let helper = std::env::current_exe()
@@ -53,7 +63,8 @@ fn prepare_integration(enabled: bool) -> Result<(), String> {
     if response["prepared"].as_bool() != Some(true) {
         return Err("Native integration did not confirm setup".into());
     }
-    AUTOMATIC_INTEGRATION.store(true, Ordering::Relaxed);
+    AUTOMATIC_INTEGRATION.store(enabled, Ordering::Relaxed);
+    SHELL_BRIDGE_READY.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -160,7 +171,7 @@ pub(crate) fn launch_environment(state: Option<&SharedNativeAgent>) -> Vec<(Stri
                     .into(),
                 ),
             ];
-            if AUTOMATIC_INTEGRATION.load(std::sync::atomic::Ordering::Relaxed) {
+            if SHELL_BRIDGE_READY.load(std::sync::atomic::Ordering::Relaxed) {
                 let shell = state
                     .borrow()
                     .shell_command

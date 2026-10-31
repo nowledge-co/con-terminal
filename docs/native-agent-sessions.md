@@ -19,6 +19,11 @@ con keeps its launchers and shell bridge in its own application data directory.
 The bridge runs your ordinary zsh startup files and the installed
 Ghostty shell integration, then exposes the launchers only in that con terminal.
 It restores the user's effective zsh configuration directory after startup.
+The beta.168 hotfix also restores the ordinary history path and automatically
+merges commands that beta.167 saved in con's private bridge directory. Recovery
+runs when a new zsh starts, after user history-path overrides, and retains both
+source history and private pre-merge backups. Existing history is appended to,
+never replaced. Recovery remains available if agent auto-resume was disabled.
 The native CLI still resolves the actual profile, model, permissions and history
 from your normal environment and arguments. No profile or credential copies are
 made. Explicit remote clients, batch commands and nested native tool calls pass
