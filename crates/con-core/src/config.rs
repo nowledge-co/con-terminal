@@ -161,6 +161,8 @@ pub struct AppearanceConfig {
     /// Keep bounded private terminal text so restart continuity can show what
     /// was on screen. This is never exported to workspace layout profiles.
     pub restore_terminal_text: bool,
+    /// Resume explicitly linked native agent conversations after restart.
+    pub resume_agent_sessions: bool,
     /// Hide the per-pane title bar when there are multiple panes. Defaults to
     /// `false` (title bar visible). When `true` the title bar is suppressed
     /// even in split layouts; the fullscreen/close buttons are also hidden.
@@ -195,6 +197,7 @@ impl Default for AppearanceConfig {
             tab_accent_inactive_alpha: default_tab_accent_inactive_alpha(),
             tab_accent_inactive_hover_alpha: default_tab_accent_inactive_hover_alpha(),
             restore_terminal_text: default_restore_terminal_text(),
+            resume_agent_sessions: false,
             hide_pane_title_bar: false,
             tabs_orientation: TabsOrientation::Vertical,
             close_to_quit: true,
@@ -2326,5 +2329,24 @@ https_proxy = ""
         let config: Config = toml::from_str(content).unwrap();
         assert_eq!(config.network.http_proxy.as_deref(), Some(""));
         assert_eq!(config.network.https_proxy.as_deref(), Some(""));
+    }
+}
+
+#[cfg(test)]
+mod native_session_settings_tests {
+    use super::*;
+    #[test]
+    fn native_resume_is_opt_in_and_round_trips_without_enabling_terminal_replay() {
+        assert!(!Config::default().appearance.resume_agent_sessions);
+        let config = Config::parse_ghostty("con.version = 1\ncon.appearance.resume_agent_sessions = true\ncon.appearance.restore_terminal_text = false\n").unwrap();
+        assert!(config.appearance.resume_agent_sessions);
+        assert!(!config.appearance.restore_terminal_text);
+        let path =
+            std::env::temp_dir().join(format!("con-native-settings-{}.conf", uuid::Uuid::new_v4()));
+        config.save_to_path(&path).unwrap();
+        let roundtrip = Config::load_from_path(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(roundtrip.appearance.resume_agent_sessions);
+        assert!(!roundtrip.appearance.restore_terminal_text);
     }
 }

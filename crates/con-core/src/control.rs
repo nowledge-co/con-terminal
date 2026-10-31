@@ -177,6 +177,18 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "Return the tab, pane, and pane-local surface tree.",
     ),
     (
+        "native_sessions.report",
+        "Link a native agent conversation to its originating terminal.",
+    ),
+    (
+        "surfaces.resume_agent",
+        "Resume the exact saved native agent conversation.",
+    ),
+    (
+        "surfaces.forget_agent",
+        "Remove the saved native agent reference without deleting native history.",
+    ),
+    (
         "surfaces.status",
         "Read explicit OSC 7501 records and a freshness cursor.",
     ),
@@ -326,6 +338,22 @@ pub enum ControlCommand {
     TreeGet {
         tab_index: Option<usize>,
     },
+    NativeSessionReport {
+        started: bool,
+        expected_session_id: Option<String>,
+        origin: String,
+        sequence: u64,
+        reference: Option<crate::native_session::NativeAgentSession>,
+        error: Option<String>,
+    },
+    SurfacesResumeAgent {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+    },
+    SurfacesForgetAgent {
+        tab_index: Option<usize>,
+        target: SurfaceTarget,
+    },
     SurfacesStatus {
         tab_index: Option<usize>,
         target: SurfaceTarget,
@@ -467,6 +495,9 @@ impl ControlCommand {
             Self::SurfacesFocus { .. } => "surfaces.focus",
             Self::SurfacesRename { .. } => "surfaces.rename",
             Self::SurfacesClose { .. } => "surfaces.close",
+            Self::NativeSessionReport { .. } => "native_sessions.report",
+            Self::SurfacesResumeAgent { .. } => "surfaces.resume_agent",
+            Self::SurfacesForgetAgent { .. } => "surfaces.forget_agent",
             Self::SurfacesStatus { .. } => "surfaces.status",
             Self::SurfacesWaitStatus { .. } => "surfaces.wait_status",
             Self::SurfacesRead { .. } => "surfaces.read",
@@ -592,6 +623,16 @@ impl ControlCommand {
                 "owner": owner,
                 "close_pane_when_last": close_pane_when_last,
             }),
+            Self::NativeSessionReport {
+                started,
+                expected_session_id,
+                origin,
+                sequence,
+                reference,
+                error,
+            } => json!({
+                "origin": origin, "sequence": sequence, "reference": reference, "error": error, "expected_session_id": expected_session_id, "started": started,
+            }),
             Self::SurfacesWaitStatus {
                 tab_index,
                 target,
@@ -604,7 +645,9 @@ impl ControlCommand {
                 "pane_id": target.pane_id, "surface_id": target.surface_id,
                 "after": after, "record_id": record_id, "states": states, "timeout_secs": timeout_secs,
             }),
-            Self::SurfacesStatus { tab_index, target }
+            Self::SurfacesResumeAgent { tab_index, target }
+            | Self::SurfacesForgetAgent { tab_index, target }
+            | Self::SurfacesStatus { tab_index, target }
             | Self::SurfacesFocus { tab_index, target } => json!({
                 "tab_index": tab_index,
                 "pane_index": target.pane_index,
@@ -848,6 +891,32 @@ impl ControlCommand {
                     owner: params.owner,
                     close_pane_when_last: params.close_pane_when_last,
                 })
+            }
+            "native_sessions.report" => {
+                let params: NativeSessionReportParams = serde_json::from_value(params)
+                    .map_err(|error| ControlError::invalid_params(error.to_string()))?;
+                Ok(Self::NativeSessionReport {
+                    started: params.started,
+                    expected_session_id: params.expected_session_id,
+                    origin: params.origin,
+                    sequence: params.sequence,
+                    reference: params.reference,
+                    error: params.error,
+                })
+            }
+            "surfaces.resume_agent" | "surfaces.forget_agent" => {
+                let params: SurfaceTargetParams = decode_params(params)?;
+                if method == "surfaces.resume_agent" {
+                    Ok(Self::SurfacesResumeAgent {
+                        tab_index: params.tab_index,
+                        target: params.target(),
+                    })
+                } else {
+                    Ok(Self::SurfacesForgetAgent {
+                        tab_index: params.tab_index,
+                        target: params.target(),
+                    })
+                }
             }
             "surfaces.status" => {
                 let params: SurfaceTargetParams = decode_params(params)?;
@@ -1459,6 +1528,17 @@ impl SurfaceTargetParams {
     fn target(&self) -> SurfaceTarget {
         SurfaceTarget::new(self.pane_index, self.pane_id, self.surface_id)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NativeSessionReportParams {
+    #[serde(default)]
+    started: bool,
+    expected_session_id: Option<String>,
+    origin: String,
+    sequence: u64,
+    reference: Option<crate::native_session::NativeAgentSession>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1405,11 +1405,14 @@ dependencies = [
  "con-core",
  "con-paths",
  "con-process",
+ "dirs 6.0.0",
  "libc",
  "portable-pty",
  "serde",
  "serde_json",
  "tokio",
+ "toml_edit 0.22.27",
+ "uuid",
 ]
 
 [[package]]

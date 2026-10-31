@@ -689,6 +689,7 @@ impl ConWorkspace {
                 .get(&tab.summary_id)
                 .cloned()
                 .unwrap_or_default(),
+            native_session_hint: self.native_session_hint_for_tab(index),
             has_user_label: tab.user_label.is_some(),
             pane_count,
             color: tab.color,

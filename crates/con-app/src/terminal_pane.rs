@@ -13,6 +13,7 @@ use crate::workspace::ConWorkspace;
 
 #[derive(Clone)]
 pub struct TerminalPane {
+    pub(crate) native_agent: crate::native_agent::SharedNativeAgent,
     entity: Entity<GhosttyView>,
     presentation_icon: std::rc::Rc<std::cell::Cell<&'static str>>,
     #[cfg(target_os = "macos")]
@@ -22,6 +23,7 @@ pub struct TerminalPane {
 impl TerminalPane {
     pub fn new(entity: Entity<GhosttyView>) -> Self {
         Self {
+            native_agent: Default::default(),
             entity,
             presentation_icon: std::rc::Rc::new(std::cell::Cell::new(
                 crate::terminal_identity::TERMINAL,
@@ -353,6 +355,50 @@ impl TerminalPane {
             .update(cx, |view, cx| view.release_mouse_selection(cx));
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn install_native_agent_context(&self, cx: &mut App) {
+        self.entity.update(cx, |view, _| {
+            view.native_agent_state = Some(self.native_agent.clone());
+        });
+    }
+
+    pub(crate) fn saved_native_session(
+        &self,
+        cx: &App,
+    ) -> Option<con_core::native_session::NativeAgentSession> {
+        let mut reference = self.native_agent.borrow().reference.clone()?;
+        if let Some(size) = self
+            .surface_instance(cx)
+            .and_then(|terminal| terminal.upgrade())
+            .map(|terminal| terminal.size())
+            && size.width_px > 0
+            && size.height_px > 0
+        {
+            reference.viewport_pixels = Some([size.width_px, size.height_px]);
+        }
+        Some(reference)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn prepare_native_resume(&self, window: &mut Window, cx: &mut App) {
+        self.entity.update(cx, |view, cx| {
+            view.ensure_native_resume_terminal(window, cx)
+        });
+    }
+
+    pub(crate) fn request_native_session_action(&self, forget: bool, cx: &mut App) {
+        #[cfg(target_os = "macos")]
+        self.entity.update(cx, |_, cx| {
+            cx.emit(crate::ghostty_view::GhosttyNativeSessionRequested(forget))
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = (forget, cx);
+    }
+
+    pub(crate) fn notify_native_agent(&self, cx: &mut App) {
+        self.entity.update(cx, |_, cx| cx.notify());
+    }
+
     pub fn entity_id(&self) -> EntityId {
         self.entity.entity_id()
     }
@@ -507,6 +553,13 @@ pub fn subscribe_terminal_pane(
             .detach();
         view.sync_terminal_focus(window, cx);
     });
+    #[cfg(target_os = "macos")]
+    cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_native_session_requested,
+    )
+    .detach();
     #[cfg(target_os = "macos")]
     cx.subscribe_in(
         &pane.entity,

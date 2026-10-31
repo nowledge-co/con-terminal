@@ -188,6 +188,7 @@ pub struct SessionEntry {
     /// Retained, deduplicated identities of the active content in each pane.
     pub pane_icons: Vec<&'static str>,
     pub pane_details: Vec<PaneHoverDetail>,
+    pub native_session_hint: Option<String>,
     pub has_user_label: bool,
     /// How many panes the tab contains (split count). Surfaced in
     /// the rail's hover card so the user can see "this tab has 3
@@ -2602,6 +2603,15 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
                 .child(session.name.clone()),
         )
         .child(rows)
+        .children(session.native_session_hint.as_ref().map(|hint| {
+            div()
+                .px(px(12.0))
+                .pb(px(12.0))
+                .text_size(ui_px(&theme, 12.0))
+                .line_height(ui_px(&theme, 18.0))
+                .text_color(secondary)
+                .child(hint.clone())
+        }))
         .child(layer)
 }
 
@@ -2734,6 +2744,17 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
                 .line_height(ui_px(theme, 18.0))
                 .text_color(theme.foreground)
                 .child(context.clone()),
+        );
+        has_body = true;
+    }
+    if let Some(hint) = &session.native_session_hint {
+        content = content.child(
+            div()
+                .mt(px(if has_body { 8.0 } else { 0.0 }))
+                .text_size(ui_px(theme, 12.0))
+                .line_height(ui_px(theme, 18.0))
+                .text_color(secondary)
+                .child(hint.clone()),
         );
         has_body = true;
     }
@@ -3077,6 +3098,7 @@ fn sidebar_button_tooltip(mut button: Button, label: SharedString) -> Button {
     button
 }
 
+#[allow(clippy::too_many_arguments)]
 fn navigation_button<F>(
     id: &'static str,
     icon: &'static str,
@@ -3891,6 +3913,7 @@ mod tests {
                     icon: "phosphor/terminal.svg",
                     pane_icons: Vec::new(),
                     pane_details: Vec::new(),
+                    native_session_hint: None,
                     has_user_label: true,
                     pane_count: 1,
                     color: None,
@@ -4285,6 +4308,7 @@ mod tests {
             icon: "phosphor/terminal.svg",
             pane_icons: Vec::new(),
             pane_details: Vec::new(),
+            native_session_hint: None,
             has_user_label: true,
             pane_count: 1,
             color: None,
@@ -4761,6 +4785,7 @@ mod tests {
                     icon: "phosphor/terminal.svg",
                     pane_icons: Vec::new(),
                     pane_details: Vec::new(),
+                    native_session_hint: None,
                     has_user_label: false,
                     pane_count: 1,
                     color: None,

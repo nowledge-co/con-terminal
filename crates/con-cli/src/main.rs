@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 mod configuration;
 mod handoff;
+mod native_session;
 mod pty_bridge;
 use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
 mod ssh;
@@ -30,6 +31,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Capture and resume native conversations without copying their transcripts.
+    NativeSession {
+        #[command(subcommand)]
+        command: native_session::NativeSessionCommand,
+    },
     Identify,
     Capabilities,
     Tabs {
@@ -88,6 +94,10 @@ enum PanesCommand {
 
 #[derive(Subcommand)]
 enum SurfacesCommand {
+    /// Resume the exact saved native conversation in this terminal.
+    ResumeAgent(SurfaceTargetArgs),
+    /// Forget the saved link, leaving the native agent history untouched.
+    ForgetAgent(SurfaceTargetArgs),
     /// Observe explicit OSC 7501 reports and a freshness cursor.
     Status(SurfaceTargetArgs),
     /// Wait for a fresh report, not inferred activity or task success.
@@ -394,6 +404,7 @@ fn main() -> Result<()> {
     let socket_path = cli.socket.clone().unwrap_or_else(control_socket_path);
 
     match cli.command {
+        Command::NativeSession { command } => native_session::run(command, &socket_path, cli.json)?,
         Command::Identify => {
             let result = send_command(&socket_path, ControlCommand::SystemIdentify)?;
             print_result(&result, cli.json, render_identify)?;
@@ -518,6 +529,26 @@ fn main() -> Result<()> {
             print_result(&result, cli.json, render_tree)?;
         }
         Command::Surfaces { command } => match command {
+            SurfacesCommand::ResumeAgent(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesResumeAgent {
+                        tab_index: args.pane.tab.tab,
+                        target: args.target(),
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
+            SurfacesCommand::ForgetAgent(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::SurfacesForgetAgent {
+                        tab_index: args.pane.tab.tab,
+                        target: args.target(),
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
             SurfacesCommand::Status(args) => {
                 let result = send_command(
                     &socket_path,

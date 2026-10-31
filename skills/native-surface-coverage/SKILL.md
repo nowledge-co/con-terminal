@@ -57,6 +57,19 @@ Keep these independent contracts intact:
 - A geometry-correct native mask and correctly sized IOSurface still need to
   **present with the matching GPUI scene**.
 
+## Restore hidden native conversations without exposing bootstrap geometry
+
+Ordinary control initialization still requires authoritative canvas bounds.
+Native conversation resume has one narrow exception: an inactive restored
+surface can initialize from its previously confirmed physical viewport size so
+its shell and native agent can start without selecting the tab. Keep that host
+hidden, keep `awaiting_first_layout_visibility` set, and discard the bootstrap
+bounds as current layout. Before activation exposes the host, the real canvas
+must commit the current frame, mask and clipping through the ordinary frame
+transaction. Never generalize this exception to estimated split/zoom bounds.
+Verify inactive tabs and stacked surfaces after restart, then activate them;
+verify closing a split and switching tabs still use current geometry.
+
 ## Keep native edits and platform presentation in one transaction
 
 The accepted Con boundary is `NativeGeometryTransaction::hold_for_frame`, opened

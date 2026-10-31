@@ -154,6 +154,8 @@ pub enum PaneSplitDirection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceState {
     #[serde(default)]
+    pub native_agent_session: Option<crate::native_session::NativeAgentSession>,
+    #[serde(default)]
     pub surface_id: usize,
     #[serde(default)]
     pub title: Option<String>,
@@ -285,6 +287,7 @@ mod tests {
             active_surface_id: Some(12),
             surfaces: vec![
                 SurfaceState {
+                    native_agent_session: None,
                     surface_id: 11,
                     title: Some("Shell".to_string()),
                     owner: None,
@@ -293,6 +296,7 @@ mod tests {
                     screen_text: vec!["$ pwd".to_string(), "/tmp/project".to_string()],
                 },
                 SurfaceState {
+                    native_agent_session: None,
                     surface_id: 12,
                     title: Some("Agent".to_string()),
                     owner: Some("subagent".to_string()),

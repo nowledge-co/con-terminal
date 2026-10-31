@@ -691,6 +691,7 @@ fn session_surfaces_from_workspace(pane: &WorkspacePane, root: &Path) -> Vec<Sur
         .iter()
         .enumerate()
         .map(|(surface_id, surface)| SurfaceState {
+            native_agent_session: None,
             surface_id,
             title: surface.title.clone(),
             owner: surface.owner.clone(),
@@ -1200,6 +1201,15 @@ mod tests {
                     cwd: Some("/tmp/project".to_string()),
                     active_surface_id: Some(3),
                     surfaces: vec![SurfaceState {
+                        native_agent_session: Some(crate::native_session::NativeAgentSession {
+                            agent: "codex".into(),
+                            session_id: "private-native-id".into(),
+                            cwd: std::env::temp_dir(),
+                            config_dir: std::env::temp_dir().join("private-native-store"),
+                            transcript_path: None,
+                            viewport_pixels: None,
+                            title: None,
+                        }),
                         surface_id: 3,
                         title: Some("Server".to_string()),
                         owner: Some("human".to_string()),
@@ -1255,6 +1265,8 @@ mod tests {
         assert!(toml.contains("tab.agent-provider = \"openai\""));
         assert!(toml.contains("tab.agent-model = \"gpt-5.2\""));
         assert!(!toml.contains("secret output"));
+        assert!(!toml.contains("private-native-id"));
+        assert!(!toml.contains("private-native-store"));
         assert!(!toml.contains("cargo run"));
         assert!(!toml.contains("private-conversation"));
         assert!(!toml.contains("screen_text"));

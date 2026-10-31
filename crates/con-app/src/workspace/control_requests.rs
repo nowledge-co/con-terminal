@@ -121,6 +121,44 @@ impl ConWorkspace {
             self.refresh_terminal_presentation(cx);
         }
         match command {
+            ControlCommand::NativeSessionReport {
+                started,
+                expected_session_id,
+                origin,
+                sequence,
+                reference,
+                error,
+            } => {
+                let result = self.apply_native_session_report(
+                    &origin,
+                    sequence,
+                    reference,
+                    error,
+                    expected_session_id,
+                    started,
+                    cx,
+                );
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesResumeAgent { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.request_native_session_resume(resolved.terminal, false, cx)
+                    });
+                Self::send_control_result(response_tx, result);
+            }
+            ControlCommand::SurfacesForgetAgent { tab_index, target } => {
+                let result = self
+                    .resolve_control_tab_index(tab_index)
+                    .and_then(|tab_idx| {
+                        let resolved = self.resolve_surface_target_for_tab(tab_idx, target)?;
+                        self.forget_native_session(&resolved.terminal, cx);
+                        Ok(json!({"status":"forgotten", "surface_id":resolved.surface_id}))
+                    });
+                Self::send_control_result(response_tx, result);
+            }
             ControlCommand::SurfacesStatus { tab_index, target } => {
                 let result = self
                     .resolve_control_tab_index(tab_index)
