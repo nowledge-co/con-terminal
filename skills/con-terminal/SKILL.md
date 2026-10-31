@@ -1,6 +1,6 @@
 ---
 name: con-terminal
-description: Use con terminal and con-cli to inspect tabs, run visible shell commands, create and drive pane-local agent sessions, coordinate parallel work, and hand off tasks between installed agents. Use when a running con app is the terminal workspace; supports Claude Code, Codex, and other CLI agents rather than one vendor's session format.
+description: Use con terminal and con-cli to inspect tabs, run visible shell commands, create and drive pane-local agent sessions, coordinate parallel work, resume linked native conversations after restart, and hand off tasks between installed agents. Use when a running con app is the terminal workspace; supports Claude Code, Codex, and other CLI agents rather than one vendor's session format.
 ---
 
 # Work through con
@@ -67,6 +67,13 @@ after a user switches pane-local tabs, so recheck the active surface first.
   `handoff` workflow rather than scraping a screen as conversation history.
   Read [handoff](references/handoff.md). Handoff shares the worktree; it is not
   isolation for concurrent editing.
+
+For the same native conversation after app or machine restart, inspect the
+surface's `native_agent` reference and read [native recovery](references/handoff.md#resume-the-same-native-conversation-after-restart).
+This initial integration supports macOS Claude Code/Codex, requires explicit
+native hooks, and has opt-in automatic recovery. Codex linking uses
+`codex --no-daemon`; saved links and process startup are separate from native
+confirmation and task success.
 
 ## Completion and permissions
 

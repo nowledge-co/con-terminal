@@ -28,6 +28,7 @@ General contains app-level behavior:
 - manual update check when the current channel supports it
 - default shell command for new panes
 - saved terminal text privacy
+- opt-in native agent conversation recovery on macOS
 - skill source folders
 
 **Default Shell** overrides the command Con starts in new panes. Leave it blank
@@ -40,6 +41,11 @@ If you prefer con not to save terminal text between launches, turn off
 **Restore Terminal Text** in General. Layout profiles never include terminal
 text. To wipe terminal text already saved on disk, run **Clear Restored Terminal
 History** from Command Palette.
+
+On macOS, **Resume Agent Sessions** reopens explicitly linked Claude Code and
+Codex conversations after restart. It is off by default, requires native session
+hooks, and is independent of terminal text replay. See [native agent sessions](native-agent-sessions.md)
+for setup and manual recovery.
 
 ## Command Palette
 

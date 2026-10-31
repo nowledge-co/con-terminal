@@ -47,7 +47,7 @@ Launch the selected installed agent in the prepared directory, for example:
 
 ```sh
 con-cli --json surfaces send-text --tab "$TAB" \
-  --surface-id "$WORKER_SURFACE" -- "cd '/absolute/path/worker' && codex"
+  --surface-id "$WORKER_SURFACE" -- "cd '/absolute/path/worker' && codex --no-daemon"
 con-cli --json surfaces send-key --tab "$TAB" \
   --surface-id "$WORKER_SURFACE" enter
 con-cli --json surfaces read --tab "$TAB" \

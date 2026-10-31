@@ -267,3 +267,12 @@ Set `CON_SOCKET_PATH` only when you intentionally run con on a custom endpoint:
 CON_SOCKET_PATH=/tmp/con-alt.sock con
 con-cli --socket /tmp/con-alt.sock identify
 ```
+
+
+## Resume after app or machine restart
+
+On macOS, install the explicit Claude Code/Codex hooks, then use exact native
+conversation links per surface. Automatic resume is off by default and can be
+enabled under General → Continuity. Codex linking requires `codex --no-daemon`.
+See [native agent sessions](native-agent-sessions.md) for setup, failure recovery,
+privacy boundaries and the `surfaces resume-agent` / `forget-agent` commands.

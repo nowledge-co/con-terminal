@@ -52,7 +52,7 @@ second top-level worker/job abstraction is justified for the initial skill.
 | Built-in agent | One existing conversation per tab via `agent ask` | Serialize; do not treat it as a fresh independent worker |
 | Context transfer | Revisioned durable `handoff` jobs, currently macOS | Separate from fresh workers and parallel editing |
 | Report observation | `surfaces wait-status --after CURSOR` | Fresh exact-record matching; not a causal task receipt or success guarantee |
-| Recovery | Every surface's layout/metadata and optional screen text; new terminal processes | Native agent session identity/resume is a separate capability |
+| Recovery | Every surface's layout/metadata and optional screen text; new terminal processes | Explicit native references support opt-in macOS resume; live processes are not preserved |
 
 Source checked: `crates/con-cli/src/main.rs`, `crates/con-cli/src/handoff.rs`,
 `crates/con-core/src/control.rs`, and app workspace `control_requests.rs`,
@@ -164,3 +164,77 @@ skill separate: it tests con itself; this skill lets users work through con.
 - The con-terminal skill was installed locally for Codex and Claude Code.
   Its package names avoid Windows reserved device names. Windows/Linux runtime
   and public-main installation are not yet verified locally.
+
+## Native conversation continuity after restart
+
+The first implementation deliberately separates native conversation recovery
+from keeping live agent processes running. Herdr's architecture distinguishes
+these too: its background server owns detach/reattach, while native recovery
+persists identity and uses an allowlisted resume adapter. References reviewed
+at [`ee5bfb5`](https://github.com/herdrdev/herdr/tree/ee5bfb5041bb3e4a49d591c72308aae3c81ecdde):
+[`agent_resume`](https://github.com/herdrdev/herdr/blob/ee5bfb5041bb3e4a49d591c72308aae3c81ecdde/src/agent_resume.rs),
+[app resume](https://github.com/herdrdev/herdr/blob/ee5bfb5041bb3e4a49d591c72308aae3c81ecdde/src/app/agent_resume.rs),
+[restore](https://github.com/herdrdev/herdr/blob/ee5bfb5041bb3e4a49d591c72308aae3c81ecdde/src/persist/restore.rs),
+and its native SessionStart integration assets. con implements its own adapters;
+no Herdr source was copied.
+
+The durable reference belongs to an individual terminal surface. A tab groups
+panes; a pane can contain multiple surfaces with different native conversations.
+The reference records exact agent/session/store identity, cwd, native history
+path and a confirmed viewport size. Shared workspace profiles never export it.
+Native history remains in the native agent's store, separately from con's
+optional terminal screen replay. No screen parser, OSC activity record or process
+observation can manufacture a native identity.
+
+Each newly created terminal receives a fresh origin UUID and the exact app
+socket in its environment before native shell creation. SessionStart hooks use
+these inherited values and a monotonic report sequence; an old terminal cannot
+silently attach to a different restarted app. Hooks ignore subagents and operate
+as optional fail-open metadata reporting, without granting harness control.
+Native hook trust and permissions remain native decisions.
+
+Restored references remain available with automatic recovery off. When enabled,
+recovery reserves each structural identity before launch, waits for a proven
+local shell, and submits one visible allowlisted helper. Missing paths/history,
+unknown adapters, remote terminals, busy TUIs and uncertain input delivery do not
+fall back to a new conversation. The helper checks the exact native history and
+runs the native CLI with the recorded store and cwd. It does not save or replay
+arbitrary executable arguments, model prompts or permission bypass flags.
+
+Current Codex has two relevant differences from Claude Code. The managed shared
+daemon loses terminal-local hook context, so con resumes with `--no-daemon` and
+rejects shared-daemon hook ancestry. Hook subprocesses can themselves detach
+from the TTY, so opening `/dev/tty` is not a reliable client-context check. Also SessionStart can be
+lazy until the next turn. Native process startup is therefore an independent
+acknowledgement (`started`), not fake hook confirmation (`observed`). con never
+sends an extra model request just to obtain that confirmation. See the
+[official hook contract](https://learn.chatgpt.com/docs/hooks) for native event
+and trust semantics; installed CLI help and live testing determine adapter
+behavior for the versions below.
+
+Inactive restored surfaces may initialize while hidden from a previously
+confirmed physical viewport size. They discard those bootstrap bounds as current
+layout and remain hidden until the ordinary canvas/frame transaction commits
+real geometry. This exception is documented in the native-surface-coverage skill;
+ordinary split/zoom control initialization still cannot use estimated geometry.
+
+The UI keeps the terminal-first structure: native continuity appears in existing
+hover information and exact-surface context actions, plus one opt-in General
+setting. A saved reference does not replace live activity icons or claim that a
+worker is still running. Background process hosting and remote recovery remain
+separate future work.
+
+Initial local verification uses macOS ARM64 with Codex CLI **0.166.0** and Claude
+Code **2.1.314**, private native stores and genuine CLI-created conversations.
+A localhost Responses/Messages fixture supplies model replies; no user native
+profile, credentials or paid model backend is used. This does not certify
+Windows/Linux, Intel hardware, other CLI versions or remote stores.
+
+The live restart fixture verified an inactive Codex tab and hidden Claude Code
+surface, exact native IDs after recovery, duplicate-identity suppression, rejection
+of old origins and foreign helper callbacks, default-off/manual recovery, missing
+exact history without replacement, and forgetting a link without deleting native
+history. Codex confirmed the resumed ID through its real hook on the next test
+turn. A hook outside terminal-local Codex ancestry could not reuse inherited
+context. Light/dark settings and stacked-surface activation were inspected.
+Application restart was exercised; the host machine was not rebooted.

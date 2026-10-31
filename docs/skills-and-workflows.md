@@ -35,6 +35,10 @@ pane-local surfaces, give them explicit acceptance criteria, observe fresh
 reported status when available, and independently verify their results. The
 [agent workflow guide](con-cli.md#agent-workflows) explains the method and CLI.
 
+For app or machine restarts, use [native agent session recovery](native-agent-sessions.md)
+to retain exact conversation identities. This is separate from worker completion
+and cross-agent handoff. Automatic recovery is an opt-in macOS setting.
+
 ## Why skills fit con
 
 Most agents can run a prompt. con can run a prompt while seeing the terminal
