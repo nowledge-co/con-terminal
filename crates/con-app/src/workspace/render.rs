@@ -1660,9 +1660,7 @@ impl Render for ConWorkspace {
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Don't handle workspace shortcuts when a modal overlay is open
-                if this.settings_panel.read(cx).is_overlay_visible()
-                    || this.command_palette.read(cx).is_visible()
-                {
+                if this.is_modal_open(cx) {
                     return;
                 }
 
@@ -1993,6 +1991,10 @@ impl Render for ConWorkspace {
         let palette_visible = self.command_palette.read(cx).is_visible();
         if palette_visible {
             root = root.child(self.command_palette.clone());
+        }
+
+        if let Some(confirmation) = self.render_agent_close_confirmation(window, cx) {
+            root = root.child(confirmation);
         }
 
         #[cfg(target_os = "linux")]

@@ -369,6 +369,7 @@ impl ConWorkspace {
     pub(super) fn is_modal_open(&self, cx: &App) -> bool {
         self.settings_panel.read(cx).is_overlay_visible()
             || self.command_palette.read(cx).is_visible()
+            || self.close_confirmation.is_some()
     }
 
     pub(super) fn new_window(
@@ -394,6 +395,9 @@ impl ConWorkspace {
     }
 
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
         let cwd = self
             .has_active_tab()
@@ -459,6 +463,9 @@ impl ConWorkspace {
     }
 
     pub(super) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         // Cmd+W maps to CloseTab, but for a focused EditorPane it should close
         // the active editor file first. Only empty editors fall through to pane/tab close.
         let active_tree = &self.tabs[self.active_tab].pane_tree;
@@ -495,6 +502,13 @@ impl ConWorkspace {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
+            let request = close_confirmation::CloseTarget::Pane {
+                tab: self.tabs[self.active_tab].summary_id,
+                pane: self.tabs[self.active_tab].pane_tree.focused_pane_id(),
+            };
+            if self.request_agent_close_confirmation(request, window, cx) {
+                return;
+            }
             log::debug!(
                 "[editor-close] CloseTab fallback closing pane: active_tab={} focused_pane={}",
                 self.active_tab,
@@ -551,9 +565,26 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let request = close_confirmation::CloseTarget::Tabs(vec![tab.summary_id]);
+        if self.request_agent_close_confirmation(request, window, cx) {
+            return;
+        }
+        self.close_tab_by_index_unchecked(index, window, cx);
+    }
+
+    pub(super) fn close_tab_by_index_unchecked(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if index >= self.tabs.len() {
             return;
         }
+        self.tabs[index].session.cancel_current();
         if self.tabs.len() <= 1 {
             if self.is_quick_terminal {
                 self.destroy_quick_terminal_window(window, cx);
@@ -567,7 +598,7 @@ impl ConWorkspace {
                 // down. After new_tab we have two tabs (old at 0, new at 1),
                 // so the recursive close takes the normal multi-tab path.
                 self.new_tab(&NewTab, window, cx);
-                self.close_tab_by_index(0, window, cx);
+                self.close_tab_by_index_unchecked(0, window, cx);
                 return;
             }
 
@@ -660,6 +691,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         if let Some(index) = self.tab_index_for_summary_id(tab_id) {
             self.close_tab_by_index(index, window, cx);
         }

@@ -314,11 +314,34 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         if !self.has_active_tab() {
             return;
         }
 
         let tab_idx = self.active_tab;
+        let target = close_confirmation::CloseTarget::Surface {
+            tab: self.tabs[tab_idx].summary_id,
+            surface: surface_id,
+        };
+        if self.request_agent_close_confirmation(target, window, cx) {
+            return;
+        }
+        self.close_surface_in_tab_unchecked(tab_idx, surface_id, window, cx);
+    }
+
+    pub(super) fn close_surface_in_tab_unchecked(
+        &mut self,
+        tab_idx: usize,
+        surface_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if tab_idx >= self.tabs.len() {
+            return;
+        }
         if self
             .surface_rename
             .as_ref()
@@ -338,10 +361,13 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
         self.notify_tab_terminal_views(tab_idx, cx);
-        self.sync_active_tab_native_view_visibility(cx);
-        if let Some(replacement) = self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned() {
-            replacement.ensure_surface(window, cx);
-            replacement.focus(window, cx);
+        if tab_idx == self.active_tab {
+            self.sync_active_tab_native_view_visibility(cx);
+            if let Some(replacement) = self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
+            {
+                replacement.ensure_surface(window, cx);
+                replacement.focus(window, cx);
+            }
         }
         self.sync_active_terminal_focus_states(cx);
         self.sync_sidebar(cx);
@@ -380,6 +406,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         if !self.has_active_tab() {
             return;
         }
@@ -587,6 +616,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         if !self.has_active_tab() {
             return;
         }
@@ -605,6 +637,19 @@ impl ConWorkspace {
         } else {
             self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
         };
+
+        if pane_count == 1
+            && self.tabs[self.active_tab]
+                .pane_tree
+                .editor_view_for_pane(valid_pane_id)
+                .is_none()
+        {
+            let target =
+                close_confirmation::CloseTarget::Tabs(vec![self.tabs[self.active_tab].summary_id]);
+            if self.request_agent_close_confirmation(target, window, cx) {
+                return;
+            }
+        }
 
         if pane_count > 1 {
             let _ = self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx);
@@ -834,6 +879,18 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some(tab) = self.tabs.get(tab_idx)
+            && tab.pane_tree.pane_count() > 1
+            && tab.pane_tree.editor_view_for_pane(pane_id).is_none()
+        {
+            let target = close_confirmation::CloseTarget::Pane {
+                tab: tab.summary_id,
+                pane: pane_id,
+            };
+            if self.request_agent_close_confirmation(target, window, cx) {
+                return true;
+            }
+        }
         self.remove_pane_in_tab(tab_idx, pane_id, window, cx, true)
     }
 

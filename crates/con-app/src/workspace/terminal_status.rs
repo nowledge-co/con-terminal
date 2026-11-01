@@ -307,6 +307,28 @@ pub(super) struct TerminalPresentation {
 }
 
 impl ConWorkspace {
+    /// A close warning is presentation, not authority to control a process.
+    /// Never treat a saved native conversation reference as a running agent.
+    pub(super) fn agent_for_close_warning(
+        &self,
+        terminal: &TerminalPane,
+        cx: &App,
+    ) -> Option<&'static str> {
+        if !terminal.is_alive(cx) {
+            return None;
+        }
+        let surface = self
+            .terminal_presentation
+            .surfaces
+            .get(&terminal.entity_id().as_u64())?;
+        if surface.query != Query::for_terminal(terminal, cx)
+            || !surface.instance.ptr_eq(&terminal.surface_instance(cx)?)
+        {
+            return None;
+        }
+        surface.status.identity().map(|identity| identity.agent)
+    }
+
     pub(super) fn explicit_program_observation(
         &self,
         terminal: &TerminalPane,

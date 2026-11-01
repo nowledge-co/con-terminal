@@ -108,6 +108,25 @@ impl ConWorkspace {
             command,
             response_tx,
         } = request;
+        if self.close_confirmation.is_some()
+            && matches!(
+                &command,
+                ControlCommand::TabsNew
+                    | ControlCommand::PanesCreate { .. }
+                    | ControlCommand::SurfacesCreate { .. }
+                    | ControlCommand::SurfacesSplit { .. }
+                    | ControlCommand::SurfacesFocus { .. }
+                    | ControlCommand::SurfacesRename { .. }
+            )
+        {
+            Self::send_control_result(
+                response_tx,
+                Err(ControlError::invalid_params(
+                    "Resolve the open close confirmation in con before changing tabs or terminals.",
+                )),
+            );
+            return;
+        }
 
         // Drain explicit backend reports on the UI event path, never during
         // rendering. Status reads must not lag a queued report behind input.

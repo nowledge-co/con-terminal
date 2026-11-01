@@ -14,6 +14,15 @@ impl ConWorkspace {
         for request in pending {
             match request {
                 PendingWindowControlRequest::TabsNew { response_tx } => {
+                    if self.close_confirmation.is_some() {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "Resolve the open close confirmation in con before opening a tab.",
+                            )),
+                        );
+                        continue;
+                    }
                     self.new_tab(&NewTab, window, cx);
                     let result = Ok(json!({
                         "active_tab_index": self.active_tab + 1,
@@ -43,6 +52,19 @@ impl ConWorkspace {
                                 tab_idx + 1,
                                 self.tabs.len()
                             ))),
+                        );
+                        continue;
+                    }
+                    let target =
+                        close_confirmation::CloseTarget::Tabs(vec![self.tabs[tab_idx].summary_id]);
+                    if self.close_confirmation.is_some()
+                        || self.close_requires_agent_confirmation(&target, cx)
+                    {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "Closing this tab requires confirmation in con; no tab was closed.",
+                            )),
                         );
                         continue;
                     }
@@ -348,6 +370,21 @@ impl ConWorkspace {
                     let closing_was_focused = current
                         .as_ref()
                         .is_some_and(|surface| surface.is_active && surface.is_focused_pane);
+                    let close_target = close_confirmation::CloseTarget::Surface {
+                        tab: self.tabs[tab_idx].summary_id,
+                        surface: resolved.surface_id,
+                    };
+                    if self.close_confirmation.is_some()
+                        || self.close_requires_agent_confirmation(&close_target, cx)
+                    {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "Closing this terminal requires confirmation in con; no terminal was closed.",
+                            )),
+                        );
+                        continue;
+                    }
                     let Some(close_outcome) = self.tabs[tab_idx]
                         .pane_tree
                         .close_surface(resolved.surface_id, close_empty_owned_pane)
