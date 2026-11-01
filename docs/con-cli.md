@@ -30,6 +30,18 @@ con-cli --json tree
 `con-cli` asks the running app for state instead of guessing from outside the
 terminal.
 
+Closing a tab, pane or terminal in con asks for confirmation when an agent is
+still open, including idle agent TUIs and active built-in requests. Bulk tab
+closes use one confirmation for the whole selection. **Keep Open**, Escape or
+Enter at the initial dialog focus leaves the sessions running.
+
+`tabs close` and `surfaces close` return an error without closing anything when
+the target has an open agent, or a close confirmation is already open. Use con's
+visible close action to confirm; a saved native conversation reference alone
+does not count as a running agent.
+While confirmation is open, structural tab/terminal changes and focus changes
+also return an error; state queries and native session reports remain available.
+
 ## Agent skill
 
 The repository includes a vendor-neutral [con skill](https://github.com/nowledge-co/con-terminal/tree/main/skills/con-terminal)

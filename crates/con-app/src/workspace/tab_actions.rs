@@ -7,6 +7,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         if index >= self.tabs.len() {
             return;
         }
@@ -455,6 +458,9 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_confirmation.is_some() {
+            return;
+        }
         let entity_id = entity.entity_id();
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if let Some(pane_id) = pane_tree.pane_id_for_entity(entity_id) {
@@ -922,12 +928,13 @@ impl ConWorkspace {
         if index >= self.tabs.len() || self.tabs.len() <= 1 {
             return;
         }
-        // Close from the end to avoid index shifting.
-        for i in (0..self.tabs.len()).rev() {
-            if i != index {
-                self.close_tab_by_index(i, window, cx);
-            }
-        }
+        let ids = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tab)| (i != index).then_some(tab.summary_id))
+            .collect();
+        self.request_close_tabs(ids, window, cx);
         cx.notify();
     }
 
@@ -952,11 +959,11 @@ impl ConWorkspace {
         if index >= self.tabs.len().saturating_sub(1) {
             return;
         }
-        // Close from the end to avoid index shifting.
-        let last = self.tabs.len() - 1;
-        for i in (index + 1..=last).rev() {
-            self.close_tab_by_index(i, window, cx);
-        }
+        let ids = self.tabs[index + 1..]
+            .iter()
+            .map(|tab| tab.summary_id)
+            .collect();
+        self.request_close_tabs(ids, window, cx);
         cx.notify();
     }
 

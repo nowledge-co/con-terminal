@@ -68,6 +68,19 @@ The goal is not to imitate any one reference. The goal is to produce a design la
 
 con is light-first (Flexoki Light default) but must excel in both themes.
 
+### Closing agent sessions
+
+- Ask before closing a tab, pane or terminal that still contains a live agent,
+  including an idle native TUI or an active built-in request. A saved conversation
+  reference is not proof that an agent is running.
+- Keep the confirmation borderless and shadowless. Identify each affected agent
+  with its existing icon and meaningful context; do not expose internal pane or
+  surface numbers. Hold bulk closes together until the user confirms.
+- Make Keep Open the initial keyboard choice. Escape cancels, focus stays inside
+  the dialog, and cancellation restores the exact previous input target.
+- Preserve terminal geometry and native composition while confirming. Approval
+  uses the existing teardown path, resolved against stable target identities.
+
 ### Settings Layout
 
 - Navigation has its own quiet foreground-derived fill and a single 1px semantic

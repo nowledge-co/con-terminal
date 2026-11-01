@@ -162,7 +162,15 @@ con-cli --json surfaces focus --tab "$TAB" --surface-id "$WORKER_SURFACE"
 Leave it open when the user needs it. Closing a surface terminates its session;
 verify the worker has finished or that stopping it is intended. Reconcile the
 current tree against the task ledger before closing, especially after tab
-changes. For a non-last surface:
+changes.
+
+If a worker's agent TUI is still open, close requests return a confirmation
+error and retain the surface. Leave it available for user review and use con's
+visible close action to confirm termination. Do not send raw exit keystrokes
+just to bypass that confirmation. A completed turn does not imply the native
+agent process has exited.
+
+For a non-last surface:
 
 ```sh
 con-cli --json surfaces close --tab "$TAB" --surface-id "$WORKER_SURFACE"

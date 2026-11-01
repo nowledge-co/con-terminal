@@ -4,6 +4,28 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.169` (Unreleased)
+
+### Added
+
+**Agent sessions**
+
+- Confirm before closing tabs, panes or stacked terminals with open agents,
+  including idle native sessions. See the affected agents before proceeding;
+  Keep Open, Escape and the initial Enter action preserve them. Bulk tab closes
+  use one confirmation and leave every target intact until approved.
+  _(PR [#544](https://github.com/nowledge-co/con-terminal/pull/544) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**CLI — compatibility**
+
+- `tabs.close` and `surfaces.close` now reject open agent sessions and pending
+  confirmations. Confirm termination through con's visible close action.
+  Structural and focus changes are held while confirmation is open; state
+  queries remain available.
+  _(PR [#544](https://github.com/nowledge-co/con-terminal/pull/544) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.168` - 2026-10-31
 
 ### Fixed

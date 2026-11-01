@@ -489,19 +489,7 @@ impl ConWorkspace {
         else {
             return;
         };
-        // Iterate from the end so indices stay stable as we close
-        // tabs to the right of `keep`. After that, close everything
-        // left of `keep` from the highest index downwards.
-        let mut i = self.tabs.len();
-        while i > keep + 1 {
-            i -= 1;
-            self.close_tab_by_index(i, window, cx);
-        }
-        let mut j = keep;
-        while j > 0 {
-            j -= 1;
-            self.close_tab_by_index(j, window, cx);
-        }
+        self.close_other_tabs(keep, window, cx);
     }
 
     pub(super) fn on_sidebar_set_color(

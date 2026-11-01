@@ -136,6 +136,7 @@ mod agent_panel_events;
 mod caption;
 mod chrome;
 mod chrome_actions;
+mod close_confirmation;
 mod control_agent_tools;
 mod control_program_status;
 mod control_requests;
@@ -236,6 +237,7 @@ pub struct ConWorkspace {
     /// Tracks whether a modal was open on the last render, so we can
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
+    close_confirmation: Option<close_confirmation::AgentCloseConfirmation>,
     ghostty_hidden: bool,
     #[cfg(target_os = "macos")]
     native_tab_handoff_pending: bool,
