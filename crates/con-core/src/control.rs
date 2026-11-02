@@ -1157,6 +1157,10 @@ impl ControlError {
 
 pub struct ControlSocketHandle {
     path: PathBuf,
+    // The listener may outlive the workspace that originally created it.
+    // Its owner must retain both execution and cancellation authority.
+    _runtime: Arc<Runtime>,
+    task: tokio::task::AbortHandle,
 }
 
 impl ControlSocketHandle {
@@ -1167,6 +1171,7 @@ impl ControlSocketHandle {
 
 impl Drop for ControlSocketHandle {
     fn drop(&mut self) {
+        self.task.abort();
         // Unix sockets leave a filesystem entry that we created; on Windows,
         // a Named Pipe disappears once the last server handle drops, so the
         // remove_file is both unnecessary and would silently fail on the
@@ -1205,9 +1210,16 @@ pub fn spawn_control_socket_server(
     runtime: Arc<Runtime>,
     request_tx: Sender<ControlRequestEnvelope>,
 ) -> Result<ControlSocketHandle> {
-    use tokio::net::UnixListener;
+    spawn_control_socket_server_at_path(runtime, request_tx, control_socket_path())
+}
 
-    let path = control_socket_path();
+#[cfg(unix)]
+fn spawn_control_socket_server_at_path(
+    runtime: Arc<Runtime>,
+    request_tx: Sender<ControlRequestEnvelope>,
+    path: PathBuf,
+) -> Result<ControlSocketHandle> {
+    use tokio::net::UnixListener;
     prepare_socket_path(&path)?;
 
     let listener = {
@@ -1217,13 +1229,17 @@ pub fn spawn_control_socket_server(
     };
     set_socket_permissions(&path)?;
 
-    runtime.spawn(async move {
+    let task = runtime.spawn(async move {
         if let Err(err) = unix_accept_loop(listener, request_tx).await {
             log::error!("[control] socket accept loop failed: {err}");
         }
     });
 
-    Ok(ControlSocketHandle { path })
+    Ok(ControlSocketHandle {
+        path,
+        task: task.abort_handle(),
+        _runtime: runtime,
+    })
 }
 
 #[cfg(windows)]
@@ -1252,14 +1268,18 @@ pub fn spawn_control_socket_server(
     };
 
     let pipe_name_for_loop = pipe_name.clone();
-    runtime.spawn(async move {
+    let task = runtime.spawn(async move {
         if let Err(err) = windows_accept_loop(initial_server, pipe_name_for_loop, request_tx).await
         {
             log::error!("[control] pipe accept loop failed: {err}");
         }
     });
 
-    Ok(ControlSocketHandle { path })
+    Ok(ControlSocketHandle {
+        path,
+        task: task.abort_handle(),
+        _runtime: runtime,
+    })
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -1929,6 +1949,61 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("create scratch dir");
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transferred_socket_owner_keeps_listener_running_after_original_runtime_owner_drops() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+        use std::time::Duration;
+        // Keep the actual Unix socket below macOS's sun_path limit.
+        let dir = PathBuf::from("/tmp").join(format!(
+            "con-rt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("con.sock");
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let weak_runtime = Arc::downgrade(&runtime);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let owner = spawn_control_socket_server_at_path(runtime.clone(), tx, path.clone()).unwrap();
+        drop(runtime);
+        let transferred_owner = owner;
+        let worker = std::thread::spawn(move || {
+            let request = rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("listener remains live");
+            assert!(matches!(request.command, ControlCommand::SystemIdentify));
+            request
+                .response_tx
+                .send(Ok(serde_json::json!({"owner": "destination"})))
+                .unwrap();
+        });
+        let mut client = UnixStream::connect(&path).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        writeln!(client, "{}", serde_json::json!({"jsonrpc":"2.0", "id":"handoff", "method":"system.identify", "params":{}})).unwrap();
+        let mut line = String::new();
+        BufReader::new(client).read_line(&mut line).unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["result"]["owner"], "destination");
+        worker.join().unwrap();
+        drop(transferred_owner);
+        assert!(!path.exists());
+        assert!(weak_runtime.upgrade().is_none());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Regression: a pre-existing parent directory must be left untouched.
