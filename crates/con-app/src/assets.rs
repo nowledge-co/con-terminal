@@ -471,6 +471,11 @@ mod tests {
                     "{path} is too faint at {size}px"
                 );
                 assert_eq!(icon.get_pixel(0, 0)[3], 0);
+                // Input mode icons fill their canvas edge to edge; only the
+                // rounded corners stay transparent.
+                if path.starts_with("input-mode-") {
+                    continue;
+                }
                 assert!(
                     icon.pixels().filter(|p| p[3] == 0).count() > (size * size / 10) as usize,
                     "{path} loses its transparent silhouette at {size}px"

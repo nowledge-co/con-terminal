@@ -1235,14 +1235,8 @@ impl Render for InputBar {
         let input_cursor = input_state.read(cx).cursor();
         let mono_scale = mono_density_scale(theme);
         let control_size = mono_space_px(theme, crate::input_chrome::CONTROL_SIZE);
-        let mode_icon_size = mono_space_px(
-            theme,
-            if cfg!(target_os = "macos") {
-                18.0
-            } else {
-                20.0
-            },
-        );
+        // Mode icons fill the whole toggle button.
+        let mode_icon_size = control_size;
         let compact_icon_size = mono_space_px(theme, 14.0);
 
         // ── Mode prefix — icon-only, minimal ──
