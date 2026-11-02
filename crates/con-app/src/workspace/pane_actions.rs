@@ -773,7 +773,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.has_active_tab() {
+        if self.close_confirmation.is_some() || !self.has_active_tab() {
             return;
         }
         let tab_idx = self.active_tab;
@@ -782,79 +782,12 @@ impl ConWorkspace {
             return;
         }
 
-        // Collect all surfaces for this pane before closing it.
-        let surfaces = self.tabs[tab_idx].pane_tree.surface_infos(Some(pane_id));
-        if surfaces.is_empty() {
-            return;
-        }
-
-        // Separate active surface (first) from the rest.
-        let active_surface = surfaces
-            .iter()
-            .find(|s| s.is_active)
-            .or_else(|| surfaces.first())
-            .cloned();
-        let Some(active_surface) = active_surface else {
+        let Some(tab) = self.take_pane_tab(tab_idx, pane_id) else {
             return;
         };
-        let other_surfaces: Vec<_> = surfaces
-            .iter()
-            .filter(|s| s.surface_id != active_surface.surface_id)
-            .cloned()
-            .collect();
-
-        // Remove the pane from the split tree.
-        if !self.remove_pane_in_tab(tab_idx, pane_id, window, cx, false) {
-            return;
-        }
-
-        // Build a new tab with the active terminal as root.
-        let tab_number = self.tabs.len() + 1;
-        let summary_id = self.next_tab_summary_id;
-        self.next_tab_summary_id += 1;
-        let active_options = SurfaceCreateOptions {
-            title: active_surface.title.clone(),
-            owner: active_surface.owner.clone(),
-            close_pane_when_last: active_surface.close_pane_when_last,
-        };
-        let mut new_pane_tree =
-            PaneTree::new_with_surface_options(active_surface.terminal.clone(), active_options);
-
-        // Re-add any additional surfaces into the new pane tree.
-        for surface in &other_surfaces {
-            let opts = SurfaceCreateOptions {
-                title: surface.title.clone(),
-                owner: surface.owner.clone(),
-                close_pane_when_last: surface.close_pane_when_last,
-            };
-            let root_pane_id = new_pane_tree.focused_pane_id();
-            let _ =
-                new_pane_tree.create_surface_in_pane(root_pane_id, surface.terminal.clone(), opts);
-        }
-
         let new_index = requested_slot.min(self.tabs.len());
         self.active_tab = rebase_active_tab_for_insert(self.active_tab, new_index);
-        self.tabs.insert(
-            new_index,
-            Tab {
-                pane_tree: new_pane_tree,
-                title: format!("Terminal {}", tab_number),
-                user_label: None,
-                ai_label: None,
-                ai_icon: None,
-                agent_cli: None,
-                color: None,
-                summary_id,
-                summary_epoch: 0,
-                needs_attention: false,
-                session: AgentSession::new(),
-                agent_routing: Self::default_agent_routing(self.harness.config()),
-                panel_state: PanelState::new(),
-                runtime_trackers: RefCell::new(HashMap::new()),
-                runtime_cache: RefCell::new(HashMap::new()),
-                shell_history: HashMap::new(),
-            },
-        );
+        self.tabs.insert(new_index, tab);
 
         // These are existing native surfaces, not fresh terminals. Their old
         // split geometry must not qualify for the incoming tab's layout cache.

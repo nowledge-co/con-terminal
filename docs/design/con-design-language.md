@@ -327,6 +327,32 @@ It should feel like the best place to do terminal-native work in the AI era.
   Refine its render-root surface to remove the default exterior ring/shadow, keep cursor
   anchoring and viewport clamping, and restore focus after selection or Escape.
 
+### Moving Live Tabs and Panes
+
+- Reuse existing tab capsules, insertion slots and half-pane split fills to
+  reveal the destination before release. Keep Flexoki Light/Dark treatment,
+  adjacent rounding, borderless and shadowless fills, and Phosphor icons;
+  do not add permanent drag handles or opaque terminal coverings.
+- Show the compact **New window** target only during an active drag. A tab
+  can join another tab's pane layout or move to a new window; a pane can become
+  a tab or move to a new window. Existing windows do not accept each other's
+  window-local drag payloads.
+- Drag existing tab identities, pane titles or surface labels. A surface-label
+  drag moves its entire pane stack, including inactive surfaces and unsaved
+  editors. Preserve surface order and active selection; whole-tab moves also
+  preserve internal splits and ratios. Keep click-to-focus/select, rename and
+  close actions distinct from dragging.
+- Resolve the destination from the release position as well as the live
+  preview, so a fast gesture works even before another drag-move event or the
+  temporary tab strip paints. Escape cancels without changing the layout;
+  dropping onto the source pane is a no-op.
+- Move the existing live sessions without closing or restarting them. Open the
+  destination window before relinquishing the source, and preserve terminal
+  and editor state. Retain native frame/clip coverage through ownership changes;
+  follow `skills/native-surface-coverage/SKILL.md` rather than masking artifacts
+  with extra chrome. Transfer eligibility and conversation boundaries are
+  documented in [Moving terminal sessions by dragging](../impl/session-drag-transfers.md).
+
 ### 1. Terminal First
 
 The terminal is the main stage.

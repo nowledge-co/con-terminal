@@ -242,6 +242,7 @@ struct RenameLifecycleStateSnapshot {
 #[derive(Clone)]
 pub struct DraggedTab {
     pub session_id: u64,
+    pub source_window: std::rc::Rc<std::cell::Cell<Option<gpui::WindowId>>>,
     pub label: SharedString,
     pub icon: &'static str,
     pub origin: DraggedTabOrigin,
@@ -249,6 +250,21 @@ pub struct DraggedTab {
     /// Set when origin is `Pane` — the pane to promote to a new tab on drop.
     pub pane_id: Option<usize>,
 }
+
+impl DraggedTab {
+    pub(crate) fn begin(&self, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        self.source_window
+            .set(Some(window.window_handle().window_id()));
+        cx.set_global(ActiveSessionDrag(Some(self.clone())));
+        cx.new(|_| self.clone())
+    }
+}
+
+/// The original payload remains available even for a fast drag whose first
+/// mouse-move both crosses the drag threshold and reaches its destination.
+#[derive(Default)]
+pub(crate) struct ActiveSessionDrag(pub Option<DraggedTab>);
+impl gpui::Global for ActiveSessionDrag {}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DraggedTabPreviewConstraint {
@@ -883,6 +899,23 @@ impl SessionSidebar {
         *self.drag_preview.borrow_mut() = None;
     }
 
+    fn release_in_tab_column(&self, position: Point<Pixels>) -> bool {
+        self.tab_bounds.borrow().first().is_some_and(|bounds| {
+            position.y >= bounds.top()
+                && position.x >= bounds.left() - px(6.0)
+                && position.x < bounds.right() + px(6.0)
+        })
+    }
+
+    pub(crate) fn drag_hover_tab(&self, position: Point<Pixels>) -> Option<(u64, Bounds<Pixels>)> {
+        self.tab_bounds
+            .borrow()
+            .iter()
+            .zip(&self.sessions)
+            .find(|(bounds, _)| bounds.contains(&position))
+            .map(|(bounds, session)| (session.id, *bounds))
+    }
+
     #[allow(dead_code)]
     pub fn drag_preview_overlay(
         &self,
@@ -929,7 +962,7 @@ impl SessionSidebar {
                 .text_size(px(12.0))
                 .text_color(theme.foreground)
                 .child(crate::assets::tab_identity_icon(
-                    sidebar_tab_icon(preview.icon),
+                    crate::assets::tab_identity_asset(preview.icon),
                     ui_icon_px(theme, 18.0),
                     theme.foreground,
                 ))
@@ -1207,6 +1240,9 @@ impl SessionSidebar {
             // user has to land the cursor precisely on a 32×32 pill
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.source_window.get() != Some(window.window_handle().window_id()) {
+                    return;
+                }
                 if !show_session_tiles {
                     return;
                 }
@@ -1220,7 +1256,10 @@ impl SessionSidebar {
                 // was actually inside the sidebar (drop_slot is Some). If the
                 // user dropped on the pane content area, the event bubbles here
                 // but we must not steal it.
-                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                if dragged.origin == DraggedTabOrigin::Pane
+                    && this.drop_slot.is_none()
+                    && !this.release_in_tab_column(window.mouse_position())
+                {
                     this.clear_drag_preview();
                     return;
                 }
@@ -1360,6 +1399,7 @@ impl SessionSidebar {
                 i + 1 == session_count && self.drop_slot == Some(session_count) && drag_in_sidebar;
             let session_id = session.id;
             let dragged = DraggedTab {
+                source_window: Default::default(),
                 session_id,
                 label: session.name.clone().into(),
                 icon: session.icon,
@@ -1442,10 +1482,8 @@ impl SessionSidebar {
                 .flex_shrink_0()
                 .cursor_pointer()
                 .group(SharedString::from(format!("rail-tab-group-{i}")))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })),
-                )
+                // Activate on click so a tab drag preserves its destination.
+                .on_click(cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })))
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |_this, _, _, cx| {
@@ -1467,7 +1505,7 @@ impl SessionSidebar {
                 // rail container so they cover gaps between pills
                 // and the slot above the first / below the last row.
                 .on_drag(dragged, |dragged, _offset, _window, cx| {
-                    cx.new(|_| dragged.clone())
+                    dragged.begin(_window, cx)
                 })
                 .on_prepaint(move |bounds, _, _| {
                     tab_bounds.borrow_mut().push(bounds);
@@ -1858,6 +1896,9 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.source_window.get() != Some(window.window_handle().window_id()) {
+                    return;
+                }
                 if !matches!(
                     dragged.origin,
                     DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
@@ -1865,7 +1906,10 @@ impl SessionSidebar {
                     return;
                 }
                 // For pane-origin drags, only handle if cursor was in sidebar.
-                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                if dragged.origin == DraggedTabOrigin::Pane
+                    && this.drop_slot.is_none()
+                    && !this.release_in_tab_column(window.mouse_position())
+                {
                     this.clear_drag_preview();
                     return;
                 }
@@ -2074,6 +2118,7 @@ impl SessionSidebar {
             .unwrap_or(hover_bg);
 
         let dragged = DraggedTab {
+            source_window: Default::default(),
             session_id,
             label: session.name.clone().into(),
             icon: session.icon,
@@ -2171,10 +2216,9 @@ impl SessionSidebar {
                 let sidebar = cx.entity().downgrade();
                 move |window, cx| tab_details_tooltip(sidebar.clone(), session_id, window, cx)
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })),
-            )
+            // Match horizontal tabs: a drag keeps the existing destination
+            // visible; only a completed click activates the source tab.
+            .on_click(cx.listener(move |_this, _, _, cx| cx.emit(SidebarSelect { index: i })))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
@@ -2183,7 +2227,7 @@ impl SessionSidebar {
                 this.begin_rename(i, window, cx);
             }))
             .on_drag(dragged, |dragged, _offset, _window, cx| {
-                cx.new(|_| dragged.clone())
+                dragged.begin(_window, cx)
             })
             .on_prepaint(move |bounds, _, _| {
                 tab_bounds.borrow_mut().push(bounds);
@@ -2216,7 +2260,10 @@ impl SessionSidebar {
                     }
                 },
             ))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.source_window.get() != Some(window.window_handle().window_id()) {
+                    return;
+                }
                 if !matches!(
                     dragged.origin,
                     DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
@@ -2224,11 +2271,22 @@ impl SessionSidebar {
                     return;
                 }
                 // For pane-origin drags, only handle if cursor was in sidebar.
-                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                if dragged.origin == DraggedTabOrigin::Pane
+                    && this.drop_slot.is_none()
+                    && !this.release_in_tab_column(window.mouse_position())
+                {
                     this.clear_drag_preview();
                     return;
                 }
-                let to = this.drop_slot.unwrap_or(i);
+                let to = this.drop_slot.unwrap_or_else(|| {
+                    this.tab_bounds.borrow().get(i).map_or(i, |bounds| {
+                        if window.mouse_position().y < bounds.center().y {
+                            i
+                        } else {
+                            i + 1
+                        }
+                    })
+                });
                 this.drop_slot = None;
                 this.clear_drag_preview();
                 match dragged.origin {
@@ -2412,10 +2470,6 @@ fn sidebar_selection_fill(theme: &gpui_component::Theme) -> Hsla {
         0.065
     };
     theme.foreground.opacity(opacity)
-}
-
-fn sidebar_tab_icon(icon: &'static str) -> &'static str {
-    crate::assets::tab_identity_asset(icon)
 }
 
 /// An open component tooltip follows live tab facts without subscribing the

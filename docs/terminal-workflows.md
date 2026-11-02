@@ -55,6 +55,18 @@ you want a separate space, usually for another project or display.
 Vertical tabs are useful once tab titles matter more than tab position. Rename a
 tab when its purpose is stable.
 
+Drag a tab into another tab's terminal area to turn it into panes. The preview
+shows the incoming half; a multi-pane tab keeps its own layout and terminal
+stacks. Hover another tab briefly during the drag to reveal its layout first.
+Drag a tab or pane to **New window**, shown during dragging, to give it a separate
+window without restarting its terminals. Escape cancels the move. Window-local
+mouse capture may also allow releasing outside the source window.
+
+A running built-in con request must finish before its tab moves to a new window.
+Native Codex/Claude Code sessions can move while running. Tabs containing con
+conversation history move intact to new windows, but cannot be merged into
+another tab's panes because panes do not have separate con conversation panels.
+
 ## Panes
 
 Panes are visible splits. They are the right tool when you need to see more than
@@ -73,7 +85,8 @@ gives the active pane the full terminal area.
 When a tab has more than one pane, each pane shows a compact title bar. Use it
 to see which pane is focused, close a pane, or fullscreen that pane without
 leaving the split layout. Drag the title bar to rearrange panes, or drag it into
-the tab strip to move that pane into its own tab.
+the tab strip to move that pane into its own tab. When surfaces fill its header,
+drag a surface label to move the complete pane and its stack.
 
 If you want the cleanest possible terminal surface, hide pane title bars from
 Settings -> Appearance. The shortcuts and terminal context menu still expose the

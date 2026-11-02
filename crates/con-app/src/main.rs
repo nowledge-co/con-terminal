@@ -710,6 +710,41 @@ pub(crate) fn open_con_window(
     open_con_window_with_startup(config, session, exit_on_error, None, cx);
 }
 
+/// Open the destination before relinquishing any source-owned terminal.
+/// Failure therefore leaves the original layout and processes intact.
+pub(crate) fn open_con_transfer_window(
+    config: con_core::Config,
+    cx: &mut App,
+) -> anyhow::Result<(WindowHandle<gpui_component::Root>, Entity<ConWorkspace>)> {
+    let session = fresh_window_session_with_history();
+    let mut workspace = None;
+    let options = default_window_options(cx);
+    let handle = cx.open_window(options, |window, cx| {
+        let view = cx.new(|cx| ConWorkspace::from_session(config.clone(), session, window, cx));
+        workspace = Some(view.clone());
+        #[cfg(target_os = "windows")]
+        let background = if apply_windows_backdrop(window, config.appearance.terminal_blur) {
+            cx.theme().transparent
+        } else {
+            cx.theme().background
+        };
+        #[cfg(target_os = "linux")]
+        set_linux_window_blur(window, config.appearance.terminal_blur);
+        #[cfg(target_os = "macos")]
+        let background = cx.theme().transparent;
+        #[cfg(target_os = "linux")]
+        let background = if matches!(window.window_decorations(), Decorations::Client { .. }) {
+            cx.theme().transparent
+        } else {
+            cx.theme().background
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let background = cx.theme().background;
+        cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(background))
+    })?;
+    Ok((handle, workspace.expect("window constructor completed")))
+}
+
 fn open_con_window_with_startup(
     config: con_core::Config,
     session: Session,

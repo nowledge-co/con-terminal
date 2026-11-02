@@ -70,6 +70,21 @@ transaction. Never generalize this exception to estimated split/zoom bounds.
 Verify inactive tabs and stacked surfaces after restart, then activate them;
 verify closing a split and switching tabs still use current geometry.
 
+## Move existing surfaces across windows without rebuilding them
+
+Reparent the retained native host, preserving its Ghostty surface and PTY. Keep
+it hidden until the destination's real canvas commits frame, backing scale and
+clips. Replace the host's GPUI parent, transition-underlay ownership and native
+backing/occlusion observer together; an observer installed on the source
+NSWindow must not remain bound there. Terminal/editor event subscriptions also
+follow the new workspace. Old bootstrap callbacks must stop without mutating an
+entity they no longer own. See [session drag transfers](../../docs/impl/session-drag-transfers.md).
+
+Verify a live PID/TTY, hidden stacked surfaces and active-surface order before
+and after a move. Close the source window, then exercise focus, output and
+native-session reports in the destination. A rendered screenshot alone cannot
+prove ownership or callback continuity.
+
 ## Keep native edits and platform presentation in one transaction
 
 The accepted Con boundary is `NativeGeometryTransaction::hold_for_frame`, opened

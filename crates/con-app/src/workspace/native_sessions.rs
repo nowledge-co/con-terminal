@@ -109,6 +109,33 @@ impl ConWorkspace {
         let origin = origin
             .parse()
             .map_err(|_| ControlError::invalid_params("Invalid terminal context"))?;
+        if self.native_terminal(origin).is_none() {
+            let destination = cx
+                .try_global::<super::session_transfer::TransferredTerminalOwners>()
+                .and_then(|owners| owners.terminals.get(&origin))
+                .cloned();
+            if let Some(destination) = destination
+                && destination.entity_id() != cx.entity_id()
+            {
+                return destination
+                    .update(cx, |workspace, cx| {
+                        workspace.apply_native_session_report(
+                            &origin.to_string(),
+                            sequence,
+                            reference,
+                            error,
+                            expected_session_id,
+                            started,
+                            cx,
+                        )
+                    })
+                    .unwrap_or_else(|_| {
+                        Err(ControlError::invalid_params(
+                            "The originating terminal no longer exists",
+                        ))
+                    });
+            }
+        }
         let (_, terminal) = self.native_terminal(origin).ok_or_else(|| {
             ControlError::invalid_params("The originating terminal no longer exists")
         })?;

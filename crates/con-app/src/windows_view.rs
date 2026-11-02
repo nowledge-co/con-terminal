@@ -499,6 +499,24 @@ impl GhosttyView {
         // at window-creation time; there's nothing per-pane to refresh.
     }
 
+    /// Keep the VT/PTY and frame data; rebuild only window-local interaction
+    /// subscriptions and layout on the destination's next render.
+    pub(crate) fn move_to_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_find = None;
+        self.cursor_subscriptions.clear();
+        self.cursor_blink_task = None;
+        self.render_hold_task = None;
+        self.pane_bounds = None;
+        self.ime_marked_text = None;
+        self.ime_selected_range = None;
+        self.mouse_down_link = None;
+        self.hovered_link = None;
+        self.last_mouse_position = None;
+        self.scrollbar_drag = None;
+        self.stop_selection_autoscroll();
+        cx.notify();
+    }
+
     pub fn drain_surface_state(
         &mut self,
         _sync_native_scroll: bool,
