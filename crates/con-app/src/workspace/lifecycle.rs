@@ -74,7 +74,6 @@ mod tab_strip_restore_tests {
 }
 
 impl ConWorkspace {
-    #[cfg(target_os = "macos")]
     pub fn from_session(
         config: Config,
         session: Session,
