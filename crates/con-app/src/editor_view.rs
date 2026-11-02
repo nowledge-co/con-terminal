@@ -513,6 +513,7 @@ enum FileOpenMode {
 }
 
 pub struct EditorView {
+    pub(crate) workspace_subscriptions: Vec<gpui::Subscription>,
     tabs: Vec<EditorTab>,
     active_tab: usize,
     open_generation: u64,
@@ -582,6 +583,7 @@ impl EditorView {
             }
         });
         Self {
+            workspace_subscriptions: Vec::new(),
             tabs: Vec::new(),
             active_tab: 0,
             open_generation: 0,

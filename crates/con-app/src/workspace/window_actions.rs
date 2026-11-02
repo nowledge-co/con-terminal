@@ -731,6 +731,7 @@ impl ConWorkspace {
             return;
         }
         self.window_close_prepared = true;
+        self.handoff_transfer_control_socket(cx);
 
         self.cancel_all_sessions();
         self.flush_session_save(cx);

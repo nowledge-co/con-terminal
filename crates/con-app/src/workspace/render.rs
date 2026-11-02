@@ -244,6 +244,35 @@ impl ConWorkspace {
 
 impl Render for ConWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if cx.has_active_drag() && self.session_drag.is_none() {
+            self.session_drag = cx
+                .try_global::<crate::sidebar::ActiveSessionDrag>()
+                .and_then(|drag| drag.0.as_ref())
+                .filter(|drag| drag.source_window.get() == Some(window.window_handle().window_id()))
+                .cloned();
+        }
+        if let Some(dragged) = self.session_drag.as_ref()
+            && dragged.origin == DraggedTabOrigin::Pane
+            && self.pane_title_drag.is_none()
+        {
+            self.pane_title_drag = Some(PaneTitleDragState {
+                title: dragged.label.clone(),
+                current_pos: window.mouse_position(),
+                active: true,
+                target: None,
+            });
+        }
+        if !cx.has_active_drag()
+            && (self.session_drag.is_some()
+                || cx
+                    .try_global::<crate::sidebar::ActiveSessionDrag>()
+                    .and_then(|d| d.0.as_ref())
+                    .is_some_and(|d| {
+                        d.source_window.get() == Some(window.window_handle().window_id())
+                    }))
+        {
+            self.clear_session_drag(cx);
+        }
         self.flush_pending_create_pane_requests(window, cx);
 
         if !self.has_active_tab() {
@@ -771,11 +800,24 @@ impl Render for ConWorkspace {
             })
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if event.drag(cx).origin != DraggedTabOrigin::Pane {
+                    if this.close_confirmation.is_some() {
                         return;
                     }
-                    let Some(pane_id) = event.drag(cx).pane_id else {
+                    let dragged = event.drag(cx);
+                    if dragged.source_window.get() != Some(this.window_handle.window_id()) {
                         return;
+                    }
+                    let is_pane = dragged.origin == DraggedTabOrigin::Pane;
+                    let pane_id = if is_pane {
+                        let Some(pane) = dragged.pane_id else {
+                            return;
+                        };
+                        pane
+                    } else {
+                        if this.tabs[this.active_tab].summary_id == dragged.session_id {
+                            return;
+                        }
+                        usize::MAX
                     };
                     let content_bounds = this
                         .pane_content_bounds
@@ -793,51 +835,49 @@ impl Render for ConWorkspace {
                     let pane_tree = &this.tabs[this.active_tab].pane_tree;
                     let new_target = candidate
                         .filter(|t| {
-                            !pane_tree.is_noop_pane_move(
-                                pane_id,
-                                t.target_pane_id,
-                                t.direction,
-                                t.placement,
-                            )
+                            !is_pane
+                                || !pane_tree.is_noop_pane_move(
+                                    pane_id,
+                                    t.target_pane_id,
+                                    t.direction,
+                                    t.placement,
+                                )
                         })
                         .map(PaneDropTarget::Split);
                     // Store in pane_title_drag so the split preview overlay renders.
-                    this.update_pane_title_drag_state(
-                        pane_id,
-                        event.event.position,
-                        new_target,
-                        cx,
-                    );
+                    this.pane_title_drag = Some(PaneTitleDragState {
+                        title: dragged.label.clone(),
+                        current_pos: event.event.position,
+                        active: true,
+                        target: new_target,
+                    });
+                    cx.notify();
                 },
             ))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _window, cx| {
-                if dragged.origin != DraggedTabOrigin::Pane {
-                    return;
-                }
-                let Some(pane_id) = dragged.pane_id else {
-                    return;
-                };
-                if let Some(drag) = this.pane_title_drag.take()
-                    && let Some(PaneDropTarget::Split(target)) = drag.target
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.source_window.get() != Some(window.window_handle().window_id())
+                    || this.close_confirmation.is_some()
                 {
-                    this.tab_strip_drop_slot = None;
-                    let moved = this.tabs[this.active_tab].pane_tree.move_pane(
-                        pane_id,
-                        target.target_pane_id,
-                        target.direction,
-                        target.placement,
-                    );
-                    #[cfg(target_os = "macos")]
-                    if moved {
-                        this.mark_active_tab_terminal_native_layout_pending(cx);
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = moved;
-                    this.sync_sidebar(cx);
-                    cx.notify();
+                    return;
                 }
-                // No split target — drop on pane content without a target does nothing.
-                // (Tab-strip drops are handled by the tab strip's own on_drop.)
+                // Resolve from the release position as well as live preview:
+                // a fast gesture may have no drag-move event after initiation.
+                if let Some(target) = this.split_target_for_drag(dragged, window.mouse_position()) {
+                    if dragged.origin == DraggedTabOrigin::Pane {
+                        if let Some(pane) = dragged.pane_id {
+                            this.tabs[this.active_tab].pane_tree.move_pane(
+                                pane,
+                                target.target_pane_id,
+                                target.direction,
+                                target.placement,
+                            );
+                            this.finish_session_transfer(window, cx);
+                        }
+                    } else {
+                        this.drop_tab_as_split(dragged, target, window, cx);
+                    }
+                }
+                this.clear_session_drag(cx);
             }));
 
         if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active)
@@ -1390,7 +1430,33 @@ impl Render for ConWorkspace {
             .key_context("ConWorkspace")
             .on_drag_move::<DraggedTab>(cx.listener(
                 |this, event: &gpui::DragMoveEvent<DraggedTab>, win, cx| {
-                    if event.drag(cx).origin != DraggedTabOrigin::HorizontalTabStrip {
+                    if this.close_confirmation.is_some() {
+                        return;
+                    }
+                    if event.drag(cx).source_window.get() != Some(win.window_handle().window_id()) {
+                        return;
+                    }
+                    this.session_drag = Some(event.drag(cx).clone());
+                    let inside_content = this
+                        .pane_content_bounds
+                        .lock()
+                        .ok()
+                        .and_then(|b| *b)
+                        .is_some_and(|b| point_in_bounds(&event.event.position, &b));
+                    if inside_content {
+                        this.session_drag_hover = None;
+                        this.tab_strip_drop_slot = None;
+                        this.tab_drag_target = None;
+                    }
+                    if this.vertical_tabs_enabled()
+                        && let Some((id, bounds)) =
+                            this.sidebar.read(cx).drag_hover_tab(event.event.position)
+                    {
+                        this.hover_drag_tab(id, bounds, win, cx);
+                    }
+                    if inside_content
+                        || event.drag(cx).origin != DraggedTabOrigin::HorizontalTabStrip
+                    {
                         return;
                     }
                     if let Some(preview) = this
@@ -1448,6 +1514,54 @@ impl Render for ConWorkspace {
                     }
                 },
             ))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    let size = window.viewport_size();
+                    if event.position.x >= px(0.0)
+                        && event.position.y >= px(0.0)
+                        && event.position.x < size.width
+                        && event.position.y < size.height
+                    {
+                        return;
+                    }
+                    let dragged = this.session_drag.take().or_else(|| {
+                        cx.try_global::<crate::sidebar::ActiveSessionDrag>()
+                            .and_then(|d| d.0.clone())
+                    });
+                    if cx.has_active_drag()
+                        && let Some(dragged) = dragged
+                    {
+                        cx.stop_active_drag(window);
+                        this.move_drag_to_window(&dragged, window, cx);
+                    }
+                }),
+            )
+            .on_drop(cx.listener(|this, dragged: &DraggedTab, window, cx| {
+                // A fast pane promotion can finish before the temporary strip
+                // has painted. Accept the same titlebar destination directly.
+                if dragged.source_window.get() != Some(window.window_handle().window_id())
+                    || this.close_confirmation.is_some()
+                    || this.vertical_tabs_enabled()
+                    || dragged.origin != DraggedTabOrigin::Pane
+                {
+                    return;
+                }
+                if window.mouse_position().y <= px(this.current_top_bar_height().max(32.0))
+                    && let Some(pane) = dragged.pane_id
+                {
+                    let bounds = this
+                        .pane_title_drag_tab_bounds
+                        .lock()
+                        .ok()
+                        .map(|b| b.clone())
+                        .unwrap_or_default();
+                    let slot =
+                        pane_title_drag_tab_slot(window.mouse_position(), &bounds, this.tabs.len());
+                    this.detach_pane_to_new_tab_at_slot(pane, slot, window, cx);
+                }
+                this.clear_session_drag(cx);
+            }))
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).
             .on_mouse_move({
@@ -1515,6 +1629,8 @@ impl Render for ConWorkspace {
                     if this.finish_active_resize_drag(cx) {
                         return;
                     }
+                    this.session_drag = None;
+                    cx.set_global(crate::sidebar::ActiveSessionDrag(None));
                     // Clear any stale pane_title_drag state (GPUI drag handles
                     // completion via on_drop; this is just a safety cleanup).
                     if this.pane_title_drag.is_some() {
@@ -1601,6 +1717,13 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::focus_files_panel))
             .on_action(cx.listener(Self::search_files_panel))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && cx.has_active_drag() {
+                    cx.stop_active_drag(window);
+                    this.clear_session_drag(cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.editor_has_keyboard_focus(window, cx)
                     && this.handle_editor_text_key_down(event, window, cx)
                 {
@@ -1778,6 +1901,7 @@ impl Render for ConWorkspace {
             .lock()
             .ok()
             .and_then(|guard| guard.clone())
+            .filter(|_| self.pane_title_drag.is_none())
         {
             let preview_size = preview.size;
             let leading_pad = top_bar::top_bar_leading_pad(window);
@@ -1791,6 +1915,40 @@ impl Render for ConWorkspace {
                     .left(left)
                     .top(preview.source_top)
                     .cursor_grab(),
+            );
+        }
+
+        if self.session_drag.is_some() && cx.has_active_drag() {
+            root = root.child(
+                div()
+                    .id("session-new-window-drop")
+                    .debug_selector(|| "session-new-window-drop".into())
+                    .absolute()
+                    .right(px(20.0))
+                    .bottom(px(20.0))
+                    .h(px(36.0))
+                    .px(px(12.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .bg(theme.background.blend(theme.foreground.opacity(0.07)))
+                    .text_color(theme.foreground)
+                    .font_family(theme.font_family.clone())
+                    .text_size(px(12.0))
+                    .drag_over::<DraggedTab>(|style, _, _, cx| {
+                        style.bg(cx.theme().primary.opacity(0.16))
+                    })
+                    .child(
+                        svg()
+                            .path("phosphor/arrow-square-out.svg")
+                            .size(px(14.0))
+                            .text_color(theme.foreground),
+                    )
+                    .child("New window")
+                    .on_drop(cx.listener(|this, dragged: &DraggedTab, window, cx| {
+                        this.move_drag_to_window(dragged, window, cx);
+                    })),
             );
         }
 
@@ -1834,7 +1992,11 @@ impl Render for ConWorkspace {
                     .text_size(px(12.0))
                     .text_color(theme.foreground)
                     .child(crate::assets::tab_identity_icon(
-                        crate::assets::tab_identity_asset("phosphor/terminal.svg"),
+                        crate::assets::tab_identity_asset(
+                            self.session_drag
+                                .as_ref()
+                                .map_or("phosphor/terminal.svg", |d| d.icon),
+                        ),
                         px(14.0),
                         theme.foreground,
                     ))

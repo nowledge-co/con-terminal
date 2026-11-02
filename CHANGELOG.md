@@ -4,6 +4,28 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.170` (Unreleased)
+
+### Added
+
+**Tabs and panes**
+
+- Drag tabs into pane layouts, drag panes back into tabs, and move either to a
+  new window without restarting their terminals. Split/insertion previews and a
+  drag-only New window target show the destination. Whole layouts and hidden
+  stacked terminals move together; native session reports and the control socket
+  keep working after the original window closes.
+  _(PR [#546](https://github.com/nowledge-co/con-terminal/pull/546) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Panes**
+
+- Preserve surface order, the selected terminal and pane history when promoting
+  a pane to a tab. Surface labels can drag their containing pane even when they
+  fill its title bar; fast drops resolve the destination at release.
+  _(PR [#546](https://github.com/nowledge-co/con-terminal/pull/546) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.169` - 2026-11-02
 
 ### Added

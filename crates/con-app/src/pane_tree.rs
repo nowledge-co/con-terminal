@@ -915,6 +915,110 @@ impl PaneTree {
         true
     }
 
+    /// Extract an intact leaf, including editor state and the ordered surface stack.
+    /// The caller must retain the returned tree; no terminal is shut down.
+    pub fn take_pane(&mut self, pane: PaneId) -> Option<Self> {
+        if self.pane_count() <= 1 || !Self::contains_leaf(&self.root, pane) {
+            return None;
+        }
+        let root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
+        let (remaining, leaf) = Self::extract_leaf(root, pane);
+        self.root = remaining.expect("a sibling remains");
+        if self.focused_pane_id == pane {
+            self.focused_pane_id = Self::first_pane_id(&self.root);
+        }
+        self.zoomed_pane_id = None;
+        self.dragging = None;
+        Some(Self {
+            root: leaf.expect("validated pane exists"),
+            focused_pane_id: pane,
+            zoomed_pane_id: None,
+            next_id: self.next_id,
+            next_surface_id: self.next_surface_id,
+            next_split_id: self.next_split_id,
+            dragging: None,
+        })
+    }
+
+    /// Insert a whole layout without recreating terminal/editor entities. IDs are
+    /// local to a tree, so remap all incoming panes/surfaces before joining it.
+    /// Returns the old/new pane IDs for migrating pane-scoped observations.
+    pub fn insert_tree(
+        &mut self,
+        target: PaneId,
+        mut incoming: Self,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) -> Vec<(PaneId, PaneId)> {
+        assert!(Self::contains_leaf(&self.root, target));
+        fn remap(
+            node: &mut PaneNode,
+            pane: &mut usize,
+            surface: &mut usize,
+            focused: PaneId,
+            new_focus: &mut PaneId,
+            ids: &mut Vec<(usize, usize)>,
+        ) {
+            match node {
+                PaneNode::Leaf { id, content } => {
+                    if *id == focused {
+                        *new_focus = *pane;
+                    }
+                    ids.push((*id, *pane));
+                    *id = *pane;
+                    *pane += 1;
+                    if let PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    } = content
+                    {
+                        let previous_active = *active_surface_id;
+                        for entry in surfaces {
+                            let old = entry.id;
+                            entry.id = *surface;
+                            *surface += 1;
+                            if previous_active == old {
+                                *active_surface_id = entry.id;
+                            }
+                        }
+                    }
+                }
+                PaneNode::Split { first, second, .. } => {
+                    remap(first, pane, surface, focused, new_focus, ids);
+                    remap(second, pane, surface, focused, new_focus, ids);
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        let mut focused = self.next_id;
+        remap(
+            &mut incoming.root,
+            &mut self.next_id,
+            &mut self.next_surface_id,
+            incoming.focused_pane_id,
+            &mut focused,
+            &mut ids,
+        );
+        let root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
+        let (root, inserted) = Self::insert_leaf_at_target(
+            root,
+            target,
+            incoming.root,
+            direction,
+            placement,
+            self.next_split_id,
+        );
+        debug_assert!(inserted);
+        self.root = root;
+        self.focused_pane_id = focused;
+        self.zoomed_pane_id = None;
+        self.dragging = None;
+        let mut split = 0;
+        Self::normalize_split_ids(&mut self.root, &mut split);
+        self.next_split_id = split;
+        ids
+    }
+
     pub fn is_noop_pane_move(
         &self,
         source_pane_id: PaneId,
@@ -2568,6 +2672,7 @@ impl PaneTree {
             .child(div().min_w_0().truncate().child(SharedString::from(title)));
         let focus_cb_bar = focus_pane_cb.clone();
         let dragged = DraggedTab {
+            source_window: Default::default(),
             session_id,
             label: drag_label,
             icon: _identity_icon,
@@ -2611,12 +2716,13 @@ impl PaneTree {
             .cursor_grab()
             .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                 focus_cb_bar(pane_id, window, cx);
+                cx.stop_propagation();
             })
             .on_drag(
                 dragged,
                 move |dragged: &DraggedTab, _offset, _window, cx| {
                     cx.stop_propagation();
-                    cx.new(|_| dragged.clone())
+                    dragged.begin(_window, cx)
                 },
             );
 
@@ -2714,10 +2820,12 @@ impl PaneTree {
             })
             .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                 focus_cb_bar(pane_id, window, cx);
+                cx.stop_propagation();
             });
 
         if chrome.can_drag {
             let dragged = DraggedTab {
+                source_window: Default::default(),
                 session_id,
                 label: tabs
                     .get(active_index)
@@ -2733,7 +2841,7 @@ impl PaneTree {
                 dragged,
                 move |dragged: &DraggedTab, _offset, _window, cx| {
                     cx.stop_propagation();
-                    cx.new(|_| dragged.clone())
+                    dragged.begin(_window, cx)
                 },
             );
         }
@@ -3264,6 +3372,29 @@ impl PaneTree {
                             rename_cb(sid, window, cx);
                         }
                     })
+                    // Surface labels may fill the whole pane header. Preserve
+                    // click-to-focus, but let a drag move the containing pane
+                    // and its complete stack without requiring a blank gap.
+                    .when(
+                        !is_editing && (tree_has_splits || surfaces.len() > 1),
+                        |tab| {
+                            tab.cursor_grab().on_drag(
+                                DraggedTab {
+                                    source_window: Default::default(),
+                                    session_id,
+                                    label: title.clone().into(),
+                                    icon: surface.terminal.presentation_icon(),
+                                    origin: DraggedTabOrigin::Pane,
+                                    preview_constraint: None,
+                                    pane_id: Some(pane_id),
+                                },
+                                |dragged, _, window, cx| {
+                                    cx.stop_propagation();
+                                    dragged.begin(window, cx)
+                                },
+                            )
+                        },
+                    )
                     .child(crate::assets::tab_identity_icon(
                         crate::assets::tab_identity_asset(surface.terminal.presentation_icon()),
                         ui_icon_px(theme, 12.0),
@@ -3963,6 +4094,73 @@ mod tests {
                 cx,
             ))
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn a_surface_label_can_drag_its_complete_pane_without_header_whitespace(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        let app = std::sync::Arc::new(
+            con_ghostty::GhosttyApp::new(
+                None, None, None, None, None, None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap(),
+        );
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let terminal = |cx: &mut App| {
+                TerminalPane::new(cx.new(|cx| {
+                    crate::ghostty_view::GhosttyView::new(app.clone(), None, None, 14.0, cx)
+                }))
+            };
+            let mut tree = PaneTree::new(terminal(cx));
+            tree.create_surface_in_pane(
+                0,
+                terminal(cx),
+                SurfaceCreateOptions::plain(Some("worker".into())),
+            );
+            SurfaceRenameTestView {
+                tree,
+                rename_editor: None,
+                hide_pane_titles: false,
+            }
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let label = cx
+            .debug_bounds("surface-tab-1")
+            .expect("stacked surface label");
+        cx.simulate_mouse_down(label.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            label.center() + point(px(0.0), px(50.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.update(|window, cx| {
+            assert!(
+                cx.has_active_drag(),
+                "the label must provide a grip even without a header gap"
+            );
+            let payload = cx
+                .global::<crate::sidebar::ActiveSessionDrag>()
+                .0
+                .as_ref()
+                .unwrap();
+            assert_eq!(payload.origin, DraggedTabOrigin::Pane);
+            assert_eq!(payload.pane_id, Some(0));
+            assert_eq!(payload.session_id, 1);
+            assert_eq!(
+                payload.source_window.get(),
+                Some(window.window_handle().window_id())
+            );
+            cx.stop_active_drag(window);
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.tree.surface_infos(Some(0)).len(), 2)
+        });
     }
 
     #[gpui::test]
@@ -5151,6 +5349,89 @@ mod tests {
     fn short_pane_title_preserves_non_path_titles() {
         assert_eq!(PaneTree::short_pane_title("Terminal"), "Terminal");
         assert_eq!(PaneTree::short_pane_title("nvim main.rs"), "nvim main.rs");
+    }
+
+    #[test]
+    fn extracted_pane_leaves_siblings_and_can_be_inserted_at_a_nested_target() {
+        let mut source = simple_two_pane_tree();
+        source.focused_pane_id = 1;
+        source.zoomed_pane_id = Some(1);
+        let extracted = source.take_pane(1).unwrap();
+        assert_eq!(source.pane_ids(), vec![0]);
+        assert_eq!(source.focused_pane_id(), 0);
+        assert_eq!(source.zoomed_pane_id(), None);
+        assert_eq!(extracted.pane_ids(), vec![1]);
+        assert!(source.take_pane(0).is_none());
+        assert!(source.take_pane(999).is_none());
+        let mut destination = simple_two_pane_tree();
+        let map = destination.insert_tree(
+            1,
+            extracted,
+            SplitDirection::Vertical,
+            SplitPlacement::Before,
+        );
+        assert_eq!(destination.pane_ids(), vec![0, 2, 1]);
+        assert_eq!(map, vec![(1, 2)]);
+        assert_eq!(destination.focused_pane_id(), 2);
+        let mut splits = Vec::new();
+        collect_split_ids(&destination.root, &mut splits);
+        assert_unique(&splits);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn moving_a_stack_preserves_entities_metadata_order_and_active_surface(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = std::sync::Arc::new(
+            con_ghostty::GhosttyApp::new(
+                None, None, None, None, None, None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap(),
+        );
+        cx.update(|cx| {
+            let terminal = |cx: &mut gpui::App| {
+                TerminalPane::new(cx.new(|cx| {
+                    crate::ghostty_view::GhosttyView::new(app.clone(), None, None, 14.0, cx)
+                }))
+            };
+            let first = terminal(cx);
+            let second = terminal(cx);
+            let third = terminal(cx);
+            let mut source = PaneTree::new(first.clone());
+            source.create_surface_in_pane(
+                0,
+                second.clone(),
+                SurfaceCreateOptions {
+                    title: Some("worker".into()),
+                    owner: Some("orchestrator".into()),
+                    close_pane_when_last: true,
+                },
+            );
+            // The active ID collides with the first incoming remapped ID; do
+            // not accidentally activate a later entry as remapping proceeds.
+            source.focus_surface(0);
+            source.split(SplitDirection::Horizontal, third);
+            let stack = source.take_pane(0).unwrap();
+            let mut destination = PaneTree::new(terminal(cx));
+            destination.create_surface_in_pane(0, terminal(cx), SurfaceCreateOptions::plain(None));
+            destination.insert_tree(0, stack, SplitDirection::Horizontal, SplitPlacement::After);
+            let infos = destination.surface_infos(Some(destination.focused_pane_id()));
+            assert_eq!(infos.len(), 2);
+            assert_eq!(infos[0].terminal.entity_id(), first.entity_id());
+            assert_eq!(infos[1].terminal.entity_id(), second.entity_id());
+            assert!(infos[0].is_active);
+            assert!(!infos[1].is_active);
+            assert_eq!(infos[1].title.as_deref(), Some("worker"));
+            assert_eq!(infos[1].owner.as_deref(), Some("orchestrator"));
+            assert!(infos[1].close_pane_when_last);
+            let ids = destination
+                .surface_infos(None)
+                .iter()
+                .map(|s| s.surface_id)
+                .collect::<Vec<_>>();
+            assert_unique(&ids);
+        });
     }
 
     #[::core::prelude::v1::test]

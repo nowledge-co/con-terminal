@@ -183,7 +183,7 @@ pub fn prepare_automatic() -> Result<()> {
     Ok(())
 }
 
-fn write_runtime(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
+fn write_runtime(path: &Path, bytes: &[u8], _executable: bool) -> Result<()> {
     ensure!(
         !path.is_symlink(),
         "Refusing to replace a symlinked con integration resource"
@@ -196,7 +196,7 @@ fn write_runtime(path: &Path, bytes: &[u8], executable: bool) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
             path,
-            std::fs::Permissions::from_mode(if executable { 0o700 } else { 0o600 }),
+            std::fs::Permissions::from_mode(if _executable { 0o700 } else { 0o600 }),
         )?;
     }
     Ok(())

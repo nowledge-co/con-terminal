@@ -151,6 +151,7 @@ mod native_sessions;
 mod pane_actions;
 mod render;
 mod session_state;
+mod session_transfer;
 mod session_worker;
 mod sidebar_settings;
 mod suggestions;
@@ -330,6 +331,8 @@ pub struct ConWorkspace {
     /// Active pane title drag state — used only for split-preview overlay
     /// rendering while a DraggedTab with origin=Pane is over the pane content.
     pane_title_drag: Option<PaneTitleDragState>,
+    session_drag: Option<DraggedTab>,
+    session_drag_hover: Option<u64>,
     /// Last painted bounds for the pane tree content, used to resolve
     /// pane-title drag drop targets in window coordinates.
     pane_content_bounds: std::sync::Arc<std::sync::Mutex<Option<Bounds<Pixels>>>>,

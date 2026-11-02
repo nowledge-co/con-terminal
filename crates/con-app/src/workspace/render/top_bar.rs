@@ -1998,6 +1998,9 @@ impl ConWorkspace {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.source_window.get() != Some(window.window_handle().window_id()) {
+                    return;
+                }
                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
                 clear_pane_tab_promotion_drag_state(
                     &mut this.pane_title_drag,
@@ -2154,6 +2157,7 @@ impl ConWorkspace {
 
                 let preview_size = tab_like_drag_preview_size();
                 let dragged = DraggedTab {
+                    source_window: Default::default(),
                     session_id,
                     label: display_title.clone().into(),
                     icon: tab_icon,
@@ -2234,7 +2238,10 @@ impl ConWorkspace {
                                 {
                                     *guard = Some(dragged.session_id);
                                 }
+                                log::debug!(target: "con::drag", "tab drag start source={} mouse={:?}", dragged.session_id, window.mouse_position());
                                 let mut d = dragged.clone();
+                                d.source_window
+                                    .set(Some(window.window_handle().window_id()));
                                 if let Some(ref mut c) = d.preview_constraint {
                                     // GPUI's offset is cursor-in-source-element. Store it
                                     // for drop math/debug helpers, but the visible preview
@@ -2268,10 +2275,23 @@ impl ConWorkspace {
                                         });
                                     }
                                 }
+                                cx.set_global(crate::sidebar::ActiveSessionDrag(Some(d.clone())));
                                 cx.new(|_| d)
                             },
                         )
+                        .on_drag_move::<DraggedTab>(cx.listener(
+                            move |this, event: &gpui::DragMoveEvent<DraggedTab>, window, cx| {
+                                if event.bounds.contains(&event.event.position) {
+                                    this.hover_drag_tab(tab_id, event.bounds, window, cx);
+                                }
+                            },
+                        ))
                         .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            if dragged.source_window.get()
+                                != Some(window.window_handle().window_id())
+                            {
+                                return;
+                            }
                             let to = this.tab_strip_drop_slot.unwrap_or(index);
                             if dragged.origin == DraggedTabOrigin::Pane {
                                 clear_pane_tab_promotion_drag_state(
@@ -2727,6 +2747,11 @@ impl ConWorkspace {
                         tab_trailing_drop_target()
                             .id(ElementId::Name(format!("tab-trailing-drop-{index}").into()))
                             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                if dragged.source_window.get()
+                                    != Some(window.window_handle().window_id())
+                                {
+                                    return;
+                                }
                                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
                                 if dragged.origin == DraggedTabOrigin::Pane {
                                     clear_pane_tab_promotion_drag_state(

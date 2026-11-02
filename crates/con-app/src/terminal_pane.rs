@@ -15,6 +15,7 @@ use crate::workspace::ConWorkspace;
 pub struct TerminalPane {
     pub(crate) native_agent: crate::native_agent::SharedNativeAgent,
     entity: Entity<GhosttyView>,
+    subscriptions: std::rc::Rc<std::cell::RefCell<Vec<Subscription>>>,
     presentation_icon: std::rc::Rc<std::cell::Cell<&'static str>>,
     #[cfg(target_os = "macos")]
     pane_surround: crate::workspace::frame::PaneSurround,
@@ -25,6 +26,7 @@ impl TerminalPane {
         Self {
             native_agent: Default::default(),
             entity,
+            subscriptions: Default::default(),
             presentation_icon: std::rc::Rc::new(std::cell::Cell::new(
                 crate::terminal_identity::TERMINAL,
             )),
@@ -399,6 +401,11 @@ impl TerminalPane {
         self.entity.update(cx, |_, cx| cx.notify());
     }
 
+    pub(crate) fn move_to_window(&self, window: &mut Window, cx: &mut App) {
+        self.entity
+            .update(cx, |view, cx| view.move_to_window(window, cx));
+    }
+
     pub fn entity_id(&self) -> EntityId {
         self.entity.entity_id()
     }
@@ -540,72 +547,66 @@ pub fn subscribe_terminal_pane(
     window: &mut Window,
     cx: &mut Context<ConWorkspace>,
 ) {
+    // Ownership follows the terminal, not its original workspace/window.
+    let mut subscriptions = pane.subscriptions.borrow_mut();
+    subscriptions.clear();
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pane.entity.update(cx, |view, cx| {
         // Input-bar broadcast targets are not keyboard focus. Report only
         // the GPUI leaf focus in an active window, including modal blur.
         let focus = view.focus_handle(cx);
-        cx.on_focus(&focus, window, GhosttyView::sync_terminal_focus)
-            .detach();
-        cx.on_blur(&focus, window, GhosttyView::sync_terminal_focus)
-            .detach();
-        cx.observe_window_activation(window, GhosttyView::sync_terminal_focus)
-            .detach();
+        subscriptions.push(cx.on_focus(&focus, window, GhosttyView::sync_terminal_focus));
+        subscriptions.push(cx.on_blur(&focus, window, GhosttyView::sync_terminal_focus));
+        subscriptions.push(cx.observe_window_activation(window, GhosttyView::sync_terminal_focus));
         view.sync_terminal_focus(window, cx);
     });
     #[cfg(target_os = "macos")]
-    cx.subscribe_in(
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_native_session_requested,
-    )
-    .detach();
+    ));
     #[cfg(target_os = "macos")]
-    cx.subscribe_in(
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_file_requested,
-    )
-    .detach();
-    cx.subscribe_in(
+    ));
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_focus_changed,
-    )
-    .detach();
-    cx.subscribe_in(
+    ));
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_process_exited,
-    )
-    .detach();
-    cx.subscribe_in(
+    ));
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_title_changed,
-    )
-    .detach();
-    cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_bell)
-        .detach();
+    ));
+    subscriptions.push(cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_bell));
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    cx.subscribe_in(
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_desktop_notification,
-    )
-    .detach();
-    cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_cwd_changed)
-        .detach();
-    cx.subscribe_in(
+    ));
+    subscriptions.push(cx.subscribe_in(
+        &pane.entity,
+        window,
+        ConWorkspace::on_terminal_cwd_changed,
+    ));
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_progress_changed,
-    )
-    .detach();
-    cx.subscribe_in(
+    ));
+    subscriptions.push(cx.subscribe_in(
         &pane.entity,
         window,
         ConWorkspace::on_terminal_split_requested,
-    )
-    .detach();
+    ));
 }

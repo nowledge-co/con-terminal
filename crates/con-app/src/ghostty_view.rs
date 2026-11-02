@@ -452,6 +452,8 @@ pub struct GhosttyView {
     #[cfg(target_os = "macos")]
     native_canvas_generation: u64,
     #[cfg(target_os = "macos")]
+    last_native_scroll_generation: u64,
+    #[cfg(target_os = "macos")]
     native_pane_clip: Option<(Bounds<Pixels>, f32)>,
     #[cfg(target_os = "macos")]
     native_pane_header_color: Option<Hsla>,
@@ -558,6 +560,8 @@ impl GhosttyView {
             pending_native_layout: false,
             #[cfg(target_os = "macos")]
             native_canvas_generation: 0,
+            #[cfg(target_os = "macos")]
+            last_native_scroll_generation: 0,
             #[cfg(target_os = "macos")]
             native_pane_clip: None,
             #[cfg(target_os = "macos")]
@@ -1106,8 +1110,17 @@ impl GhosttyView {
         }
 
         #[cfg(target_os = "macos")]
-        if sync_native_scroll {
-            self.sync_native_scroll_view();
+        {
+            // A moved surface still belongs to its original Ghostty app.
+            // The destination workspace's app generation cannot track it.
+            let generation = self.app.wake_generation();
+            if sync_native_scroll
+                || (self.native_view_visible.get()
+                    && generation != self.last_native_scroll_generation)
+            {
+                self.sync_native_scroll_view();
+                self.last_native_scroll_generation = generation;
+            }
         }
 
         if let Some(started) = started
@@ -2285,6 +2298,60 @@ impl GhosttyView {
                 log::trace!(target: "con::canvas", "host={:p} host_frame={:?} clip_frame={:?} clip_bounds={:?} surface_frame={:?} layer_frame={:?} layer_bounds={:?}", scroll_view, rect(host_frame), rect(clip_frame), rect(clip_bounds), rect(surface_frame), rect(layer_frame), rect(layer_bounds));
             }
         }
+    }
+
+    /// Reparent the existing native host. Keep Ghostty's surface and PTY alive;
+    /// bootstrap geometry is never exposed in the destination window.
+    pub(crate) fn move_to_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.terminal_find = None;
+        #[cfg(target_os = "macos")]
+        if let Some(host) = self.host_view {
+            if let Ok(handle) = HasWindowHandle::window_handle(window)
+                && let raw_window_handle::RawWindowHandle::AppKit(handle) = handle.as_raw()
+            {
+                let gpui_view = handle.ns_view.as_ptr() as id;
+                unsafe {
+                    let _: () = msg_send![host, setHidden:YES];
+                    con_terminal_pane_remove_header(host.cast());
+                    if let Some(underlay) = self.native_underlay_view {
+                        Self::set_transition_underlay_owner_visible(
+                            underlay,
+                            self.native_transition_underlay_owner_id,
+                            false,
+                        );
+                    }
+                    let superview: id = msg_send![gpui_view, superview];
+                    let parent = if superview.is_null() {
+                        gpui_view
+                    } else {
+                        superview
+                    };
+                    let _: () = msg_send![parent, addSubview:host
+                        positioned:NSWindowOrderingMode::NSWindowBelow relativeTo:gpui_view];
+                    self.native_underlay_view = Some(Self::transition_underlay_for_parent(parent));
+                }
+                if let (Some(surface_view), Some(terminal)) = (self.nsview, self.terminal.as_ref())
+                {
+                    unsafe {
+                        con_ghostty_surface_install_backing_observer(
+                            surface_view.cast(),
+                            terminal.raw_surface().cast(),
+                        );
+                    }
+                }
+                self.gpui_nsview = Some(gpui_view);
+                self.last_bounds = None;
+                self.native_pane_clip = None;
+                self.native_canvas_generation = 0;
+                self.native_underlay_color = None;
+                self.pending_native_layout = true;
+                self.awaiting_first_layout_visibility = true;
+                self.scale_factor = window.scale_factor();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
+        cx.notify();
     }
 
     fn on_layout(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {

@@ -74,7 +74,6 @@ mod tab_strip_restore_tests {
 }
 
 impl ConWorkspace {
-    #[cfg(target_os = "macos")]
     pub fn from_session(
         config: Config,
         session: Session,
@@ -998,6 +997,8 @@ impl ConWorkspace {
             #[cfg(target_os = "macos")]
             top_bar_should_move: false,
             pane_title_drag: None,
+            session_drag: None,
+            session_drag_hover: None,
             pane_content_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
             tab_strip_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             horizontal_tab_scroll: gpui::ScrollHandle::new(),
@@ -1120,33 +1121,7 @@ impl ConWorkspace {
             } else {
                 let editor_font_size = self.font_size;
                 let editor_view = cx.new(|cx| EditorView::new_with_font_size(editor_font_size, cx));
-                cx.subscribe_in(
-                    &editor_view,
-                    window,
-                    |this, _editor, _event: &ActiveFileChanged, _window, cx| {
-                        this.sync_file_tree_from_active_focus(cx);
-                    },
-                )
-                .detach();
-                cx.subscribe_in(
-                    &editor_view,
-                    window,
-                    |this, editor, _event: &EditorEmptied, window, cx| {
-                        let Some((tab_index, pane_id)) =
-                            this.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
-                                tab.pane_tree
-                                    .pane_id_for_editor_view(editor)
-                                    .map(|pane_id| (tab_index, pane_id))
-                            })
-                        else {
-                            return;
-                        };
-                        if !this.close_pane_in_tab(tab_index, pane_id, window, cx) {
-                            this.close_tab_by_index(tab_index, window, cx);
-                        }
-                    },
-                )
-                .detach();
+                self.subscribe_editor_view(&editor_view, window, cx);
                 let Some(pane_id) = self.tabs[active_tab]
                     .pane_tree
                     .split_with_editor(editor_view.clone())
@@ -1179,8 +1154,19 @@ impl ConWorkspace {
     ) -> Entity<EditorView> {
         let editor_font_size = self.font_size;
         let editor_view = cx.new(|cx| EditorView::new_with_font_size(editor_font_size, cx));
-        cx.subscribe_in(
-            &editor_view,
+        self.subscribe_editor_view(&editor_view, window, cx);
+        editor_view
+    }
+
+    pub(super) fn subscribe_editor_view(
+        &mut self,
+        editor_view: &Entity<EditorView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe_in(
+            editor_view,
             window,
             |this, editor, _event: &ActiveFileChanged, _window, cx| {
                 if let Some(tab_index) = this
@@ -1189,16 +1175,17 @@ impl ConWorkspace {
                     .position(|tab| tab.pane_tree.pane_id_for_editor_view(editor).is_some())
                 {
                     let active_file = editor.read(cx).active_path().map(Path::to_path_buf);
-                    this.tabs[tab_index].title = editor_tab_title(active_file.as_deref());
+                    if this.tabs[tab_index].pane_tree.pane_terminals().is_empty() {
+                        this.tabs[tab_index].title = editor_tab_title(active_file.as_deref());
+                    }
                     this.sync_sidebar(cx);
                     this.save_session(cx);
                 }
                 this.sync_file_tree_from_active_focus(cx);
             },
-        )
-        .detach();
-        cx.subscribe_in(
-            &editor_view,
+        ));
+        subscriptions.push(cx.subscribe_in(
+            editor_view,
             window,
             |this, editor, _event: &EditorEmptied, window, cx| {
                 let Some((tab_index, pane_id)) =
@@ -1214,9 +1201,8 @@ impl ConWorkspace {
                     this.close_tab_by_index(tab_index, window, cx);
                 }
             },
-        )
-        .detach();
-        editor_view
+        ));
+        editor_view.update(cx, |view, _| view.workspace_subscriptions = subscriptions);
     }
 
     /// Open a path in an editor tab, reusing existing editor tabs or creating a new one.
@@ -1647,7 +1633,8 @@ impl ConWorkspace {
                                     .any(|candidate| candidate.entity_id() == terminal_entity_id)
                             });
                             if !terminal_still_owned {
-                                terminal.set_focus_state(false, cx);
+                                // A transferred terminal belongs to its destination;
+                                // an old bootstrap callback must not steal its focus.
                                 return true;
                             }
 
