@@ -19,6 +19,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Window transfers**
+
+- Drag a tab or pane directly outside its window and release to detach it.
+  macOS shows a quiet pointer-following preview; Escape or returning inside
+  keeps the session in place. Fast drops onto New window also work before the
+  target paints, and detached sessions retain their live terminals.
+  _(PR [#547](https://github.com/nowledge-co/con-terminal/pull/547) by [@wey-gu](https://github.com/wey-gu))_
+
 **Panes**
 
 - Preserve surface order, the selected terminal and pane history when promoting
