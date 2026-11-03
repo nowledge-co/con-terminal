@@ -17,7 +17,24 @@ con is still pre-release, so entries may group related beta work while the produ
   keep working after the original window closes.
   _(PR [#546](https://github.com/nowledge-co/con-terminal/pull/546) by [@wey-gu](https://github.com/wey-gu))_
 
+### Changed
+
+**Input bar**
+
+- Smart, Shell and Agent mode icons fill their controls with clearer optical
+  sizing. Subtle hover/pressed feedback stays visible above the artwork without
+  changing input alignment or focus behavior.
+  _(PR [#545](https://github.com/nowledge-co/con-terminal/pull/545) by [@frostming](https://github.com/frostming); follow-up in PR [#547](https://github.com/nowledge-co/con-terminal/pull/547) by [@wey-gu](https://github.com/wey-gu))_
+
 ### Fixed
+
+**Window transfers**
+
+- Drag a tab or pane directly outside its window and release to detach it.
+  macOS shows a quiet pointer-following preview; Escape cancels, and returning
+  inside restores ordinary drop targets. Fast drops onto New window also work before the
+  target paints, and detached sessions retain their live terminals.
+  _(PR [#547](https://github.com/nowledge-co/con-terminal/pull/547) by [@wey-gu](https://github.com/wey-gu))_
 
 **Panes**
 

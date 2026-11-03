@@ -507,6 +507,10 @@ mod tests {
                 // Input mode icons fill their canvas edge to edge; only the
                 // rounded corners stay transparent.
                 if path.starts_with("input-mode-") {
+                    assert!(
+                        solid > (size * size * 4 / 5) as usize,
+                        "{path} regains excessive transparent inset at {size}px"
+                    );
                     continue;
                 }
                 assert!(

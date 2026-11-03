@@ -337,6 +337,14 @@ It should feel like the best place to do terminal-native work in the AI era.
   can join another tab's pane layout or move to a new window; a pane can become
   a tab or move to a new window. Existing windows do not accept each other's
   window-local drag payloads.
+- Direct tear-off must also work: outside the source window, show a quiet,
+  cursor-following identity and New window hint without taking focus or input.
+  Use the source theme, compact system typography, middle truncation and a
+  borderless/shadowless fill. Reentering restores normal destinations; Escape
+  or deactivation cancels. Keep a small outer margin to prevent edge jitter,
+  and create the destination only after release, near the pointer and within
+  that display's visible bounds. Never treat an in-window target as evidence
+  that outside release or native pointer capture works.
 - Drag existing tab identities, pane titles or surface labels. A surface-label
   drag moves its entire pane stack, including inactive surfaces and unsaved
   editors. Preserve surface order and active selection; whole-tab moves also

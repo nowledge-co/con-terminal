@@ -36,6 +36,9 @@ opaque bounds, centred on a square canvas and resampled to 256 pixels, so there
 is no transparent inset; only the rounded corners stay transparent.
 `tab_identities_are_embedded_small_and_transparent` therefore exempts
 `input-mode-*` assets from its tab-sized silhouette check.
+They instead require more than 80% solid coverage at 16/32 physical pixels.
+An interaction-only highlight/press overlay keeps pointer feedback visible
+above the full-size art; the resting icon stays fully opaque and unframed.
 
 ## Smart Prompt
 

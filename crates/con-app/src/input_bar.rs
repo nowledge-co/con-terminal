@@ -1277,6 +1277,7 @@ impl Render for InputBar {
 
         // ── Mode prefix — icon-only, minimal ──
         let mode_prefix = Button::new("mode-toggle")
+            .group("input-mode-button")
             .custom(
                 ButtonCustomVariant::new(cx)
                     .color(theme.transparent)
@@ -1298,11 +1299,30 @@ impl Render for InputBar {
                 this.current_input_state()
                     .update(cx, |state, cx| state.focus(window, cx));
             }))
-            .child(crate::assets::tab_identity_icon(
-                self.mode.icon(),
-                mode_icon_size,
-                theme.foreground,
-            ));
+            .child(
+                div()
+                    .relative()
+                    .size(mode_icon_size)
+                    .child(crate::assets::tab_identity_icon(
+                        self.mode.icon(),
+                        mode_icon_size,
+                        theme.foreground,
+                    ))
+                    // The full-size opaque art covers the Button's background.
+                    // Keep pointer feedback above it without dimming the idle
+                    // identity, adding a frame, or changing row geometry.
+                    .child(
+                        div()
+                            .id("input-mode-feedback")
+                            .absolute()
+                            .inset_0()
+                            .rounded(px(8.0 * mono_scale))
+                            .group_hover("input-mode-button", |s| s.bg(gpui::white().opacity(0.10)))
+                            .group_active("input-mode-button", |s| {
+                                s.bg(gpui::black().opacity(0.14))
+                            }),
+                    ),
+            );
 
         // ── Pane target control — scales to many panes without growing the row ──
         let all_selected = self.all_panes_selected();
