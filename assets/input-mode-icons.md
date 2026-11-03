@@ -28,9 +28,17 @@ approval controls; those remain theme-colored Phosphor SVGs.
 Generated with the built-in image tool on 2026-10-13. The initial assets use
 `tab-terminal-refined.png` as the edit/style reference, transparent output,
 256-pixel packaged sources and the shared physical-size preview cache.
-The mode button is 28 points with a 22-point image canvas. The current revision
-uses muted satin materials with fully opaque interiors and transparent outer
-insets. Do not add a second resting frame or runtime opacity dimming.
+The current revision uses muted satin materials with fully opaque interiors.
+Do not add a second resting frame or runtime opacity dimming.
+
+The icons fill the whole 28-point mode button. Each asset is cropped to its
+opaque bounds, centred on a square canvas and resampled to 256 pixels, so there
+is no transparent inset; only the rounded corners stay transparent.
+`tab_identities_are_embedded_small_and_transparent` therefore exempts
+`input-mode-*` assets from its tab-sized silhouette check.
+They instead require more than 80% solid coverage at 16/32 physical pixels.
+An interaction-only highlight/press overlay keeps pointer feedback visible
+above the full-size art; the resting icon stays fully opaque and unframed.
 
 ## Smart Prompt
 
