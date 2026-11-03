@@ -28,6 +28,8 @@ mod global_hotkey;
 mod macos_windowing;
 #[cfg(target_os = "macos")]
 mod quick_terminal;
+#[cfg(target_os = "macos")]
+mod session_drag_capture;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod terminal_find;
 mod terminal_identity;
@@ -714,11 +716,33 @@ pub(crate) fn open_con_window(
 /// Failure therefore leaves the original layout and processes intact.
 pub(crate) fn open_con_transfer_window(
     config: con_core::Config,
+    origin: Option<gpui::Point<Pixels>>,
     cx: &mut App,
 ) -> anyhow::Result<(WindowHandle<gpui_component::Root>, Entity<ConWorkspace>)> {
     let session = fresh_window_session_with_history();
     let mut workspace = None;
-    let options = default_window_options(cx);
+    let mut options = default_window_options(cx);
+    if let Some(origin) = origin {
+        let mut bounds = options
+            .window_bounds
+            .as_ref()
+            .map(|b| b.get_bounds())
+            .unwrap_or_else(|| Bounds::centered(None, size(px(1000.0), px(700.0)), cx));
+        bounds.origin = origin - point(px(40.0), px(16.0));
+        if let Some(display) = cx.displays().iter().find(|d| d.bounds().contains(&origin)) {
+            let screen = display.visible_bounds();
+            bounds.origin.x = bounds.origin.x.clamp(
+                screen.left(),
+                (screen.right() - bounds.size.width).max(screen.left()),
+            );
+            bounds.origin.y = bounds.origin.y.clamp(
+                screen.top(),
+                (screen.bottom() - bounds.size.height).max(screen.top()),
+            );
+            options.display_id = Some(display.id());
+        }
+        options.window_bounds = Some(WindowBounds::Windowed(bounds));
+    }
     let handle = cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| ConWorkspace::from_session(config.clone(), session, window, cx));
         workspace = Some(view.clone());

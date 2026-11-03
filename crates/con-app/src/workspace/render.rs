@@ -251,6 +251,7 @@ impl Render for ConWorkspace {
                 .filter(|drag| drag.source_window.get() == Some(window.window_handle().window_id()))
                 .cloned();
         }
+        self.track_session_drag_release(window, cx);
         if let Some(dragged) = self.session_drag.as_ref()
             && dragged.origin == DraggedTabOrigin::Pane
             && self.pane_title_drag.is_none()
@@ -263,6 +264,7 @@ impl Render for ConWorkspace {
             });
         }
         if !cx.has_active_drag()
+            && !self.has_native_session_drag()
             && (self.session_drag.is_some()
                 || cx
                     .try_global::<crate::sidebar::ActiveSessionDrag>()
@@ -1419,6 +1421,7 @@ impl Render for ConWorkspace {
         // which mutably borrows `cx` (the `&Theme` borrow would conflict).
         let theme = cx.theme().clone();
         let mut root = workspace_focus_container(&self.workspace_focus)
+            .child(Self::session_drag_release_listener(cx))
             .relative()
             .flex()
             .flex_col()
@@ -1514,29 +1517,6 @@ impl Render for ConWorkspace {
                     }
                 },
             ))
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    let size = window.viewport_size();
-                    if event.position.x >= px(0.0)
-                        && event.position.y >= px(0.0)
-                        && event.position.x < size.width
-                        && event.position.y < size.height
-                    {
-                        return;
-                    }
-                    let dragged = this.session_drag.take().or_else(|| {
-                        cx.try_global::<crate::sidebar::ActiveSessionDrag>()
-                            .and_then(|d| d.0.clone())
-                    });
-                    if cx.has_active_drag()
-                        && let Some(dragged) = dragged
-                    {
-                        cx.stop_active_drag(window);
-                        this.move_drag_to_window(&dragged, window, cx);
-                    }
-                }),
-            )
             .on_drop(cx.listener(|this, dragged: &DraggedTab, window, cx| {
                 // A fast pane promotion can finish before the temporary strip
                 // has painted. Accept the same titlebar destination directly.
@@ -1907,13 +1887,22 @@ impl Render for ConWorkspace {
             let leading_pad = top_bar::top_bar_leading_pad(window);
             let min_left = px(leading_pad);
             let max_left = (window.viewport_size().width - preview_size.width).max(min_left);
-            let left =
-                tab_drag_overlay_origin(window.mouse_position(), &preview, min_left, max_left).x;
+            let mouse = window.mouse_position();
+            let origin = if mouse.y > preview.source_top + preview_size.height + px(12.0) {
+                // Once away from the strip, the identity follows the gesture
+                // rather than looking stuck in the row while its session moves.
+                point(
+                    (mouse.x - preview.cursor_offset_x).clamp(min_left, max_left),
+                    (mouse.y + px(12.0)).min(window.viewport_size().height - preview_size.height),
+                )
+            } else {
+                tab_drag_overlay_origin(mouse, &preview, min_left, max_left)
+            };
             root = root.child(
                 top_bar::tab_drag_capsule(&preview, &theme)
                     .absolute()
-                    .left(left)
-                    .top(preview.source_top)
+                    .left(origin.x)
+                    .top(origin.y)
                     .cursor_grab(),
             );
         }
@@ -1927,6 +1916,7 @@ impl Render for ConWorkspace {
                     .right(px(20.0))
                     .bottom(px(20.0))
                     .h(px(36.0))
+                    .w(px(132.0))
                     .px(px(12.0))
                     .rounded(px(8.0))
                     .flex()

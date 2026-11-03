@@ -10,7 +10,192 @@ pub(super) struct TransferredTerminalOwners {
 }
 impl Global for TransferredTerminalOwners {}
 
+/// A release is committed only once, after the pointer has crossed the outer
+/// window boundary. In-window releases remain owned by ordinary drop targets.
+#[cfg(any(target_os = "macos", test))]
+fn tearoff_release(released: bool, cancelled: bool, outside: bool) -> Option<bool> {
+    if cancelled {
+        Some(false)
+    } else if released {
+        Some(outside)
+    } else {
+        None
+    }
+}
+
+pub(super) fn new_window_drop_bounds(viewport: Size<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(
+        point(viewport.width - px(152.0), viewport.height - px(56.0)),
+        size(px(132.0), px(36.0)),
+    )
+}
+
+fn observe_window_transfer_release(
+    window: &mut Window,
+    mut release: impl FnMut(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) {
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+        if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
+            return;
+        }
+        let size = window.viewport_size();
+        let p = event.position;
+        if p.x >= px(-12.0)
+            && p.y >= px(-12.0)
+            && p.x < size.width + px(12.0)
+            && p.y < size.height + px(12.0)
+            && !new_window_drop_bounds(size).contains(&p)
+        {
+            return;
+        }
+        release(event, window, cx);
+    });
+}
+
+fn window_transfer_release_listener(
+    release: impl FnMut(&MouseUpEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    // GPUI accepts event listeners only in paint. This canvas paints nothing,
+    // inserts no hitbox, and consumes no space in the workspace layout.
+    canvas(
+        |_, _, _| (),
+        move |_, _, window, _| {
+            observe_window_transfer_release(window, release);
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
 impl ConWorkspace {
+    pub(super) fn has_native_session_drag(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.native_session_drag.is_some()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    pub(super) fn track_session_drag_release(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        if self.native_session_drag.is_none()
+            && cx.has_active_drag()
+            && let Some(dragged) = self.session_drag.clone()
+        {
+            let theme = cx.theme();
+            if let Some(capture) = crate::session_drag_capture::SessionDragCapture::start(
+                window,
+                &dragged.label,
+                theme.background.blend(theme.foreground.opacity(0.07)),
+                theme.foreground,
+            ) {
+                let token = std::rc::Rc::new(());
+                self.native_session_drag = Some((token.clone(), capture));
+                cx.spawn_in(window, async move |workspace, window| {
+                    loop {
+                        window
+                            .background_executor()
+                            .timer(Duration::from_millis(16))
+                            .await;
+                        let keep = window
+                            .update(|window, cx| {
+                                workspace
+                                    .update(cx, |this, cx| {
+                                        let Some((current, capture)) =
+                                            this.native_session_drag.as_ref()
+                                        else {
+                                            return false;
+                                        };
+                                        if !std::rc::Rc::ptr_eq(current, &token) {
+                                            return false;
+                                        }
+                                        let sample = capture.sample();
+                                        match tearoff_release(
+                                            sample.released,
+                                            sample.cancelled,
+                                            sample.outside,
+                                        ) {
+                                            Some(true) => {
+                                                cx.stop_active_drag(window);
+                                                this.move_drag_to_window_at(
+                                                    &dragged,
+                                                    Some(sample.position),
+                                                    window,
+                                                    cx,
+                                                );
+                                                this.clear_session_drag(cx);
+                                                false
+                                            }
+                                            Some(false) => {
+                                                // A successful in-window drop has already claimed its
+                                                // gesture. This is only leftover preview/capture state.
+                                                cx.stop_active_drag(window);
+                                                this.clear_session_drag(cx);
+                                                false
+                                            }
+                                            None if !cx.has_active_drag() => {
+                                                this.clear_session_drag(cx);
+                                                false
+                                            }
+                                            None => true,
+                                        }
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .unwrap_or(false);
+                        if !keep {
+                            break;
+                        }
+                    }
+                })
+                .detach();
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (window, cx);
+    }
+
+    pub(super) fn session_drag_release_listener(cx: &mut Context<Self>) -> AnyElement {
+        // Register directly on the window: an element's mouse-up-out listener
+        // depends on its last hitbox hover state, which can be stale outside.
+        let workspace = cx.entity().downgrade();
+        window_transfer_release_listener(move |event, window, cx| {
+            let _ = workspace.update(cx, |this, cx| {
+                // AppKit owns its exact screen-space release and cancellation.
+                let explicit_target =
+                    new_window_drop_bounds(window.viewport_size()).contains(&event.position);
+                if this.has_native_session_drag() && !explicit_target {
+                    return;
+                }
+                let dragged = this.session_drag.clone().or_else(|| {
+                    cx.try_global::<crate::sidebar::ActiveSessionDrag>()
+                        .and_then(|d| d.0.clone())
+                });
+                if cx.has_active_drag()
+                    && let Some(dragged) = dragged
+                    && dragged.source_window.get() == Some(window.window_handle().window_id())
+                {
+                    cx.stop_active_drag(window);
+                    this.move_drag_to_window_at(
+                        &dragged,
+                        (!explicit_target).then_some(event.position),
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }
+            });
+        })
+        .into_any_element()
+    }
+
     pub(super) fn handoff_transfer_control_socket(&mut self, cx: &mut Context<Self>) {
         if self.control_socket.is_none() {
             return;
@@ -47,6 +232,10 @@ impl ConWorkspace {
     }
 
     pub(super) fn clear_session_drag(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            self.native_session_drag = None;
+        }
         self.session_drag = None;
         self.session_drag_hover = None;
         if cx
@@ -326,8 +515,24 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.move_drag_to_window_at(dragged, None, window, cx);
+    }
+
+    pub(super) fn move_drag_to_window_at(
+        &mut self,
+        dragged: &DraggedTab,
+        release: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if dragged.source_window.get() != Some(window.window_handle().window_id()) {
             return;
+        }
+        // Claim completion before opening another window. A native release and
+        // GPUI's mouse-up/drop may both observe the same physical release.
+        #[cfg(target_os = "macos")]
+        {
+            self.native_session_drag = None;
         }
         let Some(index) = self.tab_index_for_summary_id(dragged.session_id) else {
             return;
@@ -350,7 +555,9 @@ impl ConWorkspace {
         {
             return;
         }
-        let Ok((handle, destination)) = crate::open_con_transfer_window(self.config.clone(), cx)
+        let origin = release.map(|position| window.bounds().origin + position);
+        let Ok((handle, destination)) =
+            crate::open_con_transfer_window(self.config.clone(), origin, cx)
         else {
             Self::transfer_notice(
                 window,
@@ -460,5 +667,73 @@ impl ConWorkspace {
             }
             window.remove_window();
         }
+    }
+}
+
+#[cfg(test)]
+mod release_tests {
+    use super::{new_window_drop_bounds, tearoff_release, window_transfer_release_listener};
+    use gpui::{
+        Context, IntoElement, MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
+        div, point, px,
+    };
+
+    struct ReleaseProbe(Vec<Point<Pixels>>);
+    impl Render for ReleaseProbe {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let view = cx.entity().downgrade();
+            let _ = window;
+            div()
+                .size_full()
+                .child(window_transfer_release_listener(move |event, _, cx| {
+                    view.update(cx, |view, _| view.0.push(event.position))
+                        .unwrap();
+                }))
+        }
+    }
+
+    #[gpui::test]
+    fn release_capture_does_not_require_an_outside_move_or_fresh_hitbox(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, _| ReleaseProbe(Vec::new()));
+        // No move outside first: mouse-up is the first event crossing the
+        // boundary, as in a fast gesture or a missing final move event.
+        cx.simulate_mouse_move(
+            point(px(20.0), px(20.0)),
+            Some(MouseButton::Left),
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(-30.0), px(20.0)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        assert_eq!(
+            view.read_with(cx, |v, _| v.0.clone()),
+            vec![point(px(-30.0), px(20.0))]
+        );
+        // Releasing back inside, on the margin, or with another button never
+        // claims the gesture; ordinary in-window targets retain ownership.
+        for (p, button) in [
+            (point(px(20.0), px(20.0)), MouseButton::Left),
+            (point(px(-5.0), px(20.0)), MouseButton::Left),
+            (point(px(-30.0), px(20.0)), MouseButton::Right),
+        ] {
+            cx.simulate_mouse_up(p, button, gpui::Modifiers::default());
+        }
+        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 1);
+        // The dynamic drop target need not have painted before a fast release.
+        let target = cx.update(|window, _| new_window_drop_bounds(window.viewport_size()).center());
+        cx.simulate_mouse_up(target, MouseButton::Left, gpui::Modifiers::default());
+        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 2);
+    }
+
+    #[test]
+    fn cancel_wins_over_release_and_reentering_never_detaches() {
+        assert_eq!(tearoff_release(false, false, true), None);
+        assert_eq!(tearoff_release(true, false, false), Some(false));
+        assert_eq!(tearoff_release(true, true, true), Some(false));
+        assert_eq!(tearoff_release(true, false, true), Some(true));
     }
 }

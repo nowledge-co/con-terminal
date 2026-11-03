@@ -11,6 +11,7 @@ on:
     paths:
       - ".github/workflows/e2e.yml"
       - "scripts/ci/**"
+      - "scripts/macos/test-session-drag-capture.sh"
       - "crates/con-test/**"
       - "crates/con-app/**"
       - "crates/con-core/**"
@@ -22,6 +23,7 @@ on:
     paths:
       - ".github/workflows/e2e.yml"
       - "scripts/ci/**"
+      - "scripts/macos/test-session-drag-capture.sh"
       - "crates/con-test/**"
       - "crates/con-app/**"
       - "crates/con-core/**"
@@ -51,6 +53,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Native session drag capture regression tests
+        run: bash scripts/macos/test-session-drag-capture.sh
 
       - name: Install Zig 0.17.0
         shell: bash

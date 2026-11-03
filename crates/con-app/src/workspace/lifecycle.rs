@@ -998,6 +998,8 @@ impl ConWorkspace {
             top_bar_should_move: false,
             pane_title_drag: None,
             session_drag: None,
+            #[cfg(target_os = "macos")]
+            native_session_drag: None,
             session_drag_hover: None,
             pane_content_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
             tab_strip_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),

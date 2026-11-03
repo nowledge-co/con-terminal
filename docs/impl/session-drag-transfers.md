@@ -9,10 +9,13 @@ Drag a pane's title (or a surface label within its header) onto the tab strip or
 tab. The entire pane moves, including inactive surfaces or unsaved editor state.
 The existing active surface and surface order stay intact.
 
-Drag a tab or pane to **New window**, which appears during the gesture, to move
-it into an independent window. Releasing outside the source window offers the
-same operation on platforms that deliver application-local mouse capture there.
-The visible drop target provides the equivalent path within the window.
+Drag a tab or pane outside its source window and release to move it into an
+independent window. On macOS, a quiet title-and-action preview follows the pointer
+outside the window; it cannot take focus or intercept the drop. Moving back into
+the source returns to ordinary split/reorder targets. A 12-point outer margin
+prevents edge jitter from accidentally detaching a session. Escape cancels,
+including while the pointer is outside; deactivating the app cancels as well.
+The in-window **New window** drop destination remains available.
 Escape cancels without changing the layout. Dropping on the source pane is a
 no-op; ordinary tab reordering continues to use the tab strip/list.
 
@@ -58,3 +61,29 @@ addressing.
   parent's transition underlay. Preserve the frame transaction documented in
   `skills/native-surface-coverage/SKILL.md`; do not mask transfer artifacts with
   opaque fills, borders or shadows.
+
+## Window-outside release ownership
+
+An element mouse-up-out handler depends on hitbox hover state and is not the
+authority for finishing a drag outside its window. The workspace listens at the
+window capture phase. On macOS a gesture-scoped AppKit observer records the exact
+release point and Escape before dispatch; a main-thread task samples it only
+while the gesture is alive, with `pressedMouseButtons` as the missed-release
+fallback. No global event tap, Accessibility permission or profile changes are
+involved. The observer never calls Rust/GPUI reentrantly.
+
+The capture and preview are RAII-owned by the source workspace and released on
+every completion/cancellation path. A per-gesture token prevents an older task
+from completing a newer drag. Claim completion before opening the destination,
+so a native release and GPUI drop cannot each move the same tab. Outside release
+positions the new window near the pointer, constrained to the display’s visible
+bounds. The original transfer readiness, failure rollback and native-surface
+transaction contracts still apply. Linux/Windows use window-level pointer event
+capture; macOS native preview/observer code is not compiled on those platforms.
+
+Run `bash scripts/macos/test-session-drag-capture.sh` for the linked AppKit
+release/cancel/reentry/cleanup tests. They replace input getters and the local
+monitor only inside their own test process: no events are posted and no windows
+are shown. The macOS E2E workflow runs them before building con. Rust event
+tests separately cover a release without an outside move and a fast release
+before the New window target paints.

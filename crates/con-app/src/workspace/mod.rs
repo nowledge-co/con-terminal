@@ -332,6 +332,11 @@ pub struct ConWorkspace {
     /// rendering while a DraggedTab with origin=Pane is over the pane content.
     pane_title_drag: Option<PaneTitleDragState>,
     session_drag: Option<DraggedTab>,
+    #[cfg(target_os = "macos")]
+    native_session_drag: Option<(
+        std::rc::Rc<()>,
+        crate::session_drag_capture::SessionDragCapture,
+    )>,
     session_drag_hover: Option<u64>,
     /// Last painted bounds for the pane tree content, used to resolve
     /// pane-title drag drop targets in window coordinates.
