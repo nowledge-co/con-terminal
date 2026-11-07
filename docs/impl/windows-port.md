@@ -36,7 +36,7 @@ Prerequisites:
 - **Visual Studio Build Tools 2022** with "Desktop development with
   C++" (for `link.exe` + Windows SDK).
 - **Git for Windows**.
-- **Zig 0.16.0 exactly** on PATH (for `libghostty-vt`); download from
+- **Zig 0.17.0 exactly** on PATH (for `libghostty-vt`); download from
   <https://ziglang.org/download/>. If the `zig` executable isn't on
   PATH, set `CON_ZIG_BIN` to its absolute path.
 
@@ -67,7 +67,7 @@ Common Windows pitfalls when the Zig step fails mid-build with
    path on Windows; if your machine disallows `C:\zc`, set
    `ZIG_GLOBAL_CACHE_DIR` explicitly to another short writable path.
 3. **Zig version mismatch** — the current pin is validated with Zig
-   0.16.0. If a newer Zig breaks upstream, either install the validated
+   0.17.0. If a newer Zig breaks upstream, either install the validated
    Zig version or bump `GHOSTTY_REV` in `build.rs` (requires macOS
    re-validation of the full libghostty build).
 
@@ -469,7 +469,7 @@ polish, and distribution hardening rather than basic input/selection
 bring-up.
 
 Caveats:
-- You must have **Zig 0.16.0 exactly** on `PATH` for `cargo build` or
+- You must have **Zig 0.17.0 exactly** on `PATH` for `cargo build` or
   `cargo check` to compile `libghostty-vt`; install it from
   <https://ziglang.org/download/0.16.0/> or point `CON_ZIG_BIN` at an
   explicit 0.16.0 binary. `CON_SKIP_GHOSTTY_VT=1` remains a local

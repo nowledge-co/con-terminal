@@ -1,5 +1,8 @@
 # Ghostty 1.4 integration
 
+Historical 1.4 audit. The current source/ABI migration is documented in
+[libghostty-vt 1.0 integration](libghostty-vt-1.0-upgrade.md).
+
 Tracker: [#526](https://github.com/nowledge-co/con-terminal/issues/526), with
 security, build/ABI, bridge and native acceptance tasks #527–#530.
 

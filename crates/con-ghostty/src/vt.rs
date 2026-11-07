@@ -1,7 +1,8 @@
 //! Shared `libghostty-vt` FFI bindings + render-state snapshot.
 //!
-//! Rewritten to match the **actual** upstream API at GHOSTTY_REV
-//! `5f5b988c5236facfe8d2439203d9ee9d5b636cf8` — `include/ghostty/vt/*.h`.
+//! Matches the stable libghostty-vt 1.0.0 C API (`vt-1.0.0`).
+//! Keep consumed enum values, fixed layouts and function contracts aligned
+//! with the pinned headers and the linked runtime ABI manifest.
 //! Key lifecycle:
 //!
 //! 1. `terminal = ghostty_terminal_new(NULL_alloc, cols, rows)`
@@ -206,39 +207,46 @@ pub struct GhosttyTerminalScrollViewport {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub enum GhosttyTerminalOption {
-    Userdata = 0,
-    WritePty = 1,
-    Bell = 2,
-    Enquiry = 3,
-    Xtversion = 4,
-    TitleChanged = 5,
-    Size = 6,
-    ColorScheme = 7,
-    DeviceAttributes = 8,
-    Title = 9,
-    Pwd = 10,
-    ColorForeground = 11,
-    ColorBackground = 12,
-    ColorCursor = 13,
+    Userdata = 1,
+    WritePty = 2,
+    Bell = 3,
+    Enquiry = 4,
+    Xtversion = 5,
+    TitleChanged = 6,
+    Size = 7,
+    ColorScheme = 8,
+    DeviceAttributes = 9,
+    Title = 10,
+    Pwd = 11,
+    ColorForeground = 12,
+    ColorBackground = 13,
+    ColorCursor = 14,
     /// `GhosttyColorRgb[256]*` — full 256-entry palette.
-    ColorPalette = 14,
-    KittyImageStorageLimit = 15,
-    Selection = 21,
-    PwdChanged = 25,
-    ClipboardWrite = 26,
-    ScrollbackMaxLines = 28,
-    DesktopNotification = 29,
-    ProgressReport = 30,
-    Mode = 34,
-    UnknownSequence = 35,
-    UnknownMaxBytes = 36,
-    ClipboardRead = 38,
-    ClipboardWriteMaxBytes = 39,
-    ResizePullScrollback = 40,
-    RenderHold = 41,
-    SemanticPrompt = 42,
-    Reset = 43,
-    ProgramStatus = 46,
+    ColorPalette = 15,
+    KittyImageStorageLimit = 16,
+    Selection = 22,
+    PwdChanged = 26,
+    ClipboardWrite = 27,
+    ScrollbackMaxLines = 29,
+    DesktopNotification = 30,
+    ProgressReport = 31,
+    Mode = 35,
+    UnknownSequence = 36,
+    UnknownMaxBytes = 37,
+    ClipboardRead = 39,
+    ClipboardWriteMaxBytes = 40,
+    ResizePullScrollback = 41,
+    RenderHold = 42,
+    SemanticPrompt = 43,
+    Reset = 44,
+    ProgramStatus = 47,
+}
+
+#[repr(i32)]
+#[derive(Clone, Copy)]
+enum GhosttyFormatterOption {
+    Unwrap = 2,
+    Selection = 4,
 }
 
 #[repr(C)]
@@ -278,7 +286,6 @@ struct GhosttyPointCoordinate {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct GhosttyGridRef {
-    size: usize,
     node: *mut c_void,
     x: u16,
     y: u16,
@@ -287,7 +294,6 @@ struct GhosttyGridRef {
 impl Default for GhosttyGridRef {
     fn default() -> Self {
         Self {
-            size: std::mem::size_of::<Self>(),
             node: std::ptr::null_mut(),
             x: 0,
             y: 0,
@@ -298,7 +304,6 @@ impl Default for GhosttyGridRef {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct GhosttySelection {
-    size: usize,
     start: GhosttyGridRef,
     end: GhosttyGridRef,
     rectangle: bool,
@@ -307,7 +312,6 @@ struct GhosttySelection {
 impl Default for GhosttySelection {
     fn default() -> Self {
         Self {
-            size: std::mem::size_of::<Self>(),
             start: GhosttyGridRef::default(),
             end: GhosttyGridRef::default(),
             rectangle: false,
@@ -316,32 +320,10 @@ impl Default for GhosttySelection {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct GhosttyTerminalSelectionFormatOptions {
-    size: usize,
-    emit: GhosttyFormatterFormat,
-    unwrap: bool,
-    trim: bool,
-    selection: *const GhosttySelection,
-}
-
-impl Default for GhosttyTerminalSelectionFormatOptions {
-    fn default() -> Self {
-        Self {
-            size: std::mem::size_of::<Self>(),
-            emit: GhosttyFormatterFormat::Plain,
-            unwrap: true,
-            trim: true,
-            selection: std::ptr::null(),
-        }
-    }
-}
-
-#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GhosttySelectionGestureData {
-    ClickCount = 0,
-    Autoscroll = 2,
+    ClickCount = 1,
+    Autoscroll = 3,
 }
 
 #[repr(C)]
@@ -356,13 +338,13 @@ enum GhosttySelectionGestureEventType {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GhosttySelectionGestureEventOption {
-    Ref = 0,
-    Position = 1,
-    RepeatDistance = 2,
-    TimeNs = 3,
-    RepeatIntervalNs = 4,
-    Geometry = 8,
-    Viewport = 9,
+    Ref = 1,
+    Position = 2,
+    RepeatDistance = 3,
+    TimeNs = 4,
+    RepeatIntervalNs = 5,
+    Geometry = 9,
+    Viewport = 10,
 }
 
 #[repr(C)]
@@ -412,9 +394,9 @@ enum GhosttyMouseButton {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GhosttyMouseEncoderOption {
-    Size = 2,
-    AnyButtonPressed = 3,
-    TrackLastCell = 4,
+    Size = 3,
+    AnyButtonPressed = 4,
+    TrackLastCell = 5,
 }
 
 #[repr(C)]
@@ -458,7 +440,7 @@ impl GhosttyMouseEncoderSize {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 enum GhosttySysOption {
-    DecodePng = 1,
+    DecodePng = 2,
 }
 
 #[repr(C)]
@@ -485,8 +467,7 @@ enum GhosttyKittyGraphicsImageData {
     Height = 4,
     Format = 5,
     Compression = 6,
-    DataPtr = 7,
-    DataLen = 8,
+    Pixels = 7,
     Generation = 9,
 }
 
@@ -736,7 +717,6 @@ pub struct GhosttyString {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GhosttyTerminalDesktopNotification {
-    pub size: usize,
     pub title: GhosttyString,
     pub body: GhosttyString,
 }
@@ -744,7 +724,6 @@ pub struct GhosttyTerminalDesktopNotification {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyTerminalProgressReport {
-    pub size: usize,
     pub state: i32,
     pub progress: i8,
 }
@@ -753,7 +732,6 @@ pub struct GhosttyTerminalProgressReport {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyTerminalProgramStatus {
-    pub size: usize,
     pub state: i32,
     pub kind: i32,
     pub progress: i8,
@@ -767,7 +745,6 @@ pub struct GhosttyTerminalProgramStatus {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyTerminalSemanticPrompt {
-    pub size: usize,
     pub kind: i32,
     pub prompt_kind: i32,
     pub has_exit_code: bool,
@@ -776,8 +753,8 @@ pub struct GhosttyTerminalSemanticPrompt {
     pub error: GhosttyString,
 }
 
-const _: [(); 88] = [(); std::mem::size_of::<GhosttyTerminalProgramStatus>()];
-const _: [(); 56] = [(); std::mem::size_of::<GhosttyTerminalSemanticPrompt>()];
+const _: [(); 80] = [(); std::mem::size_of::<GhosttyTerminalProgramStatus>()];
+const _: [(); 48] = [(); std::mem::size_of::<GhosttyTerminalSemanticPrompt>()];
 
 const GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC: i32 = 0;
 
@@ -871,7 +848,6 @@ pub struct GhosttyClipboardWriteReply {
 
 #[repr(C)]
 pub struct GhosttyClipboardWrite {
-    pub size: usize,
     pub location: GhosttyClipboardLocation,
     pub contents: *const GhosttyClipboardContent,
     pub contents_len: usize,
@@ -908,7 +884,6 @@ pub struct GhosttyClipboardReadReply {
 
 #[repr(C)]
 pub struct GhosttyClipboardRead {
-    pub size: usize,
     pub location: GhosttyClipboardLocation,
     pub mimes: *const GhosttyString,
     pub mimes_len: usize,
@@ -962,10 +937,10 @@ const _: [(); 16] = [(); std::mem::size_of::<GhosttyMimeReader>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyPaste>()];
 const _: [(); 32] = [(); std::mem::size_of::<GhosttyClipboardContent>()];
 const _: [(); 16] = [(); std::mem::size_of::<GhosttyClipboardWriteReply>()];
-const _: [(); 72] = [(); std::mem::size_of::<GhosttyClipboardWrite>()];
+const _: [(); 64] = [(); std::mem::size_of::<GhosttyClipboardWrite>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyClipboardReadReply>()];
-const _: [(); 80] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
-const _: [(); 40] = [(); std::mem::size_of::<GhosttyTerminalDesktopNotification>()];
+const _: [(); 72] = [(); std::mem::size_of::<GhosttyClipboardRead>()];
+const _: [(); 32] = [(); std::mem::size_of::<GhosttyTerminalDesktopNotification>()];
 const _: [(); 24] = [(); std::mem::size_of::<GhosttySysImage>()];
 const _: [(); 56] = [(); std::mem::size_of::<GhosttyKittyGraphicsPlacementRenderInfo>()];
 
@@ -1027,62 +1002,39 @@ pub struct GhosttyDeviceAttributes {
 
 // ── Style (`style.h`) ──────────────────────────────────────────────────
 //
-// `row_cells_get(STYLE, out)` writes a `GhosttyStyle` by value. Caller
-// sets `.size = sizeof(GhosttyStyle)` first so the library knows how
-// many bytes it may write (versioned-struct forward-compat pattern).
+// `row_cells_get(STYLE, out)` writes the stable packed `GhosttyStyle` by value.
+// The field layout and flags are verified against the linked ABI manifest.
 
-/// `GhosttyStyleColor` — tagged color (None | Palette | Rgb). The
-/// union is laid out as `u64` here because we only care about the tag
-/// for now; per-cell fg/bg also come in via the cheaper FG_COLOR /
-/// BG_COLOR accessor on row_cells, so we don't need to decode the
-/// union value at read-cell time.
+/// Stable VT 1.0 style color: one-byte tag and three-byte value union.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GhosttyStyleColor {
-    pub tag: u32,
-    pub _pad: u32,
-    pub value: u64,
+    pub tag: u8,
+    pub value: [u8; 3],
 }
 
-/// `GhosttyStyle` — SGR-derived attributes for the current cell.
-/// Layout matches `include/ghostty/vt/style.h` at GHOSTTY_REV; the
-/// `size` prefix lets upstream add trailing fields without breaking
-/// older callers.
+/// Stable bounded grapheme output (`types.h`). The pointer borrows a Rust
+/// allocation only for the duration of `row_cells_get`.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+struct GhosttyCodepointBuffer {
+    ptr: *mut u32,
+    cap: usize,
+    len: usize,
+}
+
+/// Stable fixed-layout SGR style. Underline occupies bits 8..10.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GhosttyStyle {
-    pub size: usize,
     pub fg_color: GhosttyStyleColor,
     pub bg_color: GhosttyStyleColor,
     pub underline_color: GhosttyStyleColor,
-    pub bold: bool,
-    pub italic: bool,
-    pub faint: bool,
-    pub blink: bool,
-    pub inverse: bool,
-    pub invisible: bool,
-    pub strikethrough: bool,
-    pub overline: bool,
-    pub underline: c_int,
+    pub flags: u16,
+    pub reserved: u16,
 }
-
 impl GhosttyStyle {
     fn new() -> Self {
-        Self {
-            size: std::mem::size_of::<GhosttyStyle>(),
-            fg_color: GhosttyStyleColor::default(),
-            bg_color: GhosttyStyleColor::default(),
-            underline_color: GhosttyStyleColor::default(),
-            bold: false,
-            italic: false,
-            faint: false,
-            blink: false,
-            inverse: false,
-            invisible: false,
-            strikethrough: false,
-            overline: false,
-            underline: 0,
-        }
+        Self::default()
     }
 }
 
@@ -1105,7 +1057,7 @@ unsafe extern "C" {
     // Focus (`focus.h`): gained = 0, lost = 1; both encode to three bytes.
     fn ghostty_focus_encode(
         event: c_int,
-        buf: *mut c_char,
+        buf: *mut u8,
         buf_len: usize,
         out_written: *mut usize,
     ) -> GhosttyResult;
@@ -1146,7 +1098,7 @@ unsafe extern "C" {
     pub fn ghostty_terminal_scroll_viewport(
         terminal: GhosttyTerminal,
         behavior: GhosttyTerminalScrollViewport,
-    );
+    ) -> GhosttyResult;
     pub fn ghostty_terminal_get(
         terminal: GhosttyTerminal,
         key: GhosttyTerminalData,
@@ -1207,13 +1159,25 @@ unsafe extern "C" {
         b: *const GhosttySelection,
         out_equal: *mut bool,
     ) -> GhosttyResult;
-    fn ghostty_terminal_selection_format_alloc(
-        terminal: GhosttyTerminal,
+    #[cfg(test)]
+    fn ghostty_build_info(data: c_int, out: *mut c_void) -> GhosttyResult;
+    fn ghostty_formatter_terminal_new(
         allocator: *const GhosttyAllocator,
-        options: GhosttyTerminalSelectionFormatOptions,
+        out: *mut *mut c_void,
+        terminal: GhosttyTerminal,
+    ) -> GhosttyResult;
+    fn ghostty_formatter_set(
+        formatter: *mut c_void,
+        option: GhosttyFormatterOption,
+        value: *const c_void,
+    ) -> GhosttyResult;
+    fn ghostty_formatter_format_alloc(
+        formatter: *mut c_void,
+        allocator: *const GhosttyAllocator,
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
     ) -> GhosttyResult;
+    fn ghostty_formatter_free(formatter: *mut c_void);
 
     // Key encoder (`key/{encoder,event}.h`). The encoder and reusable
     // event live under `VtInner`'s mutex with the terminal whose mode
@@ -1223,14 +1187,14 @@ unsafe extern "C" {
         out_encoder: *mut GhosttyKeyEncoder,
     ) -> GhosttyResult;
     pub fn ghostty_key_encoder_free(encoder: GhosttyKeyEncoder);
-    pub fn ghostty_key_encoder_setopt_from_terminal(
+    pub fn ghostty_key_encoder_set_from_terminal(
         encoder: GhosttyKeyEncoder,
         terminal: GhosttyTerminal,
-    );
+    ) -> GhosttyResult;
     pub fn ghostty_key_encoder_encode(
         encoder: GhosttyKeyEncoder,
         event: GhosttyKeyEvent,
-        out_buf: *mut c_char,
+        out_buf: *mut u8,
         out_buf_size: usize,
         out_len: *mut usize,
     ) -> GhosttyResult;
@@ -1239,13 +1203,20 @@ unsafe extern "C" {
         out_event: *mut GhosttyKeyEvent,
     ) -> GhosttyResult;
     pub fn ghostty_key_event_free(event: GhosttyKeyEvent);
-    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent, action: c_int);
-    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: c_int);
-    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: u16);
-    pub fn ghostty_key_event_set_consumed_mods(event: GhosttyKeyEvent, mods: u16);
-    pub fn ghostty_key_event_set_composing(event: GhosttyKeyEvent, composing: bool);
-    pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: *const c_char, len: usize);
-    pub fn ghostty_key_event_set_unshifted_codepoint(event: GhosttyKeyEvent, codepoint: u32);
+    pub fn ghostty_key_event_set_action(event: GhosttyKeyEvent, action: c_int) -> GhosttyResult;
+    pub fn ghostty_key_event_set_key(event: GhosttyKeyEvent, key: c_int) -> GhosttyResult;
+    pub fn ghostty_key_event_set_mods(event: GhosttyKeyEvent, mods: u16) -> GhosttyResult;
+    pub fn ghostty_key_event_set_consumed_mods(event: GhosttyKeyEvent, mods: u16) -> GhosttyResult;
+    pub fn ghostty_key_event_set_composing(
+        event: GhosttyKeyEvent,
+        composing: bool,
+    ) -> GhosttyResult;
+    pub fn ghostty_key_event_set_utf8(event: GhosttyKeyEvent, utf8: GhosttyString)
+    -> GhosttyResult;
+    pub fn ghostty_key_event_set_unshifted_codepoint(
+        event: GhosttyKeyEvent,
+        codepoint: u32,
+    ) -> GhosttyResult;
 
     // Mouse input (`mouse/{encoder,event}.h`). The encoder and reusable event
     // share `VtInner`'s mutex with the terminal mode state they encode against.
@@ -1254,19 +1225,19 @@ unsafe extern "C" {
         out_encoder: *mut GhosttyMouseEncoder,
     ) -> GhosttyResult;
     fn ghostty_mouse_encoder_free(encoder: GhosttyMouseEncoder);
-    fn ghostty_mouse_encoder_setopt(
+    fn ghostty_mouse_encoder_set(
         encoder: GhosttyMouseEncoder,
         option: GhosttyMouseEncoderOption,
         value: *const c_void,
-    );
-    fn ghostty_mouse_encoder_setopt_from_terminal(
+    ) -> GhosttyResult;
+    fn ghostty_mouse_encoder_set_from_terminal(
         encoder: GhosttyMouseEncoder,
         terminal: GhosttyTerminal,
-    );
+    ) -> GhosttyResult;
     fn ghostty_mouse_encoder_encode(
         encoder: GhosttyMouseEncoder,
         event: GhosttyMouseEvent,
-        out_buf: *mut c_char,
+        out_buf: *mut u8,
         out_buf_size: usize,
         out_len: *mut usize,
     ) -> GhosttyResult;
@@ -1275,11 +1246,20 @@ unsafe extern "C" {
         out_event: *mut GhosttyMouseEvent,
     ) -> GhosttyResult;
     fn ghostty_mouse_event_free(event: GhosttyMouseEvent);
-    fn ghostty_mouse_event_set_action(event: GhosttyMouseEvent, action: GhosttyMouseAction);
-    fn ghostty_mouse_event_set_button(event: GhosttyMouseEvent, button: GhosttyMouseButton);
-    fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent);
-    fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent, mods: u16);
-    fn ghostty_mouse_event_set_position(event: GhosttyMouseEvent, position: GhosttyMousePosition);
+    fn ghostty_mouse_event_set_action(
+        event: GhosttyMouseEvent,
+        action: GhosttyMouseAction,
+    ) -> GhosttyResult;
+    fn ghostty_mouse_event_set_button(
+        event: GhosttyMouseEvent,
+        button: GhosttyMouseButton,
+    ) -> GhosttyResult;
+    fn ghostty_mouse_event_clear_button(event: GhosttyMouseEvent) -> GhosttyResult;
+    fn ghostty_mouse_event_set_mods(event: GhosttyMouseEvent, mods: u16) -> GhosttyResult;
+    fn ghostty_mouse_event_set_position(
+        event: GhosttyMouseEvent,
+        position: GhosttyMousePosition,
+    ) -> GhosttyResult;
 
     // Kitty graphics storage (`kitty_graphics.h`). Handles are borrowed from
     // the terminal and remain valid only while its mutex is held.
@@ -2021,10 +2001,23 @@ impl Drop for KittySnapshot {
     }
 }
 
+fn vt_check(result: GhosttyResult, operation: &str) -> anyhow::Result<()> {
+    if result != GHOSTTY_SUCCESS {
+        anyhow::bail!("{operation} failed: rc={result}");
+    }
+    Ok(())
+}
+
 struct MouseEncoderState {
     encoder: GhosttyMouseEncoder,
     event: GhosttyMouseEvent,
     geometry: GhosttyMouseEncoderSize,
+}
+
+impl Drop for MouseEncoderState {
+    fn drop(&mut self) {
+        unsafe { self.free() };
+    }
 }
 
 impl MouseEncoderState {
@@ -2042,26 +2035,35 @@ impl MouseEncoderState {
             anyhow::bail!("ghostty_mouse_event_new failed: rc={rc}");
         }
 
-        let track_last_cell = true;
-        unsafe {
-            ghostty_mouse_encoder_setopt(
-                encoder,
-                GhosttyMouseEncoderOption::Size,
-                &geometry as *const _ as *const c_void,
-            );
-            ghostty_mouse_encoder_setopt(
-                encoder,
-                GhosttyMouseEncoderOption::TrackLastCell,
-                &track_last_cell as *const _ as *const c_void,
-            );
-            ghostty_mouse_encoder_setopt_from_terminal(encoder, terminal);
-        }
-
-        Ok(Self {
+        let state = Self {
             encoder,
             event,
             geometry,
-        })
+        };
+        let track_last_cell = true;
+        unsafe {
+            vt_check(
+                ghostty_mouse_encoder_set_from_terminal(encoder, terminal),
+                "ghostty_mouse_encoder_set_from_terminal",
+            )?;
+            vt_check(
+                ghostty_mouse_encoder_set(
+                    encoder,
+                    GhosttyMouseEncoderOption::Size,
+                    (&geometry as *const GhosttyMouseEncoderSize).cast(),
+                ),
+                "ghostty_mouse_encoder_set(size)",
+            )?;
+            vt_check(
+                ghostty_mouse_encoder_set(
+                    encoder,
+                    GhosttyMouseEncoderOption::TrackLastCell,
+                    (&track_last_cell as *const bool).cast(),
+                ),
+                "ghostty_mouse_encoder_set(track_last_cell)",
+            )?;
+        }
+        Ok(state)
     }
 
     unsafe fn free(&mut self) {
@@ -3600,7 +3602,12 @@ impl VtScreen {
         // terminal after every parsed output chunk so repeated DECSET/DECRST
         // sequences cannot leave the encoder on a stale protocol.
         if let Some(mouse) = &inner.mouse {
-            unsafe { ghostty_mouse_encoder_setopt_from_terminal(mouse.encoder, inner.terminal) };
+            let rc =
+                unsafe { ghostty_mouse_encoder_set_from_terminal(mouse.encoder, inner.terminal) };
+            if rc != GHOSTTY_SUCCESS {
+                log::error!("ghostty_mouse_encoder_set_from_terminal failed: rc={rc}");
+                inner.mouse = None;
+            }
         }
         refresh_terminal_metadata(&mut inner);
         inner.output_generation = inner.output_generation.wrapping_add(1);
@@ -3662,13 +3669,16 @@ impl VtScreen {
             if mouse.geometry == geometry {
                 return Ok(());
             }
-            unsafe {
-                ghostty_mouse_encoder_setopt(
-                    mouse.encoder,
-                    GhosttyMouseEncoderOption::Size,
-                    &geometry as *const _ as *const c_void,
-                )
-            };
+            vt_check(
+                unsafe {
+                    ghostty_mouse_encoder_set(
+                        mouse.encoder,
+                        GhosttyMouseEncoderOption::Size,
+                        &geometry as *const _ as *const c_void,
+                    )
+                },
+                "ghostty_mouse_encoder_set(size)",
+            )?;
             mouse.geometry = geometry;
             return Ok(());
         }
@@ -3702,25 +3712,43 @@ impl VtScreen {
             || (event.action == VtMouseAction::Motion && event.button.is_some());
 
         unsafe {
-            ghostty_mouse_encoder_setopt(
-                mouse.encoder,
-                GhosttyMouseEncoderOption::AnyButtonPressed,
-                &any_button_pressed as *const _ as *const c_void,
-            );
-            ghostty_mouse_event_set_action(mouse.event, ghostty_mouse_action(event.action));
+            vt_check(
+                ghostty_mouse_encoder_set(
+                    mouse.encoder,
+                    GhosttyMouseEncoderOption::AnyButtonPressed,
+                    &any_button_pressed as *const _ as *const c_void,
+                ),
+                "ghostty_mouse_encoder_set",
+            )?;
+            vt_check(
+                ghostty_mouse_event_set_action(mouse.event, ghostty_mouse_action(event.action)),
+                "ghostty_mouse_event_set_action",
+            )?;
             if let Some(button) = event.button {
-                ghostty_mouse_event_set_button(mouse.event, ghostty_mouse_button(button));
+                vt_check(
+                    ghostty_mouse_event_set_button(mouse.event, ghostty_mouse_button(button)),
+                    "ghostty_mouse_event_set_button",
+                )?;
             } else {
-                ghostty_mouse_event_clear_button(mouse.event);
+                vt_check(
+                    ghostty_mouse_event_clear_button(mouse.event),
+                    "ghostty_mouse_event_clear_button",
+                )?;
             }
-            ghostty_mouse_event_set_mods(mouse.event, ghostty_mouse_modifiers(event.modifiers));
-            ghostty_mouse_event_set_position(
-                mouse.event,
-                GhosttyMousePosition {
-                    x: event.surface_x_px,
-                    y: event.surface_y_px,
-                },
-            );
+            vt_check(
+                ghostty_mouse_event_set_mods(mouse.event, ghostty_mouse_modifiers(event.modifiers)),
+                "ghostty_mouse_event_set_mods",
+            )?;
+            vt_check(
+                ghostty_mouse_event_set_position(
+                    mouse.event,
+                    GhosttyMousePosition {
+                        x: event.surface_x_px,
+                        y: event.surface_y_px,
+                    },
+                ),
+                "ghostty_mouse_event_set_position",
+            )?;
         }
 
         let mut inline = [0_u8; 128];
@@ -3820,28 +3848,50 @@ impl VtScreen {
         }
 
         unsafe {
-            ghostty_key_encoder_setopt_from_terminal(inner.key_encoder, inner.terminal);
-            ghostty_key_event_set_action(inner.key_event, ghostty_key_action(event.action));
-            ghostty_key_event_set_key(inner.key_event, ghostty_key(event.key));
-            ghostty_key_event_set_mods(inner.key_event, ghostty_modifiers(event.modifiers));
-            ghostty_key_event_set_consumed_mods(
-                inner.key_event,
-                ghostty_modifiers(event.consumed_modifiers),
-            );
-            ghostty_key_event_set_composing(inner.key_event, false);
-            ghostty_key_event_set_utf8(
-                inner.key_event,
-                if event.text.is_empty() {
-                    std::ptr::null()
-                } else {
-                    event.text.as_ptr().cast()
-                },
-                event.text.len(),
-            );
-            ghostty_key_event_set_unshifted_codepoint(
-                inner.key_event,
-                event.unshifted_codepoint.map_or(0, u32::from),
-            );
+            vt_check(
+                ghostty_key_encoder_set_from_terminal(inner.key_encoder, inner.terminal),
+                "ghostty_key_encoder_set_from_terminal",
+            )?;
+            vt_check(
+                ghostty_key_event_set_action(inner.key_event, ghostty_key_action(event.action)),
+                "ghostty_key_event_set_action",
+            )?;
+            vt_check(
+                ghostty_key_event_set_key(inner.key_event, ghostty_key(event.key)),
+                "ghostty_key_event_set_key",
+            )?;
+            vt_check(
+                ghostty_key_event_set_mods(inner.key_event, ghostty_modifiers(event.modifiers)),
+                "ghostty_key_event_set_mods",
+            )?;
+            vt_check(
+                ghostty_key_event_set_consumed_mods(
+                    inner.key_event,
+                    ghostty_modifiers(event.consumed_modifiers),
+                ),
+                "ghostty_key_event_set_consumed_mods",
+            )?;
+            vt_check(
+                ghostty_key_event_set_composing(inner.key_event, false),
+                "ghostty_key_event_set_composing",
+            )?;
+            vt_check(
+                ghostty_key_event_set_utf8(
+                    inner.key_event,
+                    GhosttyString {
+                        ptr: event.text.as_ptr(),
+                        len: event.text.len(),
+                    },
+                ),
+                "ghostty_key_event_set_utf8",
+            )?;
+            vt_check(
+                ghostty_key_event_set_unshifted_codepoint(
+                    inner.key_event,
+                    event.unshifted_codepoint.map_or(0, u32::from),
+                ),
+                "ghostty_key_event_set_unshifted_codepoint",
+            )?;
         }
 
         let mut inline = [0_u8; 128];
@@ -4581,7 +4631,11 @@ impl VtScreen {
             tag: GhosttyTerminalScrollViewportTag::Delta,
             value: GhosttyTerminalScrollViewportValue { delta: delta_rows },
         };
-        unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        let rc = unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_terminal_scroll_viewport failed: rc={rc}");
+            return false;
+        }
         inner.generation = inner.generation.wrapping_add(1);
         inner.required_full_snapshot_generation = inner.generation;
         true
@@ -4599,7 +4653,11 @@ impl VtScreen {
             tag: GhosttyTerminalScrollViewportTag::Bottom,
             value: GhosttyTerminalScrollViewportValue { delta: 0 },
         };
-        unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        let rc = unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        if rc != GHOSTTY_SUCCESS {
+            log::warn!("ghostty_terminal_scroll_viewport failed: rc={rc}");
+            return false;
+        }
         inner.generation = inner.generation.wrapping_add(1);
         inner.required_full_snapshot_generation = inner.generation;
         true
@@ -4783,9 +4841,6 @@ unsafe extern "C" fn vt_clipboard_write_callback(
     if userdata.is_null() || write.is_null() {
         return;
     }
-    if unsafe { (*write).size } < std::mem::size_of::<GhosttyClipboardWrite>() {
-        return;
-    }
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
     let write = unsafe { &*write };
@@ -4865,9 +4920,6 @@ unsafe extern "C" fn vt_clipboard_read_callback(
     read: *const GhosttyClipboardRead,
 ) {
     if userdata.is_null() || read.is_null() {
-        return;
-    }
-    if unsafe { (*read).size } < std::mem::size_of::<GhosttyClipboardRead>() {
         return;
     }
     let state = unsafe { &*(userdata as *const VtCallbackState) };
@@ -5015,11 +5067,6 @@ unsafe extern "C" fn vt_desktop_notification_callback(
     if userdata.is_null() || notification.is_null() {
         return;
     }
-    if unsafe { notification.cast::<usize>().read_unaligned() }
-        < std::mem::size_of::<GhosttyTerminalDesktopNotification>()
-    {
-        return;
-    }
 
     let notification = unsafe { &*notification };
     let Some(title) = (unsafe { ghostty_string_bytes(&notification.title) }) else {
@@ -5051,11 +5098,6 @@ unsafe extern "C" fn vt_progress_report_callback(
     if userdata.is_null() || report.is_null() {
         return;
     }
-    if unsafe { report.cast::<usize>().read_unaligned() }
-        < std::mem::size_of::<GhosttyTerminalProgressReport>()
-    {
-        return;
-    }
     let report = unsafe { &*report };
     let Some(progress) = TerminalProgress::from_ghostty_report(report.state, report.progress)
     else {
@@ -5074,11 +5116,6 @@ unsafe extern "C" fn vt_program_status_callback(
     report: *const GhosttyTerminalProgramStatus,
 ) {
     if userdata.is_null() || report.is_null() {
-        return;
-    }
-    if unsafe { report.cast::<usize>().read_unaligned() }
-        < std::mem::size_of::<GhosttyTerminalProgramStatus>()
-    {
         return;
     }
     let report = unsafe { &*report };
@@ -5116,15 +5153,9 @@ unsafe extern "C" fn vt_semantic_prompt_callback(
     if userdata.is_null() || event.is_null() {
         return;
     }
-    if unsafe { event.cast::<usize>().read_unaligned() }
-        < std::mem::size_of::<GhosttyTerminalSemanticPrompt>()
-    {
-        return;
-    }
     let event = unsafe { &*event };
     // Prompt start is the only step that drops in-flight program status.
-    if event.size < std::mem::size_of::<i32>() * 2 + std::mem::size_of::<usize>() || event.kind != 1
-    {
+    if event.kind != 1 {
         return;
     }
     let state = unsafe { &*(userdata as *const VtCallbackState) };
@@ -5547,22 +5578,46 @@ fn set_selection_locked(
 }
 
 fn selection_text_locked(inner: &VtInner) -> anyhow::Result<Option<String>> {
-    let options = GhosttyTerminalSelectionFormatOptions::default();
+    let Some(selection) = selection_locked(inner)? else {
+        return Ok(None);
+    };
+    struct Formatter(*mut c_void);
+    impl Drop for Formatter {
+        fn drop(&mut self) {
+            unsafe { ghostty_formatter_free(self.0) };
+        }
+    }
+    let mut formatter = std::ptr::null_mut();
+    let rc =
+        unsafe { ghostty_formatter_terminal_new(std::ptr::null(), &mut formatter, inner.terminal) };
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_formatter_terminal_new failed: rc={rc}");
+    }
+    let formatter = Formatter(formatter);
+    let unwrap = true;
+    // Plain text and trimming are formatter defaults; preserve soft-line unwrapping.
+    for (option, value) in [
+        (
+            GhosttyFormatterOption::Unwrap,
+            &unwrap as *const _ as *const c_void,
+        ),
+        (
+            GhosttyFormatterOption::Selection,
+            &selection as *const _ as *const c_void,
+        ),
+    ] {
+        let rc = unsafe { ghostty_formatter_set(formatter.0, option, value) };
+        if rc != GHOSTTY_SUCCESS {
+            anyhow::bail!("ghostty_formatter_set failed: rc={rc}");
+        }
+    }
     let mut ptr = std::ptr::null_mut();
     let mut len = 0_usize;
     let rc = unsafe {
-        ghostty_terminal_selection_format_alloc(
-            inner.terminal,
-            std::ptr::null(),
-            options,
-            &mut ptr,
-            &mut len,
-        )
+        ghostty_formatter_format_alloc(formatter.0, std::ptr::null(), &mut ptr, &mut len)
     };
-    match rc {
-        GHOSTTY_NO_VALUE => return Ok(None),
-        GHOSTTY_SUCCESS => {}
-        _ => anyhow::bail!("ghostty_terminal_selection_format_alloc failed: rc={rc}"),
+    if rc != GHOSTTY_SUCCESS {
+        anyhow::bail!("ghostty_formatter_format_alloc failed: rc={rc}");
     }
     if ptr.is_null() && len != 0 {
         anyhow::bail!("ghostty selection formatter returned a null {len}-byte buffer");
@@ -5773,23 +5828,23 @@ fn snapshot_kitty_image(
     let mut height = 0_u32;
     let mut format_raw = GhosttyKittyImageFormat::Rgba as c_int;
     let mut compression_raw = GhosttyKittyImageCompression::None as c_int;
-    let mut data_ptr: *const u8 = std::ptr::null();
-    let mut data_len = 0_usize;
+    let mut pixels = GhosttyString {
+        ptr: std::ptr::null(),
+        len: 0,
+    };
     let keys = [
         GhosttyKittyGraphicsImageData::Width,
         GhosttyKittyGraphicsImageData::Height,
         GhosttyKittyGraphicsImageData::Format,
         GhosttyKittyGraphicsImageData::Compression,
-        GhosttyKittyGraphicsImageData::DataPtr,
-        GhosttyKittyGraphicsImageData::DataLen,
+        GhosttyKittyGraphicsImageData::Pixels,
     ];
     let mut values = [
         &mut width as *mut _ as *mut c_void,
         &mut height as *mut _ as *mut c_void,
         &mut format_raw as *mut _ as *mut c_void,
         &mut compression_raw as *mut _ as *mut c_void,
-        &mut data_ptr as *mut _ as *mut c_void,
-        &mut data_len as *mut _ as *mut c_void,
+        &mut pixels as *mut _ as *mut c_void,
     ];
     let rc = unsafe {
         ghostty_kitty_graphics_image_get_multi(
@@ -5800,6 +5855,8 @@ fn snapshot_kitty_image(
             std::ptr::null_mut(),
         )
     };
+    let data_ptr = pixels.ptr;
+    let data_len = pixels.len;
     if rc != GHOSTTY_SUCCESS
         || width == 0
         || height == 0
@@ -5938,7 +5995,7 @@ fn read_cell(
     };
     let bg_was_default = match (rc, written) {
         (GHOSTTY_SUCCESS, 5) => false,
-        (GHOSTTY_INVALID_VALUE, 3) => {
+        (GHOSTTY_NO_VALUE, 3) => {
             let rc = unsafe {
                 ghostty_render_state_row_cells_get(
                     cells,
@@ -5948,11 +6005,11 @@ fn read_cell(
             };
             match rc {
                 GHOSTTY_SUCCESS => false,
-                GHOSTTY_INVALID_VALUE => true,
+                GHOSTTY_NO_VALUE => true,
                 _ => return None,
             }
         }
-        (GHOSTTY_INVALID_VALUE, 4) => true,
+        (GHOSTTY_NO_VALUE, 4) => true,
         _ => return None,
     };
 
@@ -5998,15 +6055,21 @@ fn read_cell(
     let mut grapheme = None;
     if graphemes_len > 1 {
         let mut scalars = vec![0_u32; graphemes_len as usize];
-        // GRAPHEMES_BUF writes graphemes_len u32 scalars, including the base.
+        let mut buffer = GhosttyCodepointBuffer {
+            ptr: scalars.as_mut_ptr(),
+            cap: scalars.len(),
+            len: 0,
+        };
+        // Stable GRAPHEMES_BUF takes a bounded record, not a raw u32 array.
         // The render lock keeps this iterator valid throughout both reads.
         if unsafe {
             ghostty_render_state_row_cells_get(
                 cells,
                 GhosttyRenderStateRowCellsData::GraphemesBuf,
-                scalars.as_mut_ptr().cast(),
+                (&mut buffer as *mut GhosttyCodepointBuffer).cast(),
             )
         } != GHOSTTY_SUCCESS
+            || buffer.len != scalars.len()
         {
             return None;
         }
@@ -6014,7 +6077,7 @@ fn read_cell(
         grapheme = Some(Arc::from(text?));
     }
 
-    const STYLE_COLOR_TAG_PALETTE: u32 = 1;
+    const STYLE_COLOR_TAG_PALETTE: u8 = 1;
     const PALETTE_BLACK: u8 = 0;
     // Curses-style full-screen apps often paint their canvas with SGR
     // 40 instead of default background. For themes whose ANSI black is
@@ -6025,7 +6088,7 @@ fn read_cell(
     // xterm-cube black (palette index 16) remain untouched.
     let bg_is_alt_canvas_black = alternate_screen
         && style.bg_color.tag == STYLE_COLOR_TAG_PALETTE
-        && style.bg_color.value as u8 == PALETTE_BLACK;
+        && style.bg_color.value[0] == PALETTE_BLACK;
     let bg = if bg_was_default || bg_is_alt_canvas_black {
         default_bg
     } else {
@@ -6046,26 +6109,26 @@ fn read_cell(
     };
 
     // Pack style flags into the attrs byte the renderer (and HLSL
-    // pixel shader) interpret. Underline is an `int` upstream
+    // pixel shader) interpret. Underline is encoded in flags bits 8..10
     // (0 = none, 1 = single, 2 = double, 3 = curly, ...); any non-zero
     // value enables our single underline rendering for now.
     let mut attrs: u8 = 0;
-    if style.bold {
+    if style.flags & (1 << 0) != 0 {
         attrs |= ATTR_BOLD;
     }
-    if style.italic {
+    if style.flags & (1 << 1) != 0 {
         attrs |= ATTR_ITALIC;
     }
-    if style.underline != 0 {
+    if (style.flags >> 8) & 7 != 0 {
         attrs |= ATTR_UNDERLINE;
     }
-    if style.strikethrough {
+    if style.flags & (1 << 6) != 0 {
         attrs |= ATTR_STRIKE;
     }
-    if style.inverse {
+    if style.flags & (1 << 4) != 0 {
         attrs |= ATTR_INVERSE;
     }
-    if style.invisible {
+    if style.flags & (1 << 5) != 0 {
         attrs |= ATTR_INVISIBLE;
     }
 
@@ -6093,9 +6156,7 @@ impl Drop for VtScreen {
             // Free every object that can refer to the terminal before the
             // terminal itself.
             // SAFETY: unique owner via Arc::get_mut.
-            if let Some(mut mouse) = inner.mouse.take() {
-                unsafe { mouse.free() };
-            }
+            drop(inner.mouse.take());
             if !inner.key_event.is_null() {
                 unsafe { ghostty_key_event_free(inner.key_event) };
                 inner.key_event = std::ptr::null_mut();
@@ -6380,6 +6441,24 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_str(manifest).expect("manifest is valid json");
         let types = &manifest["types"];
+        // Ensure the manifest comes from the stable library we actually link,
+        // rather than a stale archive that merely happens to export these symbols.
+        for (name, key, expected) in [
+            ("VERSION_MAJOR", 6, 1),
+            ("VERSION_MINOR", 7, 0),
+            ("VERSION_PATCH", 8, 0),
+        ] {
+            assert_eq!(
+                types["GhosttyBuildInfo"]["values"][name].as_i64(),
+                Some(key as i64)
+            );
+            let mut value = usize::MAX;
+            assert_eq!(
+                unsafe { ghostty_build_info(key, (&mut value as *mut usize).cast()) },
+                GHOSTTY_SUCCESS
+            );
+            assert_eq!(value, expected, "linked libghostty-vt {name}");
+        }
 
         assert_eq!(manifest["schema"].as_u64(), Some(1));
         assert_eq!(
@@ -6397,7 +6476,7 @@ mod tests {
             ("BLOCK_HOLLOW", CursorStyle::HollowBlock),
         ] {
             assert_eq!(
-                types["GhosttyRenderStateCursorVisualStyle"]["values"][name].as_u64(),
+                types["GhosttyCursorStyle"]["values"][name].as_u64(),
                 Some(style as u64),
             );
         }
@@ -6624,11 +6703,6 @@ mod tests {
                 std::mem::align_of::<GhosttySelection>(),
             ),
             (
-                "GhosttyTerminalSelectionFormatOptions",
-                std::mem::size_of::<GhosttyTerminalSelectionFormatOptions>(),
-                std::mem::align_of::<GhosttyTerminalSelectionFormatOptions>(),
-            ),
-            (
                 "GhosttySurfacePosition",
                 std::mem::size_of::<GhosttySurfacePosition>(),
                 std::mem::align_of::<GhosttySurfacePosition>(),
@@ -6648,6 +6722,114 @@ mod tests {
                 types[name]["align"].as_u64(),
                 Some(align as u64),
                 "{name} alignment"
+            );
+        }
+        for (name, size, align) in [
+            (
+                "GhosttyStyleColor",
+                std::mem::size_of::<GhosttyStyleColor>(),
+                std::mem::align_of::<GhosttyStyleColor>(),
+            ),
+            (
+                "GhosttyStyle",
+                std::mem::size_of::<GhosttyStyle>(),
+                std::mem::align_of::<GhosttyStyle>(),
+            ),
+        ] {
+            assert_eq!(
+                types[name]["size"].as_u64(),
+                Some(size as u64),
+                "{name} size"
+            );
+            assert_eq!(
+                types[name]["align"].as_u64(),
+                Some(align as u64),
+                "{name} alignment"
+            );
+        }
+        for (type_name, field, offset) in [
+            (
+                "GhosttyStyleColor",
+                "tag",
+                std::mem::offset_of!(GhosttyStyleColor, tag),
+            ),
+            (
+                "GhosttyStyleColor",
+                "value",
+                std::mem::offset_of!(GhosttyStyleColor, value),
+            ),
+            (
+                "GhosttyStyle",
+                "fg_color",
+                std::mem::offset_of!(GhosttyStyle, fg_color),
+            ),
+            (
+                "GhosttyStyle",
+                "bg_color",
+                std::mem::offset_of!(GhosttyStyle, bg_color),
+            ),
+            (
+                "GhosttyStyle",
+                "underline_color",
+                std::mem::offset_of!(GhosttyStyle, underline_color),
+            ),
+            (
+                "GhosttyStyle",
+                "flags",
+                std::mem::offset_of!(GhosttyStyle, flags),
+            ),
+            (
+                "GhosttyStyle",
+                "reserved",
+                std::mem::offset_of!(GhosttyStyle, reserved),
+            ),
+        ] {
+            assert_eq!(
+                types[type_name]["fields"][field]["offset"].as_u64(),
+                Some(offset as u64),
+                "{type_name}::{field} offset"
+            );
+        }
+        for (name, value) in [
+            ("UNWRAP", GhosttyFormatterOption::Unwrap),
+            ("SELECTION", GhosttyFormatterOption::Selection),
+        ] {
+            assert_eq!(
+                types["GhosttyFormatterOption"]["values"][name].as_i64(),
+                Some(value as i64),
+                "GhosttyFormatterOption::{name}"
+            );
+        }
+        assert_eq!(
+            types["GhosttyCodepointBuffer"]["size"].as_u64(),
+            Some(std::mem::size_of::<GhosttyCodepointBuffer>() as u64)
+        );
+        assert_eq!(
+            types["GhosttyCodepointBuffer"]["align"].as_u64(),
+            Some(std::mem::align_of::<GhosttyCodepointBuffer>() as u64)
+        );
+        for (field, offset) in [
+            ("ptr", std::mem::offset_of!(GhosttyCodepointBuffer, ptr)),
+            ("cap", std::mem::offset_of!(GhosttyCodepointBuffer, cap)),
+            ("len", std::mem::offset_of!(GhosttyCodepointBuffer, len)),
+        ] {
+            assert_eq!(
+                types["GhosttyCodepointBuffer"]["fields"][field]["offset"].as_u64(),
+                Some(offset as u64)
+            );
+        }
+        for (key, out_type) in [
+            ("RAW", "GhosttyCell"),
+            ("STYLE", "GhosttyStyle"),
+            ("GRAPHEMES_LEN", "u32"),
+            ("GRAPHEMES_BUF", "GhosttyCodepointBuffer"),
+            ("FG_COLOR", "GhosttyColorRgb"),
+            ("BG_COLOR", "GhosttyColorRgb"),
+        ] {
+            assert_eq!(
+                types["GhosttyRenderStateRowCellsData"]["keys"][key]["type"].as_str(),
+                Some(out_type),
+                "render cell {key} output contract"
             );
         }
         let cursor_fields = &types["GhosttyRenderStateCursor"]["fields"];
@@ -6761,7 +6943,6 @@ mod tests {
             (
                 "GhosttyGridRef",
                 &[
-                    ("size", std::mem::offset_of!(GhosttyGridRef, size)),
                     ("node", std::mem::offset_of!(GhosttyGridRef, node)),
                     ("x", std::mem::offset_of!(GhosttyGridRef, x)),
                     ("y", std::mem::offset_of!(GhosttyGridRef, y)),
@@ -6770,37 +6951,11 @@ mod tests {
             (
                 "GhosttySelection",
                 &[
-                    ("size", std::mem::offset_of!(GhosttySelection, size)),
                     ("start", std::mem::offset_of!(GhosttySelection, start)),
                     ("end", std::mem::offset_of!(GhosttySelection, end)),
                     (
                         "rectangle",
                         std::mem::offset_of!(GhosttySelection, rectangle),
-                    ),
-                ],
-            ),
-            (
-                "GhosttyTerminalSelectionFormatOptions",
-                &[
-                    (
-                        "size",
-                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, size),
-                    ),
-                    (
-                        "emit",
-                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, emit),
-                    ),
-                    (
-                        "unwrap",
-                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, unwrap),
-                    ),
-                    (
-                        "trim",
-                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, trim),
-                    ),
-                    (
-                        "selection",
-                        std::mem::offset_of!(GhosttyTerminalSelectionFormatOptions, selection),
                     ),
                 ],
             ),
@@ -7058,8 +7213,7 @@ mod tests {
             ("HEIGHT", GhosttyKittyGraphicsImageData::Height),
             ("FORMAT", GhosttyKittyGraphicsImageData::Format),
             ("COMPRESSION", GhosttyKittyGraphicsImageData::Compression),
-            ("DATA_PTR", GhosttyKittyGraphicsImageData::DataPtr),
-            ("DATA_LEN", GhosttyKittyGraphicsImageData::DataLen),
+            ("PIXELS", GhosttyKittyGraphicsImageData::Pixels),
             ("GENERATION", GhosttyKittyGraphicsImageData::Generation),
         ] {
             assert_eq!(
@@ -8277,7 +8431,18 @@ mod tests {
 
         assert_eq!(encode(&key("f13", "", None, none)), b"\x1b[25~");
         assert_eq!(encode(&key("help", "", None, none)), b"\x1b[28~");
-        assert_eq!(encode(&key("ф", "ф", Some('ф'), alt)), "\x1bф".as_bytes());
+        // The portable VT library still follows its compilation target's
+        // Option-key policy. The macOS test host keeps composed non-ASCII
+        // text; production Windows/Linux use Alt's ESC prefix.
+        let alt_cyrillic = if cfg!(target_os = "macos") {
+            "ф"
+        } else {
+            "\x1bф"
+        };
+        assert_eq!(
+            encode(&key("ф", "ф", Some('ф'), alt)),
+            alt_cyrillic.as_bytes()
+        );
     }
 
     #[test]
@@ -9293,6 +9458,21 @@ mod tests {
         screen.feed(b"\x1b]9;9; /tmp/con cwd \x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some(" /tmp/con cwd "));
+    }
+
+    #[test]
+    fn stable_style_flags_and_rgb_survive_render_extraction() {
+        let screen = VtScreen::new(16, 2, None).unwrap();
+        screen.feed(b"\x1b[1;3;4:3;9;38;2;18;52;86;48;2;101;67;33mX\x1b[0mY");
+        let snapshot = screen.snapshot();
+        let styled = &snapshot.cells[0];
+        assert_eq!(styled.fg, rgba([18, 52, 86], 0xFF));
+        assert_eq!(styled.bg, rgba([101, 67, 33], 0xFF));
+        assert_eq!(
+            styled.attrs & (ATTR_BOLD | ATTR_ITALIC | ATTR_UNDERLINE | ATTR_STRIKE),
+            ATTR_BOLD | ATTR_ITALIC | ATTR_UNDERLINE | ATTR_STRIKE
+        );
+        assert_eq!(snapshot.cells[1].attrs, 0);
     }
 
     #[test]

@@ -16,23 +16,47 @@
 // Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros.
 #![allow(unexpected_cfgs)]
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 use std::collections::hash_map::DefaultHasher;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 use std::time::Instant;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 use parking_lot::Mutex;
 
 pub(crate) const CLIPBOARD_WRITE_LIMIT_BYTES: usize = 1024 * 1024;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 const DESKTOP_NOTIFICATION_TITLE_LIMIT_BYTES: usize = 63;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 const DESKTOP_NOTIFICATION_BODY_LIMIT_BYTES: usize = 255;
 
 pub(crate) struct ClipboardWritePolicy {
@@ -62,14 +86,22 @@ pub(crate) fn clipboard_write_policy(initially_enabled: bool) -> Arc<ClipboardWr
         .clone()
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopNotification {
     pub title: String,
     pub body: String,
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 impl DesktopNotification {
     pub(crate) fn from_bytes(title: &[u8], body: &[u8]) -> Self {
         Self {
@@ -79,14 +111,22 @@ impl DesktopNotification {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 #[derive(Default)]
 struct DesktopNotificationLimiter {
     last_accepted_at: Option<Instant>,
     last_digest: u64,
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 impl DesktopNotificationLimiter {
     fn accept(&mut self, title: &[u8], body: &[u8]) -> bool {
         let now = Instant::now();
@@ -113,13 +153,21 @@ impl DesktopNotificationLimiter {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 pub struct DesktopNotificationPolicy {
     limiter: Arc<Mutex<DesktopNotificationLimiter>>,
     pending: Mutex<Option<DesktopNotification>>,
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 impl Default for DesktopNotificationPolicy {
     fn default() -> Self {
         Self {
@@ -129,7 +177,11 @@ impl Default for DesktopNotificationPolicy {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 impl DesktopNotificationPolicy {
     fn with_limiter(limiter: Arc<Mutex<DesktopNotificationLimiter>>) -> Self {
         Self {
@@ -162,7 +214,11 @@ pub(crate) fn desktop_notification_policy() -> Arc<DesktopNotificationPolicy> {
     Arc::new(DesktopNotificationPolicy::with_limiter(limiter))
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 fn bounded_lossy_utf8(bytes: &[u8], limit: usize) -> String {
     let text = String::from_utf8_lossy(&bytes[..bytes.len().min(limit)]);
     let mut end = text.len().min(limit);
@@ -237,13 +293,21 @@ mod program_events;
 
 pub use program_events::ProgramStatusEvent;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 mod transcript;
 
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pty_write;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 mod scroll;
 
 pub mod process;
@@ -259,16 +323,24 @@ pub mod terminal;
 // MouseButton, etc.) — also used by the Windows backend's facade as the
 // concrete type of cross-cutting values. On macOS the stub module isn't
 // compiled because all types come from `terminal.rs`.
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(not(target_os = "macos"), all(test, feature = "vt-tests")))]
 pub mod stub;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 pub mod cursor;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "linux",
+    all(test, feature = "vt-tests")
+))]
 pub mod vt;
 
 #[cfg(target_os = "windows")]
@@ -322,9 +394,17 @@ pub use stub::{
 #[cfg(test)]
 mod tests {
     use super::clipboard_mime_is_text;
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        all(test, feature = "vt-tests")
+    ))]
     use super::{DesktopNotificationPolicy, bounded_lossy_utf8};
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        all(test, feature = "vt-tests")
+    ))]
     use std::time::{Duration, Instant};
 
     #[test]
@@ -339,7 +419,11 @@ mod tests {
         assert!(!clipboard_mime_is_text(b"image/png"));
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        all(test, feature = "vt-tests")
+    ))]
     #[test]
     fn desktop_notification_limiter_is_shared_without_crossing_pending_mailboxes() {
         let first = DesktopNotificationPolicy::default();
@@ -357,7 +441,11 @@ mod tests {
         assert_eq!(first.take(), None);
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "linux",
+        all(test, feature = "vt-tests")
+    ))]
     #[test]
     fn bounded_lossy_utf8_does_not_decode_past_the_output_limit() {
         let bytes = [vec![b'a'; 62], "é".as_bytes().to_vec(), vec![0xff; 1024]].concat();

@@ -5,6 +5,10 @@ license.workspace = true
 version.workspace = true
 build = "build.rs"
 
+[features]
+# Link and exercise the portable VT binding alongside full embedding on macOS.
+vt-tests = []
+
 [dependencies]
 con-paths.workspace = true
 con-process.workspace = true
@@ -17,6 +21,7 @@ parking_lot.workspace = true
 cc = "1"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json.workspace = true
 cc = "1"
 

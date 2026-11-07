@@ -13,18 +13,16 @@ enum Status {
 
 #[repr(i32)]
 enum OptionKey {
-    Needle = 0,
-    Next = 1,
-    Previous = 2,
+    Needle = 1,
 }
 
 #[repr(i32)]
 enum Data {
-    Status = 0,
-    Total = 2,
-    SelectedIndex = 3,
-    SelectedMatch = 4,
-    ViewportMatches = 6,
+    Status = 1,
+    Total = 3,
+    SelectedIndex = 4,
+    SelectedMatch = 5,
+    ViewportMatches = 7,
 }
 
 #[repr(C)]
@@ -48,6 +46,8 @@ unsafe extern "C" {
     ) -> GhosttyResult;
     fn ghostty_search_get(search: *mut c_void, key: Data, value: *mut c_void) -> GhosttyResult;
     fn ghostty_search_feed(search: *mut c_void) -> GhosttyResult;
+    fn ghostty_search_select_next(search: *mut c_void) -> GhosttyResult;
+    fn ghostty_search_select_prev(search: *mut c_void) -> GhosttyResult;
     fn ghostty_search_tick(search: *mut c_void, status: *mut Status) -> GhosttyResult;
     fn ghostty_grid_ref_cell(
         reference: *const GhosttyGridRef,
@@ -364,15 +364,11 @@ impl VtScreen {
         };
         let mut inner = self.inner.lock();
         let rc = unsafe {
-            ghostty_search_set(
-                search.handle,
-                if previous {
-                    OptionKey::Previous
-                } else {
-                    OptionKey::Next
-                },
-                std::ptr::null(),
-            )
+            if previous {
+                ghostty_search_select_prev(search.handle)
+            } else {
+                ghostty_search_select_next(search.handle)
+            }
         };
         if rc != GHOSTTY_NO_VALUE {
             check(rc)?;
@@ -420,6 +416,7 @@ impl VtScreen {
     }
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 impl crate::GhosttyTerminal {
     pub fn search(&self, needle: &str) -> Result<bool, String> {
         self.search_screen()
@@ -676,14 +673,6 @@ mod tests {
         assert_eq!(
             types["GhosttySearchOption"]["values"]["NEEDLE"].as_i64(),
             Some(OptionKey::Needle as i64)
-        );
-        assert_eq!(
-            types["GhosttySearchOption"]["values"]["SELECT_NEXT"].as_i64(),
-            Some(OptionKey::Next as i64)
-        );
-        assert_eq!(
-            types["GhosttySearchOption"]["values"]["SELECT_PREV"].as_i64(),
-            Some(OptionKey::Previous as i64)
         );
         for (name, key) in [
             ("STATUS", Data::Status),
