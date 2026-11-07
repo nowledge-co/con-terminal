@@ -40,5 +40,7 @@ jobs:
         run: python3 scripts/docs/validate-manifest.py
       - name: Install workflow test parser
         run: python3 -m pip install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Lint all workflow definitions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Check documentation/build/release trigger boundaries
         run: python3 -m unittest discover -s .github/tests -p 'test_*.py' -v

@@ -9,7 +9,6 @@ on:
     # Path filters apply to branch pushes, not release tags. Documentation
     # bookkeeping must not compile/package both Flatpak architectures.
     paths:
-      - ".github/workflows/publish-flatpak.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
