@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.171` (Unreleased)
+
+### Changed
+
+**Terminal**
+
+- Update the shared Ghostty source to the libghostty-vt 1.0.0 baseline. Preserve
+  native program-status reporting and adapt portable selection copying, search,
+  input, styles, Unicode and Kitty image access to the stable C API.
+  _(PR [#549](https://github.com/nowledge-co/con-terminal/pull/549) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.170` - 2026-11-03
 
 ### Added

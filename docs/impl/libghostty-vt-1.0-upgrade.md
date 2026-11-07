@@ -1,6 +1,7 @@
 # libghostty-vt 1.0 integration
 
 Tracker: [#548](https://github.com/nowledge-co/con-terminal/issues/548).
+Integration: [PR #549](https://github.com/nowledge-co/con-terminal/pull/549).
 
 ## Source and scope
 
@@ -73,6 +74,14 @@ ABI/runtime acceptance. Never use `CON_SKIP_GHOSTTY_VT`, a stub, or only
 to macOS tests alongside full embedding. Normal macOS application builds keep
 the native backend. The macOS Intel workflow runs this feature; Windows/Linux
 continue linked native VT tests in `ci-portable.yml`.
+
+Local Apple Silicon linked checks pass 129 con-ghostty unit tests and 9 build
+integration tests on the normal pinned-source path, including both ABI manifests
+and grapheme output-key contracts. The filtered upstream C API suite passes
+579 tests; the embedded program-status suite also passes. The full upstream
+suite's debug stress run is separate evidence and must not be counted as passed
+without completion. Keep its result, application checks and native CI status in
+the PR rather than inferring them from the C API subset.
 
 Record exact checks and gaps in the PR. Local Apple Silicon VT tests exercise
 portable parser/FFI behavior, not Windows D3D, ConPTY, Linux compositor or Intel
