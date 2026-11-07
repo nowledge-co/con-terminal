@@ -1,0 +1,44 @@
+name: Metadata and CI policy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/tests/**'
+      - 'docs/**'
+      - 'scripts/docs/**'
+      - 'skills/**'
+      - 'postmortem/**'
+      - '*.md'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/tests/**'
+      - 'docs/**'
+      - 'scripts/docs/**'
+      - 'skills/**'
+      - 'postmortem/**'
+      - '*.md'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate docs manifest
+        run: python3 scripts/docs/validate-manifest.py
+      - name: Install workflow test parser
+        run: python3 -m pip install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Check documentation/build/release trigger boundaries
+        run: python3 -m unittest discover -s .github/tests -p 'test_*.py' -v

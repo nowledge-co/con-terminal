@@ -1,5 +1,43 @@
 # Implementation: Build System
 
+## CI scope and superseded runs
+
+Standalone changelog/date, README, contributor guide, docs, skill and postmortem
+changes run the lightweight **Metadata and CI policy** workflow rather than
+native Rust tests or Flatpak builds. The public docs rebuild still runs for its
+published inputs, including CHANGELOG.md. Documentation-validator changes also
+stay in the lightweight lane.
+
+Portable/E2E jobs retain source, dependency, asset and toolchain inputs. Mixed
+code/documentation changes still run real checks. GitHub evaluates a PR's entire
+changed-file set, not just the newest commit: adding a changelog commit to an
+existing code PR is not a reason to skip that PR's checks. Read-only workflows
+cancel older runs for the same workflow and PR/ref when a newer run starts.
+
+Flatpak main pushes use a build-input allowlist. Release tags remain unfiltered
+by changed paths; scheduled and manual publishing remain available. Release
+builds, the shared Flatpak publishing lock, and finalization keep their existing
+non-cancelling behavior. Do not add auto-cancellation to release publication.
+
+Do not rely on `[skip ci]` for routine changelog bookkeeping: it also suppresses
+useful documentation updates. Use the workflow path policy instead. GitHub's
+[path-filter semantics](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)
+leave tag pushes unaffected and can leave path-skipped required checks pending;
+keep branch protection aligned with these selectively triggered checks.
+
+Validate this policy without compiling the application:
+
+```sh
+python3 -m pip install 'PyYAML==6.0.3'
+python3 -m unittest discover -s .github/tests -p 'test_*.py' -v
+python3 scripts/docs/validate-manifest.py
+actionlint .github/workflows/*.yml
+```
+
+The tests load the real workflow YAML and exercise documentation-only, mixed,
+build-input and tag/manual/scheduled cases with the literal/*/** filter subset.
+They do not simulate GitHub dispatch itself.
+
 ## Flatpak Icon
 
 Flatpak uses a 256px derivative of the canonical Tail A6 artwork. Passing the

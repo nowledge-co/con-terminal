@@ -23,11 +23,12 @@ on:
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "mise.toml"
       - "assets/**"
       - "packaging/**"
-      - "docs/**"
       - "crates/**"
       - "scripts/**"
+      - "!scripts/docs/**"
   pull_request:
     paths:
       - ".github/workflows/ci-portable.yml"
@@ -36,11 +37,17 @@ on:
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "mise.toml"
       - "assets/**"
       - "packaging/**"
-      - "docs/**"
       - "crates/**"
       - "scripts/**"
+      - "!scripts/docs/**"
+
+# Read-only checks: newer work supersedes older runs on the same PR/ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -139,8 +146,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Docs manifest validation
-        run: python3 scripts/docs/validate-manifest.py
       - name: Flatpak icon validation
         run: python3 scripts/release/test-flatpak-icon.py
       - name: Release publication regression tests

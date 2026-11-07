@@ -12,11 +12,10 @@ on:
       - ".github/workflows/e2e.yml"
       - "scripts/ci/**"
       - "scripts/macos/test-session-drag-capture.sh"
-      - "crates/con-test/**"
-      - "crates/con-app/**"
-      - "crates/con-core/**"
-      - "crates/con-cli/**"
-      - "crates/con-ghostty/**"
+      - "crates/**"
+      - "assets/**"
+      - ".cargo/**"
+      - "mise.toml"
       - "Cargo.toml"
       - "Cargo.lock"
   pull_request:
@@ -24,13 +23,17 @@ on:
       - ".github/workflows/e2e.yml"
       - "scripts/ci/**"
       - "scripts/macos/test-session-drag-capture.sh"
-      - "crates/con-test/**"
-      - "crates/con-app/**"
-      - "crates/con-core/**"
-      - "crates/con-cli/**"
-      - "crates/con-ghostty/**"
+      - "crates/**"
+      - "assets/**"
+      - ".cargo/**"
+      - "mise.toml"
       - "Cargo.toml"
       - "Cargo.lock"
+
+# Read-only checks: newer work supersedes older runs on the same PR/ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
