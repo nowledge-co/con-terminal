@@ -16,6 +16,15 @@ lacked supersession concurrency, so new PR commits did not stop older work.
 The existing E2E filter already excluded standalone changelog changes; it was
 not accurate to attribute every observed run to the date-only commit.
 
+## Follow-up: workflow-only compilation
+
+The first policy change still triggered three native PR workflows because their
+path filters included workflow YAML files themselves. Those jobs were cancelled:
+the application inputs were unchanged and the new policy checks had passed.
+Workflow-only edits now run actionlint and policy tests; actual changes to native
+job commands or runners require explicit dispatch of the affected workflow. Small
+packaging fixtures remain automatic. Release tags stay unfiltered.
+
 ## Fix and lessons
 
 - Filter Flatpak branch pushes by actual build inputs; preserve tag, scheduled

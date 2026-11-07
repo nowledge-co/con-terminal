@@ -6,7 +6,22 @@ Standalone changelog/date, README, contributor guide, docs, skill and postmortem
 changes run the lightweight **Metadata and CI policy** workflow rather than
 native Rust tests or Flatpak builds. The public docs rebuild still runs for its
 published inputs, including CHANGELOG.md. Documentation-validator changes also
-stay in the lightweight lane.
+stay in the lightweight lane. Workflow-only changes run actionlint and policy
+tests, without compiling the application. The small macOS packaging fixtures
+remain enabled for their relevant workflow inputs.
+
+When changing actual build commands, runners or tool setup inside a workflow,
+explicitly dispatch the affected native check on the PR branch before merging:
+
+```sh
+gh workflow run ci-portable.yml --ref <branch>
+gh workflow run e2e.yml --ref <branch>
+gh workflow run ci-macos-ghostty.yml --ref <branch>
+```
+
+Trigger/concurrency-only edits do not require those builds. Release workflow
+changes still need their relevant packaging/publication validation; do not
+create a release tag merely to test CI filters.
 
 Portable/E2E jobs retain source, dependency, asset and toolchain inputs. Mixed
 code/documentation changes still run real checks. GitHub evaluates a PR's entire

@@ -123,6 +123,26 @@ class WorkflowPolicy(unittest.TestCase):
     def test_changelog_still_rebuilds_the_public_documentation(self):
         self.assertTrue(triggered('docs-website-rebuild.yml', ['CHANGELOG.md']))
 
+    def test_workflow_only_changes_do_not_compile_the_application(self):
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            relative = path.relative_to(ROOT).as_posix()
+            for event in ("push", "pull_request"):
+                self.assertTrue(triggered("ci-metadata.yml", [relative], event))
+                for name in HEAVY:
+                    if name == "ci-macos-packaging.yml":
+                        continue  # Small shell/Ruby fixture checks are intentional.
+                    with self.subTest(path=relative, event=event, workflow=name):
+                        self.assertFalse(triggered(name, [relative], event))
+
+    def test_workflow_lint_is_part_of_the_lightweight_lane(self):
+        steps = workflow("ci-metadata.yml")["jobs"]["validate"]["steps"]
+        self.assertTrue(any("github.com/rhysd/actionlint/cmd/actionlint@v1.7.12"
+                            in step.get("run", "") for step in steps))
+
+    def test_native_checks_remain_manually_available(self):
+        for name in ("ci-portable.yml", "e2e.yml", "ci-macos-ghostty.yml"):
+            self.assertTrue(triggered(name, [], "workflow_dispatch"))
+
     def test_metadata_tests_do_not_trigger_native_builds(self):
         for path in ('.github/tests/test_workflow_policy.py', '.github/workflows/ci-metadata.yml'):
             self.assertTrue(triggered('ci-metadata.yml', [path], 'pull_request'))

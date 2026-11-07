@@ -14,12 +14,10 @@ name: ci-portable
 # cannot hide behind Cargo's non-linking `check` path.
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/ci-portable.yml"
-      - ".github/workflows/publish-flatpak.yml"
-      - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -31,9 +29,6 @@ on:
       - "!scripts/docs/**"
   pull_request:
     paths:
-      - ".github/workflows/ci-portable.yml"
-      - ".github/workflows/publish-flatpak.yml"
-      - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
