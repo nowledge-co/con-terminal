@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-/// Values match GhosttyRenderStateCursorVisualStyle in vt/render.h.
+/// Values match GhosttyCursorStyle in vt/render.h.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(u32)]
 pub enum CursorStyle {

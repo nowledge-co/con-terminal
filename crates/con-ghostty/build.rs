@@ -48,14 +48,20 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// manifest is checked by linked tests on Windows/Linux. See
 /// docs/impl/ghostty-1.4-upgrade.md for security coverage and provenance.
 ///
-/// Ghostty's internal macOS embedding API and libghostty-vt API are not
-/// stable. Future bumps must update the handwritten FFI bindings, compile
+/// 2026-11-07 bump: libghostty-vt 1.0.0 (`vt-1.0.0`, `0fa3d577a5`)
+/// plus the same scoped full-embedding bridge. The stable VT ABI has new
+/// fixed records, compact styles, formatter and input APIs. The embedded
+/// action enum adds SET_WINDOW_THEME before the bridge actions. See
+/// docs/impl/libghostty-vt-1.0-upgrade.md for the migration and acceptance.
+///
+/// The VT C API is stable from 1.0; the full macOS embedding API is not.
+/// Future bumps must update the handwritten FFI bindings as needed, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
 // Temporary public-fork exception authorized on 2026-10-09; #444 tracks
 // replacement with official upstream. This revision includes IO-thread
 // ingress and close/shutdown/incarnation fixes, not just the initial bridge.
-const GHOSTTY_REV: &str = "6e68c5f446eb929f03a17bf736b56ebc0d46731b";
+const GHOSTTY_REV: &str = "9a97075f932b6c0d524618ff09dc4d93a41aba2d";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";
@@ -87,7 +93,12 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     match target_os.as_str() {
-        "macos" => build_macos(),
+        "macos" => {
+            build_macos();
+            if env::var_os("CARGO_FEATURE_VT_TESTS").is_some() {
+                build_vt_backend("macos");
+            }
+        }
         "windows" | "linux" => build_vt_backend(target_os.as_str()),
         other => {
             println!(
@@ -340,21 +351,21 @@ fn build_vt_backend(target_os: &str) {
     // Windows, so default it on regardless of cargo profile and let
     // `CON_GHOSTTY_OPTIMIZE=debug` opt back in for VT-debugging.
     //
-    // `-Dsimd`: Linux libghostty-vt must be built with libc enabled. Ghostty's
+    // `-Dsimd`: Linux and macOS-test libghostty-vt require libc enabled. Ghostty's
     // non-libc Wuffs module (`pkg/wuffs/src/main.zig`) exports hidden weak
     // `calloc`/`free` fallbacks; when that archive is linked into a Rust
     // executable, the hidden fallbacks capture the process-wide symbols and
     // make every zeroed Rust allocation fail. Enabling SIMD also enables libc
     // on Ghostty's root module (`src/build/GhosttyZig.zig`), suppressing
-    // those fallbacks, and the Linux archive contains the required
+    // those fallbacks, and the archive contains the required
     // simdutf/highway objects. Re-check both files on every GHOSTTY_REV bump;
     // the coupling is an upstream implementation detail, not a contract.
     //
     // Windows keeps the conservative non-SIMD default because its static
     // archive has a different C++ link surface. The override remains useful
-    // there for targeted toolchain experiments; Linux always takes the only
+    // there for targeted toolchain experiments; Unix always takes the only
     // runtime-safe path.
-    let simd_on = target_os == "linux"
+    let simd_on = target_os != "windows"
         || env::var("CON_GHOSTTY_VT_SIMD")
             .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
             .unwrap_or(false);
@@ -443,10 +454,18 @@ fn build_vt_backend(target_os: &str) {
         );
     }
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        lib_path.parent().unwrap().display()
-    );
+    // Darwin's final linker can prefer the same-named dylib even for Rust's
+    // static native dependency. Stage the verified archive under a unique name
+    // so a test/application cannot silently acquire an unshipped VT dylib.
+    let (link_dir, link_name) = if target_os == "macos" {
+        let dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing"));
+        fs::copy(&lib_path, dir.join("libcon-ghostty-vt.a"))
+            .expect("failed to stage static libghostty-vt archive");
+        (dir, "con-ghostty-vt")
+    } else {
+        (lib_path.parent().unwrap().to_path_buf(), link_name)
+    };
+    println!("cargo:rustc-link-search=native={}", link_dir.display());
     println!("cargo:rustc-link-lib=static={link_name}");
 
     // libghostty-vt itself doesn't pull in a platform windowing stack.
@@ -606,6 +625,8 @@ fn ghostty_vt_zig_target() -> Option<String> {
 fn cargo_target_to_zig_target(cargo_target: &str) -> Option<&'static str> {
     match cargo_target {
         "x86_64-unknown-linux-gnu" => Some("x86_64-linux-gnu"),
+        "aarch64-apple-darwin" => Some("aarch64-macos"),
+        "x86_64-apple-darwin" => Some("x86_64-macos"),
         "aarch64-unknown-linux-gnu" => Some("aarch64-linux-gnu"),
         "x86_64-unknown-linux-musl" => Some("x86_64-linux-musl"),
         "aarch64-unknown-linux-musl" => Some("aarch64-linux-musl"),
@@ -813,14 +834,22 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         "    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
     );
 
+    let header_fields = if header_text.contains("  const char* GHOSTTY_NULLABLE initial_input;") {
+        (
+            "  const char* GHOSTTY_NULLABLE initial_input;\n  bool wait_after_command;\n",
+            "  const char* GHOSTTY_NULLABLE initial_input;\n  const char* GHOSTTY_NULLABLE initial_output;\n  bool wait_after_command;\n",
+        )
+    } else {
+        (
+            "  const char* initial_input;\n  bool wait_after_command;\n",
+            "  const char* initial_input;\n  const char* initial_output;\n  bool wait_after_command;\n",
+        )
+    };
     patch_text_once(
         &header,
         &mut header_text,
-        "const char* initial_output;",
-        &[(
-            "  const char* initial_input;\n  bool wait_after_command;\n",
-            "  const char* initial_input;\n  const char* initial_output;\n  bool wait_after_command;\n",
-        )],
+        "initial_output;",
+        &[header_fields],
     )?;
 
     write_patch_files_with_rollback(&[
@@ -885,10 +914,16 @@ fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
 }
 
 fn write_patch_files_with_rollback(files: &[(&Path, &str, &str)]) -> Result<(), String> {
-    for (written_count, (path, _, patched)) in files.iter().enumerate() {
+    for (written_count, (path, original, patched)) in files.iter().enumerate() {
+        if original == patched {
+            continue;
+        }
         if let Err(write_err) = write_file_atomic(path, patched) {
             let mut rollback_errors = Vec::new();
-            for (rollback_path, original, _) in files[..written_count].iter().rev() {
+            for (rollback_path, original, patched) in files[..written_count].iter().rev() {
+                if original == patched {
+                    continue;
+                }
                 if let Err(err) = write_file_atomic(rollback_path, original) {
                     rollback_errors.push(err);
                 }
@@ -1102,9 +1137,18 @@ fn collect_zon_files(root: &Path, out: &mut VecDeque<PathBuf>) {
 
 fn extract_zon_urls(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
+    let mut metadata_depth = 0_usize;
     for line in text.lines() {
         let line = line.trim_start();
         if line.starts_with("//") {
+            continue;
+        }
+        // VT 1.0 adds packager metadata for already-vendored sources. Its
+        // project homepage is not a Zig archive dependency to download.
+        if metadata_depth > 0 || line.starts_with(".third_party =") {
+            metadata_depth += line.bytes().filter(|byte| *byte == b'{').count();
+            metadata_depth =
+                metadata_depth.saturating_sub(line.bytes().filter(|byte| *byte == b'}').count());
             continue;
         }
         let Some(url_field) = line.find(".url") else {
@@ -1434,6 +1478,55 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_embedding_patch_preserves_source_timestamp() {
+        use std::{
+            fs,
+            time::{Duration, SystemTime},
+        };
+        let path = std::env::temp_dir().join(format!(
+            "ghostty-patch-noop-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, "already patched").unwrap();
+        let timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(946684800);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(timestamp))
+            .unwrap();
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        let result = super::write_patch_files_with_rollback(&[(
+            &path,
+            "already patched",
+            "already patched",
+        )]);
+        let after = fs::metadata(&path).unwrap().modified().unwrap();
+        fs::remove_file(&path).unwrap();
+        result.unwrap();
+        assert_eq!(
+            after, before,
+            "an idempotent patch must not invalidate the native build cache"
+        );
+    }
+
+    #[test]
+    fn maps_macos_vt_test_targets() {
+        assert_eq!(
+            cargo_target_to_zig_target("aarch64-apple-darwin"),
+            Some("aarch64-macos")
+        );
+        assert_eq!(
+            cargo_target_to_zig_target("x86_64-apple-darwin"),
+            Some("x86_64-macos")
+        );
+    }
+
+    #[test]
     fn maps_linux_targets_to_generic_zig_targets() {
         assert_eq!(
             cargo_target_to_zig_target("x86_64-unknown-linux-gnu"),
@@ -1488,6 +1581,25 @@ mod tests {
                 "https://deps.files.ghostty.org/package.tar.gz".to_string(),
                 "https://github.com/example/project.tar.gz".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn skips_vendored_third_party_homepages_without_skipping_dependencies() {
+        let zon = r#"
+        .{
+            .third_party = .{
+                .{ .name = "simdutf", .path = "vendor",
+                   .url = "https://github.com/simdutf/simdutf" },
+            },
+            .dependencies = .{
+                .real = .{ .url = "https://deps.files.ghostty.org/package.tar.gz" },
+            },
+        }
+        "#;
+        assert_eq!(
+            extract_zon_urls(zon),
+            vec!["https://deps.files.ghostty.org/package.tar.gz".to_string()]
         );
     }
 

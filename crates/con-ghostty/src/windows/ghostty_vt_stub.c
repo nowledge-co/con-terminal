@@ -1,10 +1,10 @@
 /*
  * Stub C implementations of the libghostty-vt symbols con-ghostty's
- * `src/windows/vt.rs` binds. Used when `CON_STUB_GHOSTTY_VT=1` so a
+ * `src/vt.rs` binds. Used when `CON_STUB_GHOSTTY_VT=1` so a
  * cargo build can link without a working Zig/libghostty-vt toolchain.
  *
  * Signatures mirror `include/ghostty/vt/{terminal,render,allocator}.h`
- * at GHOSTTY_REV `5f5b988c5236facfe8d2439203d9ee9d5b636cf8` — keep in
+ * at libghostty-vt 1.0.0 — keep in
  * sync with vt.rs on upstream bumps.
  *
  * All calls return empty / false / zero so downstream code degrades
@@ -48,26 +48,18 @@ struct GhosttyPoint {
 };
 
 struct GhosttyGridRef {
-    size_t size;
     void* node;
     uint16_t x;
     uint16_t y;
 };
 
 struct GhosttySelection {
-    size_t size;
     struct GhosttyGridRef start;
     struct GhosttyGridRef end;
     bool rectangle;
 };
 
-struct GhosttyTerminalSelectionFormatOptions {
-    size_t size;
-    int emit;
-    bool unwrap;
-    bool trim;
-    const struct GhosttySelection* selection;
-};
+struct GhosttyString { const uint8_t* ptr; size_t len; };
 
 union GhosttyTerminalScrollViewportValue {
     intptr_t delta;
@@ -88,6 +80,10 @@ struct GhosttyMousePosition {
  * builds linkable while making manifest-aware tests fail explicitly rather
  * than validating against invented metadata. */
 const char* ghostty_type_json(void) { return NULL; }
+GhosttyResult ghostty_build_info(int key, void* out) {
+    (void)key; (void)out;
+    return -2;
+}
 
 /* ── Allocator and process-global services ─────────────────────── */
 
@@ -133,11 +129,12 @@ void ghostty_terminal_vt_write(GhosttyTerminal terminal, const uint8_t* data, si
     (void)terminal; (void)data; (void)len;
 }
 
-void ghostty_terminal_scroll_viewport(
+GhosttyResult ghostty_terminal_scroll_viewport(
     GhosttyTerminal terminal,
     struct GhosttyTerminalScrollViewport behavior
 ) {
     (void)terminal; (void)behavior;
+    return 0;
 }
 
 GhosttyResult ghostty_terminal_set(
@@ -198,6 +195,8 @@ GhosttyResult ghostty_search_get(void* search, int key, void* value) {
     (void)search; (void)key; (void)value;
     return -2;
 }
+GhosttyResult ghostty_search_select_next(void* search) { (void)search; return -2; }
+GhosttyResult ghostty_search_select_prev(void* search) { (void)search; return -2; }
 GhosttyResult ghostty_search_feed(void* search) { (void)search; return -2; }
 GhosttyResult ghostty_search_tick(void* search, int* status) {
     (void)search; (void)status;
@@ -232,7 +231,7 @@ GhosttyResult ghostty_selection_gesture_get(
 ) {
     (void)gesture; (void)terminal;
     if (out) {
-        if (data == 0) { *(uint8_t*)out = 0; }
+        if (data == 1) { *(uint8_t*)out = 0; }
         else { *(int*)out = 0; }
     }
     return 0;
@@ -275,16 +274,26 @@ GhosttyResult ghostty_terminal_selection_equal(
     return 0;
 }
 
-GhosttyResult ghostty_terminal_selection_format_alloc(
-    GhosttyTerminal terminal, const void* allocator,
-    struct GhosttyTerminalSelectionFormatOptions options,
-    uint8_t** out_ptr, size_t* out_len
+GhosttyResult ghostty_formatter_terminal_new(
+    const void* allocator, void** out, GhosttyTerminal terminal
 ) {
-    (void)terminal; (void)allocator; (void)options;
+    (void)allocator; (void)terminal;
+    if (out) { *out = (void*)(uintptr_t)10; }
+    return 0;
+}
+GhosttyResult ghostty_formatter_set(void* formatter, int option, const void* value) {
+    (void)formatter; (void)option; (void)value;
+    return 0;
+}
+GhosttyResult ghostty_formatter_format_alloc(
+    void* formatter, const void* allocator, uint8_t** out_ptr, size_t* out_len
+) {
+    (void)formatter; (void)allocator;
     if (out_ptr) { *out_ptr = NULL; }
     if (out_len) { *out_len = 0; }
     return -4;
 }
+void ghostty_formatter_free(void* formatter) { (void)formatter; }
 
 /* ── Kitty graphics ────────────────────────────────────────────── */
 
@@ -366,15 +375,16 @@ GhosttyResult ghostty_key_encoder_new(
 
 void ghostty_key_encoder_free(GhosttyKeyEncoder encoder) { (void)encoder; }
 
-void ghostty_key_encoder_setopt_from_terminal(
+GhosttyResult ghostty_key_encoder_set_from_terminal(
     GhosttyKeyEncoder encoder, GhosttyTerminal terminal
 ) {
     (void)encoder; (void)terminal;
+    return 0;
 }
 
 GhosttyResult ghostty_key_encoder_encode(
     GhosttyKeyEncoder encoder, GhosttyKeyEvent event,
-    char* out_buf, size_t out_buf_size, size_t* out_len
+    uint8_t* out_buf, size_t out_buf_size, size_t* out_len
 ) {
     (void)encoder; (void)event; (void)out_buf; (void)out_buf_size;
     if (out_len) { *out_len = 0; }
@@ -382,7 +392,7 @@ GhosttyResult ghostty_key_encoder_encode(
 }
 
 GhosttyResult ghostty_focus_encode(
-    int event, char* out_buf, size_t out_buf_size, size_t* out_len
+    int event, uint8_t* out_buf, size_t out_buf_size, size_t* out_len
 ) {
     (void)event; (void)out_buf; (void)out_buf_size;
     if (out_len) { *out_len = 0; }
@@ -398,30 +408,37 @@ GhosttyResult ghostty_key_event_new(
 }
 
 void ghostty_key_event_free(GhosttyKeyEvent event) { (void)event; }
-void ghostty_key_event_set_action(GhosttyKeyEvent event, int action) {
+GhosttyResult ghostty_key_event_set_action(GhosttyKeyEvent event, int action) {
     (void)event; (void)action;
+    return 0;
 }
-void ghostty_key_event_set_key(GhosttyKeyEvent event, int key) {
+GhosttyResult ghostty_key_event_set_key(GhosttyKeyEvent event, int key) {
     (void)event; (void)key;
+    return 0;
 }
-void ghostty_key_event_set_mods(GhosttyKeyEvent event, uint16_t mods) {
+GhosttyResult ghostty_key_event_set_mods(GhosttyKeyEvent event, uint16_t mods) {
     (void)event; (void)mods;
+    return 0;
 }
-void ghostty_key_event_set_consumed_mods(GhosttyKeyEvent event, uint16_t mods) {
+GhosttyResult ghostty_key_event_set_consumed_mods(GhosttyKeyEvent event, uint16_t mods) {
     (void)event; (void)mods;
+    return 0;
 }
-void ghostty_key_event_set_composing(GhosttyKeyEvent event, bool composing) {
+GhosttyResult ghostty_key_event_set_composing(GhosttyKeyEvent event, bool composing) {
     (void)event; (void)composing;
+    return 0;
 }
-void ghostty_key_event_set_utf8(
-    GhosttyKeyEvent event, const char* utf8, size_t len
+GhosttyResult ghostty_key_event_set_utf8(
+    GhosttyKeyEvent event, struct GhosttyString utf8
 ) {
-    (void)event; (void)utf8; (void)len;
+    (void)event; (void)utf8;
+    return 0;
 }
-void ghostty_key_event_set_unshifted_codepoint(
+GhosttyResult ghostty_key_event_set_unshifted_codepoint(
     GhosttyKeyEvent event, uint32_t codepoint
 ) {
     (void)event; (void)codepoint;
+    return 0;
 }
 
 /* ── Mouse encoder ──────────────────────────────────────────────── */
@@ -436,21 +453,23 @@ GhosttyResult ghostty_mouse_encoder_new(
 
 void ghostty_mouse_encoder_free(GhosttyMouseEncoder encoder) { (void)encoder; }
 
-void ghostty_mouse_encoder_setopt(
+GhosttyResult ghostty_mouse_encoder_set(
     GhosttyMouseEncoder encoder, int option, const void* value
 ) {
     (void)encoder; (void)option; (void)value;
+    return 0;
 }
 
-void ghostty_mouse_encoder_setopt_from_terminal(
+GhosttyResult ghostty_mouse_encoder_set_from_terminal(
     GhosttyMouseEncoder encoder, GhosttyTerminal terminal
 ) {
     (void)encoder; (void)terminal;
+    return 0;
 }
 
 GhosttyResult ghostty_mouse_encoder_encode(
     GhosttyMouseEncoder encoder, GhosttyMouseEvent event,
-    char* out_buf, size_t out_buf_size, size_t* out_len
+    uint8_t* out_buf, size_t out_buf_size, size_t* out_len
 ) {
     (void)encoder; (void)event; (void)out_buf; (void)out_buf_size;
     if (out_len) { *out_len = 0; }
@@ -466,20 +485,25 @@ GhosttyResult ghostty_mouse_event_new(
 }
 
 void ghostty_mouse_event_free(GhosttyMouseEvent event) { (void)event; }
-void ghostty_mouse_event_set_action(GhosttyMouseEvent event, int action) {
+GhosttyResult ghostty_mouse_event_set_action(GhosttyMouseEvent event, int action) {
     (void)event; (void)action;
+    return 0;
 }
-void ghostty_mouse_event_set_button(GhosttyMouseEvent event, int button) {
+GhosttyResult ghostty_mouse_event_set_button(GhosttyMouseEvent event, int button) {
     (void)event; (void)button;
+    return 0;
 }
-void ghostty_mouse_event_clear_button(GhosttyMouseEvent event) { (void)event; }
-void ghostty_mouse_event_set_mods(GhosttyMouseEvent event, uint16_t mods) {
+GhosttyResult ghostty_mouse_event_clear_button(GhosttyMouseEvent event) { (void)event;     return 0;
+}
+GhosttyResult ghostty_mouse_event_set_mods(GhosttyMouseEvent event, uint16_t mods) {
     (void)event; (void)mods;
+    return 0;
 }
-void ghostty_mouse_event_set_position(
+GhosttyResult ghostty_mouse_event_set_position(
     GhosttyMouseEvent event, struct GhosttyMousePosition position
 ) {
     (void)event; (void)position;
+    return 0;
 }
 
 /* ── Cell accessor ──────────────────────────────────────────────── */

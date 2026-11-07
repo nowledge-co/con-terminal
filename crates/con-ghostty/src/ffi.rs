@@ -387,9 +387,10 @@ pub enum ghostty_action_tag_e {
     GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD = 67,
     GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW = 68,
     GHOSTTY_ACTION_RESIZE_WINDOW = 69,
-    GHOSTTY_ACTION_PROGRAM_STATUS = 70,
-    GHOSTTY_ACTION_SHELL_PROMPT = 71,
-    GHOSTTY_ACTION_FULL_RESET = 72,
+    GHOSTTY_ACTION_SET_WINDOW_THEME = 70,
+    GHOSTTY_ACTION_PROGRAM_STATUS = 71,
+    GHOSTTY_ACTION_SHELL_PROMPT = 72,
+    GHOSTTY_ACTION_FULL_RESET = 73,
 }
 
 /// Action payload for DESKTOP_NOTIFICATION (OSC 9 and OSC 777).
@@ -430,7 +431,8 @@ pub struct ghostty_action_program_status_string_s {
     pub len: usize,
 }
 
-/// Layout-compatible with `GhosttyTerminalProgramStatus`.
+/// Full-embedding bridge payload; retains its own size-prefixed ABI.
+/// Stable VT 1.0 uses a separate fixed-layout `GhosttyTerminalProgramStatus`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ghostty_action_program_status_s {
