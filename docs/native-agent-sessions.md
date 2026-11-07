@@ -23,7 +23,13 @@ The beta.168 hotfix also restores the ordinary history path and automatically
 merges commands that beta.167 saved in con's private bridge directory. Recovery
 runs when a new zsh starts, after user history-path overrides, and retains both
 source history and private pre-merge backups. Existing history is appended to,
-never replaced. Recovery remains available if agent auto-resume was disabled.
+never replaced. Concurrent pane startups wait only briefly for recovery; if
+another recovery or a native zsh writer stays busy, they continue quietly and
+retry on a later terminal start. Deferred attempts never mark records recovered.
+Once the retained source is checkpointed, later starts do not lock or read the
+user’s history again unless new source records appear. Actual file/access errors
+still report a recovery warning. Recovery remains available if agent auto-resume
+was disabled.
 The native CLI still resolves the actual profile, model, permissions and history
 from your normal environment and arguments. No profile or credential copies are
 made. Explicit remote clients, batch commands and nested native tool calls pass

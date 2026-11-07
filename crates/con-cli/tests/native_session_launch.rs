@@ -479,6 +479,170 @@ fn private_zsh_bridge_recovers_misdirected_history_automatically_once() {
 }
 
 #[test]
+fn simultaneous_zsh_starts_recover_once_without_errors_or_history_loss() {
+    for mode in ["-lic", "-ic"] {
+        let fixture = Fixture::new();
+        fs::write(&fixture.rc, "SAVEHIST=0\n").unwrap();
+        let prepared = Command::new(env!("CARGO_BIN_EXE_con-cli"))
+            .args(["native-session", "prepare"])
+            .env("HOME", &fixture.home)
+            .output()
+            .unwrap();
+        assert!(prepared.status.success());
+        let runtime = fixture
+            .launcher
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("runtime");
+        let source = runtime.join("zsh/.zsh_history");
+        let target = fixture.home.join(".zsh_history");
+        let old = b": 1700000000:0;original-command\n";
+        let recent = b": 1700000010:0;recovered-command\n";
+        fs::write(&target, old).unwrap();
+        fs::write(&source, recent).unwrap();
+        let recovery = runtime.join("zsh/history-recovery");
+        fs::create_dir_all(&recovery).unwrap();
+        let owner = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(recovery.join("lock"))
+            .unwrap();
+        owner.try_lock().unwrap();
+
+        let start = || {
+            Command::new("/bin/zsh")
+                .args([mode, "print -r -- SHELL_READY"])
+                .env("HOME", &fixture.home)
+                .env("ZDOTDIR", runtime.join("zsh"))
+                .env("CON_NATIVE_ORIGINAL_ZDOTDIR_SET", "0")
+                .env("CON_NATIVE_SHELL_ROOT", &runtime)
+                .env("CON_NATIVE_SESSION_BIN", fixture.launcher.parent().unwrap())
+                .env(
+                    "GHOSTTY_RESOURCES_DIR",
+                    fixture.root.join("no-ghostty-resources"),
+                )
+                .env("RUST_BACKTRACE", "1")
+                .env_remove("GHOSTTY_ZSH_ZDOTDIR")
+                .env_remove("HISTFILE")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let check = |child: std::process::Child| {
+            let output = child.wait_with_output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("SHELL_READY"));
+            assert!(!stderr.contains("Error:"), "{stderr}");
+            assert!(!stderr.contains("recovery needs attention"), "{stderr}");
+            assert!(!stderr.contains("Stack backtrace"), "{stderr}");
+        };
+
+        // Deterministically force the exact startup contention reported by the
+        // user; it must defer quietly, without checkpointing unfinished work.
+        check(start());
+        assert_eq!(fs::read(&source).unwrap(), recent);
+        assert_eq!(fs::read(&target).unwrap(), old);
+        assert!(!recovery.join("recovered").exists());
+        drop(owner);
+
+        // Then exercise real parallel startup, as when restoring many panes.
+        let children: Vec<_> = (0..16).map(|_| start()).collect();
+        for child in children {
+            check(child);
+        }
+        check(start()); // A later terminal also retries any deferred recovery.
+        assert_eq!(fs::read(&source).unwrap(), recent);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            [old.as_slice(), recent.as_slice()].concat()
+        );
+        let backups = fs::read_dir(&recovery)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "source" || ext == "target")
+            })
+            .count();
+        assert_eq!(backups, 2);
+    }
+}
+
+#[test]
+fn native_history_fcntl_contention_defers_without_checkpointing_and_retries() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    for hold_source in [false, true] {
+        let fixture = Fixture::new();
+        let source = fixture.root.join("old-con-history");
+        let target = fixture.root.join("user-history");
+        fs::write(&source, b": 2:0;recent\n").unwrap();
+        fs::write(&target, b": 1:0;original\n").unwrap();
+        // Use an independent OS process: fcntl locks are process-scoped, so a
+        // lock in this test process would not reproduce a native zsh writer.
+        let mut owner = Command::new("python3")
+            .args(["-c", "import fcntl,sys\nf=open(sys.argv[1], 'r+b')\nfcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\nprint('READY', flush=True)\nsys.stdin.buffer.read()"])
+            .arg(if hold_source { &source } else { &target })
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(owner.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "READY");
+        let recover = || {
+            Command::new(env!("CARGO_BIN_EXE_con-cli"))
+                .args([
+                    "--json",
+                    "native-session",
+                    "recover-shell-history",
+                    "--source",
+                ])
+                .arg(&source)
+                .arg("--target")
+                .arg(&target)
+                .env("RUST_BACKTRACE", "1")
+                .output()
+                .unwrap()
+        };
+        let busy = recover();
+        // Release the native writer even if an assertion below fails.
+        drop(owner.stdin.take());
+        assert!(owner.wait().unwrap().success());
+        assert!(
+            busy.status.success(),
+            "{}",
+            String::from_utf8_lossy(&busy.stderr)
+        );
+        assert!(busy.stderr.is_empty());
+        assert!(String::from_utf8_lossy(&busy.stdout).contains("\"added_records\":0"));
+        assert_eq!(fs::read(&source).unwrap(), b": 2:0;recent\n");
+        assert_eq!(fs::read(&target).unwrap(), b": 1:0;original\n");
+        assert!(!fixture.root.join("history-recovery/recovered").exists());
+        let retry = recover();
+        assert!(
+            retry.status.success(),
+            "{}",
+            String::from_utf8_lossy(&retry.stderr)
+        );
+        assert!(String::from_utf8_lossy(&retry.stdout).contains("\"added_records\":1"));
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b": 1:0;original\n: 2:0;recent\n"
+        );
+    }
+}
+
+#[test]
 fn installed_launcher_preserves_argv_exit_status_and_other_terminal_behavior() {
     let fixture = Fixture::new();
     let result = fixture.install(true);

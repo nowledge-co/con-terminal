@@ -4,6 +4,27 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.172` (Unreleased)
+
+### Fixed
+
+**macOS — shell history**
+
+- Opening many zsh panes together no longer prints history-recovery errors for
+  ordinary lock contention. Busy recovery or native history writers defer safely
+  and retry on later terminal starts. Already-recovered records no longer lock
+  or scan the user's history; original files and private backups are retained.
+  _(PR [#552](https://github.com/nowledge-co/con-terminal/pull/552) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Developer experience**
+
+- Documentation, changelog and workflow-only edits use lightweight validation
+  instead of compiling the application. Superseded read-only checks cancel
+  automatically; source changes and release tags retain their required checks.
+  _(PR [#550](https://github.com/nowledge-co/con-terminal/pull/550) and [#551](https://github.com/nowledge-co/con-terminal/pull/551) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.171` - 2026-11-07
 
 ### Changed

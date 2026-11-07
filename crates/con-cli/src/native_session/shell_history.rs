@@ -6,7 +6,31 @@ use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::Path,
+    time::{Duration, Instant},
 };
+
+// Restoring a workspace starts many shells together. Serialize briefly, but
+// never turn a busy recovery or native history writer into a startup error.
+const LOCK_WAIT: Duration = Duration::from_millis(250);
+const LOCK_POLL: Duration = Duration::from_millis(10);
+
+fn lock_recovery(file: &std::fs::File) -> Result<bool> {
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(true),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                std::thread::sleep(LOCK_POLL);
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(error).context("Could not lock con history recovery");
+            }
+        }
+    }
+}
 
 // zsh stores a multiline command as backslash-newline continuations. Work on
 // bytes: history can contain zsh metafication bytes that are not UTF-8.
@@ -42,20 +66,23 @@ struct ZshLock {
 }
 #[cfg(unix)]
 impl ZshLock {
-    fn acquire(history: &Path) -> Result<Self> {
+    fn acquire(history: &Path) -> Result<Option<Self>> {
         let mut name = history.as_os_str().to_os_string();
         name.push(".LOCK");
         let path = std::path::PathBuf::from(name);
-        for attempt in 0..50 {
+        let deadline = Instant::now() + LOCK_WAIT;
+        loop {
             match private_file(&path) {
-                Ok(file) => return Ok(Self { path, file }),
+                Ok(file) => return Ok(Some(Self { path, file })),
                 Err(error)
                     if error
                         .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
-                        && attempt < 49 =>
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists) =>
                 {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    if Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(LOCK_POLL);
                 }
                 Err(error) => {
                     return Err(error
@@ -63,7 +90,6 @@ impl ZshLock {
                 }
             }
         }
-        unreachable!()
     }
 }
 #[cfg(unix)]
@@ -78,19 +104,24 @@ impl Drop for ZshLock {
     }
 }
 #[cfg(unix)]
-fn lock_native_file(file: &std::fs::File) -> Result<()> {
+fn lock_native_file(file: &std::fs::File) -> Result<bool> {
     use std::os::fd::AsRawFd;
     // SAFETY: flock contains only C integers and fcntl reads it synchronously.
     let mut lock: libc::flock = unsafe { std::mem::zeroed() };
     lock.l_type = libc::F_WRLCK as _;
     lock.l_whence = libc::SEEK_SET as _;
     let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &lock) };
-    ensure!(
-        result != -1,
-        "Shell history is busy: {}",
-        std::io::Error::last_os_error()
-    );
-    Ok(())
+    if result == -1 {
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::EAGAIN) | Some(libc::EACCES)
+        ) {
+            return Ok(false);
+        }
+        return Err(error).context("Could not lock native shell history");
+    }
+    Ok(true)
 }
 
 pub(super) fn recover(source: &Path, target: &Path) -> Result<usize> {
@@ -116,17 +147,37 @@ pub(super) fn recover(source: &Path, target: &Path) -> Result<usize> {
         .create(true)
         .truncate(false)
         .open(directory.join("lock"))?;
-    lock.try_lock()
-        .context("Another shell is recovering history; retry in a new terminal")?;
+    if !lock_recovery(&lock)? {
+        return Ok(0);
+    }
     #[cfg(unix)]
-    let _source_lock = ZshLock::acquire(source)?;
+    let Some(_source_lock) = ZshLock::acquire(source)? else {
+        return Ok(0);
+    };
     let mut source_file = OpenOptions::new().read(true).write(true).open(source)?;
     #[cfg(unix)]
-    lock_native_file(&source_file)?;
+    if !lock_native_file(&source_file)? {
+        return Ok(0);
+    }
     let mut source_bytes = Vec::new();
     source_file.read_to_end(&mut source_bytes)?;
     let source_records = records(&source_bytes);
     if source_records.is_empty() {
+        return Ok(0);
+    }
+    let checkpoint_path = directory.join("recovered");
+    let checkpoint = match fs::read(&checkpoint_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let checkpoint_records: HashSet<&[u8]> = records(&checkpoint).into_iter().collect();
+    if source_records
+        .iter()
+        .all(|record| checkpoint_records.contains(record))
+    {
+        // The old source is deliberately retained. It does not require touching
+        // the user's history on every later shell startup once checkpointed.
         return Ok(0);
     }
     // Follow a user-chosen history symlink, but never replace the link or file.
@@ -145,7 +196,9 @@ pub(super) fn recover(source: &Path, target: &Path) -> Result<usize> {
         );
     }
     #[cfg(unix)]
-    let _target_lock = ZshLock::acquire(&target)?;
+    let Some(_target_lock) = ZshLock::acquire(&target)? else {
+        return Ok(0);
+    };
     let mut options = OpenOptions::new();
     options.read(true).append(true).create(true);
     #[cfg(unix)]
@@ -155,22 +208,19 @@ pub(super) fn recover(source: &Path, target: &Path) -> Result<usize> {
     }
     let mut file = options.open(&target)?;
     #[cfg(not(unix))]
-    file.try_lock()
-        .context("Shell history is busy; retry in a new terminal")?;
+    if !lock_recovery(&file)? {
+        return Ok(0);
+    }
     #[cfg(unix)]
-    lock_native_file(&file)?;
+    if !lock_native_file(&file)? {
+        return Ok(0);
+    }
     ensure!(
         file.metadata()?.is_file(),
         "Shell history target is not a regular file"
     );
     let mut original = Vec::new();
     file.read_to_end(&mut original)?;
-    let checkpoint_path = directory.join("recovered");
-    let checkpoint = match fs::read(&checkpoint_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
     let mut known: HashSet<&[u8]> = records(&original)
         .into_iter()
         .chain(records(&checkpoint))
@@ -285,8 +335,8 @@ mod tests {
         let target = root.join("user-history");
         fs::write(&source, b": 2:0;recent\n").unwrap();
         fs::write(&target, b": 1:0;original\n").unwrap();
-        let busy = ZshLock::acquire(&target).unwrap();
-        assert!(recover(&source, &target).is_err());
+        let busy = ZshLock::acquire(&target).unwrap().unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 0);
         assert_eq!(fs::read(&target).unwrap(), b": 1:0;original\n");
         assert_eq!(fs::read(&source).unwrap(), b": 2:0;recent\n");
         drop(busy);
@@ -295,6 +345,58 @@ mod tests {
             fs::read(&target).unwrap(),
             b": 1:0;original\n: 2:0;recent\n"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn competing_recovery_defers_without_writes_and_retries_after_unlock() {
+        let root = std::env::temp_dir().join(format!("con-history-{}", uuid::Uuid::new_v4()));
+        let directory = root.join("history-recovery");
+        fs::create_dir_all(&directory).unwrap();
+        let source = root.join(".zsh_history");
+        let target = root.join("user-history");
+        fs::write(&source, b": 2:0;recent\n").unwrap();
+        fs::write(&target, b": 1:0;original\n").unwrap();
+        let owner = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(directory.join("lock"))
+            .unwrap();
+        owner.try_lock().unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 0);
+        assert_eq!(fs::read(&target).unwrap(), b": 1:0;original\n");
+        assert!(!directory.join("recovered").exists());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        drop(owner);
+        assert_eq!(recover(&source, &target).unwrap(), 1);
+        assert_eq!(recover(&source, &target).unwrap(), 0);
+        assert_eq!(fs::read(&source).unwrap(), b": 2:0;recent\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checkpointed_source_does_not_lock_or_recreate_the_users_history() {
+        let root = std::env::temp_dir().join(format!("con-history-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join(".zsh_history");
+        let target = root.join("user-history");
+        fs::write(&source, b": 2:0;recent\n").unwrap();
+        fs::write(&target, b": 1:0;original\n").unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 1);
+        let owner = ZshLock::acquire(&target).unwrap().unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 0);
+        // A native shell may trim or remove its history. The old source must
+        // not recreate those commands merely because another pane starts.
+        fs::remove_file(&target).unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 0);
+        assert!(!target.exists());
+        fs::write(&source, b": 3:0;later\n").unwrap();
+        assert_eq!(recover(&source, &target).unwrap(), 0);
+        assert!(!target.exists());
+        drop(owner);
+        assert_eq!(recover(&source, &target).unwrap(), 1);
+        assert_eq!(fs::read(&target).unwrap(), b": 3:0;later\n");
         fs::remove_dir_all(root).unwrap();
     }
 }
