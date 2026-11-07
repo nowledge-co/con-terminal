@@ -40,6 +40,10 @@ are touched.
   unless the user-facing behavior truly changed. Default expected behavior
   should read as polish or reliability, not marketing.
 - Add release dates only when a version is actually tagged/released.
+- Use ordinary commits for changelog/date bookkeeping, without `[skip ci]`.
+  Workflow path filters skip native tests/builds for documentation-only changes
+  while preserving metadata checks and public docs updates. See
+  [`docs/impl/build-system.md`](../../docs/impl/build-system.md#ci-scope-and-superseded-runs).
 - After a release, check the latest shipped headings against `gh release list
   --json tagName,publishedAt`; use the release date in Asia/Shanghai, matching
   the existing changelog convention. Do not leave shipped headings undated.

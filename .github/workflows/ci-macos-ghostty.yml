@@ -8,6 +8,11 @@ on:
       - "Cargo.lock"
   workflow_dispatch:
 
+# Read-only checks: newer work supersedes older runs on the same PR/ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-intel:
     name: Build libghostty (macOS x86_64)
