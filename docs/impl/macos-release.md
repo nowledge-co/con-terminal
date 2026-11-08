@@ -281,8 +281,9 @@ that URL for its version-history action when the app is already up to date.
 Sparkle continues to own installation, Remind Me Later, Skip This Version,
 keyboard behavior, scrolling and download verification. Existing installed
 clients can display the new feed content without an application upgrade.
-Windows/Linux feeds carry the same content, but their current Settings updater
-does not render HTML notes; this does not introduce a new portable modal.
+Windows/Linux feeds carry the same content. Their Settings updater converts it
+to inert heading/body/credit blocks rather than executing HTML. See
+[portable updates](portable-updates.md) for download and replacement ownership.
 
 The notes are generated only after platform/asset checks and anonymous download
 probes succeed, then committed with the verified feeds. They never change

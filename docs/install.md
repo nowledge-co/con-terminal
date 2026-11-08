@@ -107,6 +107,27 @@ Linux is in preview. Follow the
 [Linux tracker](https://github.com/nowledge-co/con-terminal/issues/18) for
 current limits and fixes.
 
+## Updates
+
+On macOS, use **Check for Updates…** in the app menu. Sparkle shows the
+target version’s release notes before installation.
+
+Official per-user Windows/Linux installations use **Settings → General →
+Updates**, also opened by **Check for Updates…** in the app menu.
+Review the changes, download while continuing to work, then choose
+**Restart and update** after verification completes. You can cancel a download,
+skip a version, or discard a prepared download. Installation does not open a
+PowerShell console or rerun the first-install script.
+
+Restarting closes running terminals and agents. Native conversation recovery
+follows your existing recovery settings; it does not keep processes running.
+Tabs from multiple windows are retained, using the current single-window
+restore format.
+
+For Flatpak, AUR, Scoop, system-managed or custom installations, use the original
+installation method. con shows update information but does not silently replace
+those installations.
+
 ## Shell integration
 
 con embeds Ghostty's shell-integration scripts and tries to auto-inject them

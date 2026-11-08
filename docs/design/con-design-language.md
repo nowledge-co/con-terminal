@@ -93,6 +93,12 @@ con is light-first (Flexoki Light default) but must excel in both themes.
   second page request. Link to full history, and never invent an urgency score
   or imply that only the latest release covers every skipped version.
 
+- Windows/Linux use the same reading hierarchy in Settings. Download keeps the
+  app open; restart is a separate explicit action after verification. Keep
+  progress, cancellation and failure in place. Respect managed installations;
+  never open an installation console or imply that live agent processes survive
+  restarting the terminal.
+
 ### Settings Layout
 
 - Navigation has its own quiet foreground-derived fill and a single 1px semantic

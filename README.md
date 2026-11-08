@@ -179,6 +179,11 @@ adds `con-app` and `con-cli` to your PATH.
 
 To build from source, see `HACKING.md`.
 
+Review release notes before updating: macOS uses Sparkle; official per-user
+Windows/Linux installs download verified updates in **Settings → General →
+Updates**, then restart when you choose. Keep Flatpak, AUR and Scoop installs
+updated through their package manager. See [Updates](docs/install.md#updates).
+
 ## Docs
 
 Start here:

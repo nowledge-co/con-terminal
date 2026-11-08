@@ -74,7 +74,7 @@ impl ConWorkspace {
         cx.quit();
     }
 
-    pub(super) fn prepare_app_exit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn prepare_app_exit(&mut self, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.flush_session_save(cx);
         // Tear down ghostty surfaces before app exit to avoid Metal/NSView crashes.
@@ -347,6 +347,18 @@ impl ConWorkspace {
             Err(err) => {
                 log::error!("Failed to open settings window: {err}");
             }
+        }
+    }
+
+    pub(super) fn open_updates(
+        &mut self,
+        _: &settings_panel::OpenUpdates,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_settings(&settings_panel::ToggleSettings, window, cx);
+        if let Some(panel) = self.settings_window_panel.clone() {
+            panel.update(cx, |panel, cx| panel.show_updates(cx));
         }
     }
 
