@@ -33,6 +33,8 @@ use std::{
     time::Duration,
 };
 
+mod input;
+
 /// Unique-per-process id for `EditorView` instances, used to namespace GPUI
 /// element ids (multiple editor panes may show previews simultaneously).
 static NEXT_EDITOR_VIEW_ID: AtomicU64 = AtomicU64::new(1);
@@ -473,7 +475,7 @@ impl EditorTab {
             let widest_line_index = lines
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, line)| line.chars().count())
+                .max_by_key(|(_, line)| unicode_width::UnicodeWidthStr::width(line.as_str()))
                 .map(|(index, _)| index)
                 .unwrap_or(0);
 
@@ -524,6 +526,7 @@ pub struct EditorView {
     content_bounds: Option<Bounds<Pixels>>,
     pending_source_scroll: Option<u64>,
     focus_handle: FocusHandle,
+    input_blur_subscription: Option<(gpui::WindowId, gpui::Subscription)>,
     metrics: EditorMetrics,
     lsp_clients: HashMap<PathBuf, LspClient>,
     lsp_diagnostics: HashMap<PathBuf, Vec<EditorDiagnostic>>,
@@ -594,6 +597,7 @@ impl EditorView {
             content_bounds: None,
             pending_source_scroll: None,
             focus_handle: cx.focus_handle(),
+            input_blur_subscription: None,
             metrics: EditorMetrics::from_terminal_font_size(font_size),
             lsp_clients: HashMap::new(),
             lsp_diagnostics: HashMap::new(),
@@ -657,6 +661,9 @@ impl EditorView {
         }) {
             if !temporary {
                 self.tabs[index].temporary = false;
+            }
+            if let Some(tab) = self.active_tab_mut() {
+                tab.buffer.unmark_input();
             }
             self.active_tab = index;
             self.file_tab_reveal_pending = true;
@@ -893,6 +900,9 @@ impl EditorView {
         mode: FileOpenMode,
         make_tab: impl FnOnce(PathBuf) -> EditorTab,
     ) -> LoadedFileApply {
+        if activate && let Some(tab) = tabs.get_mut(*active_tab) {
+            tab.buffer.unmark_input();
+        }
         let old_active_path = tabs.get(*active_tab).map(|tab| tab.path.clone());
         let mut activated = false;
 
@@ -1008,6 +1018,9 @@ impl EditorView {
         // Reselecting the current tab is also an explicit navigation choice.
         self.open_generation = self.open_generation.wrapping_add(1);
         if self.active_tab != index {
+            if let Some(tab) = self.active_tab_mut() {
+                tab.buffer.unmark_input();
+            }
             self.active_tab = index;
             self.file_tab_reveal_pending = true;
             self.dirty_close_blocked_tab = None;
@@ -1135,6 +1148,7 @@ impl EditorView {
             return;
         };
         let tab = &mut self.tabs[self.active_tab];
+        tab.buffer.unmark_input();
         tab.preview = preview;
         self.preview_scroll_handle = ScrollHandle::new();
         if preview {
@@ -1249,13 +1263,23 @@ impl EditorView {
         CursorPosition::new(row, Self::byte_offset_for_visual_column(line, visual_col))
     }
 
-    fn position_for_window_point(&self, point: Point<Pixels>) -> CursorPosition {
+    fn position_for_window_point(
+        &self,
+        point: Point<Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> CursorPosition {
         let local = if let Some(bounds) = self.content_bounds {
             point - bounds.origin
         } else {
             point
         };
-        self.position_for_content_point(local)
+        let fallback = self.position_for_content_point(local);
+        let Some(line) = self.shape_input_line(fallback.row, window, cx) else {
+            return fallback;
+        };
+        let x = local.x - self.scroll_handle.offset().x - px(ROW_TEXT_LEFT);
+        CursorPosition::new(fallback.row, line.closest_index_for_x(x))
     }
 
     fn position_for_content_point(&self, point: Point<Pixels>) -> CursorPosition {
@@ -1399,11 +1423,11 @@ impl EditorView {
         line[..byte_offset].chars().count()
     }
 
-    pub fn mouse_down(&mut self, event: &MouseDownEvent) {
+    pub fn mouse_down(&mut self, event: &MouseDownEvent, window: &Window, cx: &App) {
         if event.button != MouseButton::Left {
             return;
         }
-        let position = self.position_for_window_point(event.position);
+        let position = self.position_for_window_point(event.position, window, cx);
         if Self::should_select_word_on_mouse_down(event) {
             self.select_word_at(position.row, position.column);
             self.selection_anchor = None;
@@ -1423,7 +1447,7 @@ impl EditorView {
         }
     }
 
-    pub fn mouse_drag(&mut self, event: &MouseMoveEvent) {
+    pub fn mouse_drag(&mut self, event: &MouseMoveEvent, window: &Window, cx: &App) {
         if !Self::should_extend_mouse_selection(event) {
             self.selection_anchor = None;
             return;
@@ -1431,7 +1455,7 @@ impl EditorView {
         let Some(anchor) = self.selection_anchor else {
             return;
         };
-        let position = self.position_for_window_point(event.position);
+        let position = self.position_for_window_point(event.position, window, cx);
         self.set_selection(anchor, position);
     }
 
@@ -1512,7 +1536,7 @@ impl EditorView {
                 tab.buffer
                     .lines()
                     .iter()
-                    .map(|line| Self::visual_columns_for_line(line))
+                    .map(|line| unicode_width::UnicodeWidthStr::width(line.as_str()))
                     .max()
             })
             .unwrap_or(0);
@@ -1523,7 +1547,7 @@ impl EditorView {
         let tab = self.active_tab_ref()?;
         let cursor = tab.buffer.cursor();
         let line = tab.buffer.lines().get(cursor.row)?;
-        let columns = Self::visual_column_for_byte_offset(line, cursor.column);
+        let columns = unicode_width::UnicodeWidthStr::width(&line[..cursor.column]);
         Some(ROW_TEXT_LEFT + columns as f32 * self.metrics.char_width)
     }
 
@@ -1912,7 +1936,19 @@ impl Focusable for EditorView {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let window_id = window.window_handle().window_id();
+        if self.input_blur_subscription.as_ref().map(|(id, _)| *id) != Some(window_id) {
+            self.input_blur_subscription = Some((
+                window_id,
+                cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+                    for tab in &mut this.tabs {
+                        tab.buffer.unmark_input();
+                    }
+                    cx.notify();
+                }),
+            ));
+        }
         let theme = cx.theme().clone();
         let fg = theme.foreground;
         let bg = theme.background;
@@ -1954,6 +1990,15 @@ impl Render for EditorView {
         let line_count = active.line_count;
         let cursor = active.cursor;
         let selection = active.selection;
+        let marked = self.tabs[active_index]
+            .buffer
+            .input_marked_range()
+            .map(|range| {
+                (
+                    self.tabs[active_index].buffer.input_position(range.start),
+                    self.tabs[active_index].buffer.input_position(range.end),
+                )
+            });
         let cursor_visual_column = active
             .lines
             .get(cursor.row)
@@ -2065,7 +2110,7 @@ impl Render for EditorView {
 
         let mono_font_list = mono_font.clone();
         let list_theme = theme.clone();
-        let list = uniform_list("editor-lines", line_count, move |range, _window, _cx| {
+        let list = uniform_list("editor-lines", line_count, move |range, window, _cx| {
             range
                 .map(|i| {
                     let line_num: SharedString = format!("{}", i + 1).into();
@@ -2077,30 +2122,28 @@ impl Render for EditorView {
                         .map(|diagnostic| Self::diagnostic_color(&list_theme, diagnostic.severity));
                     let line_runs = syntax_runs.get(i).cloned().unwrap_or_default();
                     let line_visual_columns = Self::visual_columns_for_line(&line_text);
-                    let row_min_width = px(Self::row_min_width_for_visual_columns_with_metrics(
-                        line_visual_columns,
+                    let shaped = Self::shape_line(
+                        &line_text,
                         metrics,
-                    ));
+                        mono_font_list.clone(),
+                        fg.opacity(0.90),
+                        window,
+                    );
+                    let row_min_width = px(ROW_TEXT_LEFT + metrics.char_width) + shaped.width();
                     let selection_for_line = selection.and_then(|(start, end)| {
                         if i < start.row || i > end.row {
                             return None;
                         }
-                        let start_col = if i == start.row {
-                            Self::visual_column_for_byte_offset(&line_text, start.column)
-                        } else {
-                            0
-                        };
+                        let start_col = if i == start.row { start.column } else { 0 };
                         let end_col = if i == end.row {
-                            Self::visual_column_for_byte_offset(&line_text, end.column)
+                            end.column
                         } else {
-                            line_visual_columns
+                            line_text.len()
                         };
                         (end_col > start_col).then_some((start_col, end_col))
                     });
-                    let cursor_visual_col =
-                        Self::visual_column_for_byte_offset(&line_text, cursor.column);
-                    let cursor_left =
-                        TEXT_IN_CONTENT_LEFT + cursor_visual_col as f32 * metrics.char_width;
+                    let cursor_left = TEXT_IN_CONTENT_LEFT
+                        + f32::from(shaped.x_for_index(cursor.column.min(line_text.len())));
                     let text = SharedString::from(line_text.clone());
                     let highlighted_text = StyledText::new(text.clone()).with_runs(line_runs);
                     let mut content = div()
@@ -2123,16 +2166,38 @@ impl Render for EditorView {
                                 .child(highlighted_text),
                         );
                     if let Some((start_col, end_col)) = selection_for_line {
+                        content =
+                            content.child(
+                                div()
+                                    .absolute()
+                                    .left(px(TEXT_IN_CONTENT_LEFT
+                                        + f32::from(shaped.x_for_index(start_col))))
+                                    .top(px(2.0))
+                                    .h(px((metrics.line_height - 4.0).max(1.0)))
+                                    .w((shaped.x_for_index(end_col)
+                                        - shaped.x_for_index(start_col))
+                                    .max(px(1.0)))
+                                    .bg(fg.opacity(0.16)),
+                            );
+                    }
+                    if let Some((start, end)) =
+                        marked.filter(|(start, end)| i >= start.row && i <= end.row)
+                    {
+                        let start = if i == start.row { start.column } else { 0 };
+                        let end = if i == end.row {
+                            end.column
+                        } else {
+                            line_text.len()
+                        };
                         content = content.child(
                             div()
                                 .absolute()
-                                .left(px(
-                                    TEXT_IN_CONTENT_LEFT + start_col as f32 * metrics.char_width
-                                ))
-                                .top(px(2.0))
-                                .h(px((metrics.line_height - 4.0).max(1.0)))
-                                .w(px((end_col - start_col).max(1) as f32 * metrics.char_width))
-                                .bg(fg.opacity(0.16)),
+                                .left(px(TEXT_IN_CONTENT_LEFT) + shaped.x_for_index(start))
+                                .bottom(px(2.0))
+                                .h(px(1.0))
+                                .w((shaped.x_for_index(end) - shaped.x_for_index(start))
+                                    .max(px(1.0)))
+                                .bg(fg.opacity(0.65)),
                         );
                     }
                     if i == cursor.row {
@@ -2224,6 +2289,9 @@ impl Render for EditorView {
         .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
         .track_scroll(&self.scroll_handle);
 
+        let input_view = cx.entity();
+        let input_focus = self.focus_handle.clone();
+        let input_enabled = !preview_active && !image_tab;
         let list_frame = div()
             .relative()
             .flex()
@@ -2231,6 +2299,22 @@ impl Render for EditorView {
             .flex_1()
             .min_h_0()
             .child(list)
+            .child(
+                gpui::canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        if input_enabled {
+                            window.handle_input(
+                                &input_focus,
+                                gpui::ElementInputHandler::new(bounds, input_view.clone()),
+                                cx,
+                            );
+                        }
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
             .child(Scrollbar::new(&self.scroll_handle).mode(ScrollbarMode::Always));
 
         let body = if image_tab {
@@ -2404,12 +2488,12 @@ impl Render for EditorView {
                         cx.notify();
                         return;
                     }
-                    this.mouse_down(event);
+                    this.mouse_down(event, window, cx);
                     window.prevent_default();
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.preview_active()
                     || this.active_tab_is_image()
                     || this.point_hits_scrollbar(event.position)
@@ -2417,7 +2501,7 @@ impl Render for EditorView {
                 {
                     return;
                 }
-                this.mouse_drag(event);
+                this.mouse_drag(event, window, cx);
                 cx.stop_propagation();
                 cx.notify();
             }))

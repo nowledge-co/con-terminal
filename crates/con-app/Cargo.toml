@@ -68,6 +68,7 @@ ropey.workspace = true
 mermaid-rs-renderer.workspace = true
 mathjax-svg-rs.workspace = true
 regex = "1"
+unicode-width.workspace = true
 imagesize = "0.13"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
@@ -78,7 +79,6 @@ raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"
-unicode-width.workspace = true
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",  # AddVectoredExceptionHandler
@@ -93,7 +93,6 @@ smallvec = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 raw-window-handle = "0.6"
-unicode-width.workspace = true
 x11rb = "0.13.2"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "notification"] }
 # Linux wraps shared libghostty-vt Kitty RGBA snapshots in GPUI

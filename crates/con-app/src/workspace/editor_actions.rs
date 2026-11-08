@@ -26,40 +26,15 @@ fn editor_line_boundary_motion_for_key(event: &KeyDownEvent) -> Option<EditorMot
     }
 }
 
-fn editor_text_for_key(key: &str, key_char: Option<&str>) -> Option<String> {
-    if let Some(key_char) = key_char.filter(|text| is_printable_key_char(Some(*text))) {
-        return Some(key_char.to_string());
-    }
-
-    match key {
-        "space" => Some(" ".to_string()),
-        "tab" => Some("    ".to_string()),
-        _ => {
-            let mut chars = key.chars();
-            let ch = chars.next()?;
-            if chars.next().is_some() || ch.is_control() {
-                return None;
-            }
-            Some(key.to_string())
-        }
-    }
-}
-
-fn is_printable_key_char(key_char: Option<&str>) -> bool {
-    key_char.is_some_and(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
-}
-
-fn editor_text_for_key_event(
+fn editor_indent_for_key(
     key: &str,
-    key_char: Option<&str>,
     platform: bool,
     alt: bool,
     control: bool,
-) -> Option<String> {
-    if platform || ((alt || control) && !is_printable_key_char(key_char)) {
-        return None;
-    }
-    editor_text_for_key(key, key_char)
+    _shift: bool,
+) -> bool {
+    // Preserve the editor’s existing Tab/Shift-Tab indentation behavior.
+    key == "tab" && !platform && !alt && !control
 }
 
 impl ConWorkspace {
@@ -100,25 +75,28 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    pub(crate) fn handle_editor_text_key_down(
+    pub(crate) fn handle_editor_tab_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let mods = &event.keystroke.modifiers;
-        let Some(text) = editor_text_for_key_event(
-            event.keystroke.key.as_str(),
-            event.keystroke.key_char.as_deref(),
+        if !editor_indent_for_key(
+            &event.keystroke.key,
             mods.platform,
             mods.alt,
             mods.control,
-        ) else {
+            mods.shift,
+        ) || self
+            .focused_editor_view(window, cx)
+            .is_some_and(|view| view.read(cx).is_composing())
+        {
             return false;
-        };
+        }
 
         if self
-            .with_focused_editor_view(window, cx, |editor, cx| editor.insert_text(&text, cx))
+            .with_focused_editor_view(window, cx, |editor, cx| editor.insert_text("    ", cx))
             .is_some()
         {
             window.prevent_default();
@@ -469,55 +447,26 @@ impl ConWorkspace {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn editor_text_prefers_produced_key_char() {
-        assert_eq!(
-            super::editor_text_for_key("1", Some("!")).as_deref(),
-            Some("!")
-        );
-        assert_eq!(
-            super::editor_text_for_key("a", Some("A")).as_deref(),
-            Some("A")
-        );
-    }
-
-    #[test]
-    fn editor_text_keeps_named_key_fallbacks() {
-        assert_eq!(
-            super::editor_text_for_key("space", None).as_deref(),
-            Some(" ")
-        );
-        assert_eq!(
-            super::editor_text_for_key("tab", Some("\t")).as_deref(),
-            Some("    ")
-        );
-        assert_eq!(super::editor_text_for_key("enter", Some("\n")), None);
-    }
-
-    #[test]
-    fn editor_text_allows_printable_altgr_or_option_key_char() {
-        assert_eq!(
-            super::editor_text_for_key_event("2", Some("@"), false, true, true).as_deref(),
-            Some("@")
-        );
-        assert_eq!(
-            super::editor_text_for_key_event("e", Some("é"), false, true, false).as_deref(),
-            Some("é")
-        );
-    }
-
-    #[test]
-    fn editor_text_with_modifiers_does_not_fallback_to_physical_key() {
-        assert_eq!(
-            super::editor_text_for_key_event("a", None, false, false, true),
-            None
-        );
-        assert_eq!(
-            super::editor_text_for_key_event("2", None, false, true, true),
-            None
-        );
-        assert_eq!(
-            super::editor_text_for_key_event("a", Some("a"), true, false, false),
-            None
-        );
+    fn indentation_does_not_intercept_native_text_or_modified_keys() {
+        assert!(super::editor_indent_for_key(
+            "tab", false, false, false, false
+        ));
+        for key in ["a", "space", "ni", "你好", "enter"] {
+            assert!(!super::editor_indent_for_key(
+                key, false, false, false, false
+            ));
+        }
+        assert!(super::editor_indent_for_key(
+            "tab", false, false, false, true
+        ));
+        assert!(!super::editor_indent_for_key(
+            "tab", true, false, false, false
+        ));
+        assert!(!super::editor_indent_for_key(
+            "tab", false, true, false, false
+        ));
+        assert!(!super::editor_indent_for_key(
+            "tab", false, false, true, false
+        ));
     }
 }

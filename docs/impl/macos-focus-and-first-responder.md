@@ -172,3 +172,17 @@ When adding a new non-terminal pane type:
    `makeFirstResponder: gpui_nsview` afterward.
 3. **Post-close re-assert**: after closing a pane that was the last native-view pane,
    re-assert `workspace_focus` so the GPUI action chain stays live.
+
+## File editor text input
+
+EditorView owns a real GPUI focus handle and registers EntityInputHandler during
+paint for editable source only. Ordinary text must arrive through native commit
+or marked-text callbacks, never through the workspace's key-down character
+fallback. Physical keys remain editor commands (including indentation).
+
+The input bridge exposes document-wide UTF-16 ranges over logical LF text;
+EditorBuffer retains the file's original disk line endings separately. Keep a
+preedit sequence and its final commit in one undo step, and use shaped text for
+candidate-window bounds and caret hit-testing. Image and rendered Markdown
+previews must not accept native edits. Keep native session/terminal focus
+routing independent from this editor-specific input bridge.
