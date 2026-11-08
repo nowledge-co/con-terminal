@@ -14,7 +14,7 @@ are touched.
    - `git fetch --tags origin`
    - `git tag --sort=-v:refname | rg '^v[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.' | head`
    - `gh release view <tag>` when GitHub release state matters
-2. Put pending work under the next unreleased beta only. If the latest shipped
+2. Put pending work under the next beta only. If the latest shipped
    beta is `v0.1.0-beta.63`, the top unreleased heading is
    `v0.1.0-beta.64`; do not create `beta.65` until `beta.64` is tagged and
    released.
@@ -39,7 +39,13 @@ are touched.
 - Do not mention "workspace restore" or other baseline continuity as novelty
   unless the user-facing behavior truly changed. Default expected behavior
   should read as polish or reliability, not marketing.
-- Add release dates only when a version is actually tagged/released.
+- For an authorized release, date the changelog during preparation using the
+  current Asia/Shanghai date, before merging/tagging. This optimistic date keeps
+  the website from showing Unreleased during successful publication. Do not add
+  a second date-only bookkeeping commit after release. If publication is delayed
+  to another day, correct the date when resuming. Dates are editorial intent;
+  release/draft status and artifact gates remain the delivery authority.
+- Ordinary feature PRs without release authorization may remain Unreleased.
 - Use ordinary commits for changelog/date bookkeeping, without `[skip ci]`.
   Workflow path filters skip native tests/builds for documentation-only changes
   while preserving metadata checks and public docs updates. See

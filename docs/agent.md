@@ -46,6 +46,29 @@ When the agent streams markdown, con renders code, tables, math, and diagrams in
 the panel instead of treating the answer as a separate web page. Long responses
 stay scrollable so the terminal remains usable.
 
+## Context and file access
+
+Asking a question does not recursively scan your current directory. Automatic
+context comes from the terminal snapshot already held by con; it does not read
+`AGENTS.md`, Git diffs or a project file listing in the background. This applies
+in HOME, ordinary projects and SSH sessions alike.
+
+Set `con.agent.auto_context = false` to omit automatic terminal context and its
+background pane queries from new requests. Your question and conversation
+history are still sent to the selected provider; turning this off does not
+remove information from earlier messages.
+
+If the agent needs local files, it uses visible `file_read`, `list_files` or
+`search` tools. These require approval by default, with the local workspace
+root shown alongside the arguments. Existing automatic-tool-approval settings
+remain an explicit opt-in. Local path checks still constrain file tools to
+their workspace scope; remote work uses terminal-native tools instead.
+
+Provider configuration is checked before automatic context queries. Local and
+subscription providers retain their existing keyless or OAuth flows. macOS
+folder access is an OS permission, not permission to silently include files in
+a model request.
+
 ## SSH, tmux, and TUIs
 
 con is built for terminal-native workflows. The agent can help while you are

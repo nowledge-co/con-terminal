@@ -17,7 +17,7 @@ Window (ConWorkspace)
   │
   ├─ AgentHarness (shared)
   │   ├── config: AgentConfig       ← provider, model, auth
-  │   ├── skills: SkillRegistry     ← built-in + AGENTS.md
+  │   ├── skills: SkillRegistry     ← built-in + scoped skills
   │   └── runtime: Arc<Runtime>     ← tokio, 2 worker threads
   │
   └─ tabs: Vec<Tab>
@@ -89,6 +89,36 @@ ConWorkspace::send_to_agent()
                         Provider adds assistant message to conversation
                         Bridge emits HarnessEvent::ResponseComplete
 ```
+
+## Request context privacy boundary
+
+Before automatic pane queries, `AgentProvider::validate_request_configuration`
+checks local API-key/endpoint requirements without reading workspace files or
+making a model request. This is a configuration preflight, not a promise that a
+remote service will accept a credential. Subscription/OAuth transports retain
+native sign-in behavior; local transports need no synthetic API-key requirement.
+
+Request preparation no longer runs Git, `find`, or reads `AGENTS.md`. The shell's
+cwd is an addressing observation, not authority for background file collection.
+With `auto_context` enabled, the provider uses terminal-held snapshot data;
+legacy filesystem enrichment fields are excluded from its automatic prompt.
+With it disabled, the prompt omits the snapshot and the harness skips automatic
+pane/tmux queries. Prior conversation messages and user-authored input remain.
+
+Local file reads/listing/search run through `ConHook` approval just like
+side-effecting tools, unless the user enabled automatic tool approval. The
+approval/event arguments disclose the local workspace root even when a tool's
+path was omitted. That display metadata does not alter actual tool arguments.
+Tools retain canonical path validation. Reading config/auth files owned by the
+application/provider is distinct from scanning a user's workspace.
+
+Never reintroduce recursive enrichment behind a Git/non-Git or HOME heuristic.
+Future opt-in workspace context needs an explicit scope plus I/O budgets and
+cancellation before reading; a prompt-size truncation is not a traversal limit.
+The Unix integration fixture uses isolated child environments, Git/find traps
+and loopback model requests to verify missing/blank credentials, HOME/projects,
+remote cwd and disabled automatic context. It checks actual outgoing payloads;
+it does not grant TCC permissions or claim a GUI-level macOS permission audit.
 
 ## Local Codex transport
 

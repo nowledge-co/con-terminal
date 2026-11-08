@@ -20,7 +20,7 @@ pub struct ToolApprovalDecision {
 /// Emits `AgentEvent`s for tool calls and tool results so the UI
 /// can show what the agent is doing in real time.
 ///
-/// For dangerous tools (terminal_exec, shell_exec, file_write, edit_file),
+/// For file access and effectful tools (e.g. file_read, terminal_exec),
 /// blocks on an approval channel waiting for the user's decision before proceeding.
 ///
 /// ## Channel design
@@ -41,6 +41,7 @@ pub struct ToolApprovalDecision {
 pub struct ConHook {
     event_tx: Sender<AgentEvent>,
     approval_rx: crossbeam_channel::Receiver<ToolApprovalDecision>,
+    workspace_root: Option<std::path::PathBuf>,
     auto_approve: bool,
     cancel_flag: Arc<AtomicBool>,
 }
@@ -55,9 +56,21 @@ impl ConHook {
         Self {
             event_tx,
             approval_rx,
+            workspace_root: None,
             auto_approve,
             cancel_flag,
         }
+    }
+}
+
+fn is_file_read(tool_name: &str) -> bool {
+    matches!(tool_name, "file_read" | "list_files" | "search")
+}
+
+impl ConHook {
+    pub(crate) fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_root = Some(root);
+        self
     }
 }
 
@@ -67,6 +80,9 @@ pub fn is_dangerous(tool_name: &str) -> bool {
         "shell_exec"
             | "terminal_exec"
             | "batch_exec"
+            | "file_read"
+            | "list_files"
+            | "search"
             | "file_write"
             | "edit_file"
             | "send_keys"
@@ -159,7 +175,20 @@ impl ConHook {
     ) -> Flow {
         let call_id = internal_call_id.to_string();
         let tool_name = tool_name.to_string();
-        let args = args.to_string();
+        let args = if is_file_read(&tool_name) {
+            if let Some(root) = &self.workspace_root {
+                let mut display: serde_json::Value = serde_json::from_str(args)
+                    .unwrap_or_else(|_| serde_json::json!({"arguments": args}));
+                if let Some(fields) = display.as_object_mut() {
+                    fields.insert("workspace_root".into(), serde_json::json!(root));
+                }
+                display.to_string()
+            } else {
+                args.to_string()
+            }
+        } else {
+            args.to_string()
+        };
         let event_tx = self.event_tx.clone();
         let approval_rx = self.approval_rx.clone();
         let auto_approve = self.auto_approve;
@@ -551,5 +580,38 @@ mod tests {
             event,
             AgentEvent::ToolCallComplete { result, .. } if result.contains("Denied by test")
         )));
+    }
+}
+
+#[cfg(test)]
+mod file_privacy_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn file_reads_require_approval_and_disclose_default_scope() {
+        for tool in ["file_read", "list_files", "search"] {
+            let (event_tx, event_rx) = crossbeam_channel::unbounded();
+            let (approval_tx, approval_rx) = crossbeam_channel::unbounded();
+            let hook = ConHook::new(
+                event_tx,
+                approval_rx,
+                false,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .with_workspace_root("/selected/project".into());
+            approval_tx
+                .send(ToolApprovalDecision {
+                    call_id: "read-1".into(),
+                    allowed: false,
+                    reason: Some("Do not read files".into()),
+                })
+                .unwrap();
+            let result = hook.on_tool_call(tool, "read-1", "{}").await;
+            assert!(matches!(result, Flow::Skip { .. }));
+            let events: Vec<_> = event_rx.try_iter().collect();
+            assert!(events.iter().any(|event| matches!(event,
+                AgentEvent::ToolApprovalNeeded { args, .. }
+                    if args.contains("/selected/project"))));
+        }
     }
 }

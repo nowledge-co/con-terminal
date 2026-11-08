@@ -8,6 +8,7 @@ use gpui_component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::separator::Separator;
 use gpui_component::text::TextView;
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, Disableable, Icon, Sizable as _, Theme};
 
 /// Max lines to show for tool result previews in collapsed steps
@@ -2153,6 +2154,19 @@ fn result_is_expandable(content: &str) -> bool {
     content.lines().count() > TOOL_RESULT_PREVIEW_LINES
 }
 
+fn scoped_file_argument(args: &serde_json::Value) -> Option<String> {
+    let root = args.get("workspace_root")?.as_str()?;
+    let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+    let path = std::path::Path::new(path);
+    Some(if path.as_os_str().is_empty() {
+        root.to_string()
+    } else if path.is_absolute() {
+        path.display().to_string()
+    } else {
+        std::path::Path::new(root).join(path).display().to_string()
+    })
+}
+
 fn format_tool_args(tool_name: &str, args: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
         match tool_name {
@@ -2165,11 +2179,19 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
                 }
             }
             "file_read" | "file_write" | "edit_file" => {
+                if tool_name == "file_read" {
+                    if let Some(scope) = scoped_file_argument(&v) {
+                        return scope;
+                    }
+                }
                 if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
                     return path.to_string();
                 }
             }
             "list_files" => {
+                if let Some(scope) = scoped_file_argument(&v) {
+                    return scope;
+                }
                 return v
                     .get("path")
                     .and_then(|p| p.as_str())
@@ -2178,6 +2200,9 @@ fn format_tool_args(tool_name: &str, args: &str) -> String {
             }
             "search" => {
                 if let Some(pattern) = v.get("pattern").and_then(|q| q.as_str()) {
+                    if let Some(scope) = scoped_file_argument(&v) {
+                        return format!("\"{}\" · {}", pattern, scope);
+                    }
                     return format!("\"{}\"", pattern);
                 }
             }
@@ -4488,12 +4513,42 @@ impl AgentPanel {
                     // Args — monospace, full width
                     .child(
                         div()
+                            .id(format!("approval-arguments-{}", approval.call_id))
                             .text_size(px(11.0))
                             .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.muted_foreground.opacity(0.55))
+                            .text_color(
+                                if matches!(
+                                    approval.tool_name.as_str(),
+                                    "file_read" | "list_files" | "search"
+                                ) {
+                                    theme.foreground.opacity(0.85)
+                                } else {
+                                    theme.muted_foreground.opacity(0.55)
+                                },
+                            )
                             .overflow_x_hidden()
                             .whitespace_nowrap()
-                            .child(truncate_str(&args_display, 80)),
+                            .when(
+                                matches!(
+                                    approval.tool_name.as_str(),
+                                    "file_read" | "list_files" | "search"
+                                ),
+                                |el| el.w_full().min_w_0().truncate().text_ellipsis_middle(),
+                            )
+                            .tooltip({
+                                let details = args_display.clone();
+                                move |_, cx| cx.new(|_| Tooltip::new(details.clone())).into()
+                            })
+                            .child(
+                                if matches!(
+                                    approval.tool_name.as_str(),
+                                    "file_read" | "list_files" | "search"
+                                ) {
+                                    args_display.clone()
+                                } else {
+                                    truncate_str(&args_display, 80)
+                                },
+                            ),
                     )
                     .child(Separator::horizontal().color(theme.warning.opacity(0.12)))
                     // Action row — clear hierarchy
@@ -6421,5 +6476,26 @@ fn format_conversation_date(summary: &ConversationSummary) -> String {
         format!("Yesterday, {}", summary.created_at.format("%H:%M"))
     } else {
         summary.created_at.format("%b %d, %H:%M").to_string()
+    }
+}
+
+#[cfg(test)]
+mod file_approval_scope_tests {
+    #[test]
+    fn file_approval_discloses_the_effective_default_or_relative_scope() {
+        let root = std::env::temp_dir().join("selected-project");
+        let value = serde_json::json!({"workspace_root":root,"pattern":"secret"});
+        let args = value.to_string();
+        assert_eq!(
+            super::format_tool_args("list_files", &args),
+            root.display().to_string()
+        );
+        assert!(super::format_tool_args("search", &args).contains(&root.display().to_string()));
+        let value = serde_json::json!({"workspace_root":root,"path":"AGENTS.md"});
+        assert_eq!(
+            super::format_tool_args("file_read", &value.to_string()),
+            root.join("AGENTS.md").display().to_string()
+        );
+        assert_eq!(super::format_tool_args("list_files", "{}"), ".");
     }
 }

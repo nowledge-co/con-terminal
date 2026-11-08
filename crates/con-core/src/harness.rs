@@ -444,8 +444,18 @@ impl AgentHarness {
             let conv_snapshot = conversation.lock().clone();
             let provider = AgentProvider::new(agent_config);
             let request_start = std::time::Instant::now();
-            let prepared_context = gather_focused_read_only_facts(pane_tx.clone(), context).await;
-            let enriched_context = enrich_context_with_workspace_snapshot(prepared_context).await;
+            // Configuration failures must precede automatic context queries.
+            if let Err(error) = provider.validate_request_configuration() {
+                let _ = harness_tx.send(HarnessEvent::Error(friendly_error(&error.to_string())));
+                let _ = harness_tx.send(HarnessEvent::RequestFinished { approval_tx });
+                return;
+            }
+            let enriched_context =
+                if provider.config().auto_context && !cancelled.load(Ordering::Relaxed) {
+                    gather_focused_read_only_facts(pane_tx.clone(), context).await
+                } else {
+                    context
+                };
 
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0u32;
@@ -1273,127 +1283,6 @@ fn has_natural_language_signals(input: &str) -> bool {
     }
 
     false
-}
-
-async fn enrich_context_with_workspace_snapshot(mut context: TerminalContext) -> TerminalContext {
-    let Some(cwd) = context.cwd.clone() else {
-        return context;
-    };
-
-    let Ok((agents_md, git_branch, git_diff, project_structure)) =
-        tokio::task::spawn_blocking(move || {
-            let cwd_path = Path::new(&cwd);
-
-            let agents_md = std::fs::read_to_string(cwd_path.join("AGENTS.md")).ok();
-
-            let git_branch = con_paths::host_command("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(cwd_path)
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-
-            let git_diff = {
-                let stat = con_paths::host_command("git")
-                    .args(["diff", "--stat"])
-                    .current_dir(cwd_path)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                    .unwrap_or_default();
-
-                if stat.trim().is_empty() {
-                    None
-                } else {
-                    let diff = con_paths::host_command("git")
-                        .args(["diff"])
-                        .current_dir(cwd_path)
-                        .output()
-                        .ok()
-                        .filter(|o| o.status.success())
-                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                        .unwrap_or_default();
-
-                    const MAX_DIFF_CHARS: usize = 8_000;
-                    let mut result = stat;
-                    result.push('\n');
-                    if diff.len() <= MAX_DIFF_CHARS {
-                        result.push_str(&diff);
-                    } else {
-                        let truncation_point =
-                            diff[..MAX_DIFF_CHARS].rfind('\n').unwrap_or(MAX_DIFF_CHARS);
-                        result.push_str(&diff[..truncation_point]);
-                        result.push_str(&format!(
-                            "\n... (diff truncated — {:.0}K of {:.0}K chars shown, see `git diff` for full)",
-                            truncation_point as f64 / 1000.0,
-                            diff.len() as f64 / 1000.0,
-                        ));
-                    }
-                    Some(result)
-                }
-            };
-
-            let project_structure = {
-                let output = con_paths::host_command("git")
-                    .args(["ls-files", "--cached", "--others", "--exclude-standard"])
-                    .current_dir(cwd_path)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-
-                let listing = output.or_else(|| {
-                    con_paths::host_command("find")
-                        .args([
-                            ".",
-                            "-maxdepth",
-                            "3",
-                            "-type",
-                            "f",
-                            "-not",
-                            "-path",
-                            "./.git/*",
-                        ])
-                        .current_dir(cwd_path)
-                        .output()
-                        .ok()
-                        .filter(|o| o.status.success())
-                        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-                });
-
-                listing.and_then(|listing| {
-                    if listing.trim().is_empty() {
-                        return None;
-                    }
-
-                    let file_lines: Vec<&str> = listing.lines().collect();
-                    let total = file_lines.len();
-                    if total > 200 {
-                        Some(format!(
-                            "{}\n... ({} more files)",
-                            file_lines[..200].join("\n"),
-                            total - 200
-                        ))
-                    } else {
-                        Some(file_lines.join("\n"))
-                    }
-                })
-            };
-
-            (agents_md, git_branch, git_diff, project_structure)
-        })
-        .await
-    else {
-        return context;
-    };
-
-    context.agents_md = agents_md;
-    context.git_branch = git_branch;
-    context.git_diff = git_diff;
-    context.project_structure = project_structure;
-    context
 }
 
 async fn gather_focused_read_only_facts(

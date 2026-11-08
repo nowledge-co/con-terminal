@@ -4,6 +4,27 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.173` - 2026-11-08
+
+### Fixed
+
+**Agent privacy**
+
+- Asking the built-in agent no longer implicitly reads AGENTS.md, collects Git
+  changes, or scans the current directory. Missing provider credentials are
+  reported before automatic context queries, and disabling automatic context
+  now excludes terminal context from new requests.
+  _(PR [#553](https://github.com/nowledge-co/con-terminal/pull/553) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**File access**
+
+- Reading, listing, and searching local files now ask for approval by default,
+  with the effective filesystem scope shown in the request. Existing explicit
+  auto-approval preferences remain honored.
+  _(PR [#553](https://github.com/nowledge-co/con-terminal/pull/553) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.172` - 2026-11-08
 
 ### Fixed

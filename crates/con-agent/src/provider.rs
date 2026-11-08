@@ -2286,6 +2286,73 @@ impl AgentProvider {
         &self.config
     }
 
+    /// Local configuration preflight; no workspace reads or network requests.
+    /// OAuth transports may still perform their native sign-in flow on send.
+    pub fn validate_request_configuration(&self) -> Result<()> {
+        let kind = &self.config.provider;
+        if let Some(base_url) = self.config.effective_base_url(kind) {
+            let url = Url::parse(base_url)?;
+            anyhow::ensure!(
+                matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+                "Provider URL must use HTTP or HTTPS with a host"
+            );
+        }
+        match kind {
+            ProviderKind::Ollama
+            | ProviderKind::CodexLocal
+            | ProviderKind::ChatGPT
+            | ProviderKind::GitHubCopilot => Ok(()),
+            ProviderKind::OpenAICompatible => {
+                self.resolve_optional_api_key(kind)?;
+                Ok(())
+            }
+            ProviderKind::Magpie => {
+                anyhow::ensure!(
+                    !self.config.effective_model(kind).trim().is_empty(),
+                    "Choose a Magpie model in Settings → Providers → Magpie."
+                );
+                crate::magpie::api_key(&self.config.providers.get_or_default(kind))?;
+                Ok(())
+            }
+            ProviderKind::Anthropic
+            | ProviderKind::OpenAI
+            | ProviderKind::MiniMax
+            | ProviderKind::MiniMaxAnthropic
+            | ProviderKind::Moonshot
+            | ProviderKind::MoonshotAnthropic
+            | ProviderKind::ZAI
+            | ProviderKind::ZAIAnthropic
+            | ProviderKind::DeepSeek
+            | ProviderKind::Groq
+            | ProviderKind::Cohere
+            | ProviderKind::Gemini
+            | ProviderKind::OpenRouter
+            | ProviderKind::Perplexity
+            | ProviderKind::Mistral
+            | ProviderKind::Together
+            | ProviderKind::XAI => {
+                self.resolve_api_key(kind)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn request_system_prompt(&self, context: &TerminalContext) -> String {
+        let prefix = self.config.system_prompt_prefix();
+        if self.config.auto_context {
+            // Only the terminal snapshot is automatic. Filesystem context must
+            // come from visible, approved tools, never hidden enrichment.
+            let mut snapshot = context.clone();
+            snapshot.agents_md = None;
+            snapshot.git_branch = None;
+            snapshot.git_diff = None;
+            snapshot.project_structure = None;
+            format!("{}\n\n{}", prefix, snapshot.to_system_prompt())
+        } else {
+            prefix.to_string()
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
         &self,
@@ -2297,14 +2364,10 @@ impl AgentProvider {
         pane_tx: crossbeam_channel::Sender<PaneRequest>,
         cancelled: Arc<AtomicBool>,
     ) -> Result<Message> {
+        self.validate_request_configuration()?;
         let _ = event_tx.send(AgentEvent::Thinking);
         let kind = &self.config.provider;
-
-        let system_prompt = format!(
-            "{}\n\n{}",
-            self.config.system_prompt_prefix(),
-            context.to_system_prompt()
-        );
+        let system_prompt = self.request_system_prompt(context);
         let chat_history = conversation.to_rig_history();
         let last_user_msg = conversation
             .last_user_message()
@@ -2356,13 +2419,6 @@ impl AgentProvider {
             "[provider] auto_approve_tools = {}",
             self.config.auto_approve_tools
         );
-        let hook = ConHook::new(
-            event_tx.clone(),
-            approval_rx,
-            self.config.auto_approve_tools,
-            cancelled.clone(),
-        );
-
         // Each provider dispatches to its native Rig client — exhaustive match
         // prevents silent misrouting.
         // Derive workspace root from terminal context cwd, falling back to
@@ -2371,9 +2427,16 @@ impl AgentProvider {
             .cwd
             .as_ref()
             .map(std::path::PathBuf::from)
-            .filter(|p| p.is_dir())
+            .filter(|p| p.is_absolute())
             .or_else(dirs::home_dir)
             .unwrap_or_else(std::env::temp_dir);
+        let hook = ConHook::new(
+            event_tx.clone(),
+            approval_rx,
+            self.config.auto_approve_tools,
+            cancelled.clone(),
+        )
+        .with_workspace_root(workspace_root.clone());
 
         macro_rules! stream_with {
             ($client:expr) => {
@@ -2934,7 +2997,10 @@ impl AgentProvider {
             ));
         }
 
-        Ok(std::env::var(default_env).ok())
+        Ok(std::env::var(default_env)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()))
     }
 
     fn should_skip_default_env_api_key(&self, kind: &ProviderKind) -> bool {
@@ -3118,4 +3184,81 @@ async fn consume_stream<R: Send + 'static>(
         response_text.len(),
     );
     Ok(response_text)
+}
+
+#[cfg(test)]
+mod context_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn automatic_prompt_is_terminal_only_and_can_be_disabled() {
+        let mut context = TerminalContext::empty();
+        context.recent_output = vec!["TERMINAL_VISIBLE_MARKER".into()];
+        context.cwd = Some("/example/project".into());
+        context.agents_md = Some("AGENTS_PRIVATE_MARKER".into());
+        context.git_diff = Some("DIFF_PRIVATE_MARKER".into());
+        context.project_structure = Some("FILES_PRIVATE_MARKER".into());
+        let mut config = AgentConfig::default();
+        let prompt = AgentProvider::new(config.clone()).request_system_prompt(&context);
+        assert!(prompt.contains("TERMINAL_VISIBLE_MARKER"));
+        for marker in [
+            "AGENTS_PRIVATE_MARKER",
+            "DIFF_PRIVATE_MARKER",
+            "FILES_PRIVATE_MARKER",
+        ] {
+            assert!(!prompt.contains(marker));
+        }
+        config.auto_context = false;
+        let prompt = AgentProvider::new(config.clone()).request_system_prompt(&context);
+        assert_eq!(prompt, config.system_prompt_prefix());
+        assert!(!prompt.contains("TERMINAL_VISIBLE_MARKER"));
+        assert!(!prompt.contains("/example/project"));
+    }
+
+    #[test]
+    fn local_keyless_and_subscription_transports_remain_available() {
+        for kind in [
+            ProviderKind::Ollama,
+            ProviderKind::CodexLocal,
+            ProviderKind::ChatGPT,
+            ProviderKind::GitHubCopilot,
+            ProviderKind::OpenAICompatible,
+        ] {
+            let config = AgentConfig {
+                provider: kind,
+                ..Default::default()
+            };
+            AgentProvider::new(config)
+                .validate_request_configuration()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn configured_key_and_invalid_endpoint_are_checked_without_workspace_access() {
+        let mut config = AgentConfig::default();
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                api_key: Some("test-only-key".into()),
+                ..Default::default()
+            },
+        );
+        AgentProvider::new(config.clone())
+            .validate_request_configuration()
+            .unwrap();
+        config.providers.set(
+            &ProviderKind::Anthropic,
+            ProviderConfig {
+                api_key: Some("test-only-key".into()),
+                base_url: Some("file:///private".into()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            AgentProvider::new(config)
+                .validate_request_configuration()
+                .is_err()
+        );
+    }
 }
