@@ -162,7 +162,21 @@ async fn magpie_tools_keep_con_approval_and_return_tool_results() {
         let mut denied_write = false;
         while let Ok(event) = events_rx.recv_timeout(Duration::from_secs(20)) {
             match event {
-                AgentEvent::ToolCallStart {
+                AgentEvent::ToolApprovalNeeded {
+                    call_id,
+                    tool_name,
+                    args,
+                } if tool_name == "file_read" => {
+                    assert!(args.contains("workspace_root"));
+                    approval_tx
+                        .send(ToolApprovalDecision {
+                            call_id,
+                            allowed: true,
+                            reason: None,
+                        })
+                        .unwrap();
+                }
+                AgentEvent::ToolApprovalNeeded {
                     call_id, tool_name, ..
                 } if tool_name == "file_write" => {
                     approval_tx
