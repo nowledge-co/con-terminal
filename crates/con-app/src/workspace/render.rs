@@ -1706,7 +1706,7 @@ impl Render for ConWorkspace {
                     return;
                 }
                 if this.editor_has_keyboard_focus(window, cx)
-                    && this.handle_editor_text_key_down(event, window, cx)
+                    && this.handle_editor_tab_key_down(event, window, cx)
                 {
                     return;
                 }

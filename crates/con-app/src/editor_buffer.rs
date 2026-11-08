@@ -3,7 +3,9 @@
 //! This module deliberately has no GPUI dependencies so editing behavior stays
 //! unit-testable and can evolve independently from rendering.
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, ops::Range};
+
+mod input;
 
 const MAX_UNDO_ENTRIES: usize = 256;
 
@@ -28,6 +30,7 @@ pub struct EditorBuffer {
     dirty: bool,
     undo_stack: VecDeque<BufferSnapshot>,
     revision: u64,
+    marked_range: Option<Range<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +85,7 @@ impl EditorBuffer {
             dirty: false,
             undo_stack: VecDeque::new(),
             revision: 0,
+            marked_range: None,
         }
     }
 
@@ -287,11 +291,13 @@ impl EditorBuffer {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_selection(&mut self, anchor: CursorPosition, cursor: CursorPosition) {
+        self.unmark_input();
         self.selection_anchor = Some(self.clamp_position(anchor));
         self.cursor = self.clamp_position(cursor);
     }
 
     pub fn select_word_at(&mut self, row: usize, column: usize) -> bool {
+        self.unmark_input();
         let row = row.min(self.lines.len().saturating_sub(1));
         let Some((start, end)) = word_range_at_column(&self.lines[row], column) else {
             self.set_cursor(row, column);
@@ -304,6 +310,7 @@ impl EditorBuffer {
     }
 
     pub fn select_all(&mut self) {
+        self.unmark_input();
         self.selection_anchor = Some(CursorPosition::new(0, 0));
         let last_row = self.lines.len().saturating_sub(1);
         self.cursor = CursorPosition::new(last_row, self.lines[last_row].len());
@@ -338,6 +345,7 @@ impl EditorBuffer {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.unmark_input();
         let Some(snapshot) = self.undo_stack.pop_back() else {
             return false;
         };
@@ -351,6 +359,7 @@ impl EditorBuffer {
     }
 
     fn push_undo_snapshot(&mut self) {
+        self.unmark_input();
         while self.undo_stack.len() >= MAX_UNDO_ENTRIES {
             let _ = self.undo_stack.pop_front();
         }
@@ -409,12 +418,14 @@ impl EditorBuffer {
     }
 
     fn move_selecting(&mut self, move_cursor: fn(&mut Self)) {
+        self.unmark_input();
         let anchor = self.selection_anchor.unwrap_or(self.cursor);
         move_cursor(self);
         self.selection_anchor = Some(anchor);
     }
 
     fn clear_selection(&mut self) {
+        self.unmark_input();
         self.selection_anchor = None;
     }
 
