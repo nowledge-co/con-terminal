@@ -13,7 +13,10 @@ the source of truth; do not treat a green build on one platform as a release.
 
 - Release from `main` only.
 - Prepare `CHANGELOG.md` before tagging. The top section must be the next
-  unreleased beta and every PR-derived item must credit its GitHub author.
+  beta with the intended release date (Asia/Shanghai), and every PR-derived item
+  must credit its GitHub author. Date it before tagging/merging when release is
+  authorized; do not wait for publication to replace Unreleased. A date is not
+  proof of successful publication: keep all draft/artifact/finalizer gates.
 - Push exactly one immutable tag. Use `v0.1.0-beta.N` for beta, `v0.1.0-dev.N`
   for dev, and the project stable tag when stable is explicitly approved.
 - A tag push starts the macOS, Linux, Windows, and Flatpak workflows. Platform
