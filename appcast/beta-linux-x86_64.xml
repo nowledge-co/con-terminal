@@ -6,6 +6,69 @@
     <description>Most recent changes</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.0-beta.174</title>
+      <pubDate />
+      <sparkle:version>148</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.174</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.174/con-0.1.0-beta.174-linux-x86_64.tar.gz" length="57073357" type="application/octet-stream" sparkle:edSignature="15iUxmTb7ACxNbMi8A4n3Mar5mto2AXtes1b9zZUyCGDcciopnuM7AJOyIdUiFKE8l3cNoYgGDw6Eoh+5fYnDg==" />
+      <description>&lt;!doctype html&gt;
+&lt;html lang="en"&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;meta name="color-scheme" content="light dark"&gt;
+&lt;meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"&gt;
+&lt;title&gt;con 0.1.0-beta.174 — What’s new&lt;/title&gt;
+&lt;style&gt;
+:root { color-scheme: light dark; --ground: #fffcf0; --ink: #100f0f;
+  --muted: #6f6e69; --link: #205ea6; --wash: rgba(16,15,15,.055); }
+@media (prefers-color-scheme: dark) {
+  :root { --ground: #100f0f; --ink: #cecdc3; --muted: #9f9d96;
+    --link: #66a0c8; --wash: rgba(206,205,195,.08); }
+}
+* { box-sizing: border-box; }
+html { background: var(--ground); color: var(--ink); }
+body { margin: 0; padding: 20px 22px 24px;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere; }
+article { max-width: 66ch; margin: 0 auto; }
+header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; }
+h1 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 650; }
+.version { margin: 0; color: var(--muted); font-size: 12px; }
+h2 { margin: 20px 0 8px; font-size: 15px; line-height: 1.4; font-weight: 650; }
+h3 { margin: 10px 0 6px; font-size: 13px; line-height: 1.4; font-weight: 650; }
+p { margin: 8px 0; }
+ul { padding-left: 18px; margin: 6px 0 16px; }
+li { padding-left: 2px; }
+li + li { margin-top: 12px; }
+li::marker { color: var(--muted); }
+a { color: var(--link); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 2px; }
+code { font: .9em ui-monospace, Menlo, Consolas, monospace;
+  background: var(--wash); border-radius: 3px; padding: 1px 3px; }
+.credit { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.credit a { color: inherit; }
+footer { margin-top: 26px; font-size: 12px; }
+::selection { background: var(--link); color: var(--ground); }
+@media (max-width: 380px) { body { padding: 16px; } h1 { font-size: 18px; } }
+&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;article&gt;
+&lt;header&gt;&lt;h1&gt;What’s new&lt;/h1&gt;&lt;p class="version"&gt;con 0.1.0-beta.174 · 2026-11-08&lt;/p&gt;&lt;/header&gt;
+&lt;h2&gt;Added&lt;/h2&gt;
+&lt;h3&gt;Updates&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Read the offered version’s changes before deciding to upgrade. macOS shows release notes in its native update prompt; Windows and Linux show a compact changelog alongside download, cancel and skip controls.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/554"&gt;#554&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Changed&lt;/h2&gt;
+&lt;h3&gt;Windows, Linux&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Download and verify updates while continuing to work, then restart when ready. Recognized per-user installations update the app and companion CLI together with signature verification, backups and rollback, without launching an installer console. Package-managed and custom installations retain their original update method. Restart closes running terminals and agents; existing session recovery settings apply.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/554"&gt;#554&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;footer&gt;&lt;a href="https://con.nowledge.co/changelog/"&gt;Read the full changelog&lt;/a&gt;&lt;/footer&gt;
+&lt;/article&gt;&lt;/body&gt;&lt;/html&gt;
+</description>
+      <sparkle:fullReleaseNotesLink>https://con.nowledge.co/changelog/</sparkle:fullReleaseNotesLink>
+    </item>
+    <item>
       <title>Version 0.1.0-beta.173</title>
       <pubDate />
       <sparkle:version>147</sparkle:version>
@@ -156,14 +219,6 @@
       <sparkle:shortVersionString>0.1.0-beta.155</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.155/con-0.1.0-beta.155-linux-x86_64.tar.gz" length="56348469" type="application/octet-stream" sparkle:edSignature="esxs19x8RhiclhghT1UJa/+8JKExcf86TpLmRWPvokWMFP/RulEdpCtpKRCo2kZs8X7F/xiIUxSUTE89B0SLAw==" />
-    </item>
-    <item>
-      <title>Version 0.1.0-beta.154</title>
-      <pubDate />
-      <sparkle:version>128</sparkle:version>
-      <sparkle:shortVersionString>0.1.0-beta.154</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.154/con-0.1.0-beta.154-linux-x86_64.tar.gz" length="56323761" type="application/octet-stream" sparkle:edSignature="4v62sSRY5RmP4oUQiDI9v6EjAJ0nG94xejz9X7xhWvKEIyO3UUzkckidfW4ylQ2TdBLJ+3ENXSuZlBChzlCnAg==" />
     </item>
   </channel>
 </rss>
