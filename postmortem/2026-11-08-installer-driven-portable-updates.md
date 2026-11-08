@@ -52,3 +52,11 @@ The final manual-menu routing compiled and passed the affected Settings and
 updater tests. Its additional native click-through could not run because the
 computer-use native pipe failed to start; earlier visual-state checks above
 remain valid. This final entry-point interaction remains a verification gap.
+
+Follow-up native verification on Windows 11 Pro and Ubuntu 24.04 WSL2 passed
+17 updater and 3 path tests on each host. The disposable-key subprocess fixture
+also passed on both: an installed executable holds the live-instance lock,
+replacement waits for normal exit, the helper replaces both files, and the
+replacement executable actually relaunches. An unrelated preferences file is
+retained and each temporary installation is removed. This closes the native
+transaction gap; the full graphical Settings-to-update flow remains separate.

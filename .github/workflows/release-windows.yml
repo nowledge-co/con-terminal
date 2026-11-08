@@ -2,7 +2,8 @@ name: Release Windows
 
 # v0 release pipeline for the Windows port. Unsigned for now — the
 # user downloads a ZIP, unpacks it anywhere, and runs `con-app.exe`.
-# No installer, no code signature, no auto-update. Those come later.
+# No installer or Authenticode signature. Signed per-user ZIP updates use
+# the portable updater; package-managed/custom installs retain their owner.
 #
 # macOS releases live in release-macos.yml and run on the same `v*`
 # tag; this workflow piggybacks onto the same release the macOS job

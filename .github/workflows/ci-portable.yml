@@ -117,6 +117,12 @@ jobs:
         run: cargo check --locked -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
         run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: Portable updater subprocess smoke
+        env:
+          # Disposable test key, deliberately unrelated to release signing.
+          CON_SPARKLE_PUBLIC_ED_KEY: Zs1gi5KLiOUODv6qM/rxxDzv4HKUsLh+n+CrpqPPdjM=
+          CON_RELEASE_VERSION: 0.1.0-beta.173
+        run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app updater::portable
@@ -187,6 +193,12 @@ jobs:
         run: cargo check --locked -p con
       - name: cargo test — portable crates
         run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: Portable updater subprocess smoke
+        env:
+          # Disposable test key, deliberately unrelated to release signing.
+          CON_SPARKLE_PUBLIC_ED_KEY: Zs1gi5KLiOUODv6qM/rxxDzv4HKUsLh+n+CrpqPPdjM=
+          CON_RELEASE_VERSION: 0.1.0-beta.173
+        run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
           cargo test --locked -p con --bin con updater::portable

@@ -110,3 +110,30 @@ temporary installations. Native macOS UI previews exercise the portable reading
 surface through a debug-only fixture; they do not certify Windows/Linux runtime
 behavior. No production updater endpoint or live installation is modified by
 local tests.
+
+### Native subprocess smoke
+
+The reproducible fixture copies its own executable into a temporary installation,
+signs a ZIP/tar containing a paired replacement, launches the actual copied
+helper, holds a live-instance lock, authorizes exit, and checks executable
+relaunch, both replacement bytes, unrelated-file retention and cleanup. It never
+uses a real installation, production signing key, updater endpoint or user data.
+Run it in a shell-local environment with this disposable public key:
+
+```sh
+CON_SPARKLE_PUBLIC_ED_KEY=Zs1gi5KLiOUODv6qM/rxxDzv4HKUsLh+n+CrpqPPdjM= \
+CON_RELEASE_VERSION=0.1.0-beta.173 \
+cargo run -p con-update --example transaction_smoke
+```
+
+On PowerShell, set the two environment variables for the command's process before
+running the same cargo command. Portable CI runs this on both Windows and Linux.
+The fixture validates native process/file lifecycle, not a full graphical app
+update or display-server behavior.
+
+On 2026-11-08 the same fixture source was run on Windows 11 Pro (Rust 1.97)
+and Ubuntu 24.04 under WSL2, in isolated directories. Both passed the 17 updater
+and 3 path tests and the real subprocess smoke, including another running
+installed executable holding the lock, paired replacement and executable
+relaunch. This certifies the native filesystem/process transaction on those
+hosts, not the full Windows/Linux graphical Settings-to-update lifecycle.
