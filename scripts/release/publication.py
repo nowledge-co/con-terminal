@@ -14,6 +14,8 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from release_notes import CHANGELOG, render as render_release_notes
+
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
@@ -193,6 +195,19 @@ def finish(repo, tag, sha, pages):
     probe_downloads(feeds)
     if not feeds:  # Dev releases never touch stable/beta updater endpoints.
         return
+    # Use the immutable tag source, shared with the public website. Embed a
+    # self-contained snapshot so the native prompt needs no second network
+    # request or live website build to explain what the user is installing.
+    changelog = run("git", "show", f"{sha}:CHANGELOG.md", cwd=ROOT)
+    notes = render_release_notes(changelog, tag)
+    for tree in feeds.values():
+        item = tree.find("./channel/item")
+        for field in ("description", f"{{{SPARKLE}}}releaseNotesLink",
+                      f"{{{SPARKLE}}}fullReleaseNotesLink"):
+            for existing in item.findall(field):
+                item.remove(existing)
+        ET.SubElement(item, "description").text = notes
+        ET.SubElement(item, f"{{{SPARKLE}}}fullReleaseNotesLink").text = CHANGELOG
     for attempt in range(5):
         run("git", "fetch", "origin", "gh-pages", cwd=pages)
         # This dedicated CI clone is clean after each attempted commit. Start
