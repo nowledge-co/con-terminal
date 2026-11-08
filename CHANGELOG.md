@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.175` - 2026-11-08
+
+### Fixed
+
+**File editor**
+
+- Restore CJK input-method composition and candidate selection in file editor
+  panes. Keep the caret, selection and candidate window aligned with shaped
+  text, including emoji and horizontally scrolled CJK lines. Undo a completed
+  composition in one step and clear composition state when leaving the editor.
+  _(PR [#555](https://github.com/nowledge-co/con-terminal/pull/555) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.174` - 2026-11-08
 
 ### Added
