@@ -160,6 +160,14 @@ strip --strip-debug "${stage_dir}/con" || true
 cp "$cli_bin_path" "${stage_dir}/con-cli"
 strip --strip-debug "${stage_dir}/con-cli" || true
 
+# Signed archive identity binds feed version/platform to the payload.
+python3 - "$stage_dir/update.json" "$CON_RELEASE_VERSION" "$art_arch" <<'PYIDENTITY'
+import json, sys
+with open(sys.argv[1], "w") as out:
+    json.dump(dict(protocol=1, version=sys.argv[2].removeprefix("v"),
+                   platform="linux", arch=sys.argv[3]), out)
+PYIDENTITY
+
 # Docs.
 [[ -f LICENSE ]] && cp LICENSE "${stage_dir}/"
 [[ -f README.md ]] && cp README.md "${stage_dir}/"

@@ -400,6 +400,10 @@ fn main() -> Result<()> {
     if raw_args.get(1).is_some_and(|arg| arg == "+ssh") {
         std::process::exit(ssh::run(&raw_args[2..]));
     }
+    if raw_args.get(1).is_some_and(|arg| arg == "+update-helper") {
+        let plan = raw_args.get(2).context("Missing update plan")?;
+        return con_update::run_helper(Path::new(plan));
+    }
     let cli = Cli::parse();
     let socket_path = cli.socket.clone().unwrap_or_else(control_socket_path);
 

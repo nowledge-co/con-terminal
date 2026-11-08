@@ -116,9 +116,11 @@ jobs:
         # instead — mirrors what `cargo wbuild` / `cargo wrun` do locally.
         run: cargo check --locked -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
-        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: State presentation layout tests
         run: |
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app updater::portable
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app settings_panel::tests
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_geometry::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_identity::
@@ -184,9 +186,11 @@ jobs:
       - name: cargo check — UI binary
         run: cargo check --locked -p con
       - name: cargo test — portable crates
-        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: State presentation layout tests
         run: |
+          cargo test --locked -p con --bin con updater::portable
+          cargo test --locked -p con --bin con settings_panel::tests
           cargo test --locked -p con --bin con sidebar::
           cargo test --locked -p con --bin con terminal_geometry::
           cargo test --locked -p con --bin con terminal_identity::

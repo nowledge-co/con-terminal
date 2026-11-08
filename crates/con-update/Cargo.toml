@@ -1,0 +1,26 @@
+[package]
+name = "con-update"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+con-paths.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+url.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+base64 = "0.22"
+ed25519-dalek = "2"
+roxmltree = "0.21"
+semver = "1"
+zip = { version = "9.4", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+tar = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

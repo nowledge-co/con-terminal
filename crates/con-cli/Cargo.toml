@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 con-agent.workspace = true
 con-core.workspace = true
+con-update.workspace = true
 con-paths.workspace = true
 con-process.workspace = true
 uuid.workspace = true

@@ -17,6 +17,9 @@ on:
 permissions:
   contents: write
 
+env:
+  CON_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+
 jobs:
   build:
     name: Build windows-x86_64
@@ -60,6 +63,16 @@ jobs:
           git fetch origin "${{ github.ref }}"
           git checkout "${{ github.ref_name }}"
           git log -1 --oneline
+
+      - name: Validate portable updater public key
+        shell: bash
+        run: |
+          python3 - <<'PYKEY'
+          import base64, os
+          key = base64.b64decode(os.environ["CON_SPARKLE_PUBLIC_ED_KEY"].strip(), validate=True)
+          if len(key) != 32:
+              raise SystemExit("A 32-byte portable updater public key is required")
+          PYKEY
 
       - name: Derive release metadata
         id: meta
@@ -289,6 +302,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
           Copy-Item "target\release\con-app.exe" "$StagingDir\con-app.exe"
           Copy-Item "target\release\con-cli.exe" "$StagingDir\con-cli.exe"
+          @{ protocol = 1; version = $Version; platform = 'windows'; arch = 'x86_64' } |
+            ConvertTo-Json -Compress | Set-Content "$StagingDir\update.json" -Encoding utf8NoBOM
           if (Test-Path "README.md")  { Copy-Item "README.md"  $StagingDir }
           if (Test-Path "LICENSE")    { Copy-Item "LICENSE"    $StagingDir }
           if (Test-Path "LICENSE.md") { Copy-Item "LICENSE.md" $StagingDir }
