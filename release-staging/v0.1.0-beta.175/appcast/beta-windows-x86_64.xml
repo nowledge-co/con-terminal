@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>con</title>
+    <link>https://con-releases.nowledge.co</link>
+    <description>Most recent changes</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.1.0-beta.175</title>
+      <pubDate/>
+      <sparkle:version>158</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.175</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.175/con-0.1.0-beta.175-windows-x86_64.zip" length="60201057" type="application/octet-stream" sparkle:edSignature="MTP5h8x70CsP5aNgBVpRv9QZ7Yrbx6XaHZgFpGLm9eLG8hOw9WQRfR55/qvc6xxMSo15m2SnZ5z6yohkJWkfCg=="/>
+    </item>
+  </channel>
+</rss>
