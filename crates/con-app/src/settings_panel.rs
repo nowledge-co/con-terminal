@@ -41,7 +41,10 @@ use window_chrome::SETTINGS_HEADER_HEIGHT;
 pub(crate) use window_chrome::traffic_light_position;
 pub(crate) use window_chrome::{floating_titlebar_options, settings_titlebar_options};
 
-actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
+actions!(
+    settings,
+    [ToggleSettings, SaveSettings, DismissSettings, OpenUpdates]
+);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
@@ -249,6 +252,7 @@ pub struct SettingsPanel {
     oauth_runtime: Arc<tokio::runtime::Runtime>,
     focus_handle: FocusHandle,
     active_section: SettingsSection,
+    content_scroll_handle: ScrollHandle,
     overlay_motion: MotionValue,
 
     selected_provider: ProviderKind,
@@ -376,6 +380,13 @@ struct EndpointPreset {
 }
 
 impl SettingsPanel {
+    pub(crate) fn show_updates(&mut self, cx: &mut Context<Self>) {
+        self.active_section = SettingsSection::General;
+        self.content_scroll_handle
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    }
+
     fn clamp_ui_font_size(value: f32) -> f32 {
         value.clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE)
     }
@@ -1852,6 +1863,7 @@ impl SettingsPanel {
             oauth_runtime,
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
+            content_scroll_handle: ScrollHandle::new(),
             overlay_motion: MotionValue::new(0.0),
             selected_provider,
             provider_navigation_select,
@@ -3426,6 +3438,7 @@ impl SettingsPanel {
                                                     .flex()
                                                     .flex_col()
                                                     .items_end()
+                                    .flex_wrap()
                                                     .gap(px(8.0))
                                                     .child(
                                                         div()
@@ -3540,40 +3553,34 @@ impl SettingsPanel {
                                             }),
                                     )
                                     .child({
-                                        let actions = div().flex().items_center().gap(px(6.0));
+                                        let actions = div().flex().flex_wrap().items_center().gap(px(6.0));
 
-                                        // The notify-only updater
-                                        // (Windows + Linux) shows
-                                        // "Update now" when the
-                                        // latest state has a fresh
-                                        // version. macOS uses
-                                        // Sparkle's own dialog
-                                        // instead.
-                                        #[cfg(any(target_os = "windows", target_os = "linux"))]
-                                        let actions = if matches!(
-                                            &latest_state,
+                                        let actions = match &latest_state {
                                             crate::updater::CheckState::UpdateAvailable { .. }
-                                        ) {
-                                            actions.child(
-                                                Button::new("apply-update")
-                                                    .small()
-                                                    .primary()
-                                                    .label("Update now")
-                                                    .on_click(cx.listener(
-                                                        |_this, _, _window, _cx| {
-                                                            crate::updater::apply_update_in_place();
-                                                        },
-                                                    )),
-                                            )
-                                        } else {
-                                            actions
+                                                if crate::updater::portable::enabled() && crate::updater::portable::managed().is_none() => actions
+                                                .child(Button::new("download-update").small().primary().label("Download update")
+                                                    .on_click(|_, _, _| crate::updater::portable::download()))
+                                                .child(Button::new("skip-update").small().ghost().label("Skip this version")
+                                                    .on_click(|_, _, _| crate::updater::portable::skip())),
+                                            crate::updater::CheckState::Downloading { .. } => actions.child(
+                                                Button::new("cancel-update").small().ghost().label("Cancel")
+                                                    .on_click(|_, _, _| crate::updater::portable::cancel())),
+                                            crate::updater::CheckState::Ready { .. } => actions.child(
+                                                Button::new("restart-update").small().primary().label("Restart and update")
+                                                    .on_click(|_, _, _| crate::updater::portable::restart()))
+                                                .child(Button::new("discard-update").small().ghost().label("Discard download")
+                                                    .on_click(|_, _, _| crate::updater::portable::discard())),
+                                            _ => actions,
                                         };
 
+                                        if matches!(&latest_state, crate::updater::CheckState::Downloading { .. } | crate::updater::CheckState::Ready { .. } | crate::updater::CheckState::Installing) {
+                                            actions
+                                        } else {
                                         actions.child(
                                             Button::new("check-updates")
                                                 .small()
                                                 .ghost()
-                                                .disabled(!updater_status.can_check_manually())
+                                                .disabled(!updater_status.can_check_manually() || matches!(&latest_state, crate::updater::CheckState::Downloading { .. } | crate::updater::CheckState::Ready { .. } | crate::updater::CheckState::Installing))
                                                 .label("Check for Updates")
                                                 .on_click(cx.listener(
                                                     |_this, _, _window, _cx| {
@@ -3581,10 +3588,80 @@ impl SettingsPanel {
                                                     },
                                                 )),
                                         )
+                                        }
                                     }),
                             ),
                     ),
             );
+            if crate::updater::portable::enabled() {
+                let notes = crate::updater::portable::notes();
+                let mut content = div().flex().flex_col().gap(px(10.0)).min_w(px(0.0));
+                if let Some(message) = crate::updater::portable::managed() {
+                    content = content.child(
+                        div()
+                            .text_size(ui_px(theme, 12.0))
+                            .line_height(ui_px(theme, 18.0))
+                            .text_color(theme.muted_foreground)
+                            .child(message),
+                    );
+                }
+                if !notes.is_empty() {
+                    let mut reading = div()
+                        .id("update-release-notes")
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.0))
+                        .max_h(px(280.0))
+                        .overflow_y_scroll()
+                        .min_w(px(0.0));
+                    for block in notes {
+                        use con_update::NoteBlock;
+                        let (text, size, weight, color, top) = match block {
+                            NoteBlock::Heading(text) => {
+                                (text, 14.0, FontWeight::SEMIBOLD, theme.foreground, 10.0)
+                            }
+                            NoteBlock::Subheading(text) => {
+                                (text, 13.0, FontWeight::MEDIUM, theme.foreground, 4.0)
+                            }
+                            NoteBlock::Body(text) => (
+                                text,
+                                13.0,
+                                FontWeight::NORMAL,
+                                theme.foreground.opacity(0.88),
+                                0.0,
+                            ),
+                            NoteBlock::Credit(text) => {
+                                (text, 11.0, FontWeight::NORMAL, theme.muted_foreground, 0.0)
+                            }
+                        };
+                        reading = reading.child(
+                            div()
+                                .pt(px(top))
+                                .text_size(ui_px(theme, size))
+                                .line_height(ui_px(theme, 20.0))
+                                .font_weight(weight)
+                                .text_color(color)
+                                .child(text),
+                        );
+                    }
+                    content = content
+                        .child(
+                            div()
+                                .text_size(ui_px(theme, 14.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.foreground)
+                                .child("What’s new"),
+                        )
+                        .child(reading);
+                }
+                content = content.child(
+                    gpui_component::link::Link::new("update-changelog")
+                        .href("https://con.nowledge.co/changelog/")
+                        .text_size(ui_px(theme, 12.0))
+                        .child("Read the full changelog"),
+                );
+                container = container.child(content.px(rems(1.0)).pb(px(8.0)));
+            }
         }
 
         container
@@ -6456,6 +6533,7 @@ impl Render for SettingsPanel {
 
         let content_scroll = div()
             .id("settings-content-scroll")
+            .track_scroll(&self.content_scroll_handle)
             .debug_selector(|| "settings-content-scroll".into())
             .flex()
             .flex_col()
@@ -6534,6 +6612,7 @@ impl Render for SettingsPanel {
             .flex_col()
             .occlude()
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, _: &OpenUpdates, _, cx| this.show_updates(cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // If recording a keybinding, capture the keystroke.
                 if this.recording_key.is_some() {
@@ -6927,6 +7006,22 @@ fn update_summary_and_detail(
             format!("Update available: {version}"),
             "A newer build has been published.".to_string(),
         ),
+        CheckState::Downloading { version, received, total } => (
+            format!("Downloading {version}"),
+            format!("{:.1} / {:.1} MB — you can keep using con.", *received as f64 / 1_000_000.0, *total as f64 / 1_000_000.0),
+        ),
+        CheckState::Ready { version } => (
+            format!("{version} is ready"),
+            "Verified and ready to install. Restarting closes running terminals and agents; native sessions resume according to your recovery settings.".to_string(),
+        ),
+        CheckState::Installing => (
+            "Preparing to restart…".to_string(),
+            "Saving sessions before applying the verified update.".to_string(),
+        ),
+        CheckState::Skipped { version } => (
+            format!("Skipped {version}"),
+            "Check again to reconsider this version.".to_string(),
+        ),
         CheckState::UpToDate => (
             "Up to date".to_string(),
             format!(
@@ -6934,13 +7029,16 @@ fn update_summary_and_detail(
                 crate::app_display_version()
             ),
         ),
-        CheckState::Error(e) => ("Update check failed".to_string(), e.clone()),
+        CheckState::Error(e) => ("Update couldn’t finish".to_string(), e.clone()),
         CheckState::Idle => (status.summary().to_string(), status.detail().to_string()),
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn update_download_url(state: &crate::updater::CheckState) -> Option<String> {
+    if crate::updater::portable::enabled() && crate::updater::portable::managed().is_none() {
+        return None;
+    }
     match state {
         crate::updater::CheckState::UpdateAvailable { url, .. } => Some(url.clone()),
         _ => None,

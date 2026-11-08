@@ -4,6 +4,29 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.174` - 2026-11-08
+
+### Added
+
+**Updates**
+
+- Read the offered version’s changes before deciding to upgrade. macOS shows
+  release notes in its native update prompt; Windows and Linux show a compact
+  changelog alongside download, cancel and skip controls.
+  _(PR [#554](https://github.com/nowledge-co/con-terminal/pull/554) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Windows, Linux**
+
+- Download and verify updates while continuing to work, then restart when ready.
+  Recognized per-user installations update the app and companion CLI together
+  with signature verification, backups and rollback, without launching an
+  installer console. Package-managed and custom installations retain their
+  original update method. Restart closes running terminals and agents; existing
+  session recovery settings apply.
+  _(PR [#554](https://github.com/nowledge-co/con-terminal/pull/554) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.173` - 2026-11-08
 
 ### Fixed

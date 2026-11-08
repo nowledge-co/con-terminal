@@ -230,10 +230,13 @@ class PublicationTests(unittest.TestCase):
         original_run = p.run
         original_subprocess = subprocess.run
         effects = []
+        source_requests = []
         inserted = False
 
         def execute(*args, **kwargs):
             nonlocal inserted
+            if args[:2] == ("git", "show") and args[2].endswith(":CHANGELOG.md"):
+                source_requests.append(args[2])
             if args[0] == "gh":
                 effects.append("promote")
                 self.release["isDraft"] = False
@@ -265,12 +268,21 @@ class PublicationTests(unittest.TestCase):
                 patch.object(p.time, "sleep"):
             p.finish(REPO, TAG, p.run("git", "rev-parse", "HEAD", cwd=ROOT), self.pages)
             p.finish(REPO, TAG, p.run("git", "rev-parse", "HEAD", cwd=ROOT), self.pages)
+        expected_source = p.run("git", "rev-parse", "HEAD", cwd=ROOT) + ":CHANGELOG.md"
+        self.assertEqual(source_requests, [expected_source, expected_source])
         self.assertEqual(effects[:3], ["gate", "promote", "probe"])
         self.assertEqual(effects.count("promote"), 1)
         self.assertGreater(effects.index("push"), effects.index("probe"))
         for name in p.feed_names("beta"):
             items = ET.parse(self.pages / "appcast" / name).findall("./channel/item")
             self.assertEqual([p.build_number(item) for item in items], [160, 159])
+            staged_item = ET.parse(self.stage / name).find("./channel/item")
+            self.assertEqual(items[0].find("enclosure").attrib, staged_item.find("enclosure").attrib)
+            self.assertIn("What’s new", items[0].findtext("description"))
+            self.assertIn(TAG[1:], items[0].findtext("description"))
+            self.assertNotIn("What’s new", items[1].findtext("description", ""))
+            self.assertEqual(items[0].findtext(f"{{{p.SPARKLE}}}fullReleaseNotesLink"),
+                             "https://con.nowledge.co/changelog/")
         expected = "concurrent deployment" if conflict else "unrelated deployment"
         self.assertEqual((self.pages / "flatpak" / "keep").read_text(), expected)
 

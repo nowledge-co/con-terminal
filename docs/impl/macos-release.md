@@ -264,6 +264,48 @@ Examples:
 
 This is stable across releases and extensible to Linux when needed.
 
+### Update-window release notes
+
+The standard Sparkle update window displays a self-contained HTML snapshot of
+the target release’s `CHANGELOG.md` section. The public website uses that same
+source; the updater does not scrape a live page or depend on a second network
+request. The content is selected from the immutable release commit, not `main`,
+and is embedded as the appcast item’s `<description>` by finalization.
+
+The reading surface uses compact system typography, neutral Flexoki Light/Dark
+colors, clear Added/Changed/Fixed groups, and subdued but accessible PR/author
+links. It preserves compatibility notes rather than inferring urgency. The
+full changelog link opens `https://con.nowledge.co/changelog/`; Sparkle also uses
+that URL for its version-history action when the app is already up to date.
+
+Sparkle continues to own installation, Remind Me Later, Skip This Version,
+keyboard behavior, scrolling and download verification. Existing installed
+clients can display the new feed content without an application upgrade.
+Windows/Linux feeds carry the same content. Their Settings updater converts it
+to inert heading/body/credit blocks rather than executing HTML. See
+[portable updates](portable-updates.md) for download and replacement ownership.
+
+The notes are generated only after platform/asset checks and anonymous download
+probes succeed, then committed with the verified feeds. They never change
+signed download URLs, lengths, signatures or build ordering. A missing legacy
+changelog entry displays an honest link to full history, never another version’s
+notes. Authorized releases carry their intended date before tagging. Legacy tags
+may still say Unreleased; that suffix is omitted without inventing a date.
+
+Validate without compiling the application:
+
+```sh
+python3 scripts/release/test-release-notes.py
+python3 scripts/release/test-publication.py
+python3 scripts/release/release_notes.py v0.1.0-beta.170 \
+  --output .context/update-notes.html
+```
+
+The renderer interprets a conservative Markdown subset, escapes raw HTML, and
+allows only HTTPS links. Notes contain no JavaScript, images, external fonts or
+tracking. Do not embed the full website navigation or weaken Sparkle’s signed
+artifact checks to preview these notes.
+
 ### Sparkle Integration
 
 Sparkle is loaded dynamically from `Contents/Frameworks/Sparkle.framework` at app launch.  If the framework is absent (e.g. `cargo run` dev builds), auto-update silently disables.

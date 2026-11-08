@@ -22,6 +22,7 @@ Start with the page that matches what you are trying to do.
 | Need | Read |
 | --- | --- |
 | Install con | [Install](install.md) |
+| Review changes and update con | [Updates](install.md#updates) |
 | Learn the main controls | [Quick controls](quick-controls.md) |
 | Open a drop-down terminal from anywhere on macOS | [Quick Terminal](quick-terminal.md) |
 | Work with tabs, panes, broadcast, links, and pane zoom | [Terminal workflows](terminal-workflows.md) |

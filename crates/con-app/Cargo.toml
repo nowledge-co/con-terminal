@@ -32,6 +32,7 @@ bin-con-app = []
 
 [dependencies]
 con-core.workspace = true
+con-update.workspace = true
 con-paths.workspace = true
 con-terminal.workspace = true
 con-agent.workspace = true

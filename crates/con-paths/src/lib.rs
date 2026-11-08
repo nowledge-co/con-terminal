@@ -151,3 +151,16 @@ mod tests {
         }
     }
 }
+
+/// Supported legacy per-user install roots for the portable updater.
+/// This is an ownership boundary, not a search for any writable executable.
+pub fn portable_installation_dir(
+    home: &std::path::Path,
+    local_app_data: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        local_app_data.map(|path| path.join("Programs/con-terminal"))
+    } else {
+        Some(home.join(".local/bin"))
+    }
+}

@@ -2744,6 +2744,9 @@ fn main() {
     inherit_shell_env();
     terminal_env::sanitize_inherited_terminal_environment();
 
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    updater::portable::restore_session();
+
     log::info!("con starting (pid {})", std::process::id());
     if let Some(path) = log_file_path.as_ref() {
         log::info!("logging to {}", path.display());
@@ -2923,8 +2926,18 @@ fn main() {
             show_about_window(cx);
         });
 
-        cx.on_action(|_: &CheckForUpdates, _cx: &mut App| {
+        cx.on_action(|_: &CheckForUpdates, cx: &mut App| {
             updater::check_for_updates();
+            if updater::portable::enabled() {
+                let handle = cx.active_window();
+                cx.defer(move |cx| {
+                    if let Some(handle) = handle {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.dispatch_action(Box::new(settings_panel::OpenUpdates), cx)
+                        });
+                    }
+                });
+            }
         });
         cx.on_action(|_: &HideApp, cx: &mut App| {
             cx.hide();
@@ -3060,8 +3073,9 @@ fn main() {
         );
 
         // Initialize the auto-updater. On macOS this loads Sparkle
-        // from the app bundle; on Windows it kicks off a notify-only
-        // background check against the release appcast.
+        // from the app bundle; Windows/Linux initialize the signed portable
+        // updater against their release appcast.
         updater::init();
+        updater::portable::observe(cx);
     });
 }

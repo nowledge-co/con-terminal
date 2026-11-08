@@ -631,6 +631,8 @@ impl ConWorkspace {
         )
         .detach();
 
+        crate::updater::portable::register_workspace(cx.weak_entity());
+
         // Restart must save sessions and release native surfaces in every window,
         // just like Quit. GPUI's platform restart bypasses our Quit action.
         let workspace_handle = cx.weak_entity();

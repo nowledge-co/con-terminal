@@ -116,9 +116,17 @@ jobs:
         # instead — mirrors what `cargo wbuild` / `cargo wrun` do locally.
         run: cargo check --locked -p con --no-default-features --features con/bin-con-app
       - name: cargo test — portable crates
-        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: Portable updater subprocess smoke
+        env:
+          # Disposable test key, deliberately unrelated to release signing.
+          CON_SPARKLE_PUBLIC_ED_KEY: Zs1gi5KLiOUODv6qM/rxxDzv4HKUsLh+n+CrpqPPdjM=
+          CON_RELEASE_VERSION: 0.1.0-beta.173
+        run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app updater::portable
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app settings_panel::tests
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_geometry::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_identity::
@@ -143,8 +151,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Flatpak icon validation
         run: python3 scripts/release/test-flatpak-icon.py
-      - name: Release publication regression tests
-        run: python3 scripts/release/test-publication.py
+      - name: Release publication and updater notes regression tests
+        run: |
+          python3 scripts/release/test-publication.py
+          python3 scripts/release/test-release-notes.py
       - name: Program status acceptance fixture tests
         run: python3 -m unittest discover -s scripts/terminal -p 'test_*.py'
       - name: Release script syntax checks
@@ -182,9 +192,17 @@ jobs:
       - name: cargo check — UI binary
         run: cargo check --locked -p con
       - name: cargo test — portable crates
-        run: cargo test --locked -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+        run: cargo test --locked -p con-update -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+      - name: Portable updater subprocess smoke
+        env:
+          # Disposable test key, deliberately unrelated to release signing.
+          CON_SPARKLE_PUBLIC_ED_KEY: Zs1gi5KLiOUODv6qM/rxxDzv4HKUsLh+n+CrpqPPdjM=
+          CON_RELEASE_VERSION: 0.1.0-beta.173
+        run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
+          cargo test --locked -p con --bin con updater::portable
+          cargo test --locked -p con --bin con settings_panel::tests
           cargo test --locked -p con --bin con sidebar::
           cargo test --locked -p con --bin con terminal_geometry::
           cargo test --locked -p con --bin con terminal_identity::

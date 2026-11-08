@@ -81,6 +81,24 @@ con is light-first (Flexoki Light default) but must excel in both themes.
 - Preserve terminal geometry and native composition while confirming. Approval
   uses the existing teardown path, resolved against stable target identities.
 
+### Update release notes
+
+- Keep Sparkle’s native update actions and focus/installation ownership. Put
+  target-version changes in its reading area, using the website’s changelog
+  source rather than a full website shell or an extra confirmation dialog.
+- Use system prose typography, Added/Changed/Fixed hierarchy and visible
+  compatibility notes. Credit links remain available without competing with
+  the changes. Match Flexoki Light/Dark; add no decorative cards or shadows.
+- Embed an exact-release snapshot in the feed so notes do not depend on a
+  second page request. Link to full history, and never invent an urgency score
+  or imply that only the latest release covers every skipped version.
+
+- Windows/Linux use the same reading hierarchy in Settings. Download keeps the
+  app open; restart is a separate explicit action after verification. Keep
+  progress, cancellation and failure in place. Respect managed installations;
+  never open an installation console or imply that live agent processes survive
+  restarting the terminal.
+
 ### Settings Layout
 
 - Navigation has its own quiet foreground-derived fill and a single 1px semantic

@@ -29,6 +29,10 @@ impl ConWorkspace {
         state
     }
 
+    pub(crate) fn snapshot_for_update(&self, cx: &App) -> Option<Session> {
+        (!self.is_quick_terminal).then(|| self.snapshot_session(cx))
+    }
+
     pub(super) fn snapshot_session(&self, cx: &App) -> Session {
         self.snapshot_session_with_options(cx, self.config.appearance.restore_terminal_text)
     }

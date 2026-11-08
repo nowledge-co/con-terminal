@@ -166,6 +166,7 @@ These constraints take precedence over conflicting older examples in linked docs
 | Task | Guidance |
 |------|----------|
 | Architecture / boundaries | `DESIGN.md`, `docs/impl/workspace-modules.md` |
+| Application updates / portable replacement | `docs/impl/portable-updates.md` |
 | Build / packaging | `HACKING.md`, `docs/impl/build-system.md` |
 | Agent behavior / tools | `docs/impl/agent-harness.md`, `docs/impl/agent-tool-surface.md` |
 | Native agent conversation recovery | `docs/native-agent-sessions.md`, `docs/study/con-agent-orchestration.md` |

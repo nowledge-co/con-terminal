@@ -8,6 +8,7 @@ members = [
     "crates/con-agent",
     "crates/con-cli",
     "crates/con-process",
+    "crates/con-update",
     "crates/con-test",
 ]
 default-members = ["crates/con-app"]
@@ -26,6 +27,7 @@ con-terminal = { path = "crates/con-terminal" }
 con-ghostty = { path = "crates/con-ghostty" }
 con-agent = { path = "crates/con-agent" }
 con-process = { path = "crates/con-process" }
+con-update = { path = "crates/con-update" }
 
 # UI — Zed's GPUI via the `gpui-pre-*` crates.io snapshots (0.3.7 = zed@1a28cff).
 # Pin them exactly to the snapshot gpui-component was released against and bump

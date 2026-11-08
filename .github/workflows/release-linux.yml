@@ -20,6 +20,9 @@ on:
 permissions:
   contents: write
 
+env:
+  CON_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+
 jobs:
   build:
     name: Build linux-x86_64
@@ -55,6 +58,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Validate portable updater public key
+        shell: bash
+        run: |
+          python3 - <<'PYKEY'
+          import base64, os
+          key = base64.b64decode(os.environ["CON_SPARKLE_PUBLIC_ED_KEY"].strip(), validate=True)
+          if len(key) != 32:
+              raise SystemExit("A 32-byte portable updater public key is required")
+          PYKEY
 
       - name: Derive release metadata
         id: meta
