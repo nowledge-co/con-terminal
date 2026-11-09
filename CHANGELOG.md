@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.176` - 2026-11-10
+
+### Fixed
+
+**Tabs and panes**
+
+- Keep valid tab-to-pane drops from being silently discarded when a terminal
+  receives the final mouse release. Resolve the destination from the release
+  position, including single-pane layouts, while preserving cancellation,
+  tab reordering and the separate new-window drop target.
+  _(PR [#556](https://github.com/nowledge-co/con-terminal/pull/556) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.175` - 2026-11-08
 
 ### Fixed

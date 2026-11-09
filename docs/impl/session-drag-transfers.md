@@ -87,3 +87,10 @@ monitor only inside their own test process: no events are posted and no windows
 are shown. The macOS E2E workflow runs them before building con. Rust event
 tests separately cover a release without an outside move and a fast release
 before the New window target paints.
+
+In-window release is resolved at window capture from the final pointer position;
+it must not depend on a terminal descendant allowing a hovered bubble drop. A
+single-pane destination has the same split affordance as an existing layout.
+The native macOS release observer also resolves an unclaimed in-window split
+before cleanup. Consume the active drag before committing, give Escape priority,
+and preserve the explicit new-window affordance and ordinary tab reordering.

@@ -11,7 +11,7 @@ pub(super) struct TransferredTerminalOwners {
 impl Global for TransferredTerminalOwners {}
 
 /// A release is committed only once, after the pointer has crossed the outer
-/// window boundary. In-window releases remain owned by ordinary drop targets.
+/// window boundary. Unclaimed in-window releases resolve their final split target.
 #[cfg(any(target_os = "macos", test))]
 fn tearoff_release(released: bool, cancelled: bool, outside: bool) -> Option<bool> {
     if cancelled {
@@ -36,16 +36,6 @@ fn observe_window_transfer_release(
 ) {
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
         if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
-            return;
-        }
-        let size = window.viewport_size();
-        let p = event.position;
-        if p.x >= px(-12.0)
-            && p.y >= px(-12.0)
-            && p.x < size.width + px(12.0)
-            && p.y < size.height + px(12.0)
-            && !new_window_drop_bounds(size).contains(&p)
-        {
             return;
         }
         release(event, window, cx);
@@ -134,8 +124,35 @@ impl ConWorkspace {
                                                 false
                                             }
                                             Some(false) => {
-                                                // A successful in-window drop has already claimed its
-                                                // gesture. This is only leftover preview/capture state.
+                                                // Native terminal descendants can receive release without
+                                                // GPUI's hovered drop target. Resolve the final position
+                                                // before discarding an unclaimed in-window gesture.
+                                                if !sample.cancelled && cx.has_active_drag() {
+                                                    if new_window_drop_bounds(
+                                                        window.viewport_size(),
+                                                    )
+                                                    .contains(&sample.position)
+                                                    {
+                                                        cx.stop_active_drag(window);
+                                                        this.move_drag_to_window_at(
+                                                            &dragged, None, window, cx,
+                                                        );
+                                                    } else if this
+                                                        .split_target_for_drag(
+                                                            &dragged,
+                                                            sample.position,
+                                                        )
+                                                        .is_some()
+                                                    {
+                                                        cx.stop_active_drag(window);
+                                                        this.commit_session_split_drop(
+                                                            &dragged,
+                                                            sample.position,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                }
                                                 cx.stop_active_drag(window);
                                                 this.clear_session_drag(cx);
                                                 false
@@ -168,6 +185,46 @@ impl ConWorkspace {
         let workspace = cx.entity().downgrade();
         window_transfer_release_listener(move |event, window, cx| {
             let _ = workspace.update(cx, |this, cx| {
+                #[cfg(target_os = "macos")]
+                if this
+                    .native_session_drag
+                    .as_ref()
+                    .is_some_and(|(_, capture)| capture.sample().cancelled)
+                {
+                    cx.stop_active_drag(window);
+                    this.clear_session_drag(cx);
+                    return;
+                }
+                let dragged = this.session_drag.clone().or_else(|| {
+                    cx.try_global::<crate::sidebar::ActiveSessionDrag>()
+                        .and_then(|d| d.0.clone())
+                });
+                if cx.has_active_drag()
+                    && let Some(dragged) = dragged.as_ref()
+                    && dragged.source_window.get() == Some(window.window_handle().window_id())
+                    && !new_window_drop_bounds(window.viewport_size()).contains(&event.position)
+                    && this
+                        .split_target_for_drag(dragged, event.position)
+                        .is_some()
+                {
+                    cx.stop_active_drag(window);
+                    this.commit_session_split_drop(dragged, event.position, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                // Reordering, same-pane and other in-window releases remain
+                // with their existing targets; only the explicit affordance
+                // or an actual outer-boundary release can create a window.
+                let viewport = window.viewport_size();
+                let p = event.position;
+                if p.x >= px(-12.0)
+                    && p.y >= px(-12.0)
+                    && p.x < viewport.width + px(12.0)
+                    && p.y < viewport.height + px(12.0)
+                    && !new_window_drop_bounds(viewport).contains(&p)
+                {
+                    return;
+                }
                 // AppKit owns its exact screen-space release and cancellation.
                 let explicit_target =
                     new_window_drop_bounds(window.viewport_size()).contains(&event.position);
@@ -405,6 +462,12 @@ impl ConWorkspace {
         dragged: &DraggedTab,
         position: Point<Pixels>,
     ) -> Option<PaneSplitDropTarget> {
+        if self.close_confirmation.is_some()
+            || dragged.source_window.get() != Some(self.window_handle.window_id())
+            || !self.has_active_tab()
+        {
+            return None;
+        }
         let pane = if dragged.origin == DraggedTabOrigin::Pane {
             if self.tabs[self.active_tab].summary_id != dragged.session_id {
                 return None;
@@ -429,6 +492,31 @@ impl ConWorkspace {
                     )
             },
         )
+    }
+
+    pub(super) fn commit_session_split_drop(
+        &mut self,
+        dragged: &DraggedTab,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(target) = self.split_target_for_drag(dragged, position) {
+            if dragged.origin == DraggedTabOrigin::Pane {
+                if let Some(pane) = dragged.pane_id {
+                    self.tabs[self.active_tab].pane_tree.move_pane(
+                        pane,
+                        target.target_pane_id,
+                        target.direction,
+                        target.placement,
+                    );
+                    self.finish_session_transfer(window, cx);
+                }
+            } else {
+                self.drop_tab_as_split(dragged, target, window, cx);
+            }
+        }
+        self.clear_session_drag(cx);
     }
 
     pub(super) fn drop_tab_as_split(
@@ -674,8 +762,8 @@ impl ConWorkspace {
 mod release_tests {
     use super::{new_window_drop_bounds, tearoff_release, window_transfer_release_listener};
     use gpui::{
-        Context, IntoElement, MouseButton, ParentElement, Pixels, Point, Render, Styled, Window,
-        div, point, px,
+        Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point,
+        Render, Styled, Window, div, point, px,
     };
 
     struct ReleaseProbe(Vec<Point<Pixels>>);
@@ -689,6 +777,15 @@ mod release_tests {
                     view.update(cx, |view, _| view.0.push(event.position))
                         .unwrap();
                 }))
+                // A terminal/editor may occlude and stop the bubble release.
+                // Capture must still observe it when there is only one pane.
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .occlude()
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                )
         }
     }
 
@@ -713,8 +810,9 @@ mod release_tests {
             view.read_with(cx, |v, _| v.0.clone()),
             vec![point(px(-30.0), px(20.0))]
         );
-        // Releasing back inside, on the margin, or with another button never
-        // claims the gesture; ordinary in-window targets retain ownership.
+        // Capture also observes inside/margin releases without depending on
+        // hovered children. The workspace validates the exact destination;
+        // another button never reaches the release callback.
         for (p, button) in [
             (point(px(20.0), px(20.0)), MouseButton::Left),
             (point(px(-5.0), px(20.0)), MouseButton::Left),
@@ -722,11 +820,11 @@ mod release_tests {
         ] {
             cx.simulate_mouse_up(p, button, gpui::Modifiers::default());
         }
-        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 1);
+        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 3);
         // The dynamic drop target need not have painted before a fast release.
         let target = cx.update(|window, _| new_window_drop_bounds(window.viewport_size()).center());
         cx.simulate_mouse_up(target, MouseButton::Left, gpui::Modifiers::default());
-        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 2);
+        assert_eq!(view.read_with(cx, |v, _| v.0.len()), 4);
     }
 
     #[test]
