@@ -862,24 +862,7 @@ impl Render for ConWorkspace {
                 {
                     return;
                 }
-                // Resolve from the release position as well as live preview:
-                // a fast gesture may have no drag-move event after initiation.
-                if let Some(target) = this.split_target_for_drag(dragged, window.mouse_position()) {
-                    if dragged.origin == DraggedTabOrigin::Pane {
-                        if let Some(pane) = dragged.pane_id {
-                            this.tabs[this.active_tab].pane_tree.move_pane(
-                                pane,
-                                target.target_pane_id,
-                                target.direction,
-                                target.placement,
-                            );
-                            this.finish_session_transfer(window, cx);
-                        }
-                    } else {
-                        this.drop_tab_as_split(dragged, target, window, cx);
-                    }
-                }
-                this.clear_session_drag(cx);
+                this.commit_session_split_drop(dragged, window.mouse_position(), window, cx);
             }));
 
         if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active)

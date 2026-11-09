@@ -147,3 +147,11 @@ Record the exact accepted build/configuration and delivery state. Scope claims
 to actual OS/hardware: no inferred FPS, 1x, Intel, remote-desktop or Windows/Linux
 certification. Once the relevant checks and matched acceptance pass, stop testing
 unless new changes, failures or feedback justify another pass.
+
+When validating tab-to-pane drops, exercise a single terminal destination as well
+as split layouts. Native descendants and occluding children can suppress a
+bubble-phase drop despite correct model bounds. Resolve valid in-window releases
+at capture/final release position, consume the drag once, and let the AppKit
+fallback resolve only unclaimed gestures; never discard an in-window native
+release on the assumption that GPUI already committed it. Preserve Escape and
+explicit new-window ownership without changing terminal composition to fix input.
