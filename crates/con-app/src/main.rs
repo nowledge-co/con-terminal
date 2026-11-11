@@ -78,6 +78,8 @@ mod model_registry;
 mod motion;
 mod mouse_sequence;
 mod native_agent;
+#[cfg(target_os = "macos")]
+mod open_folders;
 mod pane_tree;
 mod process_name;
 mod provider_icons;
@@ -2800,6 +2802,8 @@ fn main() {
                 .unwrap_or_else(|_| reqwest_client::ReqwestClient::new()),
         ));
     log::info!("gpui application created");
+    #[cfg(target_os = "macos")]
+    let folder_requests = open_folders::register(&app);
     let startup_error = config.as_ref().err().cloned();
     app.on_reopen(move |cx| {
         if has_open_windows(cx) {
@@ -3062,7 +3066,10 @@ fn main() {
         cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
 
         #[cfg(target_os = "macos")]
-        first_run::start(config.clone(), startup.clone(), cx);
+        {
+            cx.set_global(folder_requests);
+            first_run::start(config.clone(), startup.clone(), cx);
+        }
         #[cfg(not(target_os = "macos"))]
         open_con_window_with_startup(
             config.clone(),

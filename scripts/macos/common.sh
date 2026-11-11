@@ -301,6 +301,21 @@ generate_info_plist() {
   <string>en</string>
   <key>CFBundleDisplayName</key>
   <string>${CON_APP_NAME}</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Folder</string>
+      <key>CFBundleTypeRole</key>
+      <string>Shell</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.folder</string>
+      </array>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+    </dict>
+  </array>
   <key>CFBundleExecutable</key>
   <string>con</string>
   <key>CFBundleIconFile</key>

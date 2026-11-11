@@ -105,13 +105,7 @@ pub(crate) fn start(config: Config, startup: StartupArgs, cx: &mut App) {
 
 fn launch(config: Config, startup: StartupArgs, cx: &mut App) {
     cx.set_global(ImportPending(false));
-    crate::open_con_window_with_startup(
-        config,
-        crate::startup_session(&startup),
-        true,
-        Some(startup),
-        cx,
-    );
+    crate::open_folders::launch(config, startup, cx);
 }
 
 struct Welcome {
