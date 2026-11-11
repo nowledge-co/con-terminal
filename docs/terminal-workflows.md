@@ -55,6 +55,11 @@ you want a separate space, usually for another project or display.
 Vertical tabs are useful once tab titles matter more than tab position. Rename a
 tab when its purpose is stable.
 
+On macOS, drop a folder onto con's Dock icon to open a new window with a
+shell in that folder. From a script or another terminal, use
+`open -a "con Beta" "/path/to/project"` (use the installed app's name).
+This also works while con is already running.
+
 Drag a tab into another tab's terminal area to turn it into panes. The preview
 shows the incoming half; a multi-pane tab keeps its own layout and terminal
 stacks. Hover another tab briefly during the drag to reveal its layout first.

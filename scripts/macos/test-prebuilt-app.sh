@@ -23,6 +23,8 @@ run_case() (
   verify_native_binary_architecture "$app/Contents/MacOS/con-cli" "$CON_ARCH"
   ln -s con-cli "$app/Contents/MacOS/ghostty"
   generate_info_plist "$app/Contents/Info.plist"
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:LSItemContentTypes:0' "$app/Contents/Info.plist")" == public.folder ]] \
+    || fail "$name: bundle does not advertise opening folders"
   case "$mutation" in
     version) /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 54' "$app/Contents/Info.plist" ;;
     channel) /usr/libexec/PlistBuddy -c 'Set :ConReleaseChannel dev' "$app/Contents/Info.plist" ;;

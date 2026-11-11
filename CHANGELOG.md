@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.177` - 2026-11-11
+
+### Added
+
+**macOS**
+
+- Open a folder in a new con window from the Dock or with
+  `open -a "con Beta" "/path/to/project"`. The shell starts in that folder,
+  including paths with spaces or non-ASCII characters. This also lets Ducter
+  offer con in its terminal picker.
+  _(PR [#558](https://github.com/nowledge-co/con-terminal/pull/558) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.176` - 2026-11-10
 
 ### Fixed
