@@ -250,7 +250,7 @@ impl TabActivity {
     }
 
     /// Keeps the caller's original icon slot. Compact working states retain the
-    /// brand inside a ring; expanded busy states use the shared three-bar loader.
+    /// brand inside a ring. Stacks use a centered loader below the artwork.
     #[cfg(test)]
     pub(crate) fn icon(
         &self,
@@ -276,14 +276,14 @@ impl TabActivity {
         let visual = status
             .map(ActivityVisual::from)
             .unwrap_or(ActivityVisual::None);
-        let visual = if visual == ActivityVisual::Busy && !compact {
+        let visual = if visual == ActivityVisual::Busy && (!compact || icons.len() > 1) {
             ActivityVisual::BusyBars
         } else {
             visual
         };
         let active = visual != ActivityVisual::None;
         let slot_size = if compact { px(32.0) } else { size };
-        let icon_size = if compact { size.min(px(18.0)) } else { size };
+        let icon_size = if compact { size.min(px(16.0)) } else { size };
         let group_width = crate::assets::tab_identity_group_width(icons.len(), icon_size, compact);
         let group_height = crate::assets::tab_identity_group_height(icons.len(), icon_size);
         let mut slot = div()
@@ -296,7 +296,11 @@ impl TabActivity {
             .w(if compact { slot_size } else { group_width })
             .h(if compact { slot_size } else { group_height });
         if !active
-            || (compact && matches!(visual, ActivityVisual::Busy | ActivityVisual::Progress(_)))
+            || (compact
+                && matches!(
+                    visual,
+                    ActivityVisual::Busy | ActivityVisual::BusyBars | ActivityVisual::Progress(_)
+                ))
         {
             slot = slot.child(
                 div()
@@ -329,16 +333,34 @@ impl TabActivity {
                     )
                     .into_any_element();
             }
-            let ring_size = if compact {
-                px(if icons.len() > 1 { 32.0 } else { 24.0 })
+            let activity_color = if compact {
+                activity_color.opacity(0.7)
             } else {
-                slot_size.min(px(18.0))
+                activity_color
             };
-            slot = slot.child(
-                self.register(activity_color, visual)
-                    .absolute()
-                    .size(ring_size),
-            );
+            let marker = self.register(activity_color, visual).absolute();
+            slot = if compact && icons.len() == 1 {
+                // A single identity has a quiet, concentric silhouette. The
+                // 16pt artwork leaves a clear gap inside the 24pt activity ring.
+                slot.child(marker.size(px(24.0)))
+            } else if compact {
+                // A fixed lower lane keeps motion on the identity group’s axis,
+                // inside the selection fill and clear of the unread corner.
+                let width = if visual == ActivityVisual::BusyBars {
+                    px(10.0)
+                } else {
+                    px(6.0)
+                };
+                slot.child(
+                    marker
+                        .left((slot_size - width) / 2.0)
+                        .bottom(px(1.0))
+                        .w(width)
+                        .h(px(5.0)),
+                )
+            } else {
+                slot.child(marker.size(slot_size.min(px(18.0))))
+            };
         }
         slot.into_any_element()
     }
@@ -469,7 +491,8 @@ fn paint_ring(
                 center.y + radius * angle.sin(),
             )
         };
-        let mut path = PathBuilder::stroke(px(1.5));
+        let stroke = px(1.5);
+        let mut path = PathBuilder::stroke(stroke);
         path.move_to(at(start));
         // Two arcs also handle a full circle, whose endpoints coincide.
         path.arc_to(
@@ -497,8 +520,8 @@ fn paint_ring(
                 window.paint_quad(
                     gpui::fill(
                         Bounds::new(
-                            endpoint - point(px(0.75), px(0.75)),
-                            gpui::size(px(1.5), px(1.5)),
+                            endpoint - point(stroke / 2.0, stroke / 2.0),
+                            gpui::size(stroke, stroke),
                         ),
                         tone,
                     )
@@ -1011,6 +1034,41 @@ mod tests {
             activity,
             evidence: Evidence::Progress,
             percent,
+        }
+    }
+
+    #[test]
+    fn compact_stacks_use_one_shared_loader_instead_of_surrounding_the_cards() {
+        let layer = TabActivity::default();
+        let theme = gpui_component::Theme::default();
+        for icons in [
+            vec!["phosphor/terminal.svg"],
+            vec!["phosphor/terminal.svg", "phosphor/code.svg"],
+            vec![
+                "phosphor/terminal.svg",
+                "phosphor/code.svg",
+                "phosphor/folder.svg",
+            ],
+        ] {
+            layer.clear();
+            layer.icon_group(
+                &icons,
+                px(18.0),
+                theme.foreground,
+                Some(status(Activity::Busy, None)),
+                &theme,
+                true,
+            );
+            let markers = layer.markers.borrow();
+            assert_eq!(markers.used, 1);
+            assert_eq!(
+                markers.rows[0].visual,
+                if icons.len() == 1 {
+                    ActivityVisual::Busy
+                } else {
+                    ActivityVisual::BusyBars
+                }
+            );
         }
     }
 
