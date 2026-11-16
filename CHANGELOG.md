@@ -4,6 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.180` - 2026-11-16
+
+### Changed
+
+**Settings and dialogs**
+
+- Soften settings section changes with brief content and selection transitions,
+  keep the floating settings frame steady, and make navigation keyboard
+  accessible. Respect Reduce Motion and preserve unsaved edits across sections.
+  _(PR [#562](https://github.com/nowledge-co/con-terminal/pull/562) by [@wey-gu](https://github.com/wey-gu))_
+- Give common con-authored dialogs consistent button spacing, rounding and
+  action hierarchy, including setup, configuration recovery/import, handoff,
+  agent-close confirmations and the unsaved-settings prompt.
+  _(PR [#562](https://github.com/nowledge-co/con-terminal/pull/562) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.179` - 2026-11-16
 
 ### Fixed

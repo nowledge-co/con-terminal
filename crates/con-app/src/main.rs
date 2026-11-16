@@ -63,6 +63,7 @@ mod ghostty_view;
 mod ghostty_view;
 
 mod activity_bar;
+mod dialog_style;
 mod editor_browser;
 mod editor_buffer;
 mod editor_lsp;

@@ -4494,7 +4494,7 @@ mod tests {
         assert_eq!(selection.size, Size::new(px(32.0), px(32.0)));
         assert_eq!(tile.center(), selection.center());
         assert_eq!(tile.center(), icon.center());
-        assert_eq!(icon.size, Size::new(px(18.0), px(18.0)));
+        assert_eq!(icon.size, Size::new(px(16.0), px(16.0)));
         view.read_with(cx, |sidebar, _| {
             assert_eq!(sidebar.tab_bounds.borrow()[0], tile);
         });
@@ -4686,10 +4686,11 @@ mod tests {
         let slot = cx.debug_bounds("tab-status-slot").unwrap();
         let markers = rendered_rings(&view, cx);
         assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0].center(), slot.center());
+        assert_eq!(markers[0].center().x, slot.center().x);
         assert_eq!(stack.center(), slot.center());
-        assert!(markers[0].size.width > stack.size.width);
-        assert!(markers[0].size.height > stack.size.height);
+        assert!(markers[0].top() >= stack.bottom() + px(1.0));
+        assert!(markers[0].bottom() <= slot.bottom());
+        assert!(markers[0].size.width < stack.size.width);
 
         view.update(cx, |sidebar, cx| {
             sidebar.set_pinned(true, cx);

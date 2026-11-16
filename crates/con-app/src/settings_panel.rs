@@ -1,3 +1,4 @@
+use crate::dialog_style::DialogButtonStyle as _;
 use con_agent::provider::{AgentPurpose, ProviderTransport};
 use con_agent::{
     OAuthDevicePrompt, ProviderConfig, ProviderKind, SuggestionModelConfig,
@@ -253,6 +254,9 @@ pub struct SettingsPanel {
     focus_handle: FocusHandle,
     active_section: SettingsSection,
     content_scroll_handle: ScrollHandle,
+    rendered_section: SettingsSection,
+    navigation_motion: [MotionValue; 7],
+    section_motion: MotionValue,
     overlay_motion: MotionValue,
 
     selected_provider: ProviderKind,
@@ -1864,6 +1868,11 @@ impl SettingsPanel {
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             content_scroll_handle: ScrollHandle::new(),
+            rendered_section: SettingsSection::General,
+            navigation_motion: std::array::from_fn(|index| {
+                MotionValue::new(if index == 0 { 1.0 } else { 0.0 })
+            }),
+            section_motion: MotionValue::new(1.0),
             overlay_motion: MotionValue::new(0.0),
             selected_provider,
             provider_navigation_select,
@@ -3558,17 +3567,17 @@ impl SettingsPanel {
                                         let actions = match &latest_state {
                                             crate::updater::CheckState::UpdateAvailable { .. }
                                                 if crate::updater::portable::enabled() && crate::updater::portable::managed().is_none() => actions
-                                                .child(Button::new("download-update").small().primary().label("Download update")
+                                                .child(Button::new("download-update").small().dialog_primary(cx).label("Download update")
                                                     .on_click(|_, _, _| crate::updater::portable::download()))
-                                                .child(Button::new("skip-update").small().ghost().label("Skip this version")
+                                                .child(Button::new("skip-update").small().dialog_secondary(cx).label("Skip this version")
                                                     .on_click(|_, _, _| crate::updater::portable::skip())),
                                             crate::updater::CheckState::Downloading { .. } => actions.child(
-                                                Button::new("cancel-update").small().ghost().label("Cancel")
+                                                Button::new("cancel-update").small().dialog_secondary(cx).label("Cancel")
                                                     .on_click(|_, _, _| crate::updater::portable::cancel())),
                                             crate::updater::CheckState::Ready { .. } => actions.child(
-                                                Button::new("restart-update").small().primary().label("Restart and update")
+                                                Button::new("restart-update").small().dialog_primary(cx).label("Restart and update")
                                                     .on_click(|_, _, _| crate::updater::portable::restart()))
-                                                .child(Button::new("discard-update").small().ghost().label("Discard download")
+                                                .child(Button::new("discard-update").small().dialog_secondary(cx).label("Discard download")
                                                     .on_click(|_, _, _| crate::updater::portable::discard())),
                                             _ => actions,
                                         };
@@ -6389,6 +6398,21 @@ impl Render for SettingsPanel {
             self.active_section
         };
 
+        if active != self.rendered_section {
+            for (index, section) in ALL_SECTIONS.iter().enumerate() {
+                self.navigation_motion[index].set_target(
+                    if *section == active { 1.0 } else { 0.0 },
+                    std::time::Duration::from_millis(140),
+                );
+            }
+            self.rendered_section = active;
+            self.section_motion
+                .restart(0.0, 1.0, std::time::Duration::from_millis(140));
+            self.content_scroll_handle
+                .set_offset(point(px(0.0), px(0.0)));
+        }
+        let section_progress = self.section_motion.value(window, cx);
+
         // Render content first (AI needs &mut self)
         let content = match active {
             SettingsSection::General => self.render_general(window, cx),
@@ -6425,14 +6449,10 @@ impl Render for SettingsPanel {
         };
         // Uniform width for all sections — prevents position jumping when switching tabs
         let card_width = px(((viewport_w * 0.76).clamp(680.0, 980.0)).min(viewport_w - 32.0));
-        let card_height = {
-            let target = match active {
-                SettingsSection::Appearance => (viewport_h * 0.82).clamp(440.0, 780.0),
-                SettingsSection::Providers => (viewport_h * 0.80).clamp(440.0, 760.0),
-                _ => (viewport_h * 0.76).clamp(420.0, 720.0),
-            };
-            px(target.min(viewport_h - 32.0))
-        };
+        // Keep the floating surface stationary while its contents change.
+        let card_height = px((viewport_h * 0.80)
+            .clamp(440.0, 780.0)
+            .min(viewport_h - 32.0));
 
         // Sidebar
         let mut sidebar = div()
@@ -6452,80 +6472,80 @@ impl Render for SettingsPanel {
             .overflow_y_scroll()
             .flex_shrink_0();
 
-        for section in ALL_SECTIONS {
+        for (section_index, section) in ALL_SECTIONS.iter().enumerate() {
             let is_active = *section == active;
             let section_val = *section;
-            let mut nav_item = div()
-                .id(SharedString::from(format!("nav-{}", section.label())))
+            let selection = self.navigation_motion[section_index].value(window, cx);
+            let ink = if is_active {
+                theme.foreground
+            } else {
+                theme.muted_foreground
+            };
+            let fill = selection * if theme.is_dark() { 0.09 } else { 0.065 };
+            let mut nav_item = Button::new(SharedString::from(format!("nav-{}", section.label())))
+                .accessibility_label(section.label())
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .color(theme.foreground.opacity(fill))
+                        .foreground(ink)
+                        .hover(theme.foreground.opacity(fill.max(0.04)))
+                        .active(theme.foreground.opacity(0.12)),
+                )
                 .flex()
                 .items_center()
+                .justify_start()
+                .w_full()
                 .h(rems(2.25))
                 .rounded(px(8.0))
-                .cursor_pointer()
-                .bg(if is_active {
-                    theme
-                        .foreground
-                        .opacity(if theme.is_dark() { 0.09 } else { 0.065 })
-                } else {
-                    theme.transparent
-                })
-                .text_color(if is_active {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                })
                 .font_weight(if is_active {
                     FontWeight::MEDIUM
                 } else {
                     FontWeight::NORMAL
                 })
-                .hover(|s| {
-                    if is_active {
-                        s
-                    } else {
-                        s.bg(theme.foreground.opacity(0.04))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.active_section = section_val;
+                    if section_val == SettingsSection::Configuration {
+                        this.discover_configuration_sources(cx);
                     }
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        this.active_section = section_val;
-                        if section_val == SettingsSection::Configuration {
-                            this.discover_configuration_sources(cx);
-                        }
-                        cx.notify();
-                    }),
-                );
+                    cx.notify();
+                }));
 
             if narrow {
                 // Icon-only mode: centered icon, no label
-                nav_item = nav_item.justify_center().size(px(36.0)).mx_auto().child(
-                    svg()
-                        .path(section.icon())
-                        .size(ui_icon_px(theme, 16.0))
-                        .text_color(if is_active {
-                            theme.foreground
-                        } else {
-                            theme.muted_foreground
-                        }),
-                );
-            } else {
                 nav_item = nav_item
-                    .gap(px(8.0))
-                    .px(px(10.0))
-                    .text_size(ui_px(theme, 13.0))
+                    .justify_center()
+                    .w(px(36.0))
+                    .h(px(36.0))
+                    .mx_auto()
+                    .tooltip(section.label())
                     .child(
                         svg()
                             .path(section.icon())
-                            .size(ui_icon_px(theme, 15.0))
-                            .flex_shrink_0()
+                            .size(ui_icon_px(theme, 16.0))
                             .text_color(if is_active {
                                 theme.foreground
                             } else {
                                 theme.muted_foreground
                             }),
-                    )
-                    .child(div().min_w_0().truncate().child(section.label()));
+                    );
+            } else {
+                nav_item = nav_item.px(px(10.0)).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(8.0))
+                        .text_size(ui_px(theme, 13.0))
+                        .child(
+                            svg()
+                                .path(section.icon())
+                                .size(ui_icon_px(theme, 15.0))
+                                .flex_shrink_0()
+                                .text_color(ink),
+                        )
+                        .child(div().min_w_0().truncate().child(section.label())),
+                );
             }
 
             sidebar = sidebar.child(nav_item);
@@ -6541,7 +6561,15 @@ impl Render for SettingsPanel {
             .min_w_0()
             .overflow_y_scroll()
             .p(content_pad)
-            .child(content);
+            .child(
+                div()
+                    .id("settings-section-content")
+                    .debug_selector(|| "settings-section-content".into())
+                    .w_full()
+                    .min_w_0()
+                    .opacity(0.75 + 0.25 * section_progress)
+                    .child(content),
+            );
         let save_button_tint = theme.foreground.opacity(if has_unsaved_changes {
             if theme.is_dark() { 0.88 } else { 0.82 }
         } else {
@@ -6713,6 +6741,7 @@ impl Render for SettingsPanel {
                                     }))
                                     .child(
                                         Button::new("settings-open-config")
+                                            .accessibility_label("Open settings file")
                                             .ghost()
                                             .small()
                                             .compact()
@@ -6735,6 +6764,7 @@ impl Render for SettingsPanel {
                                     )
                                     .children(self.standalone.then(|| {
                                         Button::new("settings-apply")
+                                            .accessibility_label("Save settings")
                                             .small()
                                             .compact()
                                             .custom(save_button_style)
@@ -6820,12 +6850,14 @@ impl Render for SettingsPanel {
                                 .gap(px(6.0))
                                 .child(
                                     Button::new("settings-close-prompt-keep-editing")
+                                        .accessibility_label("Keep Editing")
                                         .ghost()
                                         .small()
                                         .compact()
                                         .h(px(26.0 * header_density))
                                         .px(px(8.0 * header_density))
                                         .rounded(px(7.0 * header_density))
+                                        .dialog_secondary(cx)
                                         .child(
                                             div()
                                                 .text_xs()
@@ -6841,12 +6873,14 @@ impl Render for SettingsPanel {
                                 )
                                 .child(
                                     Button::new("settings-close-prompt-discard")
+                                        .accessibility_label("Discard")
                                         .ghost()
                                         .small()
                                         .compact()
                                         .h(px(26.0 * header_density))
                                         .px(px(8.0 * header_density))
                                         .rounded(px(7.0 * header_density))
+                                        .dialog_destructive(cx)
                                         .child(
                                             div()
                                                 .text_xs()
@@ -6862,6 +6896,7 @@ impl Render for SettingsPanel {
                                 )
                                 .child(
                                     Button::new("settings-close-prompt-save")
+                                        .accessibility_label("Save and Close")
                                         .small()
                                         .compact()
                                         .custom(save_button_style)
@@ -6869,6 +6904,7 @@ impl Render for SettingsPanel {
                                         .px(px(9.0 * header_density))
                                         .rounded(px(7.0 * header_density))
                                         .gap(px(5.0 * header_density))
+                                        .dialog_primary(cx)
                                         .child(
                                             svg()
                                                 .path("phosphor/check.svg")
@@ -7844,6 +7880,47 @@ mod tests {
         ProviderKind, ProviderOAuthState, ResponsiveMode, SettingsPanel, keybinding_default,
         keybinding_field, keybinding_field_mut, provider_connection_status,
     };
+
+    #[gpui::test]
+    fn section_changes_keep_surface_bounds_and_unsaved_configuration(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+        let (panel, view) = cx.add_window_view(|window, cx| {
+            let mut panel = SettingsPanel::new(
+                &con_core::Config::default(),
+                crate::model_registry::ModelRegistry::new(),
+                runtime,
+                window,
+                cx,
+            );
+            panel.visible = true;
+            panel.overlay_motion = crate::motion::MotionValue::new(1.0);
+            panel.config.appearance.ui_font_size = 19.0;
+            panel
+        });
+        view.simulate_resize(gpui::size(gpui::px(1000.0), gpui::px(800.0)));
+        let initial = view.debug_bounds("settings-content-scroll").unwrap();
+        for section in [
+            super::SettingsSection::Appearance,
+            super::SettingsSection::Keys,
+            super::SettingsSection::General,
+        ] {
+            panel.update(view, |panel, cx| {
+                panel.active_section = section;
+                cx.notify();
+            });
+            assert_eq!(
+                view.debug_bounds("settings-content-scroll").unwrap(),
+                initial
+            );
+            panel.read_with(view, |panel, _| {
+                assert_eq!(panel.config.appearance.ui_font_size, 19.0)
+            });
+        }
+    }
 
     #[gpui::test]
     fn appearance_image_choices_keep_geometry_when_selection_changes(

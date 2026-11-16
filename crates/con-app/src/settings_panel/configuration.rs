@@ -299,7 +299,7 @@ impl SettingsPanel {
                             .on_click(move |_, _, cx| cx.reveal_path(&backup)),
                     );
             }
-            content = content.child(div().flex().child(Button::new("configuration-restart").primary().small().label("Restart con…")
+            content = content.child(div().flex().child(Button::new("configuration-restart").dialog_primary(cx).small().label("Restart con…")
                 .on_click(|_, window, cx| {
                     let answer = window.prompt(PromptLevel::Warning, "Restart con?", Some("Running terminal commands and agent tasks will stop. Save any unsaved editor files before restarting."), &["Cancel", "Restart con"], cx);
                     cx.spawn(async move |cx| {
@@ -409,7 +409,7 @@ impl SettingsPanel {
                         .gap_2()
                         .child(
                             Button::new("configuration-confirm")
-                                .primary()
+                                .dialog_primary(cx)
                                 .small()
                                 .label("Import Configuration")
                                 .disabled(blocked)
@@ -419,7 +419,7 @@ impl SettingsPanel {
                         )
                         .child(
                             Button::new("configuration-cancel")
-                                .ghost()
+                                .dialog_secondary(cx)
                                 .small()
                                 .label("Cancel")
                                 .disabled(blocked)

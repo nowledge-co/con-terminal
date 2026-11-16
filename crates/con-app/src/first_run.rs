@@ -1,14 +1,12 @@
 //! One-time, opt-in Ghostty import before creating any terminal sessions.
+use crate::dialog_style::DialogButtonStyle as _;
 use con_core::{
     Config,
     config::transfer::{ghostty_config_candidates, prepare_import},
     session::Session,
 };
 use gpui::*;
-use gpui_component::{
-    ActiveTheme, Disableable, Sizable,
-    button::{Button, ButtonVariant, ButtonVariants},
-};
+use gpui_component::{ActiveTheme, Disableable, Sizable, button::Button};
 use std::path::{Path, PathBuf};
 
 use crate::startup_args::StartupArgs;
@@ -194,7 +192,7 @@ impl Render for Welcome {
                     .child(
                         div().flex().child(
                             Button::new(("first-run-import", index))
-                                .primary()
+                                .dialog_primary(cx)
                                 .small()
                                 .label("Import and Start")
                                 .disabled(self.busy)
@@ -223,7 +221,7 @@ impl Render for Welcome {
             .child(
                 div().flex().child(
                     Button::new("first-run-defaults")
-                        .with_variant(ButtonVariant::Secondary)
+                        .dialog_secondary(cx)
                         .small()
                         .label(if self.error.is_some() {
                             "Continue Without Import"
