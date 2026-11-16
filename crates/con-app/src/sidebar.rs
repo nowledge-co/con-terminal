@@ -1523,12 +1523,12 @@ impl SessionSidebar {
                 gpui::size(
                     crate::assets::tab_identity_group_width(
                         session.identity_icons().len(),
-                        ui_icon_px(theme, 18.0).min(px(18.0)),
+                        ui_icon_px(theme, 18.0).min(px(16.0)),
                         true,
                     ),
                     crate::assets::tab_identity_group_height(
                         session.identity_icons().len(),
-                        ui_icon_px(theme, 18.0).min(px(18.0)),
+                        ui_icon_px(theme, 18.0).min(px(16.0)),
                     ),
                 ),
                 window,
