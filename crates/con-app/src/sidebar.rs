@@ -4623,8 +4623,8 @@ mod tests {
             });
             let identity = cx.debug_bounds("tab-status-brand").unwrap();
             let notification = cx.debug_bounds("tab-notification-dot").unwrap();
-            assert!((notification.center().x - (identity.right() - px(1.0))).abs() <= px(0.5));
-            assert!((notification.center().y - (identity.top() + px(1.0))).abs() <= px(0.5));
+            assert!((notification.center().x - (identity.right() - px(2.0))).abs() <= px(0.5));
+            assert!((notification.center().y - (identity.top() + px(2.0))).abs() <= px(0.5));
             assert!(cx.debug_bounds("tab-status-glyph").is_none());
             view.update(cx, |sidebar, cx| {
                 sidebar.sessions[0].status = Some(Status {

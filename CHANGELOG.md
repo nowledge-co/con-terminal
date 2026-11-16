@@ -4,6 +4,26 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.181` - 2026-11-16
+
+### Fixed
+
+**Settings**
+
+- Keep shortcut descriptions readable beside their keycaps instead of wrapping
+  one character per line. Refresh section transitions on every animation frame
+  and use a brief fade with gentle settling.
+  _(PR [#563](https://github.com/nowledge-co/con-terminal/pull/563) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Interface**
+
+- Refine configuration and dialog actions with lighter theme-accent primary
+  buttons and neutral secondary actions. Keep unread markers smaller, inset
+  against their tab identity, and animate their opacity without size changes.
+  _(PR [#563](https://github.com/nowledge-co/con-terminal/pull/563) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.180` - 2026-11-16
 
 ### Changed
