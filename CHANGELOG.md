@@ -13,6 +13,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Soften settings section changes with brief content and selection transitions,
   keep the floating settings frame steady, and make navigation keyboard
   accessible. Respect Reduce Motion and preserve unsaved edits across sections.
+  _(PR [#562](https://github.com/nowledge-co/con-terminal/pull/562) by [@wey-gu](https://github.com/wey-gu))_
 - Give common con-authored dialogs consistent button spacing, rounding and
   action hierarchy, including setup, configuration recovery/import, handoff,
   agent-close confirmations and the unsaved-settings prompt.
