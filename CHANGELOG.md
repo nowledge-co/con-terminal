@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.178` - 2026-11-16
+
+### Changed
+
+**Compact vertical tabs**
+
+- Give activity indicators more breathing room: single icons retain a quieter
+  surrounding ring, while stacked icons use a small wave centered below the
+  artwork. Keep identities stationary as activity changes.
+  _(PR [#559](https://github.com/nowledge-co/con-terminal/pull/559) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.177` - 2026-11-11
 
 ### Added
