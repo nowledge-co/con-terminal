@@ -15,6 +15,12 @@ con is still pre-release, so entries may group related beta work while the produ
   refresh behavior.
   _(PR [#560](https://github.com/nowledge-co/con-terminal/pull/560) by [@SleepyChaos](https://github.com/SleepyChaos))_
 
+**Windows builds**
+
+- Restore the compatible Cargo build layout for Windows CI and release builds;
+  Cargo 1.100's package-name directory collides with Windows' reserved `CON` name.
+  _(PR [#561](https://github.com/nowledge-co/con-terminal/pull/561) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.178` - 2026-11-16
 
 ### Changed
