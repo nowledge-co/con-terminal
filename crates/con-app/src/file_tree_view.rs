@@ -551,10 +551,6 @@ fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry>
     for entry in read_dir.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        // Skip hidden files/dirs (dot-prefixed).
-        if name.starts_with('.') {
-            continue;
-        }
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
@@ -1289,7 +1285,7 @@ mod tests {
             assert!(paths.contains(&root.join("renamed.txt")));
             assert!(!paths.contains(&root.join("rename.txt")));
             assert!(!paths.contains(&root.join("delete.txt")));
-            assert!(!paths.contains(&root.join(".gitignore")));
+            assert!(paths.contains(&root.join(".gitignore")));
             assert!(
                 view.entries
                     .iter()
@@ -1432,9 +1428,10 @@ mod tests {
         let root = temp_tree();
         fs::create_dir_all(root.join("Alpha")).unwrap();
         fs::create_dir_all(root.join("beta")).unwrap();
+        fs::create_dir_all(root.join(".venv")).unwrap();
         fs::write(root.join("zeta.txt"), "z").unwrap();
         fs::write(root.join("apple.txt"), "a").unwrap();
-        fs::write(root.join(".hidden"), "hidden").unwrap();
+        fs::write(root.join(".gitignore"), "target/").unwrap();
         root
     }
 
@@ -1471,11 +1468,21 @@ mod tests {
     }
 
     #[test]
-    fn build_entries_filters_hidden_entries() {
+    fn build_entries_includes_dotfiles() {
         let root = temp_ordered_tree();
         let entries = build_entries(&root, 1, false);
 
-        assert!(!entries.iter().any(|entry| entry.name.starts_with('.')));
+        let gitignore = entries
+            .iter()
+            .find(|entry| entry.name == ".gitignore")
+            .expect(".gitignore should be visible");
+        assert!(!gitignore.is_dir);
+
+        let venv = entries
+            .iter()
+            .find(|entry| entry.name == ".venv")
+            .expect(".venv should be visible");
+        assert!(venv.is_dir);
     }
 
     #[test]
@@ -1489,7 +1496,16 @@ mod tests {
 
         assert_eq!(
             names,
-            vec!["Alpha", "beta", "src", "apple.txt", "README.md", "zeta.txt"]
+            vec![
+                ".venv",
+                "Alpha",
+                "beta",
+                "src",
+                ".gitignore",
+                "apple.txt",
+                "README.md",
+                "zeta.txt"
+            ]
         );
     }
 
