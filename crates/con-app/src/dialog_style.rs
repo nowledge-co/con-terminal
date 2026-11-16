@@ -15,13 +15,15 @@ fn action(button: Button, cx: &App, destructive: bool, primary: bool) -> Button 
     let theme = cx.theme();
     let ink = if destructive {
         theme.danger
+    } else if primary {
+        theme.primary
     } else {
         theme.foreground
     };
     let fill = if primary {
-        if theme.is_dark() { 0.14 } else { 0.09 }
+        if theme.is_dark() { 0.18 } else { 0.10 }
     } else {
-        0.04
+        if theme.is_dark() { 0.075 } else { 0.045 }
     };
     button
         .small()

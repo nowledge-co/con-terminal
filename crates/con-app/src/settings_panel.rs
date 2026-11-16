@@ -6097,10 +6097,10 @@ impl SettingsPanel {
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(3.0))
+                        .gap(px(3.0)).flex_1().min_w_0().when(mobile, |this| this.flex_initial().w_full())
                         .min_w_0()
                         .child(
-                            div()
+                            div().debug_selector(|| "shortcut-global-label".into())
                                 .text_xs()
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Shortcut"),
@@ -6119,7 +6119,7 @@ impl SettingsPanel {
                 )
                 .child(
                     div()
-                        .id("key-badge-global-summon")
+                        .id("key-badge-global-summon").flex_shrink_0()
                         .when(!mobile, |this| this.min_w(px(112.0)).justify_end())
                         .flex()
                         .when(mobile, |this| this.w_full().flex_wrap().justify_start())
@@ -6246,9 +6246,9 @@ impl SettingsPanel {
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(3.0))
+                            .gap(px(3.0)).flex_1().min_w_0().when(mobile, |this| this.flex_initial().w_full())
                             .child(
-                                div()
+                                div().debug_selector(|| "shortcut-quick-label".into())
                                     .text_xs()
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("Shortcut"),
@@ -6263,7 +6263,7 @@ impl SettingsPanel {
                     )
                     .child(
                         div()
-                            .id("key-badge-hotkey-window")
+                            .id("key-badge-hotkey-window").flex_shrink_0()
                             .when(!mobile, |this| this.min_w(px(112.0)).justify_end())
                             .flex()
                             .when(mobile, |this| this.w_full().flex_wrap().justify_start())
@@ -6402,16 +6402,21 @@ impl Render for SettingsPanel {
             for (index, section) in ALL_SECTIONS.iter().enumerate() {
                 self.navigation_motion[index].set_target(
                     if *section == active { 1.0 } else { 0.0 },
-                    std::time::Duration::from_millis(140),
+                    std::time::Duration::from_millis(220),
                 );
             }
             self.rendered_section = active;
             self.section_motion
-                .restart(0.0, 1.0, std::time::Duration::from_millis(140));
+                .restart(0.0, 1.0, std::time::Duration::from_millis(220));
             self.content_scroll_handle
                 .set_offset(point(px(0.0), px(0.0)));
         }
         let section_progress = self.section_motion.value(window, cx);
+        if self.section_motion.is_animating()
+            || self.navigation_motion.iter().any(MotionValue::is_animating)
+        {
+            cx.on_next_frame(window, |_, _, cx| cx.notify());
+        }
 
         // Render content first (AI needs &mut self)
         let content = match active {
@@ -6567,7 +6572,9 @@ impl Render for SettingsPanel {
                     .debug_selector(|| "settings-section-content".into())
                     .w_full()
                     .min_w_0()
-                    .opacity(0.75 + 0.25 * section_progress)
+                    .relative()
+                    .top(px(4.0 * (1.0 - section_progress)))
+                    .opacity(0.35 + 0.65 * section_progress)
                     .child(content),
             );
         let save_button_tint = theme.foreground.opacity(if has_unsaved_changes {
@@ -7882,6 +7889,38 @@ mod tests {
     };
 
     #[gpui::test]
+    fn shortcut_descriptions_keep_readable_width_beside_keycaps(cx: &mut gpui::TestAppContext) {
+        con_core::release_channel::init();
+        cx.update(gpui_component::init);
+        for width in [920.0, 840.0, 600.0, 375.0] {
+            let runtime = std::sync::Arc::new(tokio::runtime::Runtime::new().unwrap());
+            let (_, view) = cx.add_window_view(|window, cx| {
+                let mut panel = SettingsPanel::new(
+                    &con_core::Config::default(),
+                    crate::model_registry::ModelRegistry::new(),
+                    runtime,
+                    window,
+                    cx,
+                );
+                panel.standalone = true;
+                panel.visible = true;
+                panel.active_section = super::SettingsSection::Keys;
+                panel
+            });
+            view.simulate_resize(gpui::size(gpui::px(width), gpui::px(800.0)));
+            let label = view.debug_bounds("shortcut-global-label").unwrap();
+            assert!(
+                label.size.width >= gpui::px(140.0),
+                "shortcut text collapsed at width {width}: {label:?}"
+            );
+            assert!(
+                label.size.height < gpui::px(40.0),
+                "Shortcut label wrapped vertically: {label:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn section_changes_keep_surface_bounds_and_unsaved_configuration(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -7949,6 +7988,7 @@ mod tests {
                 panel.standalone = true;
                 panel.visible = true;
                 panel.active_section = super::SettingsSection::Appearance;
+                panel.rendered_section = super::SettingsSection::Appearance;
                 panel
             });
             view.simulate_resize(gpui::size(gpui::px(width), gpui::px(680.0)));
@@ -8083,6 +8123,7 @@ mod tests {
                 panel.standalone = true;
                 panel.visible = true;
                 panel.active_section = super::SettingsSection::Appearance;
+                panel.rendered_section = super::SettingsSection::Appearance;
                 panel
             });
             view.simulate_resize(gpui::size(gpui::px(width), gpui::px(680.0)));
@@ -8243,6 +8284,7 @@ mod tests {
 
             panel.update(view, |panel, cx| {
                 panel.active_section = super::SettingsSection::Appearance;
+                panel.rendered_section = super::SettingsSection::Appearance;
                 cx.notify();
             });
             let ordered_sections = [

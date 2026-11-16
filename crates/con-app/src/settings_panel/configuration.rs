@@ -257,7 +257,7 @@ impl SettingsPanel {
                         .gap_2()
                         .child(
                             Button::new("configuration-open")
-                                .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                                .dialog_secondary(cx)
                                 .small()
                                 .label("Open File")
                                 .on_click(
@@ -266,7 +266,7 @@ impl SettingsPanel {
                         )
                         .child(
                             Button::new("configuration-folder")
-                                .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                                .dialog_secondary(cx)
                                 .small()
                                 .label("Open Folder")
                                 .on_click(|_, _, cx| {
@@ -293,7 +293,7 @@ impl SettingsPanel {
                     )
                     .child(
                         Button::new("configuration-backup")
-                            .ghost()
+                            .dialog_secondary(cx)
                             .small()
                             .label("Show Backup")
                             .on_click(move |_, _, cx| cx.reveal_path(&backup)),
@@ -338,7 +338,7 @@ impl SettingsPanel {
                             )
                             .child(
                                 Button::new(("configuration-source", index))
-                                    .primary()
+                                    .dialog_primary(cx)
                                     .small()
                                     .label("Import This File")
                                     .disabled(blocked)
@@ -356,7 +356,7 @@ impl SettingsPanel {
                     .gap_2()
                     .child(
                         Button::new("configuration-choose")
-                            .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                            .dialog_secondary(cx)
                             .small()
                             .label("Choose File…")
                             .disabled(blocked)
@@ -366,7 +366,7 @@ impl SettingsPanel {
                     )
                     .child(
                         Button::new("configuration-rescan")
-                            .ghost()
+                            .dialog_secondary(cx)
                             .small()
                             .label("Refresh")
                             .disabled(blocked)

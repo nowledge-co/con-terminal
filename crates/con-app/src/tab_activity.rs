@@ -143,16 +143,16 @@ impl TabNotifications {
             return None;
         }
         // Animate the fill itself, not inherited opacity on cached brand artwork.
-        // The fixed 5pt footprint prevents layout movement during entry and exit.
-        let diameter = px(5.0 * (0.8 + 0.2 * progress));
+        // A fixed inset footprint keeps the marker attached to its identity.
+        let diameter = px(4.0);
         let mut dot = div()
             .id("tab-notification-dot")
             .absolute()
-            .left((slot.width + group.width) * 0.5 - px(1.0) - diameter * 0.5)
-            .top((slot.height - group.height) * 0.5 + px(1.0) - diameter * 0.5)
+            .left((slot.width + group.width) * 0.5 - diameter)
+            .top((slot.height - group.height) * 0.5)
             .size(diameter)
             .rounded_full()
-            .bg(color.opacity(progress));
+            .bg(color.opacity(0.78 * progress));
         if let Some(label) = label {
             dot = dot
                 .debug_selector(|| "tab-notification-dot".into())
