@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.182` (Unreleased)
+
+### Changed
+
+**Tabs**
+
+- Clarify hover details with shared project metadata, compact working-directory
+  paths and per-pane layout previews that distinguish same-named terminals.
+  Keep the focused pane visible through a quiet highlight and retain directory
+  information for single-pane tabs too.
+  _(PR [#564](https://github.com/nowledge-co/con-terminal/pull/564) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.181` - 2026-11-16
 
 ### Fixed
