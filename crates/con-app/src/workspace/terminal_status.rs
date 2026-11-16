@@ -544,11 +544,7 @@ impl ConWorkspace {
                 );
                 changed |= terminal.set_presentation_icon(icon);
             }
-            let pane_details = if tab.pane_tree.pane_count() > 1 {
-                collect_pane_hover_details(&tab.pane_tree, &state.surfaces, now, cx)
-            } else {
-                Vec::new()
-            };
+            let pane_details = collect_pane_hover_details(&tab.pane_tree, &state.surfaces, now, cx);
             changed |=
                 retain_pane_hover_details(&mut state.pane_details, tab.summary_id, pane_details);
             let focused = tab
@@ -797,6 +793,10 @@ fn collect_pane_hover_details(
     cx: &App,
 ) -> Vec<crate::sidebar::PaneHoverDetail> {
     let sources = tree.surface_infos(None);
+    let layout = tree.pane_bounds(gpui::Bounds::new(
+        gpui::point(gpui::px(0.0), gpui::px(0.0)),
+        gpui::size(gpui::px(1000.0), gpui::px(1000.0)),
+    ));
     tree.pane_ids()
         .into_iter()
         .filter_map(|pane_id| {
@@ -862,6 +862,18 @@ fn collect_pane_hover_details(
                 });
                 Some(crate::sidebar::PaneHoverDetail {
                     id: pane_id as u64,
+                    is_focused: tree.focused_pane_id() == pane_id,
+                    layout: layout
+                        .iter()
+                        .find(|(id, _)| *id == pane_id)
+                        .map(|(_, bounds)| {
+                            [
+                                bounds.origin.x.as_f32().round() as u16,
+                                bounds.origin.y.as_f32().round() as u16,
+                                bounds.size.width.as_f32().round() as u16,
+                                bounds.size.height.as_f32().round() as u16,
+                            ]
+                        }),
                     icon,
                     title,
                     directory,
@@ -885,6 +897,18 @@ fn collect_pane_hover_details(
                     .and_then(|path| super::tab_presentation::cwd_subtitle(path.to_str()));
                 Some(crate::sidebar::PaneHoverDetail {
                     id: pane_id as u64,
+                    is_focused: tree.focused_pane_id() == pane_id,
+                    layout: layout
+                        .iter()
+                        .find(|(id, _)| *id == pane_id)
+                        .map(|(_, bounds)| {
+                            [
+                                bounds.origin.x.as_f32().round() as u16,
+                                bounds.origin.y.as_f32().round() as u16,
+                                bounds.size.width.as_f32().round() as u16,
+                                bounds.size.height.as_f32().round() as u16,
+                            ]
+                        }),
                     icon: "phosphor/file-code.svg",
                     title,
                     directory,
@@ -932,6 +956,8 @@ mod tests {
         use con_core::terminal_status::{Activity, Evidence, Status, aggregate};
         let row = |id| crate::sidebar::PaneHoverDetail {
             id,
+            is_focused: id == 1,
+            layout: Some([0, 0, 1000, 1000]),
             icon: "agents/codex.svg",
             title: format!("task-{id}"),
             directory: Some(format!("/project/{id}")),
@@ -967,7 +993,20 @@ mod tests {
             rows.clone()
         ));
         assert_eq!(retained[&7][1].status.unwrap().activity, Activity::Done);
-        assert!(!super::retain_pane_hover_details(&mut retained, 7, rows));
+        assert!(!super::retain_pane_hover_details(
+            &mut retained,
+            7,
+            rows.clone()
+        ));
+        rows[0].is_focused = false;
+        rows[1].is_focused = true;
+        assert!(super::retain_pane_hover_details(
+            &mut retained,
+            7,
+            rows.clone()
+        ));
+        rows[1].layout = Some([500, 0, 500, 1000]);
+        assert!(super::retain_pane_hover_details(&mut retained, 7, rows));
     }
 
     #[test]

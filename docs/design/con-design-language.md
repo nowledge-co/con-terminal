@@ -68,6 +68,25 @@ The goal is not to imitate any one reference. The goal is to produce a design la
 
 con is light-first (Flexoki Light default) but must excel in both themes.
 
+### Multi-pane tab details
+
+Multi-pane tab hover cards separate the project header from an inset session region.
+Show an identical shared directory once in the header; retain distinct directories
+on their own rows. Each multi-pane row includes a small schematic derived from
+real split geometry, highlighting the pane represented by that row. This makes
+same-named terminals distinguishable without internal IDs or invented labels.
+Keep the app identity separate from that schematic. A quiet row fill identifies
+the focused pane; do not add a second focus badge. Idle rows reserve no empty
+status slot. Collect pane metadata for single-pane tabs too, so their working
+directory is available without agent protocol events. Single-pane cards use the
+same leading identity and flat material. Keep pane
+identity above path metadata. Use a compact
+single-line path that retains the distinguishing suffix; expose the original
+directory through its accessibility label. Do not turn long directories into
+paragraphs or use monospaced path text at the same visual weight as pane titles.
+Keep every physical pane represented, including same-named panes. Preserve
+user-authored tab labels; only abbreviate path-shaped generated headings.
+
 ### Settings navigation and dialog actions
 
 - Settings section changes use a short 220ms content fade with 4pt relative settling and independently

@@ -165,6 +165,8 @@ pub struct ProgramStatusDetail {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaneHoverDetail {
     pub id: u64,
+    pub is_focused: bool,
+    pub layout: Option<[u16; 4]>,
     pub icon: &'static str,
     pub title: String,
     pub directory: Option<String>,
@@ -2541,6 +2543,70 @@ impl Render for SidebarHoverDetails {
 
 /// Shared by the expanded navigator tooltip and compact rail hover card.
 /// Keep metadata out of the permanent single-line rows.
+fn hover_tab_heading(session: &SessionEntry) -> String {
+    if !session.has_user_label && (session.name.starts_with('/') || session.name.starts_with("~/"))
+    {
+        session
+            .name
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&session.name)
+            .to_owned()
+    } else {
+        session.name.clone()
+    }
+}
+
+/// Keep the distinguishing leaf directories visible without turning metadata
+/// into paragraphs. This is presentation only; the full path remains in AX.
+fn hover_directory_label(directory: &str) -> String {
+    const LIMIT: usize = 42;
+    if directory.chars().count() <= LIMIT {
+        return directory.to_owned();
+    }
+    let tail: String = directory
+        .chars()
+        .rev()
+        .take(LIMIT - 2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if let Some((_, suffix)) = tail.split_once('/') {
+        format!("…/{suffix}")
+    } else {
+        format!("…{tail}")
+    }
+}
+
+// A schematic of actual pane geometry, not a decorative replacement icon.
+fn pane_layout_preview(
+    session: &SessionEntry,
+    selected: &PaneHoverDetail,
+    theme: &gpui_component::Theme,
+) -> Div {
+    let mut map = div().relative().flex_none().w(px(28.0)).h(px(18.0));
+    for pane in &session.pane_details {
+        if let Some([x, y, width, height]) = pane.layout {
+            map = map.child(
+                div()
+                    .absolute()
+                    .left(px(x as f32 * 0.028 + 1.0))
+                    .top(px(y as f32 * 0.018 + 1.0))
+                    .w(px((width as f32 * 0.028 - 2.0).max(1.0)))
+                    .h(px((height as f32 * 0.018 - 2.0).max(1.0)))
+                    .rounded(px(2.0))
+                    .bg(theme
+                        .foreground
+                        .opacity(if pane.id == selected.id { 0.34 } else { 0.08 })),
+            );
+        }
+    }
+    map
+}
+
 fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut App) -> Div {
     let theme = cx.theme().clone();
     let layer = window.use_keyed_state(
@@ -2550,14 +2616,25 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
     );
     let layer = layer.read(cx).clone();
     layer.read(cx).clear();
-    let size = ui_icon_px(&theme, 16.0);
-    let secondary = theme.popover.blend(theme.foreground.opacity(0.72));
+    let size = ui_icon_px(&theme, 14.0);
+    let secondary = theme.popover.blend(theme.foreground.opacity(0.60));
+    let shared_directory = session
+        .pane_details
+        .first()
+        .and_then(|pane| pane.directory.as_ref())
+        .filter(|directory| {
+            session
+                .pane_details
+                .iter()
+                .all(|pane| pane.directory.as_ref() == Some(*directory))
+        });
     let mut rows = div()
         .flex()
         .flex_col()
-        .gap(px(12.0))
-        .px(px(12.0))
-        .pb(px(12.0));
+        .gap(px(2.0))
+        .mx(px(10.0))
+        .mb(px(10.0))
+        .p(px(0.0));
     for pane in &session.pane_details {
         let activity = pane.status.filter(|status| {
             !matches!(
@@ -2567,18 +2644,31 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
             )
         });
         let marker = activity.map(|status| layer.read(cx).status_marker(status, size, &theme));
+        let redundant_title = pane.icon == "phosphor/terminal.svg"
+            && shared_directory.is_some_and(|directory| {
+                directory.trim_end_matches('/').rsplit('/').next() == Some(pane.title.as_str())
+            });
+        let title = if redundant_title {
+            "Terminal".to_owned()
+        } else {
+            pane.title.clone()
+        };
         let mut text = div().flex_1().min_w_0().flex().flex_col().child(
             div()
                 .debug_selector({
                     let id = pane.id;
                     move || format!("pane-hover-title-{id}")
                 })
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::MEDIUM)
                 .text_size(ui_px(&theme, 12.0))
                 .line_height(ui_px(&theme, 18.0))
                 .text_color(theme.foreground)
-                .child(pane.title.clone()),
+                .child(title),
         );
         if let Some(directory) = &pane.directory
+            && shared_directory.is_none()
             && directory != &pane.title
         {
             text = text.child(
@@ -2587,12 +2677,19 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
                         let id = pane.id;
                         move || format!("pane-hover-path-{id}")
                     })
-                    .mt(px(4.0))
-                    .font_family(theme.mono_font_family.clone())
+                    .mt(px(2.0))
+                    .min_w_0()
+                    .truncate()
+                    .id(gpui::ElementId::NamedInteger(
+                        "pane-directory".into(),
+                        pane.id,
+                    ))
+                    .role(gpui::Role::Label)
+                    .aria_label(directory.clone())
                     .text_size(ui_px(&theme, 11.0))
                     .line_height(ui_px(&theme, 16.0))
                     .text_color(secondary)
-                    .child(directory.clone()),
+                    .child(hover_directory_label(directory)),
             );
         }
         rows = rows.child(
@@ -2604,20 +2701,24 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
                 })
                 .flex_shrink_0()
                 .flex()
-                .items_start()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .mt(px(1.0))
-                        .flex_none()
-                        .child(crate::assets::tab_identity_icon(
-                            pane.icon,
-                            size,
-                            theme.foreground,
-                        )),
-                )
+                .items_center()
+                .px(px(8.0))
+                .py(px(6.0))
+                .rounded(px(6.0))
+                .bg(theme.foreground.opacity(if pane.is_focused {
+                    if theme.is_dark() { 0.07 } else { 0.045 }
+                } else {
+                    0.0
+                }))
+                .gap(px(9.0))
+                .child(pane_layout_preview(session, pane, &theme))
+                .child(crate::assets::tab_identity_icon(
+                    pane.icon,
+                    size,
+                    theme.foreground,
+                ))
                 .child(text)
-                .child(
+                .children(activity.map(|_| {
                     div()
                         .id("pane-state")
                         .relative()
@@ -2625,8 +2726,8 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
                         .size(size)
                         .role(gpui::Role::Label)
                         .aria_label(pane.status_label.clone())
-                        .children(marker),
-                )
+                        .children(marker)
+                }))
                 .when_some(
                     activity.and_then(|status| status.percent),
                     |row, percent| row.child(hover_progress(percent, &theme)),
@@ -2638,31 +2739,54 @@ fn multi_pane_hover_content(session: &SessionEntry, window: &mut Window, cx: &mu
         .flex()
         .flex_col()
         .rounded(px(10.0))
-        .bg(gpui::linear_gradient(
-            180.0,
-            gpui::linear_color_stop(
-                theme
-                    .popover
-                    .blend(
-                        theme
-                            .foreground
-                            .opacity(if theme.is_dark() { 0.055 } else { 0.032 }),
-                    ),
-                0.0,
-            ),
-            gpui::linear_color_stop(theme.popover.blend(theme.foreground.opacity(0.008)), 1.0),
-        ))
+        .bg(theme.popover)
         .font_family(theme.font_family.clone())
         .child(
             div()
                 .debug_selector(|| "tab-hover-heading".into())
-                .px(px(12.0))
-                .py(px(12.0))
-                .text_size(ui_px(&theme, 13.0))
-                .line_height(ui_px(&theme, 20.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(session.name.clone()),
+                .px(px(14.0))
+                .pt(px(13.0))
+                .pb(px(10.0))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_px(&theme, 13.0))
+                        .line_height(ui_px(&theme, 20.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.foreground)
+                        .child(hover_tab_heading(session)),
+                )
+                .children(shared_directory.map(|directory| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .min_w_0()
+                        .child(
+                            svg()
+                                .path("phosphor/folder.svg")
+                                .size(px(12.0))
+                                .flex_shrink_0()
+                                .text_color(secondary),
+                        )
+                        .child(
+                            div()
+                                .id("tab-shared-directory")
+                                .debug_selector(|| "tab-hover-shared-path".into())
+                                .role(gpui::Role::Label)
+                                .aria_label(directory.clone())
+                                .min_w_0()
+                                .truncate()
+                                .text_size(ui_px(&theme, 11.0))
+                                .line_height(ui_px(&theme, 16.0))
+                                .text_color(secondary)
+                                .child(hover_directory_label(directory)),
+                        )
+                })),
         )
         .child(rows)
         .children(session.native_session_hint.as_ref().map(|hint| {
@@ -2733,13 +2857,13 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
             .child(layer)
             .into_any_element()
     });
-    let secondary = theme.popover.blend(theme.foreground.opacity(0.72));
+    let secondary = theme.popover.blend(theme.foreground.opacity(0.60));
     let mut header = div()
         .debug_selector(|| "tab-hover-summary".into())
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .px(px(12.0))
+        .px(px(14.0))
         .py(px(12.0))
         .font_family(theme.font_family.clone())
         .child(
@@ -2749,6 +2873,13 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
                 .flex()
                 .items_center()
                 .gap(px(8.0))
+                .child(crate::assets::tab_identity_group(
+                    icons,
+                    ui_icon_px(theme, 16.0),
+                    theme.foreground,
+                    false,
+                    theme,
+                ))
                 .child(
                     div()
                         .debug_selector(|| "tab-hover-name".into())
@@ -2758,15 +2889,8 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
                         .line_height(ui_px(theme, 20.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground)
-                        .child(session.name.clone()),
+                        .child(hover_tab_heading(session)),
                 )
-                .child(crate::assets::tab_identity_group(
-                    icons,
-                    ui_icon_px(theme, 16.0),
-                    theme.foreground,
-                    false,
-                    theme,
-                ))
                 .children(status_marker)
                 .when_some(
                     session.status.and_then(|status| status.percent),
@@ -2789,7 +2913,7 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
     let mut content = div()
         .flex()
         .flex_col()
-        .px(px(12.0))
+        .px(px(14.0))
         .pb(px(12.0))
         .font_family(theme.font_family.clone());
     let mut has_body = false;
@@ -2825,6 +2949,12 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
         .as_ref()
         .and_then(|detail| detail.source_path.as_ref())
         .or(session.subtitle.as_ref())
+        .or_else(|| {
+            session
+                .pane_details
+                .first()
+                .and_then(|pane| pane.directory.as_ref())
+        })
     {
         content = content.child(
             div()
@@ -2832,11 +2962,29 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
                 .flex_shrink_0()
                 .mt(px(if has_body { 8.0 } else { 0.0 }))
                 .w_full()
-                .font_family(theme.mono_font_family.clone())
+                .id("tab-hover-directory")
+                .role(gpui::Role::Label)
+                .aria_label(path.clone())
+                .truncate()
                 .text_size(ui_px(theme, 11.0))
                 .line_height(ui_px(theme, 16.0))
                 .text_color(secondary)
-                .child(path.clone()),
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(
+                    svg()
+                        .path("phosphor/folder.svg")
+                        .size(px(12.0))
+                        .flex_shrink_0()
+                        .text_color(secondary),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(hover_directory_label(path)),
+                ),
         );
         has_body = true;
     }
@@ -2864,20 +3012,7 @@ fn sidebar_hover_content(session: &SessionEntry, window: &mut Window, cx: &mut A
         .flex()
         .flex_col()
         .rounded(px(10.0))
-        .bg(gpui::linear_gradient(
-            180.0,
-            gpui::linear_color_stop(
-                theme
-                    .popover
-                    .blend(
-                        theme
-                            .foreground
-                            .opacity(if theme.is_dark() { 0.055 } else { 0.032 }),
-                    ),
-                0.0,
-            ),
-            gpui::linear_color_stop(theme.popover.blend(theme.foreground.opacity(0.008)), 1.0),
-        ))
+        .bg(theme.popover)
         .font_family(theme.font_family.clone())
         .child(header)
         .when(has_body, |view| view.child(content))
@@ -3989,8 +4124,8 @@ mod tests {
         let path = cx.debug_bounds("tab-hover-path").expect("path");
         let status = cx.debug_bounds("tab-hover-status").expect("status");
         let meta = cx.debug_bounds("tab-hover-meta").expect("metadata");
-        assert_eq!(heading.left() - card.left(), px(12.0));
-        assert_eq!(card.right() - heading.right(), px(12.0));
+        assert_eq!(heading.left() - card.left(), px(14.0));
+        assert_eq!(card.right() - heading.right(), px(14.0));
         assert_eq!(heading.top() - card.top(), px(12.0));
         assert_eq!(card.bottom() - meta.bottom(), px(12.0));
         assert!(name.right() <= status.left());
@@ -3998,10 +4133,10 @@ mod tests {
         assert!(status.bottom() < path.top());
         assert!(path.bottom() <= meta.top());
         assert!(status.right() <= heading.right());
-        assert_eq!(path.left(), name.left());
+        assert_eq!(path.left(), heading.left());
         assert!(
-            path.size.height > px(16.0),
-            "long paths wrap instead of losing their tail"
+            path.size.height <= px(18.0),
+            "long paths retain their suffix on one metadata line"
         );
     }
 
@@ -4049,6 +4184,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hover_metadata_preserves_labels_and_distinguishing_unicode_path_suffixes() {
+        let mut entry = session(None, None);
+        entry.name = "~/dev/siwei.io/talks/opensource-2026".into();
+        entry.has_user_label = false;
+        assert_eq!(super::hover_tab_heading(&entry), "opensource-2026");
+        entry.has_user_label = true;
+        assert_eq!(super::hover_tab_heading(&entry), entry.name);
+        for leaf in ["修复登录超时", "2026-bof-open-source"] {
+            let path = format!("~/conductor/workspaces/a-long-project/team/slides/{leaf}");
+            let display = super::hover_directory_label(&path);
+            assert!(display.starts_with("…/"));
+            assert!(display.ends_with(leaf));
+            assert!(display.chars().count() <= 42);
+        }
+        assert_eq!(super::hover_directory_label("/short/path"), "/short/path");
+    }
+
     #[gpui::test]
     fn multi_pane_hover_exposes_every_panes_own_task_and_directory(cx: &mut gpui::TestAppContext) {
         use con_core::terminal_status::{Activity, Evidence, Status};
@@ -4065,6 +4218,13 @@ mod tests {
                     session.pane_details = (0..count)
                         .map(|id| super::PaneHoverDetail {
                             id: id as u64,
+                            is_focused: id == 0,
+                            layout: Some([
+                                id as u16 * (1000 / count as u16),
+                                0,
+                                1000 / count as u16,
+                                1000,
+                            ]),
                             icon: if id == 0 {
                                 "agents/codex.svg"
                             } else {
@@ -4075,7 +4235,9 @@ mod tests {
                             } else {
                                 format!("service-{id}")
                             },
-                            directory: Some(format!("/project/service-{id}")),
+                            directory: Some(format!(
+                                "~/conductor/workspaces/a-long-project/team/slides/service-{id}"
+                            )),
                             status: Some(Status {
                                 surface_id: id as u64,
                                 activity: if id == 0 {
@@ -4139,6 +4301,10 @@ mod tests {
                     assert!(previous.bottom() <= row.top());
                     assert!(title.bottom() <= path.top());
                     assert!(path.right() <= row.right());
+                    assert!(
+                        path.size.height <= px(18.0),
+                        "paths stay on one metadata line: {path:?}"
+                    );
                     previous = row;
                 }
                 assert!(cx.debug_bounds("tab-hover-pane-count").is_none());
@@ -4149,6 +4315,86 @@ mod tests {
                     "multiple working panes keep their shared activity layer alive"
                 );
             }
+        }
+    }
+
+    #[gpui::test]
+    fn single_pane_hover_retains_directory_without_protocol_metadata(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            let (_, cx) = cx.add_window_view(|_, cx| {
+                gpui_component::Theme::change(mode, None, cx);
+                let mut session = session(None, None);
+                session.subtitle = None;
+                session.pane_details = vec![super::PaneHoverDetail {
+                    id: 0,
+                    is_focused: true,
+                    layout: Some([0, 0, 1000, 1000]),
+                    icon: "phosphor/terminal.svg",
+                    title: "project".into(),
+                    directory: Some("~/work/project".into()),
+                    status: None,
+                    status_label: "Idle".into(),
+                }];
+                TabDetailsTestView {
+                    session,
+                    width: 304.0,
+                }
+            });
+            let heading = cx.debug_bounds("tab-hover-heading").unwrap();
+            let path = cx
+                .debug_bounds("tab-hover-path")
+                .expect("shell cwd is useful even without agent metadata");
+            assert!(heading.bottom() <= path.top());
+            assert!(path.size.height <= px(18.0));
+        }
+    }
+
+    #[gpui::test]
+    fn shared_directory_moves_to_header_without_collapsing_pane_identity(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(gpui_component::init);
+        for mode in [
+            gpui_component::ThemeMode::Light,
+            gpui_component::ThemeMode::Dark,
+        ] {
+            let (_, cx) = cx.add_window_view(|_, cx| {
+                gpui_component::Theme::change(mode, None, cx);
+                let mut session = session(None, None);
+                session.pane_count = 2;
+                session.pane_details = (0..2)
+                    .map(|id| super::PaneHoverDetail {
+                        id,
+                        is_focused: id == 0,
+                        layout: Some([id as u16 * 500, 0, 500, 1000]),
+                        icon: "phosphor/terminal.svg",
+                        title: "project".into(),
+                        directory: Some("~/work/project".into()),
+                        status: None,
+                        status_label: "Idle".into(),
+                    })
+                    .collect();
+                TabDetailsTestView {
+                    session,
+                    width: 304.0,
+                }
+            });
+            let path = cx.debug_bounds("tab-hover-shared-path").unwrap();
+            let first = cx.debug_bounds("pane-hover-row-0").unwrap();
+            let second = cx.debug_bounds("pane-hover-row-1").unwrap();
+            assert!(path.bottom() < first.top());
+            assert!(first.bottom() < second.top());
+            assert!(second.bottom() - path.top() < px(140.0));
+            assert!(cx.debug_bounds("pane-hover-path-0").is_none());
+            assert!(cx.debug_bounds("pane-hover-path-1").is_none());
+            assert!(cx.debug_bounds("pane-hover-title-0").is_some());
+            assert!(cx.debug_bounds("pane-hover-title-1").is_some());
         }
     }
 
