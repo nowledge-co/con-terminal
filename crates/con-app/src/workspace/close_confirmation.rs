@@ -1,9 +1,7 @@
 //! One confirmation for a user close operation, addressed by stable identities.
 use super::*;
-use gpui_component::{
-    FocusTrapElement,
-    button::{Button, ButtonVariants},
-};
+use crate::dialog_style::DialogButtonStyle as _;
+use gpui_component::{FocusTrapElement, button::Button};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CloseTarget {
@@ -325,7 +323,7 @@ impl ConWorkspace {
                         .child(
                             Button::new("agent-close-keep-open")
                                 .label("Keep Open")
-                                .primary()
+                                .dialog_primary(cx)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.dismiss_agent_close_confirmation(window, cx)
                                 })),
@@ -333,7 +331,7 @@ impl ConWorkspace {
                         .child(
                             Button::new("agent-close-confirm")
                                 .label(confirmation.target.action())
-                                .danger()
+                                .dialog_destructive(cx)
                                 .text_color(foreground)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.confirm_agent_close(window, cx)

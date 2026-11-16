@@ -68,6 +68,21 @@ The goal is not to imitate any one reference. The goal is to produce a design la
 
 con is light-first (Flexoki Light default) but must excel in both themes.
 
+### Settings navigation and dialog actions
+
+- Settings section changes use a short 140ms content fade and independently
+  retained navigation-fill transitions. Rapid switching retargets the existing
+  selection motion. Reduce Motion resolves immediately. Keep the floating
+  settings frame size fixed across sections; reset only the content scroll,
+  preserving unsaved edits and the existing Save/Discard behavior.
+- Con-authored dialog actions use `dialog_style::DialogButtonStyle` over
+  gpui-component buttons: system typography, 32pt scaled height, 8pt scaled
+  rounding, and borderless, shadowless opacity fills. Primary actions carry
+  stronger neutral fill; destructive actions retain semantic danger color.
+  Preserve the component's focus ring, disabled handling and keyboard behavior.
+- This styling does not replace native operating-system dialogs or change
+  terminal geometry, native masks, modal ownership or confirmation semantics.
+
 ### Closing agent sessions
 
 - Ask before closing a tab, pane or terminal that still contains a live agent,

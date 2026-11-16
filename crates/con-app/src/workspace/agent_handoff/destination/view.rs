@@ -1,4 +1,5 @@
 use super::*;
+use crate::dialog_style::DialogButtonStyle as _;
 use gpui_component::{
     ActiveTheme, Disableable,
     button::{Button, ButtonVariants},
@@ -427,7 +428,7 @@ impl Render for HandoffDestinationPanel {
                     .flex_shrink_0()
                     .child(
                         Button::new("handoff-cancel")
-                            .ghost()
+                            .dialog_secondary(cx)
                             .label("Cancel")
                             .on_click(|_, window, _| {
                                 log::info!("handoff: cancel clicked");
@@ -438,7 +439,7 @@ impl Render for HandoffDestinationPanel {
                         // One click prepares and dispatches: there is no
                         // separate review page to pass through first.
                         Button::new("handoff-send")
-                            .primary()
+                            .dialog_primary(cx)
                             .label("Send handoff")
                             .disabled(!confirm_ready)
                             .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),

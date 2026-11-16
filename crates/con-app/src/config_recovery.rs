@@ -1,3 +1,4 @@
+use crate::dialog_style::DialogButtonStyle as _;
 use std::path::{Path, PathBuf};
 
 use gpui::*;
@@ -185,20 +186,20 @@ impl Render for ConfigRecovery {
                     .child(
                         Button::new("recovery-open-config")
                             .label("Open Settings File")
-                            .ghost()
+                            .dialog_secondary(cx)
                             .on_click(cx.listener(|this, _, _, cx| this.open_file(cx))),
                     )
                     .child(
                         Button::new("recovery-copy-details")
                             .label("Copy Details")
-                            .ghost()
+                            .dialog_secondary(cx)
                             .on_click(cx.listener(|this, _, _, cx| this.copy_details(cx))),
                     )
                     .child(div().flex_1())
                     .child(
                         Button::new("recovery-retry")
                             .label("Try Again")
-                            .primary()
+                            .dialog_primary(cx)
                             .on_click(cx.listener(|this, _, window, cx| this.retry(window, cx))),
                     ),
             )
@@ -216,7 +217,7 @@ impl Render for ConfigRecovery {
                         Button::new("recovery-quit")
                             .label("Quit con")
                             .small()
-                            .ghost()
+                            .dialog_secondary(cx)
                             .on_click(|_, _, cx| cx.quit()),
                     ),
             )
