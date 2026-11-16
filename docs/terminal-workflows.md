@@ -99,6 +99,10 @@ same pane actions.
 
 ## Browse files
 
+The file browser includes dotfiles and dot-directories such as `.gitignore`
+and `.venv`. Directory contents load when expanded; structural changes refresh
+the tree while preserving expanded directories and the active file.
+
 Select a file in the file browser or search results to preview it in an editor
 pane. The italic file tab is temporary: selecting another file replaces it
 without adding more tabs.

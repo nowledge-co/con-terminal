@@ -1258,6 +1258,10 @@ mod tests {
         let root = temp.path().to_path_buf();
         let src = root.join("src");
         fs::create_dir(&src).unwrap();
+        let hidden = root.join(".venv");
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join(".old"), "rename").unwrap();
+        fs::write(hidden.join(".remove"), "delete").unwrap();
         fs::write(src.join("keep.txt"), "keep").unwrap();
         fs::write(root.join("rename.txt"), "rename").unwrap();
         fs::write(root.join("delete.txt"), "delete").unwrap();
@@ -1265,7 +1269,7 @@ mod tests {
         let view = cx.new(|_| FileTreeView::new());
         view.update(cx, |view, cx| {
             view.root = Some(root.clone());
-            view.expanded_paths = HashSet::from([root.clone(), src.clone()]);
+            view.expanded_paths = HashSet::from([root.clone(), src.clone(), hidden.clone()]);
             view.active_path = Some(src.join("keep.txt"));
             view.refresh(cx);
         });
@@ -1273,6 +1277,9 @@ mod tests {
         fs::write(src.join("new.txt"), "new").unwrap();
         fs::rename(root.join("rename.txt"), root.join("renamed.txt")).unwrap();
         fs::remove_file(root.join("delete.txt")).unwrap();
+        fs::write(hidden.join(".created"), "new").unwrap();
+        fs::rename(hidden.join(".old"), hidden.join(".renamed")).unwrap();
+        fs::remove_file(hidden.join(".remove")).unwrap();
         view.update(cx, |view, cx| view.refresh(cx));
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -1286,6 +1293,17 @@ mod tests {
             assert!(!paths.contains(&root.join("rename.txt")));
             assert!(!paths.contains(&root.join("delete.txt")));
             assert!(paths.contains(&root.join(".gitignore")));
+            assert!(paths.contains(&hidden.join(".created")));
+            assert!(paths.contains(&hidden.join(".renamed")));
+            assert!(!paths.contains(&hidden.join(".old")));
+            assert!(!paths.contains(&hidden.join(".remove")));
+            assert!(
+                view.entries
+                    .iter()
+                    .find(|entry| entry.path == hidden)
+                    .unwrap()
+                    .is_expanded
+            );
             assert!(
                 view.entries
                     .iter()
