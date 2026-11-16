@@ -81,7 +81,10 @@ jobs:
           git fetch origin "${{ github.event.pull_request.head.sha || github.sha }}"
           git checkout "${{ github.event.pull_request.head.sha || github.sha }}"
           git log -1 --oneline
-      - uses: dtolnay/rust-toolchain@stable
+      # Cargo 1.100 uses a bare package-name directory (build/con), which
+      # Win32 rejects. Keep the last compatible layout until upstream escapes
+      # reserved DOS names; con-app.exe alone cannot avoid this intermediate path.
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: C:\src\repo
