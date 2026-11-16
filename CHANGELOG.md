@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.179` - 2026-11-16
+
+### Fixed
+
+**File browser**
+
+- Show dotfiles and dot-directories, including `.gitignore` and `.venv`,
+  using the existing directory-first sorting, lazy expansion and automatic
+  refresh behavior.
+  _(PR [#560](https://github.com/nowledge-co/con-terminal/pull/560) by [@SleepyChaos](https://github.com/SleepyChaos))_
+
 ## `v0.1.0-beta.178` - 2026-11-16
 
 ### Changed
