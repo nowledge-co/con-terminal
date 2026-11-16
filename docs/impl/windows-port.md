@@ -24,15 +24,19 @@ you get per platform:
 On Windows (from a Developer Command Prompt for VS 2022):
 
 ```powershell
-rustup default stable
+rustup toolchain install 1.99.1 --profile minimal
 git clone https://github.com/nowledge-co/con-terminal.git
 cd con-terminal
-cargo wbuild -p con --release          # → target\release\con-app.exe
-cargo wtest  -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
+cargo +1.99.1 wbuild -p con --release  # → target\release\con-app.exe
+cargo +1.99.1 wtest -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
 ```
 
 Prerequisites:
-- **Rust** (stable, edition 2024).
+- **Rust 1.99.1**, edition 2024. Windows CI and releases temporarily pin this
+  version: Cargo 1.100 creates a `build/con/<hash>` directory for the app
+  package, and Win32 rejects the reserved `CON` component even though the
+  executable is named `con-app.exe`. Use `cargo +1.99.1 wbuild -p con --release`
+  until Cargo supports a Windows-safe intermediate layout for reserved names.
 - **Visual Studio Build Tools 2022** with "Desktop development with
   C++" (for `link.exe` + Windows SDK).
 - **Git for Windows**.
