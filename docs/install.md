@@ -109,6 +109,13 @@ current limits and fixes.
 
 ## Updates
 
+**Settings → General → Updates** includes **Automatically Check for Updates**.
+Turn it off to stop background checks; **Check for Updates…** remains available
+when you want to check manually. This preference applies immediately and survives
+restarting con. Checks are enabled by default, but do not authorize installation.
+con requires an explicit installation decision for each release and does not
+silently download or install updates in the background.
+
 On macOS, use **Check for Updates…** in the app menu. Sparkle shows the
 target version’s release notes before installation.
 

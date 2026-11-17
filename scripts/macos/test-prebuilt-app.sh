@@ -23,6 +23,12 @@ run_case() (
   verify_native_binary_architecture "$app/Contents/MacOS/con-cli" "$CON_ARCH"
   ln -s con-cli "$app/Contents/MacOS/ghostty"
   generate_info_plist "$app/Contents/Info.plist"
+  if [[ -n "${CON_SPARKLE_FEED_URL:-}${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAllowsAutomaticUpdates' "$app/Contents/Info.plist")" == false ]] \
+      || fail "$name: silent installation must be disabled"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$app/Contents/Info.plist")" == false ]] \
+      || fail "$name: automatic download default must be disabled"
+  fi
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:LSItemContentTypes:0' "$app/Contents/Info.plist")" == public.folder ]] \
     || fail "$name: bundle does not advertise opening folders"
   case "$mutation" in

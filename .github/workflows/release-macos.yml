@@ -71,6 +71,12 @@ jobs:
         shell: bash
         run: ./scripts/sparkle/download.sh
 
+      - name: Verify Sparkle update consent policy
+        shell: bash
+        env:
+          SPARKLE_FRAMEWORK: ${{ github.workspace }}/.sparkle/Sparkle.framework
+        run: bash scripts/macos/test-update-preferences.sh
+
       - name: Build native app bundle
         shell: bash
         env:

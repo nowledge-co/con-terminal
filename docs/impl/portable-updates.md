@@ -33,6 +33,30 @@ installs remain externally managed. Flatpak is detected before adoption and
 points to its software manager/Flatpak. Never elevate, bypass a package manager,
 or create a second installation to make an update appear successful.
 
+## Update consent
+
+Checking, downloading, installing and restarting are separate decisions. Keep
+background checks enabled by default for existing behavior, but expose a
+persistent off switch in Settings → General → Updates. Manual checks continue
+working while automatic checks are off. The switch applies immediately and is
+not part of the configuration Save/Discard draft.
+
+macOS reads/writes Sparkle's `automaticallyChecksForUpdates` on the main thread;
+never duplicate that preference in con's config or reset it on startup. Bundle
+policy sets `SUAllowsAutomaticUpdates=false` and `SUAutomaticallyUpdate=false`,
+so every installation requires a user decision, including with a previously
+stored automatic-install preference. The policy does not overwrite that stored
+preference. Use the public setter only for an explicit settings change.
+
+Portable clients store only their check preference in con-owned
+`update-preferences.json`, atomically before changing the in-memory value. An
+absent file preserves the existing enabled default; unreadable/malformed data
+fails closed for background checks. Reject automatic checks before network
+admission when off, cancel an active automatic fetch, and suppress its result.
+Do not cancel a user-initiated check or download when this switch changes.
+Downloading still requires its own button, and replacement/restart requires the
+separate explicit action and helper commit token described below.
+
 ## Request and preparation
 
 The first appcast item supplies version, URL, size, signature and release notes
@@ -101,6 +125,14 @@ one state machine. No installation console or disappearing application during
 download. macOS keeps Sparkle's own native UI and lifecycle.
 
 ## Verification
+
+`bash scripts/macos/test-update-preferences.sh` exercises the actual Objective-C
+bridge against a real Sparkle.framework (override `SPARKLE_FRAMEWORK` when needed).
+It creates and removes a disposable app and defaults domain, does not check a
+production feed, and verifies that manual checks remain available when automatic
+checks are off, preferences persist in Sparkle's defaults, and bundle policy
+blocks silent downloads despite an old stored opt-in. macOS release builds run
+this against their downloaded framework before packaging.
 
 Run con-update tests on Windows and Linux as well as the host platform, and the
 affected con-cli and con app suites. Test signature/identity mismatches, wrong

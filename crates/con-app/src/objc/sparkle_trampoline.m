@@ -85,3 +85,30 @@ void con_sparkle_check_for_updates(void *controller) {
               exception.name, exception.reason);
     }
 }
+
+// Return -1 when unavailable; zero is a valid persisted user choice.
+int con_sparkle_automatic_checks(void *controller) {
+    @try {
+        if (!controller) return -1;
+        id updater = ((id (*)(id, SEL))objc_msgSend)((__bridge id)controller, NSSelectorFromString(@"updater"));
+        if (!updater) return -1;
+        return ((BOOL (*)(id, SEL))objc_msgSend)(updater, NSSelectorFromString(@"automaticallyChecksForUpdates")) ? 1 : 0;
+    } @catch (NSException *exception) {
+        NSLog(@"[con-updater] Cannot read update checks preference: %@", exception);
+        return -1;
+    }
+}
+
+int con_sparkle_set_automatic_checks(void *controller, int enabled) {
+    @try {
+        if (!controller) return 0;
+        id updater = ((id (*)(id, SEL))objc_msgSend)((__bridge id)controller, NSSelectorFromString(@"updater"));
+        if (!updater) return 0;
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(updater, NSSelectorFromString(@"setAutomaticallyChecksForUpdates:"), enabled != 0);
+        BOOL actual = ((BOOL (*)(id, SEL))objc_msgSend)(updater, NSSelectorFromString(@"automaticallyChecksForUpdates"));
+        return actual == (enabled != 0) ? 1 : 0;
+    } @catch (NSException *exception) {
+        NSLog(@"[con-updater] Cannot change update checks preference: %@", exception);
+        return 0;
+    }
+}

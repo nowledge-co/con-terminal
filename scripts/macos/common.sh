@@ -290,6 +290,10 @@ generate_info_plist() {
 
   if [[ -n "$sparkle_keys" ]]; then
     sparkle_keys+="  <key>SUEnableAutomaticChecks</key>\n  <true/>\n"
+    # Installation always needs an explicit decision, including for users with
+    # an older SUAutomaticallyUpdate preference in NSUserDefaults.
+    sparkle_keys+="  <key>SUAllowsAutomaticUpdates</key>\n  <false/>\n"
+    sparkle_keys+="  <key>SUAutomaticallyUpdate</key>\n  <false/>\n"
   fi
 
   cat >"$plist_path" <<EOF
