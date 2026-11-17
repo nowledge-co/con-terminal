@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>con</title>
+    <link>https://con-releases.nowledge.co</link>
+    <description>Most recent changes</description>
+    <language>en</language>
+    <item>
+      <title>Version 0.1.0-beta.183</title>
+      <pubDate/>
+      <sparkle:version>157</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.183</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.183/con-0.1.0-beta.183-linux-x86_64.tar.gz" length="57108419" type="application/octet-stream" sparkle:edSignature="0xhtZXyjuKbWv2D13cvP34kQI0DL+yPi3QbG/4FnZWMlMArX1/1sB7j2mP4zAL4eaOPvh0klZR0GkczgAAobBQ=="/>
+    </item>
+  </channel>
+</rss>
