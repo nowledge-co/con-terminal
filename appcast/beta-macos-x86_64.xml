@@ -8,6 +8,69 @@
     <item>
       <title>Version 0.1.0</title>
       <pubDate />
+      <sparkle:version>194</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.183/con-Beta-0.1.0-beta.183-macos-x86_64.dmg" length="64972076" type="application/octet-stream" sparkle:edSignature="39+0ZT3roTvTYhA/dFotHnmxbzvk48O3dWh20A6SL2Iih/AY84Ecl4tFBLsuPr+khVx5t2UvKaqiC5OMj1+oBg==" />
+      <description>&lt;!doctype html&gt;
+&lt;html lang="en"&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;meta name="color-scheme" content="light dark"&gt;
+&lt;meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"&gt;
+&lt;title&gt;con 0.1.0-beta.183 — What’s new&lt;/title&gt;
+&lt;style&gt;
+:root { color-scheme: light dark; --ground: #fffcf0; --ink: #100f0f;
+  --muted: #6f6e69; --link: #205ea6; --wash: rgba(16,15,15,.055); }
+@media (prefers-color-scheme: dark) {
+  :root { --ground: #100f0f; --ink: #cecdc3; --muted: #9f9d96;
+    --link: #66a0c8; --wash: rgba(206,205,195,.08); }
+}
+* { box-sizing: border-box; }
+html { background: var(--ground); color: var(--ink); }
+body { margin: 0; padding: 20px 22px 24px;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere; }
+article { max-width: 66ch; margin: 0 auto; }
+header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; }
+h1 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 650; }
+.version { margin: 0; color: var(--muted); font-size: 12px; }
+h2 { margin: 20px 0 8px; font-size: 15px; line-height: 1.4; font-weight: 650; }
+h3 { margin: 10px 0 6px; font-size: 13px; line-height: 1.4; font-weight: 650; }
+p { margin: 8px 0; }
+ul { padding-left: 18px; margin: 6px 0 16px; }
+li { padding-left: 2px; }
+li + li { margin-top: 12px; }
+li::marker { color: var(--muted); }
+a { color: var(--link); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 2px; }
+code { font: .9em ui-monospace, Menlo, Consolas, monospace;
+  background: var(--wash); border-radius: 3px; padding: 1px 3px; }
+.credit { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.credit a { color: inherit; }
+footer { margin-top: 26px; font-size: 12px; }
+::selection { background: var(--link); color: var(--ground); }
+@media (max-width: 380px) { body { padding: 16px; } h1 { font-size: 18px; } }
+&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;article&gt;
+&lt;header&gt;&lt;h1&gt;What’s new&lt;/h1&gt;&lt;p class="version"&gt;con 0.1.0-beta.183 · 2026-11-17&lt;/p&gt;&lt;/header&gt;
+&lt;h2&gt;Fixed&lt;/h2&gt;
+&lt;h3&gt;Updates&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Add a persistent &lt;strong&gt;Automatically Check for Updates&lt;/strong&gt; switch in Settings → General → Updates. Turning it off stops background checks while keeping manual checks available. Show the actual checking preference instead of the ambiguous “Auto-update enabled” status.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/565"&gt;#565&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Changed&lt;/h2&gt;
+&lt;h3&gt;Updates&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Require an explicit installation decision for each con-managed release. macOS no longer offers silent automatic downloading or installation; portable updates retain separate download and restart actions. Package-managed installations continue using their original update mechanism.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/565"&gt;#565&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;footer&gt;&lt;a href="https://con.nowledge.co/changelog/"&gt;Read the full changelog&lt;/a&gt;&lt;/footer&gt;
+&lt;/article&gt;&lt;/body&gt;&lt;/html&gt;
+</description>
+      <sparkle:fullReleaseNotesLink>https://con.nowledge.co/changelog/</sparkle:fullReleaseNotesLink>
+    </item>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate />
       <sparkle:version>193</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
@@ -571,14 +634,6 @@ footer { margin-top: 26px; font-size: 12px; }
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.163/con-Beta-0.1.0-beta.163-macos-x86_64.dmg" length="64253553" type="application/octet-stream" sparkle:edSignature="m0jLPvCRIsq7lU6H+XurBu19aOOxKI/fT4B+xx9X+pCh6/aRRdB9NFnjKqf9iSlH4XAUd51E9IpqBiKzyzQICQ==" />
-    </item>
-    <item>
-      <title>Version 0.1.0</title>
-      <pubDate />
-      <sparkle:version>173</sparkle:version>
-      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.162/con-Beta-0.1.0-beta.162-macos-x86_64.dmg" length="64240041" type="application/octet-stream" sparkle:edSignature="nvFh5b8X903BIijwqSgvf22H7Minx/OzOp5ek/HfJLoyEqSfJqOkJlasb4EezEPAA6F4VDHw3Gkjzufk1gbfAg==" />
     </item>
   </channel>
 </rss>
