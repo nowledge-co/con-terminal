@@ -128,7 +128,7 @@ jobs:
         run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
-          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app updater::portable
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app updater::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app settings_panel::tests
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app sidebar::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app terminal_geometry::
@@ -204,7 +204,7 @@ jobs:
         run: cargo run --locked -p con-update --example transaction_smoke
       - name: State presentation layout tests
         run: |
-          cargo test --locked -p con --bin con updater::portable
+          cargo test --locked -p con --bin con updater::
           cargo test --locked -p con --bin con settings_panel::tests
           cargo test --locked -p con --bin con sidebar::
           cargo test --locked -p con --bin con terminal_geometry::

@@ -13,6 +13,7 @@ static REVISION: AtomicU64 = AtomicU64::new(0);
 static RELEASE: Mutex<Option<Release>> = Mutex::new(None);
 static PREPARED: Mutex<Option<Prepared>> = Mutex::new(None);
 static CANCEL: AtomicBool = AtomicBool::new(false);
+static AUTOMATIC_CHECK_CANCEL: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 static BUSY: AtomicBool = AtomicBool::new(false);
 static EXIT: AtomicBool = AtomicBool::new(false);
 static LOCK: OnceLock<File> = OnceLock::new();
@@ -82,7 +83,21 @@ pub fn init() {
         }
     }
 }
+pub fn cancel_automatic_check() {
+    if let Some(cancel) = AUTOMATIC_CHECK_CANCEL.lock().unwrap().take() {
+        let _ = cancel.send(());
+    }
+}
+async fn cancellable_check<T>(
+    future: impl std::future::Future<Output = T>,
+    cancel: tokio::sync::oneshot::Receiver<()>,
+) -> Option<T> {
+    tokio::select! { biased; _ = cancel => None, result = future => Some(result) }
+}
 pub fn check(manual: bool) {
+    if !manual && !super::preferences::enabled() {
+        return;
+    }
     if let Some(prepared) = PREPARED.lock().ok().and_then(|p| p.clone()) {
         state(CheckState::Ready {
             version: prepared.release.version,
@@ -92,42 +107,64 @@ pub fn check(manual: bool) {
     if BUSY.swap(true, Ordering::SeqCst) {
         return;
     }
+    let (sender, cancel) = tokio::sync::oneshot::channel();
+    let manual_guard = if manual {
+        Some(sender)
+    } else {
+        *AUTOMATIC_CHECK_CANCEL.lock().unwrap() = Some(sender);
+        None
+    };
     state(CheckState::Checking);
     runtime().spawn(async move {
-        let result = async {
-            let channel = con_core::release_channel::current();
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(20))
-                .build()?;
-            let url = channel.feed_url(
-                con_core::release_channel::host_platform(),
-                con_core::release_channel::host_arch(),
-            );
-            let mut response = client.get(url).send().await?.error_for_status()?;
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await? {
-                anyhow::ensure!(
-                    bytes.len() + chunk.len() <= 2 * 1024 * 1024,
-                    "Update feed is too large"
+        let _manual_guard = manual_guard;
+        let result = cancellable_check(
+            async {
+                let channel = con_core::release_channel::current();
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(20))
+                    .build()?;
+                let url = channel.feed_url(
+                    con_core::release_channel::host_platform(),
+                    con_core::release_channel::host_arch(),
                 );
-                bytes.extend_from_slice(&chunk);
-            }
-            let release = con_update::parse_feed(
-                std::str::from_utf8(&bytes)?,
-                con_core::release_channel::host_platform(),
-                con_core::release_channel::host_arch(),
-            )?;
-            let skipped = !manual
-                && fs::read_to_string(con_paths::app_data_dir().join("skipped-update"))
-                    .ok()
-                    .as_deref()
-                    == Some(release.version.as_str());
-            let next = candidate_state(&release, &crate::app_display_version(), skipped);
-            *RELEASE.lock().unwrap() = Some(release);
-            Ok::<_, anyhow::Error>(next)
-        }
+                let mut response = client.get(url).send().await?.error_for_status()?;
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await? {
+                    anyhow::ensure!(
+                        bytes.len() + chunk.len() <= 2 * 1024 * 1024,
+                        "Update feed is too large"
+                    );
+                    bytes.extend_from_slice(&chunk);
+                }
+                let release = con_update::parse_feed(
+                    std::str::from_utf8(&bytes)?,
+                    con_core::release_channel::host_platform(),
+                    con_core::release_channel::host_arch(),
+                )?;
+                let skipped = !manual
+                    && fs::read_to_string(con_paths::app_data_dir().join("skipped-update"))
+                        .ok()
+                        .as_deref()
+                        == Some(release.version.as_str());
+                let next = candidate_state(&release, &crate::app_display_version(), skipped);
+                *RELEASE.lock().unwrap() = Some(release);
+                Ok::<_, anyhow::Error>(next)
+            },
+            cancel,
+        )
         .await;
-        state(result.unwrap_or_else(|error| CheckState::Error(error.to_string())));
+        if let Some(result) = result {
+            if manual || super::preferences::enabled() {
+                state(result.unwrap_or_else(|error| CheckState::Error(error.to_string())));
+            } else {
+                state(CheckState::Idle);
+            }
+        } else {
+            state(CheckState::Idle);
+        }
+        if !manual {
+            AUTOMATIC_CHECK_CANCEL.lock().unwrap().take();
+        }
         BUSY.store(false, Ordering::SeqCst);
     });
 }
@@ -426,6 +463,35 @@ pub fn seed_review() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn disabling_checks_cancels_pending_fetch_and_discards_ready_results() {
+        let (sender, cancel) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(super::cancellable_check(
+            std::future::pending::<()>(),
+            cancel,
+        ));
+        sender.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        let (sender, cancel) = tokio::sync::oneshot::channel();
+        sender.send(()).unwrap();
+        assert!(
+            super::cancellable_check(std::future::ready(123), cancel)
+                .await
+                .is_none()
+        );
+        let (_sender, cancel) = tokio::sync::oneshot::channel();
+        assert_eq!(
+            super::cancellable_check(std::future::ready(123), cancel).await,
+            Some(123)
+        );
+    }
+
     #[test]
     fn skipped_version_does_not_hide_that_it_is_already_installed() {
         let release = Release {

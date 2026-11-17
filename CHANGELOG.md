@@ -4,6 +4,28 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.183` - 2026-11-17
+
+### Fixed
+
+**Updates**
+
+- Add a persistent **Automatically Check for Updates** switch in Settings →
+  General → Updates. Turning it off stops background checks while keeping
+  manual checks available. Show the actual checking preference instead of the
+  ambiguous “Auto-update enabled” status.
+  _(PR [#565](https://github.com/nowledge-co/con-terminal/pull/565) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**Updates**
+
+- Require an explicit installation decision for each con-managed release.
+  macOS no longer offers silent automatic downloading or installation; portable
+  updates retain separate download and restart actions. Package-managed
+  installations continue using their original update mechanism.
+  _(PR [#565](https://github.com/nowledge-co/con-terminal/pull/565) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.182` - 2026-11-17
 
 ### Changed

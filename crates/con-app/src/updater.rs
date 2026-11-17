@@ -9,6 +9,7 @@
 
 use std::sync::{Mutex, OnceLock};
 pub(crate) mod portable;
+mod preferences;
 
 #[cfg(target_os = "macos")]
 use cocoa::base::{BOOL, YES, id, nil};
@@ -20,6 +21,8 @@ use objc::{class, msg_send, sel, sel_impl};
 unsafe extern "C" {
     fn con_sparkle_init_controller() -> *mut std::ffi::c_void;
     fn con_sparkle_check_for_updates(controller: *mut std::ffi::c_void);
+    fn con_sparkle_automatic_checks(controller: *mut std::ffi::c_void) -> i32;
+    fn con_sparkle_set_automatic_checks(controller: *mut std::ffi::c_void, enabled: i32) -> i32;
 }
 
 /// Opaque handle to the Sparkle updater controller (macOS).
@@ -109,20 +112,18 @@ impl UpdaterStatus {
 
     pub fn summary(self) -> &'static str {
         match self {
-            Self::Active => "Auto-update enabled",
-            Self::Disabled(_) => "Auto-update unavailable",
+            Self::Active => match automatic_checks_enabled() {
+                Some(false) => "Manual checks only",
+                Some(true) => "Automatic checks on",
+                None => "Update settings unavailable",
+            },
+            Self::Disabled(_) => "Updates unavailable",
         }
     }
 
     pub fn detail(self) -> &'static str {
         match self {
-            Self::Active => {
-                if cfg!(target_os = "macos") {
-                    "Sparkle is loaded and polling this release channel."
-                } else {
-                    "Signed updates download while you work and install when you choose to restart."
-                }
-            }
+            Self::Active => "Updates require your confirmation before installation.",
             Self::Disabled(UpdaterDisabledReason::ChannelDoesNotPoll) => {
                 "Development builds do not poll for updates."
             }
@@ -149,6 +150,55 @@ impl UpdaterStatus {
             }
         }
     }
+}
+
+/// Read the backend's authoritative preference, never a duplicated UI flag.
+/// Sparkle calls must stay on the main thread.
+pub fn automatic_checks_enabled() -> Option<bool> {
+    if !status().can_check_manually() {
+        return None;
+    }
+    if portable::enabled() {
+        return Some(preferences::enabled());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let controller = *CONTROLLER.get()? as *mut std::ffi::c_void;
+        return match unsafe { con_sparkle_automatic_checks(controller) } {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+pub fn set_automatic_checks(enabled: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        status().can_check_manually(),
+        "Update checking is unavailable in this build."
+    );
+    if portable::enabled() {
+        preferences::set(enabled)?;
+        if !enabled {
+            portable::cancel_automatic_check();
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let controller = *CONTROLLER
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("Update checking is unavailable."))?
+            as *mut std::ffi::c_void;
+        anyhow::ensure!(
+            unsafe { con_sparkle_set_automatic_checks(controller, enabled as i32) } == 1,
+            "Could not save the update preference."
+        );
+        return Ok(());
+    }
+    #[cfg(not(target_os = "macos"))]
+    anyhow::bail!("Update checking is unavailable.")
 }
 
 /// Initialize the updater. Call once during app launch, after the

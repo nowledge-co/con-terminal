@@ -254,6 +254,7 @@ pub struct SettingsPanel {
     focus_handle: FocusHandle,
     active_section: SettingsSection,
     content_scroll_handle: ScrollHandle,
+    update_preference_error: Option<String>,
     rendered_section: SettingsSection,
     navigation_motion: [MotionValue; 7],
     section_motion: MotionValue,
@@ -1868,6 +1869,7 @@ impl SettingsPanel {
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             content_scroll_handle: ScrollHandle::new(),
+            update_preference_error: None,
             rendered_section: SettingsSection::General,
             navigation_motion: std::array::from_fn(|index| {
                 MotionValue::new(if index == 0 { 1.0 } else { 0.0 })
@@ -3599,7 +3601,23 @@ impl SettingsPanel {
                                         )
                                         }
                                     }),
-                            ),
+                            )
+                            .child(toggle_row(
+                                "Automatically Check for Updates",
+                                "Check for new releases in the background. Changes apply immediately.",
+                                Switch::new("automatic-update-checks").small()
+                                    .checked(crate::updater::automatic_checks_enabled().unwrap_or(false))
+                                    .disabled(crate::updater::automatic_checks_enabled().is_none())
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        this.update_preference_error = crate::updater::set_automatic_checks(*checked)
+                                            .err().map(|error| error.to_string());
+                                        cx.refresh_windows();
+                                        cx.notify();
+                                    })), theme, mobile,
+                            ))
+                            .children(self.update_preference_error.as_ref().map(|error| div()
+                                .px(rems(1.0)).pb(px(12.0)).text_size(ui_px(theme, 12.0))
+                                .text_color(theme.danger).child(error.clone()))),
                     ),
             );
             if crate::updater::portable::enabled() {
