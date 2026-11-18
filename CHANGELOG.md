@@ -4,7 +4,15 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.184` - 2026-11-18
+## `v0.1.0-beta.185` - 2026-11-18
+
+### Fixed
+
+**Files**
+
+- Scale file and folder names with the UI font size so the file tree matches
+  the Files and Search headings.
+  _(PR [#567](https://github.com/nowledge-co/con-terminal/pull/567) by [@adaiguoguo](https://github.com/adaiguoguo))_
 
 ### Changed
 
