@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::file_icons::{FILE_ICON_FONT_FAMILY, FileIcon, icon_for_path};
-use crate::ui_scale::ui_icon_px;
+use crate::ui_scale::{ui_icon_px, ui_px};
 
 pub(crate) const ROW_HEIGHT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 12.0;
@@ -715,7 +715,8 @@ impl Render for FileTreeView {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(12.0))
+                                .text_size(ui_px(&list_theme, 12.0))
+                                .line_height(ui_px(&list_theme, 16.0))
                                 .text_color(text_color)
                                 .font_family(list_theme.font_family.clone())
                                 .child(name),
