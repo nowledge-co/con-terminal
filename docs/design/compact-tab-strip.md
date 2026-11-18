@@ -31,9 +31,10 @@ configured UI font, while terminal text and code keep their monospace fonts.
   Keep the twelve-point trailing reorder hit region outside the painted tray.
   It must not add blank width to the last tab's visible end.
 - Fill each equal-width hit target with one capsule, inset by two points.
-  Keep its width independent of the name. Within it, the identity slot stays at
-  a fixed eight-point left inset. The title begins six points after the identity
-  slot. The right side reserves the close hit target, its concentric inset and
+  Keep its width independent of the name. Inset the identity slot by three
+  points to bring the icon toward the leading arc. The title starts 34 points
+  from the left, with additional clearance for wider icon stacks. The right side
+  reserves the close hit target, its concentric inset and
   six points of label clearance, even while the close control is hidden.
   This keeps icon and title together rather than distributing them across a
   wide tab. Icons never move when names change; long names truncate without
@@ -134,8 +135,8 @@ focus-restoration and click handlers; resolve stable tab IDs when selecting an
 entry, since tabs can close or reorder while the menu remains open.
 Labels use the UI font at
 11.5 points scaled from the configured UI size, preserving original case.
-The six-point gap groups the icon and label
-without adding padding inside the label itself. Larger UI sizes cap each base
+A stable title start keeps labels aligned as the identity changes.
+Larger UI sizes cap each base
 identity at twenty points; multi-app groups reserve their own width. Hover never
 shifts the slot or label.
 

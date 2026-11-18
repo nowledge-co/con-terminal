@@ -14,8 +14,9 @@ const TAB_SELECTION_INSET: f32 = TOP_BAR_TAB_SELECTION_INSET;
 const TAB_SURFACE_HEIGHT: f32 = TOP_BAR_TAB_HEIGHT - 2.0 * TAB_SELECTION_INSET;
 const TAB_CLOSE_CIRCLE_SIZE: f32 = 14.0;
 const TAB_IDENTITY_LABEL_GAP: f32 = 6.0;
-const TAB_IDENTITY_INSET: f32 = 8.0;
-const TAB_CONTENT_INSET: f32 = TAB_IDENTITY_INSET + TAB_CLOSE_SIZE + TAB_IDENTITY_LABEL_GAP;
+// Bring the icon toward the leading arc while leaving room for stacked cards.
+const TAB_IDENTITY_INSET: f32 = 3.0;
+const TAB_CONTENT_INSET: f32 = 34.0;
 const TAB_TITLE_TRAILING_INSET: f32 =
     TAB_CLOSE_SIZE + TAB_IDENTITY_LABEL_GAP + (TAB_SURFACE_HEIGHT - TAB_CLOSE_SIZE) * 0.5;
 const TAB_TRAILING_DROP_WIDTH: f32 = 12.0;
@@ -1260,7 +1261,9 @@ mod chrome_tests {
                 assert!(icon.right() <= capsule.right());
                 assert_eq!(
                     label.left() - icon.center().x,
-                    px(super::TAB_CLOSE_SIZE * 0.5 + super::TAB_IDENTITY_LABEL_GAP)
+                    px(super::TAB_CONTENT_INSET
+                        - super::TAB_IDENTITY_INSET
+                        - super::TAB_CLOSE_SIZE * 0.5)
                 );
             }
         }
@@ -1654,7 +1657,9 @@ mod chrome_tests {
                 let label = cx.debug_bounds(label_selector).unwrap();
                 assert_eq!(
                     label.left() - identity.right(),
-                    px(super::TAB_IDENTITY_LABEL_GAP)
+                    px(super::TAB_CONTENT_INSET
+                        - super::TAB_IDENTITY_INSET
+                        - super::TAB_CLOSE_SIZE)
                 );
                 assert_eq!(label.left() - surface.left(), px(super::TAB_CONTENT_INSET));
                 assert_eq!(
