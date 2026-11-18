@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.184` - 2026-11-18
+
+### Changed
+
+**Tabs**
+
+- Move horizontal tab icons closer to the left curve, with matching placement
+  for unread indicators and drag previews.
+  _(PR [#568](https://github.com/nowledge-co/con-terminal/pull/568) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.183` - 2026-11-17
 
 ### Fixed
