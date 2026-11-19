@@ -135,11 +135,21 @@ impl ConWorkspace {
     }
 
     pub(super) fn save_session(&self, cx: &App) {
+        if !self.window_close_prepared {
+            self.queue_session_snapshot(false, false, cx);
+        }
+    }
+
+    pub(super) fn flush_session_save(&self, cx: &App) {
+        self.queue_session_snapshot(self.window_close_prepared, true, cx);
+    }
+
+    fn queue_session_snapshot(&self, closed: bool, flush: bool, cx: &App) {
+        let (done, complete) = crossbeam_channel::bounded(1);
         let started = std::time::Instant::now();
-        let session = self.snapshot_session(cx);
-        let history = self.snapshot_global_history();
+        let snapshot = (!self.is_quick_terminal).then(|| self.snapshot_session(cx));
         let elapsed = started.elapsed();
-        if elapsed > std::time::Duration::from_millis(50) {
+        if elapsed > Duration::from_millis(50) {
             log::warn!(
                 target: "con::perf",
                 "session snapshot blocked UI for {:.1}ms (tabs={}, terminal_text={})",
@@ -148,50 +158,30 @@ impl ConWorkspace {
                 self.config.appearance.restore_terminal_text,
             );
         }
-        if let Err(err) = self
-            .session_save_tx
-            .send(SessionSaveRequest::Save(session, history))
-        {
-            log::warn!("Failed to queue session save: {}", err);
+        let request = SessionSaveRequest {
+            window: self.workspace_handle.entity_id(),
+            snapshot,
+            closed: closed && !self.is_quick_terminal,
+            history: Some(self.snapshot_global_history()),
+            done: flush.then_some(done),
+        };
+        if let Err(error) = self.session_save_tx.send(request) {
+            log::warn!("Failed to queue session snapshot: {error}");
+        } else if flush && let Err(error) = complete.recv_timeout(Duration::from_secs(2)) {
+            // An independent write here would overwrite the other windows.
+            log::warn!("Timed out waiting for session snapshot: {error}");
         }
     }
 
-    pub(super) fn flush_session_save(&self, cx: &App) {
-        let session = self.snapshot_session(cx);
-        let history = self.snapshot_global_history();
-        let (done_tx, done_rx) = crossbeam_channel::bounded(1);
-        if let Err(err) = self.session_save_tx.send(SessionSaveRequest::Flush(
-            session.clone(),
-            history.clone(),
-            done_tx,
-        )) {
-            log::warn!("Failed to flush session save queue: {}", err);
-            if let Err(save_err) = session.save() {
-                log::warn!("Failed to save session directly during flush: {}", save_err);
-            }
-            if let Err(save_err) = history.save() {
-                log::warn!(
-                    "Failed to save command history directly during flush: {}",
-                    save_err
-                );
-            }
-            return;
-        }
-
-        if let Err(err) = done_rx.recv_timeout(Duration::from_secs(2)) {
-            log::warn!("Timed out waiting for session save flush: {}", err);
-            if let Err(save_err) = session.save() {
-                log::warn!(
-                    "Failed to save session directly after flush timeout: {}",
-                    save_err
-                );
-            }
-            if let Err(save_err) = history.save() {
-                log::warn!(
-                    "Failed to save command history directly after flush timeout: {}",
-                    save_err
-                );
-            }
+    pub(super) fn remove_session_snapshot(&self) {
+        if let Err(error) = self.session_save_tx.send(SessionSaveRequest {
+            window: self.workspace_handle.entity_id(),
+            snapshot: None,
+            closed: true,
+            history: None,
+            done: None,
+        }) {
+            log::warn!("Failed to remove closed window snapshot: {error}");
         }
     }
 

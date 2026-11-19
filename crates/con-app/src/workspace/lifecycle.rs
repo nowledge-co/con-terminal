@@ -218,19 +218,40 @@ impl ConWorkspace {
         harness.prewarm_input_classification();
         let shell_suggestion_engine = harness.suggestion_engine(180);
         let tab_summary_engine = harness.tab_summary_engine();
-        let session_save_tx = spawn_session_save_worker();
+        if !cx.has_global::<WorkspaceContinuity>() {
+            cx.set_global(WorkspaceContinuity::new());
+        }
+        let owner = cx.weak_entity();
+        let continuity = cx.global_mut::<WorkspaceContinuity>();
+        continuity
+            .workspaces
+            .retain(|workspace| workspace.upgrade().is_some());
+        continuity.workspaces.push(owner.clone());
+        let session_save_tx = continuity.save_tx.clone();
+        let socket_already_owned = continuity
+            .socket_owner
+            .as_ref()
+            .and_then(WeakEntity::upgrade)
+            .is_some();
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let (tab_summary_tx, tab_summary_rx) = crossbeam_channel::unbounded();
         let (skill_scan_tx, skill_scan_rx) = crossbeam_channel::unbounded();
-        let control_socket = match con_core::spawn_control_socket_server(
-            harness.runtime_handle(),
-            control_request_tx,
-        ) {
-            Ok(handle) => Some(handle),
-            Err(err) => {
-                log::error!("Failed to start con control socket: {}", err);
-                None
+        let control_socket = if socket_already_owned {
+            None
+        } else {
+            match con_core::spawn_control_socket_server(
+                harness.runtime_handle(),
+                control_request_tx,
+            ) {
+                Ok(handle) => {
+                    cx.global_mut::<WorkspaceContinuity>().socket_owner = Some(owner);
+                    Some(handle)
+                }
+                Err(err) => {
+                    log::error!("Failed to start con control socket: {err}");
+                    None
+                }
             }
         };
         let model_registry = ModelRegistry::new();
@@ -1038,6 +1059,15 @@ impl ConWorkspace {
             workspace.request_skill_scan_for_cwd(&cwd);
         }
 
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            if let Some(owner) = owner.upgrade() {
+                let workspace = owner.read(cx);
+                if !workspace.window_close_prepared {
+                    workspace.save_session(cx);
+                }
+            }
+        });
         workspace
     }
 

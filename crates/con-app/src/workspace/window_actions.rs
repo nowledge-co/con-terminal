@@ -70,11 +70,21 @@ impl ConWorkspace {
     }
 
     pub(super) fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        let current = cx.entity_id();
+        let windows = cx.global::<WorkspaceContinuity>().workspaces.clone();
+        for workspace in windows {
+            if workspace.entity_id() != current {
+                let _ = workspace.update(cx, |workspace, cx| workspace.prepare_app_exit(cx));
+            }
+        }
         self.prepare_app_exit(cx);
         cx.quit();
     }
 
     pub(crate) fn prepare_app_exit(&mut self, cx: &mut Context<Self>) {
+        if self.window_close_prepared || self.tabs.is_empty() {
+            return;
+        }
         self.cancel_all_sessions();
         self.flush_session_save(cx);
         // Tear down ghostty surfaces before app exit to avoid Metal/NSView crashes.
