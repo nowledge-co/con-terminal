@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.186` - 2026-11-19
+
+### Fixed
+
+**macOS**
+
+- Restore linked Codex and Claude Code sessions from all open windows after
+  quitting con. Their tabs reopen together, preserving panes, stacked terminals
+  and the original conversations.
+  _(PR [#569](https://github.com/nowledge-co/con-terminal/pull/569) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.185` - 2026-11-18
 
 ### Fixed
