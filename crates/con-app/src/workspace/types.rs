@@ -333,7 +333,10 @@ pub(super) struct PendingControlAgentRequest {
     pub(super) response_tx: tokio::sync::oneshot::Sender<ControlResult>,
 }
 
-pub(super) enum SessionSaveRequest {
-    Save(Session, GlobalHistoryState),
-    Flush(Session, GlobalHistoryState, crossbeam_channel::Sender<()>),
+pub(super) struct SessionSaveRequest {
+    pub window: gpui::EntityId,
+    pub snapshot: Option<Session>,
+    pub closed: bool,
+    pub history: Option<GlobalHistoryState>,
+    pub done: Option<crossbeam_channel::Sender<()>>,
 }

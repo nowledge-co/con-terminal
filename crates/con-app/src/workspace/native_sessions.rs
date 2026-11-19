@@ -111,29 +111,24 @@ impl ConWorkspace {
             .map_err(|_| ControlError::invalid_params("Invalid terminal context"))?;
         if self.native_terminal(origin).is_none() {
             let destination = cx
-                .try_global::<super::session_transfer::TransferredTerminalOwners>()
-                .and_then(|owners| owners.terminals.get(&origin))
-                .cloned();
-            if let Some(destination) = destination
-                && destination.entity_id() != cx.entity_id()
-            {
-                return destination
-                    .update(cx, |workspace, cx| {
-                        workspace.apply_native_session_report(
-                            &origin.to_string(),
-                            sequence,
-                            reference,
-                            error,
-                            expected_session_id,
-                            started,
-                            cx,
-                        )
-                    })
-                    .unwrap_or_else(|_| {
-                        Err(ControlError::invalid_params(
-                            "The originating terminal no longer exists",
-                        ))
-                    });
+                .global::<WorkspaceContinuity>()
+                .workspaces
+                .iter()
+                .filter(|owner| owner.entity_id() != cx.entity_id())
+                .filter_map(WeakEntity::upgrade)
+                .find(|owner| owner.read(cx).native_terminal(origin).is_some());
+            if let Some(destination) = destination {
+                return destination.update(cx, |workspace, cx| {
+                    workspace.apply_native_session_report(
+                        &origin.to_string(),
+                        sequence,
+                        reference,
+                        error,
+                        expected_session_id,
+                        started,
+                        cx,
+                    )
+                });
             }
         }
         let (_, terminal) = self.native_terminal(origin).ok_or_else(|| {
@@ -259,6 +254,23 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn native_claim_in_use(&self, key: &str, requesting_origin: uuid::Uuid, cx: &App) -> bool {
+        let Some(owner) = self.native_session_claims.get(key).copied() else {
+            return false;
+        };
+        if owner == requesting_origin || self.window_close_prepared {
+            return false;
+        }
+        let Some((tab, terminal)) = self.native_terminal(owner) else {
+            return false;
+        };
+        if terminal.native_agent.borrow().phase == NativeAgentPhase::Resuming {
+            return true;
+        }
+        let (_, runtime) = self.observe_terminal_runtime_for_tab(tab, &terminal, 20, cx);
+        !con_agent::control::PaneControlState::from_runtime(&runtime).allows_visible_shell_exec()
+    }
+
     pub(super) fn request_native_session_resume(
         &mut self,
         terminal: TerminalPane,
@@ -286,19 +298,19 @@ impl ConWorkspace {
         };
         reference.validate().map_err(ControlError::invalid_params)?;
         let key = session_key(&reference);
-        if let Some(owner) = self.native_session_claims.get(&key).copied()
-            && owner != origin
-            && let Some((tab, peer)) = self.native_terminal(owner)
+        let current = cx.entity_id();
+        if self.native_claim_in_use(&key, origin, cx)
+            || cx
+                .global::<WorkspaceContinuity>()
+                .workspaces
+                .iter()
+                .filter(|window| window.entity_id() != current)
+                .filter_map(WeakEntity::upgrade)
+                .any(|window| window.read(cx).native_claim_in_use(&key, origin, cx))
         {
-            let pending = peer.native_agent.borrow().phase == NativeAgentPhase::Resuming;
-            let (_, runtime) = self.observe_terminal_runtime_for_tab(tab, &peer, 20, cx);
-            let shell = con_agent::control::PaneControlState::from_runtime(&runtime)
-                .allows_visible_shell_exec();
-            if pending || !shell {
-                return Err(ControlError::invalid_params(
-                    "This native conversation is already resuming or active in another surface",
-                ));
-            }
+            return Err(ControlError::invalid_params(
+                "This native conversation is already resuming or active in another surface",
+            ));
         }
         self.native_session_claims.insert(key, origin);
         {

@@ -1,15 +1,6 @@
 //! Dragging changes layout ownership, never terminal/process ownership.
 use super::*;
 
-/// Native shell integration retains its original socket address and terminal
-/// context across a move. Route that exact context to its current owner.
-#[derive(Default)]
-pub(super) struct TransferredTerminalOwners {
-    pub terminals: HashMap<uuid::Uuid, WeakEntity<ConWorkspace>>,
-    pub workspaces: Vec<WeakEntity<ConWorkspace>>,
-}
-impl Global for TransferredTerminalOwners {}
-
 /// A release is committed only once, after the pointer has crossed the outer
 /// window boundary. Unclaimed in-window releases resolve their final split target.
 #[cfg(any(target_os = "macos", test))]
@@ -257,10 +248,7 @@ impl ConWorkspace {
         if self.control_socket.is_none() {
             return;
         }
-        let owners = cx
-            .try_global::<TransferredTerminalOwners>()
-            .map(|r| r.workspaces.clone())
-            .unwrap_or_default();
+        let owners = cx.global::<WorkspaceContinuity>().workspaces.clone();
         for owner in owners {
             if owner.entity_id() == cx.entity_id() {
                 continue;
@@ -277,15 +265,13 @@ impl ConWorkspace {
                 })
                 .unwrap_or(false);
             if handed {
-                // The closing source flushes its own snapshot synchronously.
-                // Persist the surviving destination afterwards, not an empty
-                // replacement tab from the now-closed source window.
-                cx.defer(move |cx| {
-                    let _ = owner.update(cx, |destination, cx| destination.flush_session_save(cx));
-                });
-                break;
+                cx.global_mut::<WorkspaceContinuity>().socket_owner = Some(owner);
+                return;
             }
         }
+        // Release the endpoint before a replacement window can be opened.
+        self.control_socket = None;
+        cx.global_mut::<WorkspaceContinuity>().socket_owner = None;
     }
 
     pub(super) fn clear_session_drag(&mut self, cx: &mut Context<Self>) {
@@ -661,9 +647,6 @@ impl ConWorkspace {
             self.take_pane_tab(index, pane.expect("pane transfer"))
                 .expect("validated pane")
         };
-        if close_source {
-            self.flush_session_save(cx);
-        }
         let origins = incoming
             .pane_tree
             .all_surface_terminals()
@@ -700,18 +683,6 @@ impl ConWorkspace {
                 workspace.agent_panel.update(cx, |panel_view, cx| {
                     panel_view.swap_state(panel, cx);
                 });
-                if !cx.has_global::<TransferredTerminalOwners>() {
-                    cx.set_global(TransferredTerminalOwners::default());
-                }
-                let owner = cx.weak_entity();
-                cx.global_mut::<TransferredTerminalOwners>()
-                    .workspaces
-                    .push(owner.clone());
-                for origin in &origins {
-                    cx.global_mut::<TransferredTerminalOwners>()
-                        .terminals
-                        .insert(*origin, owner.clone());
-                }
                 for (key, origin) in &claims {
                     workspace.native_session_claims.insert(key.clone(), *origin);
                 }
@@ -746,6 +717,7 @@ impl ConWorkspace {
         if close_source {
             self.handoff_transfer_control_socket(cx);
             self.window_close_prepared = true;
+            self.remove_session_snapshot();
             // Only the fresh replacement remains; migrated terminals are no
             // longer reachable from the closing workspace's shutdown path.
             for tab in &self.tabs {

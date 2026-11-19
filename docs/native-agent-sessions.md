@@ -106,6 +106,13 @@ exact saved conversation, never `--last`, and prevents concurrent automatic
 resume of the same native identity. It sends no prompt and replays no tool call.
 The agent retains its normal permission and trust flow.
 
+On macOS, native session reports reach the terminal that launched the agent,
+including terminals in a second con window and terminals moved between windows.
+When quitting with several ordinary windows open, con saves their tabs together.
+On restart, those tabs reopen in one window with their pane and surface layouts
+intact. A window explicitly closed while another ordinary window remains open
+is removed from the saved layout.
+
 A restored native terminal starts with the native conversation UI instead of
 replaying an old terminal screen over it. Hidden surfaces remain hidden until
 the current canvas commits their real geometry.
