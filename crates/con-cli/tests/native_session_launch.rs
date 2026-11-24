@@ -746,3 +746,132 @@ fn cursor_installer_uses_native_xdg_store_without_touching_default_profile() {
     assert!(!fixture.home.join(".cursor/hooks.json").exists());
     assert!(!fixture.launcher.exists());
 }
+
+#[test]
+fn resume_passes_exact_codex_id_and_preserves_claude_profile_selection() {
+    let fixture = Fixture::new();
+    let id = uuid::Uuid::new_v4().to_string();
+    let origin = uuid::Uuid::new_v4().to_string();
+    let default_store = fixture.home.join(".claude");
+    fs::create_dir(&default_store).unwrap();
+    for store in [&default_store, &fixture.profile] {
+        fs::write(store.join(format!("{id}.jsonl")), "").unwrap();
+    }
+    for agent in ["codex", "claude"] {
+        let executable = fixture.native_bin.join(agent);
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+printf 'profile=%s\n' "${CLAUDE_CONFIG_DIR-unset}"
+printf 'codex_home=%s\n' "$CODEX_HOME"
+printf 'arg=%s\n' "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(executable, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let run = |agent: &str,
+               store: &std::path::Path,
+               extra: &[&str],
+               inherited: Option<&std::path::Path>| {
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_con-cli"));
+        cmd.arg("--socket");
+        cmd.arg(fixture.root.join("unused.sock"));
+        cmd.args([
+            "native-session",
+            "resume",
+            "--origin",
+            &origin,
+            "--agent",
+            agent,
+            "--session-id",
+            &id,
+            "--cwd",
+        ]);
+        cmd.arg(&fixture.home);
+        cmd.arg("--config-dir");
+        cmd.arg(store);
+        cmd.args(extra);
+        cmd.env("HOME", &fixture.home);
+        cmd.env("CON_TERMINAL_CONTEXT", &origin);
+        cmd.env("PATH", &fixture.native_bin);
+        cmd.env_remove("CLAUDE_CONFIG_DIR");
+        if let Some(path) = inherited {
+            cmd.env("CLAUDE_CONFIG_DIR", path);
+        }
+        let mut child = pair.slave.spawn_command(cmd).unwrap();
+        drop(pair.slave);
+        let mut output = String::new();
+        let _ = pair
+            .master
+            .try_clone_reader()
+            .unwrap()
+            .read_to_string(&mut output);
+        (
+            child.wait().unwrap().success(),
+            output.replace("\r\n", "\n"),
+        )
+    };
+    let (ok, output) = run("codex", &fixture.profile, &[], None);
+    assert!(ok, "{output}");
+    assert!(
+        output.contains(&format!("arg=--no-daemon\narg=resume\narg={id}\n")),
+        "{output}"
+    );
+    assert!(output.contains(&format!(
+        "codex_home={}\n",
+        fixture.profile.canonicalize().unwrap().display()
+    )));
+    let (ok, output) = run(
+        "codex",
+        &fixture.profile,
+        &["--transcript-path", "/missing.jsonl"],
+        None,
+    );
+    assert!(!ok && !output.contains("arg="), "{output}");
+
+    let relative_default = PathBuf::from(".claude");
+    for (store, recorded, inherited, expected) in [
+        (
+            &default_store,
+            None,
+            Some(&relative_default),
+            Some(&relative_default),
+        ),
+        (&default_store, None, None, None),
+        (
+            &default_store,
+            None,
+            Some(&default_store),
+            Some(&default_store),
+        ),
+        (&default_store, Some("false"), Some(&fixture.profile), None),
+        (&default_store, Some("true"), None, Some(&default_store)),
+        (&fixture.profile, None, None, Some(&fixture.profile)),
+    ] {
+        let transcript = store.join(format!("{id}.jsonl"));
+        let mut extra = vec!["--transcript-path", transcript.to_str().unwrap()];
+        if let Some(value) = recorded {
+            extra.extend(["--claude-config-dir-set", value]);
+        }
+        let (ok, output) = run("claude", store, &extra, inherited.map(|p| p.as_path()));
+        assert!(ok, "{output}");
+        let expected = expected.map(|p| {
+            if inherited == Some(p) {
+                p.clone()
+            } else {
+                p.canonicalize().unwrap()
+            }
+        });
+        let profile = expected.as_ref().map_or("unset", |p| p.to_str().unwrap());
+        assert!(output.contains(&format!("profile={profile}\n")), "{output}");
+        assert!(
+            output.contains(&format!("arg=--resume\narg={id}\n")),
+            "{output}"
+        );
+    }
+    let (ok, output) = run("claude", &default_store, &[], None);
+    assert!(!ok && !output.contains("arg="), "{output}");
+}
