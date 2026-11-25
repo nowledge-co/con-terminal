@@ -54,6 +54,10 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// action enum adds SET_WINDOW_THEME before the bridge actions. See
 /// docs/impl/libghostty-vt-1.0-upgrade.md for the migration and acceptance.
 ///
+/// 2026-11-25 bump: libghostty-vt 1.0.2 (`vt-1.0.2`, `573c4a21e0`)
+/// plus the unchanged scoped embedding bridge. Public VT declarations and
+/// the upstream full embedding header are unchanged. Zig remains 0.17.0.
+///
 /// The VT C API is stable from 1.0; the full macOS embedding API is not.
 /// Future bumps must update the handwritten FFI bindings as needed, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
@@ -61,7 +65,7 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 // Temporary public-fork exception authorized on 2026-10-09; #444 tracks
 // replacement with official upstream. This revision includes IO-thread
 // ingress and close/shutdown/incarnation fixes, not just the initial bridge.
-const GHOSTTY_REV: &str = "9a97075f932b6c0d524618ff09dc4d93a41aba2d";
+const GHOSTTY_REV: &str = "59b7e8731d59e6dc4aa3593aa051a2f8d939905c";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";

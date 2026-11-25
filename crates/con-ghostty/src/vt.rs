@@ -1,6 +1,6 @@
 //! Shared `libghostty-vt` FFI bindings + render-state snapshot.
 //!
-//! Matches the stable libghostty-vt 1.0.0 C API (`vt-1.0.0`).
+//! Matches the stable libghostty-vt 1.0 C API (currently `vt-1.0.2`).
 //! Keep consumed enum values, fixed layouts and function contracts aligned
 //! with the pinned headers and the linked runtime ABI manifest.
 //! Key lifecycle:
@@ -3649,8 +3649,7 @@ impl VtScreen {
     }
 
     /// Update the renderer geometry used for cell and SGR-pixel mouse formats.
-    /// Ghostty clears motion deduplication whenever this option is set, so
-    /// compare the complete geometry before crossing the FFI boundary.
+    /// Skip the FFI call when the renderer reports unchanged geometry.
     pub fn set_mouse_geometry(
         &self,
         screen_width_px: u32,
@@ -6446,7 +6445,7 @@ mod tests {
         for (name, key, expected) in [
             ("VERSION_MAJOR", 6, 1),
             ("VERSION_MINOR", 7, 0),
-            ("VERSION_PATCH", 8, 0),
+            ("VERSION_PATCH", 8, 2),
         ] {
             assert_eq!(
                 types["GhosttyBuildInfo"]["values"][name].as_i64(),
@@ -8211,6 +8210,22 @@ mod tests {
             .expect("keep equal mouse geometry");
         assert!(!screen.send_mouse_event(drag).unwrap().output_written);
         assert_eq!(writes.lock().len(), 1);
+    }
+
+    #[test]
+    fn mouse_encoder_deduplicates_same_cell_motion_across_terminal_output() {
+        let (screen, writes) = mouse_test_screen(80, 24);
+        screen.feed(b"\x1b[?1002h\x1b[?1006h");
+        let drag = test_mouse_event(VtMouseAction::Motion, Some(VtMouseButton::Left), 5.0, 5.0);
+
+        assert!(screen.send_mouse_event(drag).unwrap().output_written);
+        screen.feed(b"redraw");
+        assert!(!screen.send_mouse_event(drag).unwrap().output_written);
+
+        let next_cell =
+            test_mouse_event(VtMouseAction::Motion, Some(VtMouseButton::Left), 15.0, 5.0);
+        assert!(screen.send_mouse_event(next_cell).unwrap().output_written);
+        assert_eq!(writes.lock().len(), 2);
     }
 
     #[test]
