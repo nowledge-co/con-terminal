@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.187` - 2026-11-25
+## `v0.1.0-beta.188` - 2026-11-25
 
 ### Fixed
 
@@ -15,6 +15,11 @@ con is still pre-release, so entries may group related beta work while the produ
   engine also preserves soft wraps and prompt markers when rows move, and
   keeps Kitty images visible while their replacements arrive.
   _(PR [#571](https://github.com/nowledge-co/con-terminal/pull/571) by [@wey-gu](https://github.com/wey-gu))_
+
+**macOS**
+
+- Restore Codex conversations by their saved session ID when Codex omits the transcript path. Claude Code recovery now preserves the original configuration selection, including the API-key approval associated with it.
+  _(PR [#570](https://github.com/nowledge-co/con-terminal/pull/570) by [@adaiguoguo](https://github.com/adaiguoguo))_
 
 ## `v0.1.0-beta.186` - 2026-11-19
 
