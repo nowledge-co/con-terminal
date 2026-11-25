@@ -76,6 +76,8 @@ pub enum NativeSessionCommand {
         config_dir: PathBuf,
         #[arg(long)]
         transcript_path: Option<PathBuf>,
+        #[arg(long)]
+        claude_config_dir_set: Option<bool>,
     },
 }
 
@@ -185,6 +187,8 @@ fn hook_reference(
             .into(),
         cwd: hook_cwd(agent, input)?,
         config_dir: directory,
+        claude_config_dir_set: (agent == "claude")
+            .then(|| std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|value| !value.is_empty())),
         transcript_path: input
             .get("transcript_path")
             .and_then(Value::as_str)
@@ -345,6 +349,7 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
             cwd,
             config_dir,
             transcript_path,
+            claude_config_dir_set,
         } => {
             ensure!(
                 std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
@@ -360,6 +365,7 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
                 cwd,
                 config_dir,
                 transcript_path,
+                claude_config_dir_set,
                 title: None,
                 viewport_pixels: None,
             };
@@ -405,27 +411,23 @@ pub fn run(command: NativeSessionCommand, socket: &Path, json_output: bool) -> R
     Ok(())
 }
 
-fn resume(reference: &NativeAgentSession, started: impl FnOnce() -> Result<()>) -> Result<()> {
-    reference.validate().map_err(anyhow::Error::msg)?;
-    ensure!(
-        reference.cwd.is_dir(),
-        "The saved working directory is unavailable"
-    );
-    ensure!(
-        reference.config_dir.is_dir(),
-        "The saved native configuration directory is unavailable"
-    );
-    let transcript = reference.transcript_path.as_ref().context(
-        "No exact native history path was recorded; link the session again before restoring",
-    )?;
+fn validate_resume_history(reference: &NativeAgentSession, store: &Path) -> Result<()> {
+    let Some(transcript) = &reference.transcript_path else {
+        // Codex can resolve a UUID from its native store without a rollout path.
+        // Its explicit resume command fails if that UUID cannot be found.
+        ensure!(
+            reference.agent == "codex",
+            "No exact native history path was recorded; link the session again before restoring"
+        );
+        return Ok(());
+    };
     ensure!(
         transcript.is_file(),
         "The native history file is unavailable; no new session was started"
     );
     let transcript = transcript.canonicalize()?;
-    let store = reference.config_dir.canonicalize()?;
     ensure!(
-        transcript.starts_with(&store),
+        transcript.starts_with(store),
         "The native history is outside the recorded agent store"
     );
     ensure!(
@@ -444,16 +446,66 @@ fn resume(reference: &NativeAgentSession, started: impl FnOnce() -> Result<()>) 
             })),
         "The native history path does not match the exact saved session ID"
     );
+    Ok(())
+}
+
+fn configure_resume_store(
+    command: &mut Command,
+    reference: &NativeAgentSession,
+    store: &Path,
+) -> Result<()> {
+    let key = reference.config_env().map_err(anyhow::Error::msg)?;
+    if reference.agent == "claude" {
+        let default_store =
+            dirs::home_dir().and_then(|home| home.join(".claude").canonicalize().ok());
+        let is_default = default_store.as_deref() == Some(store);
+        let inherited = std::env::var_os(key).filter(|value| !value.is_empty());
+        let matching_override = inherited.as_deref().filter(|value| {
+            reference.cwd.join(value).canonicalize().ok().as_deref() == Some(store)
+        });
+        // For a legacy link, prefer the shell's matching explicit profile.
+        // Otherwise recover the default store with Claude's default semantics.
+        let explicit = reference
+            .claude_config_dir_set
+            .unwrap_or(!is_default || matching_override.is_some());
+        if !explicit {
+            ensure!(
+                is_default,
+                "Claude's default configuration directory no longer matches the saved session"
+            );
+            command.env_remove(key);
+            return Ok(());
+        }
+        command.env(key, matching_override.unwrap_or(store.as_os_str()));
+    } else {
+        command.env(key, store);
+    }
+    Ok(())
+}
+
+fn resume(reference: &NativeAgentSession, started: impl FnOnce() -> Result<()>) -> Result<()> {
+    reference.validate().map_err(anyhow::Error::msg)?;
+    ensure!(
+        reference.cwd.is_dir(),
+        "The saved working directory is unavailable"
+    );
+    ensure!(
+        reference.config_dir.is_dir(),
+        "The saved native configuration directory is unavailable"
+    );
+    let store = reference.config_dir.canonicalize()?;
+    validate_resume_history(reference, &store)?;
     let argv = reference.resume_argv().map_err(anyhow::Error::msg)?;
     eprintln!(
         "Resuming {} conversation in {}",
         reference.label(),
         reference.cwd.display()
     );
-    let mut child = Command::new(&argv[0])
+    let mut command = Command::new(&argv[0]);
+    configure_resume_store(&mut command, reference, &store)?;
+    let mut child = command
         .args(&argv[1..])
         .current_dir(&reference.cwd)
-        .env(reference.config_env().map_err(anyhow::Error::msg)?, &store)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

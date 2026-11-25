@@ -457,6 +457,9 @@ impl ConWorkspace {
                 "--config-dir".into(),
                 reference.config_dir.to_string_lossy().into_owned(),
             ];
+            if let Some(explicit) = reference.claude_config_dir_set {
+                args.extend(["--claude-config-dir-set".into(), explicit.to_string()]);
+            }
             if let Some(path) = &reference.transcript_path {
                 args.extend([
                     "--transcript-path".into(),

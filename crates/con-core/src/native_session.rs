@@ -73,6 +73,10 @@ pub struct NativeAgentSession {
     pub cwd: PathBuf,
     /// The native agent's own store/config namespace, never a copied transcript.
     pub config_dir: PathBuf,
+    /// Claude selects a different global config when CLAUDE_CONFIG_DIR is set,
+    /// even if its value is the default directory. Older links lack this bit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_config_dir_set: Option<bool>,
     #[serde(default)]
     pub transcript_path: Option<PathBuf>,
     /// Last confirmed terminal pixel size, only for hidden startup before layout.
@@ -175,6 +179,7 @@ mod tests {
             session_id: uuid::Uuid::new_v4().to_string(),
             cwd: root.join("worker ' $(nope)"),
             config_dir: root.join("native-config"),
+            claude_config_dir_set: None,
             title: None,
             transcript_path: None,
             viewport_pixels: None,

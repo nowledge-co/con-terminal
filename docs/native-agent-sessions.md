@@ -75,7 +75,14 @@ fallback is respected when `CURSOR_CONFIG_DIR` is unset. Qwen histories must rem
 at recovery. Unsupported or missing history never falls back to a recent session.
 
 SessionStart links the exact native session ID, working directory, native store
-and history path to that surface. It does not collect prompt text, credentials
+and any reported history path to that surface. When Codex omits the path,
+con passes the exact saved UUID to native Codex for lookup in the recorded
+store. For Claude, con preserves whether the configuration directory was
+explicitly set, since this affects global settings and API-key approval.
+For older Claude links to the default directory, con uses default settings
+unless the shell explicitly selects that same directory.
+
+con does not collect prompt text, credentials
 or transcripts into con's layout file. The native agent owns its conversation
 history. OSC 7501 activity reports and process names do not establish this link.
 

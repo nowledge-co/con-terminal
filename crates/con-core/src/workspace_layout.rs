@@ -1206,6 +1206,7 @@ mod tests {
                             session_id: "private-native-id".into(),
                             cwd: std::env::temp_dir(),
                             config_dir: std::env::temp_dir().join("private-native-store"),
+                            claude_config_dir_set: None,
                             transcript_path: None,
                             viewport_pixels: None,
                             title: None,
