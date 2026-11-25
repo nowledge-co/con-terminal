@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.187` - 2026-11-25
+
+### Fixed
+
+**Terminal**
+
+- Upgrade to libghostty-vt 1.0.2. Mouse-tracking TUIs on Windows and Linux
+  receive fewer redundant motion events during redraws. The shared terminal
+  engine also preserves soft wraps and prompt markers when rows move, and
+  keeps Kitty images visible while their replacements arrive.
+  _(PR [#571](https://github.com/nowledge-co/con-terminal/pull/571) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.186` - 2026-11-19
 
 ### Fixed
