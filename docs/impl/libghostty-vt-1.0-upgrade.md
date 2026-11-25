@@ -3,6 +3,23 @@
 Tracker: [#548](https://github.com/nowledge-co/con-terminal/issues/548).
 Integration: [PR #549](https://github.com/nowledge-co/con-terminal/pull/549).
 
+## VT 1.0.2 follow-up
+
+con now pins [`vt-1.0.2`](https://github.com/ghostty-org/ghostty/releases/tag/vt-1.0.2)
+(`573c4a21e02311ae87844af26b6a7a179f82858e`) plus the same scoped
+embedding bridge at public `wey-gu/ghostty@59b7e8731d59e6dc4aa3593aa051a2f8d939905c`.
+The fork diff from the official tag matches the existing 1.0.0 bridge.
+[#444](https://github.com/nowledge-co/con-terminal/issues/444) still tracks
+upstream replacement. Both backends use this pin and Zig 0.17.0.
+
+Public declarations are unchanged. The portable regression test verifies
+that resynchronizing the mouse encoder after terminal output preserves
+same-cell deduplication and still delivers the first motion in another cell.
+Keep con's geometry cache to avoid unnecessary calls. The official Windows
+packages do not change con's static source-build path.
+
+The sections below record the original 1.0.0 integration.
+
 ## Source and scope
 
 The official release is **libghostty-vt 1.0.0**, tag `vt-1.0.0`, peeled commit
