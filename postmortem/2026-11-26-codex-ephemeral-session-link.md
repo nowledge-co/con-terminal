@@ -1,21 +1,48 @@
-# Codex 临时会话覆盖终端恢复绑定
+# A temporary Codex thread replaced a pane's saved conversation
 
-## 现象
+## What happened
 
-一次终端恢复使用了 Codex 运行过的 UUID。原生会话索引和历史库均查不到该 UUID，Codex 因此拒绝恢复。现有日志无法确认用户当时触发了哪项操作。
+After a restart, Con tried to resume a UUID that Codex had used earlier. The
+UUID was absent from both the native session index and the history store, so
+Codex refused to resume it. The logs did not identify the action that triggered
+the original incident. We later reproduced the failure with `/recap`.
 
-## 原因
+## Cause
 
-Con 将无 transcript 路径的 SessionStart 直接保存为可恢复会话。Codex 0.172 的持久化分页历史和临时线程都能产生这种事件。临时线程在同一终端上报时，原有绑定会被覆盖。
+Con treated a Codex `SessionStart` event without a transcript path as a
+resumable conversation. Both persistent conversations with paginated history
+and temporary threads can omit the path. When a temporary thread reported
+its UUID in the same terminal, Con replaced the pane's saved conversation.
 
-## 修复与验证
+## Fix
 
-在记录无路径 hook 时，只探测原生存储中该 UUID 对应的写锁。持久化线程在 hook 执行期间持有独占锁，临时线程跳过原生历史写入器初始化。检查不枚举目录，也不读取对话。旧绑定继续按已保存的 UUID 交给 Codex 恢复。
+When the hook omits the path, con-cli checks the writer lock for the reported
+UUID in the recorded native store. A persistent local thread holds an exclusive
+lock while the hook runs. A temporary thread skips history-writer initialization.
+The probe opens the existing lock file read-only and never waits for a lock.
+It neither scans the store nor reads the conversation. At restore time, Con
+continues to pass the saved UUID to Codex.
 
-回归测试覆盖正在写入的分页会话、同一存储中的另一条临时会话、已释放的锁以及退出后的恢复校验。升级 Codex 时，应重新验证正常会话与临时会话在 hook 执行期间的锁行为。
+## Verification
 
-在 macOS 的隔离配置中，用 Codex CLI 0.172.0 的 TUI 完成一轮对话，再输入 `/recap`。模型响应由本机测试服务提供。旧版 con-cli 和修复版接收同一组 SessionStart 事件。旧版上报了主会话及后续临时线程的 UUID，修复版只上报主会话。分别执行 `codex resume <UUID>`，主会话显示原回答，摘要线程返回 `No saved session found`。
+In an isolated macOS profile, we completed a turn in the Codex CLI 0.172.0 TUI
+and ran `/recap`. A local test server supplied the model responses. Both
+versions of con-cli received the same native hook events. The old helper
+reported the main UUID and subsequent temporary UUIDs. The patched helper
+reported only the main UUID. Running `codex resume <UUID>` reopened the
+original reply for the main conversation. The recap thread returned
+`No saved session found`.
 
-这次 TUI 测试中，Codex 为主会话提供了 transcript 路径。为单独验证 #570 的兼容性，第二轮在 hook 输入中移除了该字段，保留原生写锁和历史存储，得到相同的上报和恢复结果。
+Codex supplied a transcript path for the main conversation in that run. To
+check compatibility with #570, we repeated the test with that field removed
+from the hook input, keeping the real writer lock and history store. The
+patched helper still reported the main UUID, and Codex reopened the reply.
 
-另一次 Con 图形应用测试在同一窗格产生持久和临时线程，核对了磁盘布局保存的 UUID，并在重启后确认原对话重新显示。
+In a separate Con GUI test, we started a persistent thread and a temporary
+thread in the same pane. The layout on disk retained the persistent UUID,
+and the original conversation reappeared after restart.
+
+The regression test checks the exact UUID against a live writer, a temporary
+thread in the same store, and a released lock file. It also checks resume
+validation after the writer exits. Recheck the native lock behavior on Codex
+upgrades because the lock layout is part of its local store implementation.
