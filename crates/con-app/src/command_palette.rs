@@ -62,6 +62,12 @@ const CLOSE_SURFACE_SHORTCUT: &str = "secondary-alt-shift-w";
 const CLOSE_SURFACE_SHORTCUT: &str = "alt-shift-x";
 
 const PALETTE_ACTIONS: &[PaletteAction] = &[
+    PaletteAction {
+        id: "review-program-resume",
+        label: "Review Program Resume…",
+        shortcut: "",
+        category: "Terminal",
+    },
     #[cfg(target_os = "macos")]
     PaletteAction {
         id: "handoff-agent",
@@ -296,6 +302,7 @@ pub struct CommandPalette {
     ui_opacity: f32,
     overlay_motion: MotionValue,
     handoff_enabled: bool,
+    program_resume_available: bool,
 }
 
 /// Emitted when the user selects an action
@@ -328,6 +335,7 @@ impl CommandPalette {
             ui_opacity: 0.90,
             overlay_motion: MotionValue::new(0.0),
             handoff_enabled: true,
+            program_resume_available: false,
         }
     }
 
@@ -335,6 +343,10 @@ impl CommandPalette {
     /// config every time the palette opens.
     pub fn set_handoff_enabled(&mut self, enabled: bool) {
         self.handoff_enabled = enabled;
+    }
+
+    pub fn set_program_resume_available(&mut self, available: bool) {
+        self.program_resume_available = available;
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -388,7 +400,12 @@ impl CommandPalette {
 
     fn filtered_actions(&self) -> Vec<&PaletteAction> {
         let handoff_enabled = self.handoff_enabled;
-        let available = |action: &&PaletteAction| handoff_enabled || action.id != "handoff-agent";
+        let program_resume_available = self.program_resume_available;
+        let available = |action: &&PaletteAction| match action.id {
+            "handoff-agent" => handoff_enabled,
+            "review-program-resume" => program_resume_available,
+            _ => true,
+        };
         if self.query_text.is_empty() {
             return PALETTE_ACTIONS.iter().filter(available).collect();
         }

@@ -109,7 +109,10 @@ the `cargo w*` aliases in `.cargo/config.toml` to produce `con-app.exe` because
   OSC 7501 has a maintainer-authorized temporary exception (2026-10-09):
   Ghostty may use the public `wey-gu/ghostty` fork at the immutable
   revision in `con-ghostty/build.rs`. Track official replacement in #444;
-  this exception does not permit local patches or unrelated fork dependencies.
+  This exception was extended on 2026-11-26 for OSC 7577 to cover complete
+  unknown OSC framing and the bounded full-embedding delivery callback.
+  Track replacement for both protocols in #444. This does not authorize local
+  patches or unrelated fork dependencies.
   Native macOS presentation has a separate maintainer-authorized temporary
   exception (2026-10-10): a public GPUI fork may carry the reviewed frame-scoped
   presentation fix at an immutable revision. Preserve the compatible snapshot

@@ -2132,6 +2132,9 @@ impl Render for ConWorkspace {
         if let Some(confirmation) = self.render_agent_close_confirmation(window, cx) {
             root = root.child(confirmation);
         }
+        if let Some(review) = self.render_program_resume_review(window, cx) {
+            root = root.child(review);
+        }
 
         #[cfg(target_os = "linux")]
         {

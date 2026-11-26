@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,6 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use con_terminal::program_resume::{
+    PtyResumeEnvironment, ReportAction, ResumeOwner, ResumeReport, TERMINAL_CONTEXT_ENV, TOKEN_ENV,
+};
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
@@ -97,6 +101,8 @@ pub struct LinuxPtyOptions {
     pub command_args: Option<Vec<OsString>>,
     pub size: SurfaceSize,
     pub initial_output: Option<Vec<u8>>,
+    /// Enable the OSC 7577 receiver for a local, unprivileged PTY.
+    pub program_resume: bool,
     pub wake_generation: Option<Arc<AtomicU64>>,
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
@@ -121,6 +127,7 @@ impl Default for LinuxPtyOptions {
                 cell_height_px: 0,
             },
             initial_output: None,
+            program_resume: false,
             wake_generation: None,
             wake_callback: None,
             theme: None,
@@ -286,6 +293,8 @@ fn write_all_cancellable(
 
 pub struct LinuxPtySession {
     backend: LinuxPtyBackend,
+    program_resume_root: Option<con_process::ProcessIdentity>,
+    program_resume_context: Option<uuid::Uuid>,
     input: LinuxPtyInput,
     input_worker: PtyWriteWorker,
     shared: Arc<SessionShared>,
@@ -721,6 +730,29 @@ impl LinuxPtySession {
         self.shared.screen.progress()
     }
 
+    pub fn program_resume_context(&self) -> Option<uuid::Uuid> {
+        self.program_resume_context
+    }
+
+    pub(crate) fn take_program_resume_reader(&self) -> Option<crate::ProgramResumeRead> {
+        let root = self.program_resume_root.clone()?;
+        let reports = match self.shared.screen.take_program_resume_reports() {
+            Ok(reports) if reports.is_empty() => return None,
+            Ok(reports) => reports,
+            Err(error) => return Some(Box::new(move || Err(error))),
+        };
+        let group = self.foreground_process_group_id();
+        Some(Box::new(move || {
+            verify_resume_reports(root, group, reports)
+        }))
+    }
+
+    #[cfg(test)]
+    fn take_verified_program_resume_reports(&self) -> Result<Vec<crate::VerifiedResumeReport>> {
+        self.take_program_resume_reader()
+            .map_or_else(|| Ok(Vec::new()), |read| read())
+    }
+
     pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
         self.shared.screen.take_program_events()
     }
@@ -949,6 +981,48 @@ impl Drop for LinuxPtySession {
     }
 }
 
+fn verify_resume_reports(
+    root: con_process::ProcessIdentity,
+    group: Option<u64>,
+    reports: Vec<ResumeReport>,
+) -> Result<Vec<crate::VerifiedResumeReport>> {
+    // SAFETY: geteuid takes no arguments and doesn't change credentials.
+    let uid = unsafe { libc::geteuid() };
+    Ok(reports
+        .into_iter()
+        .filter_map(|report| {
+            let process = con_process::read_process_under_root(report.pid.get(), &root)?;
+            // A proposal must come from the foreground job. A verified
+            // owner may withdraw its own proposal after being backgrounded.
+            if matches!(report.action, ReportAction::Set(_))
+                && (group.is_none() || process.process_group_id.map(u64::from) != group)
+            {
+                return None;
+            }
+            let proc_dir = PathBuf::from(format!("/proc/{}", report.pid));
+            if std::fs::metadata(&proc_dir).ok()?.uid() != uid {
+                return None;
+            }
+            let cwd = std::fs::read_link(proc_dir.join("cwd")).ok();
+            // Check the incarnation again after reading the owner's cwd.
+            let current = con_process::read_process(report.pid.get())?;
+            if current.identity != process.identity
+                || current.process_group_id != process.process_group_id
+            {
+                return None;
+            }
+            Some((
+                ResumeOwner {
+                    pid: report.pid,
+                    started_at: process.identity.started_at,
+                },
+                report,
+                cwd,
+            ))
+        })
+        .collect())
+}
+
 fn spawn_local(
     options: LinuxPtyOptions,
 ) -> std::result::Result<LinuxPtySession, LinuxPtySpawnError> {
@@ -989,6 +1063,8 @@ fn spawn_local(
         configure_shell_startup(&target_program, &mut command);
     }
     command.env("TERM", "xterm-256color");
+    command.env_remove(TOKEN_ENV);
+    command.env_remove(TERMINAL_CONTEXT_ENV);
 
     if let Some(cwd) = options.cwd.as_ref() {
         command.cwd(cwd);
@@ -1032,9 +1108,28 @@ fn spawn_local(
     {
         screen.feed(output);
     }
+    // Only live bytes may carry authenticated reports. Enable capture
+    // after replaying retained scrollback and before exposing a token.
+    // SAFETY: geteuid takes no arguments and doesn't change credentials.
+    let capture_resume = options.program_resume && unsafe { libc::geteuid() } != 0;
+    let resume_environment = capture_resume
+        .then(PtyResumeEnvironment::new)
+        .transpose()
+        .context("generate OSC 7577 environment")?;
+    if let Some(environment) = &resume_environment {
+        screen.enable_program_resume_capture(environment.token().to_owned())?;
+        for (key, value) in environment.variables() {
+            command.env(key, value);
+        }
+    }
     let child = pair.slave.spawn_command(command).map_err(|err| {
         LinuxPtySpawnError::permanent(err.context("failed to spawn linux pty child process"))
     })?;
+
+    let program_resume_root = capture_resume
+        .then(|| child.process_id().and_then(con_process::read_process))
+        .flatten()
+        .map(|process| process.identity);
 
     let shared = Arc::new(SessionShared::new(
         screen,
@@ -1056,6 +1151,12 @@ fn spawn_local(
     );
 
     Ok(LinuxPtySession {
+        program_resume_context: program_resume_root.as_ref().and(
+            resume_environment
+                .as_ref()
+                .map(PtyResumeEnvironment::context),
+        ),
+        program_resume_root,
         backend: LinuxPtyBackend::Local {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
@@ -1380,6 +1481,8 @@ fn spawn_host_bridge(
     spawn_bridge_reader_thread(stream_reader, shared.clone(), started_at);
 
     Ok(LinuxPtySession {
+        program_resume_root: None,
+        program_resume_context: None,
         backend: LinuxPtyBackend::HostBridge {
             stream_shutdown: stream,
             socket_path,
@@ -1949,7 +2052,7 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::mpsc;
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, Instant, SystemTime};
 
     use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::VtScreen;
@@ -2286,6 +2389,55 @@ mod tests {
                 .to_string()
                 .contains("failed to spawn linux pty child")
         );
+    }
+
+    #[test]
+    fn program_resume_reports_belong_to_the_live_foreground_pty() {
+        // This PTY capability is never advertised while running as root.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let fixture = r#"
+import base64, hashlib, os, time
+token = os.environ['OSC7577_TOKEN']
+context = os.environ['CON_PROGRAM_RESUME_CONTEXT']
+now = int(time.time())
+def report(pid, args):
+    body = f'pid={pid}:time={now}:argv={args}'
+    mac = hashlib.sha256(f'{body}:{token}'.encode()).hexdigest()
+    os.write(1, f'\x1b]7577;{body}:mac={mac}\x07'.encode())
+report(os.getppid(), 'bm90LW93bmVy')
+report(os.getpid(), 'bnZpbQ,' + base64.b64encode(context.encode()).decode())
+time.sleep(5)
+"#;
+        let session = super::spawn_local(LinuxPtyOptions {
+            command_program: Some(OsString::from("/usr/bin/python3")),
+            command_args: Some(vec![OsString::from("-c"), OsString::from(fixture)]),
+            program_resume: true,
+            ..LinuxPtyOptions::default()
+        })
+        .expect("start isolated program-resume PTY");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let (owner, report, cwd) = loop {
+            let mut reports = session.take_verified_program_resume_reports().unwrap();
+            if !reports.is_empty() {
+                assert_eq!(reports.len(), 1);
+                break reports.pop().unwrap();
+            }
+            assert!(Instant::now() < deadline, "verified report did not arrive");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(
+            owner.pid.get(),
+            session.program_resume_root.as_ref().unwrap().pid
+        );
+        assert!(cwd.unwrap().is_absolute());
+        assert!(matches!(
+            report.action,
+            con_terminal::program_resume::ReportAction::Set(command)
+                if command.argv == ["nvim", &session.program_resume_context().unwrap().to_string()]
+        ));
     }
 
     #[test]

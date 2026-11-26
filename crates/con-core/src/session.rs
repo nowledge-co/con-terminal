@@ -153,6 +153,10 @@ pub enum PaneSplitDirection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SurfaceState {
+    /// Reference into the current user's private program-resume store.
+    /// Workspace profiles must never export this reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_resume: Option<uuid::Uuid>,
     #[serde(default)]
     pub native_agent_session: Option<crate::native_session::NativeAgentSession>,
     #[serde(default)]
@@ -287,6 +291,7 @@ mod tests {
             active_surface_id: Some(12),
             surfaces: vec![
                 SurfaceState {
+                    program_resume: None,
                     native_agent_session: None,
                     surface_id: 11,
                     title: Some("Shell".to_string()),
@@ -296,6 +301,7 @@ mod tests {
                     screen_text: vec!["$ pwd".to_string(), "/tmp/project".to_string()],
                 },
                 SurfaceState {
+                    program_resume: None,
                     native_agent_session: None,
                     surface_id: 12,
                     title: Some("Agent".to_string()),

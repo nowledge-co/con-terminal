@@ -354,6 +354,7 @@ impl ConWorkspace {
             return;
         };
         let closing = close_outcome.terminal.clone();
+        self.discard_program_resumes([&closing]);
         closing.set_focus_state(false, cx);
         closing.set_native_view_visible(false, cx);
         closing.shutdown_surface(Some(window), cx);
@@ -934,6 +935,9 @@ impl ConWorkspace {
         }
 
         // Terminal pane: normal shutdown flow.
+        if shutdown_closing_terminals {
+            self.discard_program_resumes(&closing_terminals);
+        }
         let mut focus_after_close = None;
         let mut sync_visibility_after_close = false;
         {

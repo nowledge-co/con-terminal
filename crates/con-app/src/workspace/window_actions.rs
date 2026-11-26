@@ -247,7 +247,15 @@ impl ConWorkspace {
         // compatibility, but keyboard invocation is intentionally idempotent:
         // repeated key-down events while modifiers are held should focus the
         // palette, not close it and strand focus.
+        if self.program_resume_review.is_some() {
+            return;
+        }
+        let program_resume_available = self
+            .try_active_terminal()
+            .and_then(TerminalPane::recoverable_program_resume)
+            .is_some();
         self.command_palette.update(cx, |palette, cx| {
+            palette.set_program_resume_available(program_resume_available);
             palette.set_handoff_enabled(self.config.experimental.handoff);
             palette.show(window, cx);
         });
@@ -392,6 +400,7 @@ impl ConWorkspace {
         self.settings_panel.read(cx).is_overlay_visible()
             || self.command_palette.read(cx).is_visible()
             || self.close_confirmation.is_some()
+            || self.program_resume_review.is_some()
     }
 
     pub(super) fn new_window(
@@ -549,6 +558,7 @@ impl ConWorkspace {
                 tab.pane_tree.all_terminals().into_iter().cloned().collect();
             // Safe: may be None if only editor panes remain after close.
             let new_focus = tab.pane_tree.try_focused_terminal().cloned();
+            self.discard_program_resumes(&closing_terminals);
 
             #[cfg(target_os = "macos")]
             self.mark_active_tab_terminal_native_layout_pending(cx);
@@ -633,6 +643,7 @@ impl ConWorkspace {
             .into_iter()
             .cloned()
             .collect();
+        self.discard_program_resumes(&closing_terminals);
         if self.config.appearance.tabs_orientation == TabsOrientation::Horizontal
             && self.tabs.len() > 2
             && !cx.reduce_motion()
@@ -756,6 +767,11 @@ impl ConWorkspace {
         self.handoff_transfer_control_socket(cx);
 
         self.cancel_all_sessions();
+        self.discard_program_resumes(
+            self.tabs
+                .iter()
+                .flat_map(|tab| tab.pane_tree.all_surface_terminals()),
+        );
         self.flush_session_save(cx);
         // Restore the saved Dock image only if a Settings panel in this
         // window last applied the preview. Matching on icon id would let

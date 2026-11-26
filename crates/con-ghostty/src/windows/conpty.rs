@@ -28,15 +28,18 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
+use con_terminal::program_resume::PtyResumeEnvironment;
 use parking_lot::Mutex;
 use windows::Win32::Foundation::{
     CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, TRUE,
 };
+use windows::Win32::Globalization::{CSTR_EQUAL, CSTR_LESS_THAN, CompareStringOrdinal};
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::{ReadFile, WriteFile};
 use windows::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
 };
+use windows::Win32::System::Environment::{FreeEnvironmentStringsW, GetEnvironmentStringsW};
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
@@ -183,6 +186,76 @@ pub(crate) struct PreparedConPty {
     output_write: OwnedHandle,
 }
 
+/// Preserve the inherited block (including `=C:` drive entries), replacing
+/// only the per-PTY capability. Windows orders keys case-insensitively.
+fn program_resume_environment(environment: &PtyResumeEnvironment) -> Result<Vec<u16>> {
+    struct NativeEnvironment(PWSTR);
+
+    impl Drop for NativeEnvironment {
+        fn drop(&mut self) {
+            // SAFETY: the block was allocated by GetEnvironmentStringsW.
+            let _ = unsafe { FreeEnvironmentStringsW(self.0) };
+        }
+    }
+
+    // SAFETY: this obtains a private, double-NUL-terminated environment block.
+    let inherited = unsafe { GetEnvironmentStringsW() };
+    anyhow::ensure!(
+        !inherited.is_null(),
+        "Could not copy the ConPTY environment"
+    );
+    let inherited = NativeEnvironment(inherited);
+    let mut entries = environment
+        .variables()
+        .map(|(key, value)| format!("{key}={value}").encode_utf16().collect::<Vec<_>>())
+        .to_vec();
+    let mut cursor = inherited.0.0;
+    // SAFETY: cursor advances to the next entry only after finding a NUL
+    // in the API-owned block and stops at the second NUL.
+    while unsafe { *cursor } != 0 {
+        let mut end = cursor;
+        while unsafe { *end } != 0 {
+            end = unsafe { end.add(1) };
+        }
+        let current =
+            unsafe { std::slice::from_raw_parts(cursor, end.offset_from(cursor) as usize) };
+        cursor = unsafe { end.add(1) };
+        entries.push(current.to_vec());
+    }
+
+    Ok(merge_program_resume_environment(entries))
+}
+
+fn merge_program_resume_environment(mut entries: Vec<Vec<u16>>) -> Vec<u16> {
+    fn key(entry: &[u16]) -> &[u16] {
+        // Skip the leading '=' in a native per-drive entry such as '=C:'.
+        let end = entry
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, value)| **value == u16::from(b'='))
+            .map_or(entry.len(), |(index, _)| index);
+        &entry[..end]
+    }
+    use std::cmp::Ordering;
+    // Stable sort retains the per-PTY entries before inherited variants.
+    entries.sort_by(
+        |a, b| match unsafe { CompareStringOrdinal(key(a), key(b), true) } {
+            CSTR_LESS_THAN => Ordering::Less,
+            CSTR_EQUAL => Ordering::Equal,
+            _ => Ordering::Greater,
+        },
+    );
+    entries.dedup_by(|a, b| unsafe { CompareStringOrdinal(key(a), key(b), true) } == CSTR_EQUAL);
+    let mut block = Vec::new();
+    for entry in entries {
+        block.extend(entry);
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
 impl PreparedConPty {
     pub(crate) fn writer(&self) -> ConPtyWriter {
         self.input_writer.clone()
@@ -200,7 +273,31 @@ impl PreparedConPty {
         F: FnMut(&[u8]) + Send + 'static,
         E: FnOnce() + Send + 'static,
     {
-        ConPty::spawn_prepared(self, command_line, cwd, size, on_output, on_eof)
+        self.spawn_with_program_resume(command_line, cwd, size, None, on_output, on_eof)
+    }
+
+    pub(crate) fn spawn_with_program_resume<F, E>(
+        self,
+        command_line: &str,
+        cwd: Option<&Path>,
+        size: PtySize,
+        resume_environment: Option<&PtyResumeEnvironment>,
+        on_output: F,
+        on_eof: E,
+    ) -> Result<ConPty>
+    where
+        F: FnMut(&[u8]) + Send + 'static,
+        E: FnOnce() + Send + 'static,
+    {
+        ConPty::spawn_prepared(
+            self,
+            command_line,
+            cwd,
+            size,
+            resume_environment,
+            on_output,
+            on_eof,
+        )
     }
 }
 
@@ -218,6 +315,7 @@ pub struct ConPty {
     input_worker: PtyWriteWorker,
     /// Process handle (kept so callers can `WaitForSingleObject` for exit).
     process: OwnedHandle,
+    program_resume_context: Option<uuid::Uuid>,
     root_identity: Option<crate::process::ProcessIdentity>,
     /// Child thread handle.
     _thread: OwnedHandle,
@@ -276,6 +374,7 @@ impl ConPty {
         command_line: &str,
         cwd: Option<&Path>,
         size: PtySize,
+        resume_environment: Option<&PtyResumeEnvironment>,
         on_output: F,
         on_eof: E,
     ) -> Result<Self>
@@ -283,6 +382,9 @@ impl ConPty {
         F: FnMut(&[u8]) + Send + 'static,
         E: FnOnce() + Send + 'static,
     {
+        let child_environment = resume_environment
+            .map(program_resume_environment)
+            .transpose()?;
         let PreparedConPty {
             input_read,
             input_writer,
@@ -361,7 +463,9 @@ impl ConPty {
                 None,
                 false,
                 creation_flags,
-                None,
+                child_environment
+                    .as_ref()
+                    .map(|block| block.as_ptr().cast()),
                 cwd_ptr,
                 &startup_info.StartupInfo as *const _,
                 &mut process_info,
@@ -441,6 +545,7 @@ impl ConPty {
             _input_writer: input_writer,
             input_worker,
             process,
+            program_resume_context: resume_environment.map(PtyResumeEnvironment::context),
             root_identity: crate::process::read_process(process_info.dwProcessId)
                 .map(|process| process.identity),
             _thread: thread,
@@ -469,6 +574,12 @@ impl ConPty {
 
     pub fn process_handle(&self) -> HANDLE {
         self.process.as_handle()
+    }
+
+    pub fn program_resume_context(&self) -> Option<uuid::Uuid> {
+        self.is_alive()
+            .then_some(self.program_resume_context)
+            .flatten()
     }
 
     pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
@@ -1177,6 +1288,50 @@ fn strip_jsonc_trailing_commas(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_resume_environment_contains_fresh_context_and_preserves_windows_entries() {
+        use con_terminal::program_resume::{TERMINAL_CONTEXT_ENV, TOKEN_ENV};
+        let environment = PtyResumeEnvironment::new().unwrap();
+        let block = program_resume_environment(&environment).unwrap();
+        assert!(block.ends_with(&[0, 0]));
+        let entries: Vec<_> = block
+            .split(|unit| *unit == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect();
+        let matches = |expected: &str| {
+            entries
+                .iter()
+                .filter_map(|entry| entry.split_once('='))
+                .filter(|(key, _)| key.eq_ignore_ascii_case(expected))
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(matches(TOKEN_ENV), [environment.token()]);
+        assert_eq!(
+            matches(TERMINAL_CONTEXT_ENV),
+            [environment.context().to_string()]
+        );
+        assert_eq!(matches("SystemRoot").len(), 1);
+
+        let synthetic = merge_program_resume_environment(
+            [
+                "OSC7577_TOKEN=own",
+                "osc7577_token=inherited",
+                "Path=custom",
+                "=C:=C:\\work",
+            ]
+            .into_iter()
+            .map(|entry| entry.encode_utf16().collect())
+            .collect(),
+        );
+        let normalized = String::from_utf16(&synthetic).unwrap();
+        assert_eq!(
+            normalized,
+            "=C:=C:\\work\0OSC7577_TOKEN=own\0Path=custom\0\0"
+        );
+    }
+
     use super::*;
 
     #[test]

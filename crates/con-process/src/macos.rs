@@ -27,6 +27,67 @@ fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
     (bytes == size_of::<libc::proc_bsdinfo>() as i32 && info.pbi_pid == pid).then_some(info)
 }
 
+/// Observe the same local account and controlling terminal on both sides
+/// of the cwd query. A PID or a process group number alone is insufficient.
+pub fn observe_pty_process(
+    pid: u32,
+    tty_device: u32,
+    foreground: Option<u32>,
+) -> Option<(u64, Option<PathBuf>)> {
+    let uid = unsafe { libc::geteuid() };
+    let matches_pty = |info: &libc::proc_bsdinfo| {
+        info.pbi_uid == uid
+            && info.pbi_ruid == uid
+            && info.pbi_svuid == uid
+            && info.e_tdev == tty_device
+            && foreground.is_none_or(|group| info.pbi_pgid == group && info.e_tpgid == group)
+    };
+    let before = bsd_info(pid)?;
+    if !matches_pty(&before) {
+        return None;
+    }
+
+    // SAFETY: the zero-initialized C layout contains only plain data.
+    let mut paths = unsafe { zeroed::<libc::proc_vnodepathinfo>() };
+    let size = size_of::<libc::proc_vnodepathinfo>() as i32;
+    // SAFETY: bsd_info validated pid and the output buffer matches the flavor.
+    let count = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut paths as *mut libc::proc_vnodepathinfo).cast(),
+            size,
+        )
+    };
+    let cwd = (count == size)
+        .then(|| {
+            paths
+                .pvi_cdir
+                .vip_path
+                .as_flattened()
+                .iter()
+                .take_while(|byte| **byte != 0)
+                .map(|byte| *byte as u8)
+                .collect()
+        })
+        .filter(|bytes: &Vec<u8>| !bytes.is_empty())
+        .map(|bytes| PathBuf::from(std::ffi::OsString::from_vec(bytes)));
+
+    let after = bsd_info(pid)?;
+    if !matches_pty(&after)
+        || before.pbi_start_tvsec != after.pbi_start_tvsec
+        || before.pbi_start_tvusec != after.pbi_start_tvusec
+    {
+        return None;
+    }
+    let started_at = after
+        .pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(after.pbi_start_tvusec)?;
+    Some((started_at, cwd))
+}
+
 pub(super) fn read_process(pid: u32) -> Option<ProcessInfo> {
     let before = bsd_info(pid)?;
     let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];

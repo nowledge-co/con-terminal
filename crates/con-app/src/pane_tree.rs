@@ -3849,6 +3849,7 @@ impl PaneTree {
                             cx,
                         );
                         SurfaceState {
+                            program_resume: surface.terminal.saved_program_resume(),
                             native_agent_session: surface.terminal.saved_native_session(cx),
                             surface_id: surface.id,
                             title: surface.title.clone(),
@@ -3960,6 +3961,9 @@ impl PaneTree {
                             .borrow_mut()
                             .restore(reference);
                     }
+                    surface
+                        .terminal
+                        .set_saved_program_resume(state.program_resume);
                     surface.title = state.title.clone();
                     surface.owner = state.owner.clone();
                     surface.close_pane_when_last = state.close_pane_when_last;
@@ -5398,6 +5402,8 @@ mod tests {
             let first = terminal(cx);
             let second = terminal(cx);
             let third = terminal(cx);
+            let resume_record = uuid::Uuid::new_v4();
+            second.set_saved_program_resume(Some(resume_record));
             let mut source = PaneTree::new(first.clone());
             source.create_surface_in_pane(
                 0,
@@ -5425,6 +5431,24 @@ mod tests {
             assert_eq!(infos[1].title.as_deref(), Some("worker"));
             assert_eq!(infos[1].owner.as_deref(), Some("orchestrator"));
             assert!(infos[1].close_pane_when_last);
+            assert_eq!(
+                infos[1].terminal.saved_program_resume(),
+                Some(resume_record)
+            );
+
+            let snapshot = destination.to_state(cx, false);
+            let restored = PaneTree::from_state(
+                &snapshot,
+                Some(destination.focused_pane_id()),
+                &mut |_, _, _| terminal(cx),
+            );
+            let restored_stack = restored.surface_infos(Some(restored.focused_pane_id()));
+            assert_eq!(restored_stack[0].terminal.saved_program_resume(), None);
+            assert_eq!(
+                restored_stack[1].terminal.saved_program_resume(),
+                Some(resume_record),
+            );
+
             let ids = destination
                 .surface_infos(None)
                 .iter()

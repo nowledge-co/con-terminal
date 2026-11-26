@@ -1023,6 +1023,7 @@ fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> 
             cwd: cwd.clone(),
             active_surface_id: Some(0),
             surfaces: vec![SurfaceState {
+                program_resume: None,
                 native_agent_session: None,
                 surface_id: 0,
                 title: Some("Shell".to_string()),

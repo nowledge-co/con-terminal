@@ -137,6 +137,7 @@ jobs:
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app agent_panel::tests
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::render::top_bar
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::terminal_status::
+          cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::program_resume::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::tab_presentation::
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app workspace::tests::horizontal_tab_reorder
           cargo test --locked -p con --no-default-features --features con/bin-con-app --bin con-app input_bar::tests
@@ -213,6 +214,7 @@ jobs:
           cargo test --locked -p con --bin con agent_panel::tests
           cargo test --locked -p con --bin con workspace::render::top_bar
           cargo test --locked -p con --bin con workspace::terminal_status::
+          cargo test --locked -p con --bin con workspace::program_resume::
           cargo test --locked -p con --bin con workspace::tab_presentation::
           cargo test --locked -p con --bin con workspace::tests::horizontal_tab_reorder
           cargo test --locked -p con --bin con input_bar::tests

@@ -691,6 +691,7 @@ fn session_surfaces_from_workspace(pane: &WorkspacePane, root: &Path) -> Vec<Sur
         .iter()
         .enumerate()
         .map(|(surface_id, surface)| SurfaceState {
+            program_resume: None,
             native_agent_session: None,
             surface_id,
             title: surface.title.clone(),
@@ -1192,6 +1193,7 @@ mod tests {
 
     #[test]
     fn workspace_layout_export_drops_private_runtime_state() {
+        let resume_reference = uuid::Uuid::new_v4();
         let session = Session {
             tabs: vec![TabState {
                 title: "Dev".to_string(),
@@ -1201,6 +1203,7 @@ mod tests {
                     cwd: Some("/tmp/project".to_string()),
                     active_surface_id: Some(3),
                     surfaces: vec![SurfaceState {
+                        program_resume: Some(resume_reference),
                         native_agent_session: Some(crate::native_session::NativeAgentSession {
                             agent: "codex".into(),
                             session_id: "private-native-id".into(),
@@ -1266,6 +1269,7 @@ mod tests {
         assert!(toml.contains("tab.agent-provider = \"openai\""));
         assert!(toml.contains("tab.agent-model = \"gpt-5.2\""));
         assert!(!toml.contains("secret output"));
+        assert!(!toml.contains(&resume_reference.to_string()));
         assert!(!toml.contains("private-native-id"));
         assert!(!toml.contains("private-native-store"));
         assert!(!toml.contains("cargo run"));

@@ -50,6 +50,7 @@ use crate::{
 use image::{ImageFormat, ImageReader, Limits};
 use parking_lot::Mutex;
 
+mod program_resume;
 mod search;
 pub use search::SearchProgress;
 
@@ -767,8 +768,17 @@ pub struct GhosttyTerminalUnknownStringSequence {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct GhosttyTerminalUnknownOscSequence {
+    pub truncated: bool,
+    pub content: GhosttyString,
+    pub terminator: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub union GhosttyTerminalUnknownSequenceValue {
     pub apc: GhosttyTerminalUnknownStringSequence,
+    pub osc: GhosttyTerminalUnknownOscSequence,
     pub _padding: [u64; 16],
 }
 
@@ -1959,6 +1969,7 @@ struct VtCallbackState {
     progress_epoch: Instant,
     progress: AtomicU64,
     unknown_sequence_log_count: AtomicU8,
+    program_resume: Mutex<Option<crate::resume_capture::Capture>>,
     capture: Mutex<RenderCapture>,
     program_events: Arc<Mutex<program_events::ProgramStatusBuffer>>,
 }
@@ -2604,6 +2615,7 @@ impl VtScreen {
             progress_epoch: Instant::now(),
             progress: AtomicU64::new(0),
             unknown_sequence_log_count: AtomicU8::new(0),
+            program_resume: Mutex::new(None),
             capture: Mutex::new(RenderCapture::default()),
             program_events: Arc::new(Mutex::new(program_events::ProgramStatusBuffer::default())),
         });
@@ -5240,14 +5252,32 @@ unsafe extern "C" fn vt_unknown_sequence_callback(
     userdata: *mut c_void,
     sequence: *const GhosttyTerminalUnknownSequence,
 ) {
-    if userdata.is_null()
-        || sequence.is_null()
-        || !log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug)
-    {
+    if userdata.is_null() || sequence.is_null() {
         return;
     }
 
     let state = unsafe { &*(userdata as *const VtCallbackState) };
+    let sequence = unsafe { &*sequence };
+    if sequence.tag == program_resume::OSC_SEQUENCE_TAG {
+        let osc = unsafe { sequence.value.osc };
+        if matches!(osc.terminator, 0 | 1)
+            && !osc.truncated
+            && osc.content.len <= crate::resume_capture::CAPTURE_BYTES
+            && !osc.content.ptr.is_null()
+        {
+            // Ghostty retains these bytes for the duration of the callback.
+            let bytes = unsafe { std::slice::from_raw_parts(osc.content.ptr, osc.content.len) };
+            if bytes.starts_with(b"7577;") {
+                if let Some(capture) = state.program_resume.lock().as_mut() {
+                    capture.receive(bytes);
+                }
+                return;
+            }
+        }
+    }
+    if !log::log_enabled!(target: UNKNOWN_SEQUENCE_LOG_TARGET, log::Level::Debug) {
+        return;
+    }
     let Ok(log_index) = state.unknown_sequence_log_count.try_update(
         Ordering::Relaxed,
         Ordering::Relaxed,
@@ -5263,7 +5293,6 @@ unsafe extern "C" fn vt_unknown_sequence_callback(
         return;
     }
 
-    let sequence = unsafe { &*sequence };
     if sequence.tag != GHOSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC {
         log::debug!(
             target: UNKNOWN_SEQUENCE_LOG_TARGET,

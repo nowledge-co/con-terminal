@@ -13,6 +13,10 @@
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+use crate::resume_capture::{CAPTURE_BYTES, Capture};
+use con_terminal::program_resume::{PtyResumeEnvironment, ReportAction, ResumeOwner};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
@@ -616,6 +620,7 @@ pub struct TerminalState {
     pub mouse_shape: Option<i32>,
     pub mouse_visible: Option<bool>,
     program_events: program_events::ProgramStatusBuffer,
+    resume_capture: Option<Capture>,
 }
 
 const MAX_COMMAND_HISTORY: usize = 20;
@@ -645,6 +650,7 @@ impl Default for TerminalState {
             scrollbar: None,
             mouse_shape: None,
             program_events: program_events::ProgramStatusBuffer::default(),
+            resume_capture: None,
             mouse_visible: None,
         }
     }
@@ -883,6 +889,15 @@ impl GhosttyApp {
         if app.is_null() {
             return Err("ghostty_app_new returned null".into());
         }
+        // The callback runs on Ghostty's IO thread and only touches its
+        // bounded surface queue. Surface destruction joins that thread.
+        unsafe {
+            ffi::ghostty_app_set_unknown_osc_callback(
+                app,
+                CAPTURE_BYTES,
+                Some(unknown_osc_callback),
+            );
+        }
         wake_handle
             .app
             .store(app.cast::<c_void>(), Ordering::Release);
@@ -1107,6 +1122,16 @@ impl GhosttyApp {
         font_size: Option<f32>,
         environment: &[(String, String)],
     ) -> Result<GhosttyTerminal, String> {
+        let resume = (unsafe { libc::geteuid() } != 0)
+            .then(PtyResumeEnvironment::new)
+            .and_then(Result::ok);
+        let mut environment = environment.to_vec();
+        if let Some(resume) = &resume {
+            for (key, value) in resume.variables() {
+                environment.retain(|(name, _)| name != key);
+                environment.push((key.to_owned(), value));
+            }
+        }
         let owned_environment = environment
             .iter()
             .map(|(key, value)| {
@@ -1130,6 +1155,9 @@ impl GhosttyApp {
         #[allow(clippy::arc_with_non_send_sync)]
         let state: StateRef = Arc::new(Mutex::new(TerminalState {
             clipboard_write_policy: self.wake_handle.clipboard_write_policy.clone(),
+            resume_capture: resume
+                .as_ref()
+                .map(|env| Capture::new(env.token().to_owned())),
             ..TerminalState::default()
         }));
         let surface_userdata = Box::into_raw(Box::new(state.clone())) as *mut c_void;
@@ -1176,6 +1204,7 @@ impl GhosttyApp {
             state,
             userdata_ptr: surface_userdata,
             tty_name: Mutex::new(None),
+            program_resume_context: resume.map(|env| env.context()),
         })
     }
 
@@ -1220,6 +1249,7 @@ pub struct GhosttyTerminal {
     /// Must be recovered and freed when the terminal is dropped.
     userdata_ptr: *mut c_void,
     tty_name: Mutex<Option<String>>,
+    program_resume_context: Option<uuid::Uuid>,
 }
 
 impl GhosttyTerminal {
@@ -1621,6 +1651,45 @@ impl GhosttyTerminal {
         Some(tty_name.insert(name).clone())
     }
 
+    pub fn program_resume_context(&self) -> Option<uuid::Uuid> {
+        self.program_resume_context
+    }
+
+    pub fn take_program_resume_reader(&self) -> Option<crate::ProgramResumeRead> {
+        let reports = match self.state.lock().resume_capture.as_mut()?.take() {
+            Ok(reports) if reports.is_empty() => return None,
+            Ok(reports) => reports,
+            Err(error) => return Some(Box::new(move || Err(error))),
+        };
+        let tty = self.tty_name()?;
+        let group = self
+            .foreground_process_group_id()
+            .and_then(|id| u32::try_from(id).ok());
+        Some(Box::new(move || {
+            let metadata = std::fs::symlink_metadata(tty)?;
+            if !metadata.file_type().is_char_device() {
+                return Ok(Vec::new());
+            }
+            let device = u32::try_from(metadata.rdev())?;
+            Ok(reports
+                .into_iter()
+                .filter_map(|report| {
+                    let foreground = match report.action {
+                        ReportAction::Set(_) => Some(group?),
+                        ReportAction::Clear | ReportAction::Reject => None,
+                    };
+                    let (started_at, cwd) =
+                        con_process::observe_pty_process(report.pid.get(), device, foreground)?;
+                    let owner = ResumeOwner {
+                        pid: report.pid,
+                        started_at,
+                    };
+                    Some((owner, report, cwd))
+                })
+                .collect())
+        }))
+    }
+
     pub fn progress(&self) -> Option<TerminalProgress> {
         let mut state = self.state.lock();
         let progress = state.progress?;
@@ -2006,6 +2075,33 @@ unsafe extern "C" fn wakeup_callback(userdata: *mut c_void) {
         }
         wake_handle.generation.fetch_add(1, Ordering::AcqRel);
     });
+}
+
+unsafe extern "C" fn unknown_osc_callback(
+    _app_userdata: *mut c_void,
+    surface_userdata: *mut c_void,
+    data: *const u8,
+    len: usize,
+    terminator: std::os::raw::c_int,
+    truncated: bool,
+) {
+    if truncated
+        || !matches!(terminator, 0 | 1)
+        || len > CAPTURE_BYTES
+        || surface_userdata.is_null()
+        || data.is_null()
+    {
+        return;
+    }
+    // SAFETY: Ghostty guarantees the borrowed bytes and userdata stay live
+    // through the callback. Filter the prefix before locking surface state.
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    if bytes.starts_with(b"7577;") {
+        let state = unsafe { &*surface_userdata.cast::<StateRef>() };
+        if let Some(capture) = state.lock().resume_capture.as_mut() {
+            capture.receive(bytes);
+        }
+    }
 }
 
 fn mark_child_exited_state(state: &Mutex<TerminalState>) {

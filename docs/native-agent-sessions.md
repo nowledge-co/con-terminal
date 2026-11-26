@@ -174,3 +174,16 @@ hooks feature enabled because other integrations may need it.
 
 Cross-agent context transfer is a different operation: see
 [Agent Handoff](con-cli.md#agent-workflows). It does not replace exact native resume.
+
+
+## Other programs that report resume commands
+
+Programs that emit [OSC 7577](https://www.superlogical.com/rex/docs/build/program-resume)
+can save a resume command in their terminal. After restarting con, select
+that terminal and choose **Review Program Resume…** from the command palette.
+Inspect the executable, working directory and arguments before resuming.
+When con needs you to enter the command at your shell, **Copy Command**
+copies a one-time invocation for that terminal. Paste and run it within
+one minute.
+
+[Implementation details](impl/osc7577-program-resume.md)

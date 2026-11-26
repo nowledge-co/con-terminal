@@ -972,6 +972,7 @@ impl ConWorkspace {
             input_bar_motion: SidebarMotion::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
             close_confirmation: None,
+            program_resume_review: None,
             ghostty_hidden: false,
             #[cfg(target_os = "macos")]
             native_tab_handoff_pending: false,

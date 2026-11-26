@@ -149,6 +149,7 @@ mod input_events;
 mod lifecycle;
 mod native_sessions;
 mod pane_actions;
+mod program_resume;
 mod render;
 mod session_state;
 mod session_transfer;
@@ -239,6 +240,7 @@ pub struct ConWorkspace {
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
     close_confirmation: Option<close_confirmation::AgentCloseConfirmation>,
+    program_resume_review: Option<program_resume::PendingReview>,
     ghostty_hidden: bool,
     #[cfg(target_os = "macos")]
     native_tab_handoff_pending: bool,

@@ -643,6 +643,7 @@ impl ConWorkspace {
 
     pub(super) fn refresh_agent_cli_detection(&mut self, cx: &mut Context<Self>) {
         self.refresh_terminal_presentation(cx);
+        self.refresh_program_resumes(cx);
         let state = &mut self.terminal_presentation;
         let now = Instant::now();
         if state.in_flight

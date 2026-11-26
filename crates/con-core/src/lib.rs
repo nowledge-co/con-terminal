@@ -4,6 +4,8 @@ pub mod handoff;
 pub mod harness;
 pub mod native_session;
 pub mod program_observation;
+#[cfg(any(unix, windows))]
+pub mod program_resume_store;
 pub mod program_status;
 pub mod release_channel;
 pub mod session;

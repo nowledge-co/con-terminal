@@ -9,8 +9,9 @@ use std::process::Command;
 /// Fork of ghostty-org/ghostty. Official main parses OSC 7501 inside
 /// libghostty-vt and then drops it in the full embedded runtime. This
 /// revision forwards those reports, prompt starts, and full resets when
-/// the embedder opts in. Replace this with ghostty-org/ghostty once that
-/// forward is merged upstream.
+/// the embedder opts in. The fork also carries complete unknown OSC
+/// framing and a bounded full-embedding callback for OSC 7577. Replace this
+/// with ghostty-org/ghostty once both protocols have equivalent support.
 const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// Pinned Ghostty revision. Bump together when updating either the
 /// macOS full-libghostty build or the Windows/Linux libghostty-vt build —
@@ -62,10 +63,9 @@ const GHOSTTY_REPO: &str = "https://github.com/wey-gu/ghostty.git";
 /// Future bumps must update the handwritten FFI bindings as needed, compile
 /// the ABI assertions, and run real build/link/runtime checks on all three
 /// platforms rather than treating this as a source-only dependency bump.
-// Temporary public-fork exception authorized on 2026-10-09; #444 tracks
-// replacement with official upstream. This revision includes IO-thread
-// ingress and close/shutdown/incarnation fixes, not just the initial bridge.
-const GHOSTTY_REV: &str = "59b7e8731d59e6dc4aa3593aa051a2f8d939905c";
+// Scoped public-fork exceptions for OSC 7501 (2026-10-09) and OSC 7577
+// (2026-11-26). #444 tracks replacement with official upstream.
+const GHOSTTY_REV: &str = "6e4acbf8edf9a66fe4e48680593a18ed14ba8e7f";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
 const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_PREFETCH_DEPS_ENV: &str = "CON_GHOSTTY_PREFETCH_DEPS";

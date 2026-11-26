@@ -726,6 +726,13 @@ unsafe extern "C" {
         runtime_config: *const ghostty_runtime_config_s,
         config: ghostty_config_t,
     ) -> ghostty_app_t;
+    pub fn ghostty_app_set_unknown_osc_callback(
+        app: ghostty_app_t,
+        max_bytes: usize,
+        callback: Option<
+            unsafe extern "C" fn(*mut c_void, *mut c_void, *const u8, usize, c_int, bool),
+        >,
+    );
     pub fn ghostty_app_free(app: ghostty_app_t);
     pub fn ghostty_app_tick(app: ghostty_app_t);
     pub fn ghostty_app_userdata(app: ghostty_app_t) -> *mut c_void;

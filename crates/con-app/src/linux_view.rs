@@ -957,6 +957,7 @@ impl GhosttyView {
         }
 
         let mut options = self.app.default_pty_options(self.initial_cwd.as_deref());
+        options.program_resume = true;
         if let Some(command) = self.initial_command.as_ref() {
             options.command_program = Some(command.program.clone());
             options.command_args = Some(command.args.clone());

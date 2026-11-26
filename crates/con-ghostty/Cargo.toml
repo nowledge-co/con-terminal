@@ -16,11 +16,14 @@ con-terminal.workspace = true
 anyhow.workspace = true
 log.workspace = true
 parking_lot.workspace = true
+libc = "0.2"
+uuid.workspace = true
 
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
+sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json.workspace = true
 cc = "1"
@@ -38,6 +41,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",             # User locale for regional CJK glyph fallback
+    "Win32_System_Environment",         # Preserve the native child environment block
     "Win32_System_Console",             # ConPTY: CreatePseudoConsole etc.
     "Win32_System_Threading",           # CreateProcessW, STARTUPINFOEXW
     "Win32_System_Pipes",               # CreatePipe (ConPTY I/O)
@@ -71,8 +75,6 @@ etagere = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
-libc = "0.2"
 portable-pty = "0.9"
 serde_json.workspace = true
 shell-words = "1.1"
-uuid.workspace = true

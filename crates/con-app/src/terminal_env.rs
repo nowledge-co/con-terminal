@@ -8,6 +8,13 @@ enum EnvUpdate {
 }
 
 pub fn sanitize_inherited_terminal_environment() {
+    // SAFETY: startup is single-threaded here. A nested con must never
+    // accidentally advertise the enclosing terminal's resume capability.
+    unsafe {
+        std::env::remove_var(con_terminal::program_resume::TOKEN_ENV);
+        std::env::remove_var(con_terminal::program_resume::TERMINAL_CONTEXT_ENV);
+    };
+
     let update = conductor_zdotdir_update(
         std::env::var_os("ZDOTDIR").as_deref(),
         std::env::var_os("CONDUCTOR_INTEGRATION_ZDOTDIR").as_deref(),

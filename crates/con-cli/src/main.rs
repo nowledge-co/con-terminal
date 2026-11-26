@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 mod configuration;
 mod handoff;
 mod native_session;
+#[cfg(any(unix, windows))]
+mod program_resume;
 mod pty_bridge;
 use pty_bridge::{PtyBridgeArgs, run_pty_bridge};
 mod ssh;
@@ -403,6 +405,10 @@ fn main() -> Result<()> {
     if raw_args.get(1).is_some_and(|arg| arg == "+update-helper") {
         let plan = raw_args.get(2).context("Missing update plan")?;
         return con_update::run_helper(Path::new(plan));
+    }
+    #[cfg(any(unix, windows))]
+    if raw_args.get(1).is_some_and(|arg| arg == "+program-resume") {
+        return program_resume::run(&raw_args[2..]);
     }
     let cli = Cli::parse();
     let socket_path = cli.socket.clone().unwrap_or_else(control_socket_path);

@@ -1434,6 +1434,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs 6.0.0",
  "futures",
+ "libc",
  "log",
  "objc",
  "parking_lot",
@@ -1442,6 +1443,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "uuid",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1464,6 +1466,7 @@ dependencies = [
  "portable-pty",
  "raw-window-handle",
  "serde_json",
+ "sha2",
  "shell-words",
  "uuid",
  "windows 0.61.3",
@@ -1490,7 +1493,13 @@ dependencies = [
 name = "con-terminal"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "con-paths",
+ "getrandom 0.4.2",
+ "serde",
+ "sha2",
+ "subtle",
+ "uuid",
 ]
 
 [[package]]

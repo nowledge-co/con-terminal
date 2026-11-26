@@ -692,6 +692,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         match event.action_id.as_str() {
+            "review-program-resume" => self.review_saved_program(window, cx),
             "handoff-agent" => self.open_agent_handoff(&crate::HandoffAgent, window, cx),
             "new-window" => {
                 cx.dispatch_action(&crate::NewWindow);
