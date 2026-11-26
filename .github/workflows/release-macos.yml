@@ -187,7 +187,11 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: macos-${{ matrix.arch }}
-          path: dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/*
+          # The signed app bundle is already inside the ZIP and DMG.
+          path: |
+            dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/*.zip
+            dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/*.dmg
+            dist/macos/${{ steps.meta.outputs.channel }}/${{ matrix.arch }}/SHA256SUMS-macos-*.txt
           if-no-files-found: error
 
   publish:
