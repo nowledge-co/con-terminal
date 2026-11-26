@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.188` - 2026-11-25
+## `v0.1.0-beta.189` - 2026-11-26
 
 ### Fixed
 
@@ -20,6 +20,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Restore Codex conversations by their saved session ID when Codex omits the transcript path. Claude Code recovery now preserves the original configuration selection, including the API-key approval associated with it.
   _(PR [#570](https://github.com/nowledge-co/con-terminal/pull/570) by [@adaiguoguo](https://github.com/adaiguoguo))_
+
+- Fix upload of signed macOS release packages when bundled themes contain
+  characters unsupported by GitHub Actions artifact storage.
+  _(PR [#572](https://github.com/nowledge-co/con-terminal/pull/572) by [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.186` - 2026-11-19
 
