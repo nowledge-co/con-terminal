@@ -148,6 +148,26 @@ fn hook_cwd(agent: &str, input: &Value) -> Result<PathBuf> {
         .context("Native session directory is unavailable")
 }
 
+/// Paginated and ephemeral Codex threads can both omit the transcript path. Only
+/// persistent threads hold the native store's per-UUID writer lock during the
+/// hook. Probe just that UUID, without creating a file or waiting for the lock.
+fn codex_has_history_writer(reference: &NativeAgentSession) -> std::io::Result<bool> {
+    let path = reference
+        .config_dir
+        .join("thread-writer-locks")
+        .join(format!("{}.lock", reference.session_id));
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match file.try_lock_shared() {
+        Ok(()) => Ok(false), // Leftover lock file with no writer.
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 /// Hook input is data. Never relay prompt text, credentials, commands, or a
 /// subagent's identity into the parent's persisted session.
 fn hook_reference(
@@ -209,6 +229,12 @@ fn hook_reference(
         );
     }
     reference.validate().map_err(anyhow::Error::msg)?;
+    if agent == "codex"
+        && reference.transcript_path.is_none()
+        && !codex_has_history_writer(&reference)?
+    {
+        return Ok(None);
+    }
     Ok(Some(reference))
 }
 
@@ -564,12 +590,41 @@ mod tests {
         );
     }
     #[test]
+    fn pathless_codex_hooks_only_report_the_id_with_a_live_history_writer() {
+        let store = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let locks = store.join("thread-writer-locks");
+        std::fs::create_dir_all(&locks).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let lock = locks.join(format!("{id}.lock"));
+        let writer = std::fs::File::create(&lock).unwrap();
+        writer.lock().unwrap();
+        let hook = |id: &str| {
+            let payload = json!({"hook_event_name":"SessionStart", "cwd":store,
+                                 "session_id":id, "transcript_path":null});
+            hook_reference("codex", &payload, store.clone()).unwrap()
+        };
+        let main = hook(&id).unwrap();
+        assert_eq!(main.session_id, id);
+        assert!(main.transcript_path.is_none());
+        let ephemeral = uuid::Uuid::new_v4().to_string();
+        assert!(hook(&ephemeral).is_none());
+        assert!(!locks.join(format!("{ephemeral}.lock")).exists());
+        drop(writer);
+        assert!(hook(&id).is_none());
+        // Resume runs later, after the writer has exited.
+        assert!(validate_resume_history(&main, &store).is_ok());
+        std::fs::remove_dir_all(store).unwrap();
+    }
+
+    #[test]
     fn hooks_bind_exact_session_and_reject_subagents_or_missing_ids() {
         let root = std::env::temp_dir().canonicalize().unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let payload = json!({"hook_event_name":"SessionStart", "session_id": id, "cwd": root});
+        let mut with_path = payload.clone();
+        with_path["transcript_path"] = json!(root.join(format!("rollout-{id}.jsonl")));
         assert_eq!(
-            hook_reference("codex", &payload, root.clone())
+            hook_reference("codex", &with_path, root.clone())
                 .unwrap()
                 .unwrap()
                 .session_id,
