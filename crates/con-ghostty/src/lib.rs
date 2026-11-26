@@ -228,6 +228,21 @@ fn bounded_lossy_utf8(bytes: &[u8], limit: usize) -> String {
     text[..end].to_owned()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod resume_capture;
+
+/// One authenticated report plus its independently verified process and
+/// fallback directory. Platform backends construct these after ownership checks.
+pub type VerifiedResumeReport = (
+    con_terminal::program_resume::ResumeOwner,
+    con_terminal::program_resume::ResumeReport,
+    Option<std::path::PathBuf>,
+);
+
+/// Raw capture is drained under the PTY lock; process verification runs after
+/// releasing it so a slow OS query cannot hold up terminal rendering.
+pub type ProgramResumeRead = Box<dyn FnOnce() -> anyhow::Result<Vec<VerifiedResumeReport>> + Send>;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalPromptState {
     pub cursor_at_prompt: bool,

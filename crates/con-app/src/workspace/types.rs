@@ -333,10 +333,16 @@ pub(super) struct PendingControlAgentRequest {
     pub(super) response_tx: tokio::sync::oneshot::Sender<ControlResult>,
 }
 
+pub(super) enum ProgramResumeWrite {
+    Save(uuid::Uuid, con_terminal::program_resume::ResumeCommand),
+    Remove(uuid::Uuid),
+}
+
 pub(super) struct SessionSaveRequest {
     pub window: gpui::EntityId,
     pub snapshot: Option<Session>,
     pub closed: bool,
     pub history: Option<GlobalHistoryState>,
+    pub program_resume_writes: Vec<ProgramResumeWrite>,
     pub done: Option<crossbeam_channel::Sender<()>>,
 }

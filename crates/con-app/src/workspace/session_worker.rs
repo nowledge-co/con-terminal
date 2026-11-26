@@ -61,11 +61,23 @@ fn spawn_session_save_worker() -> crossbeam_channel::Sender<SessionSaveRequest> 
         .name("con-session-save".into())
         .spawn(move || {
             let mut snapshots = SessionSnapshots::default();
+            let resume_store = con_core::program_resume_store::ProgramResumeStore::default();
             while let Ok(request) = rx.recv() {
                 let mut history = None;
                 let mut waiters = Vec::new();
                 let mut layout_changed = false;
                 for request in std::iter::once(request).chain(rx.try_iter()) {
+                    for write in request.program_resume_writes {
+                        let result = match write {
+                            ProgramResumeWrite::Save(id, command) => {
+                                resume_store.save(id, &command)
+                            }
+                            ProgramResumeWrite::Remove(id) => resume_store.remove(id).map(|_| ()),
+                        };
+                        if let Err(error) = result {
+                            log::warn!("Failed to update a private program resume record: {error}");
+                        }
+                    }
                     layout_changed |= request.snapshot.is_some() || request.closed;
                     snapshots.record(request.window, request.snapshot, request.closed);
                     if request.history.is_some() {

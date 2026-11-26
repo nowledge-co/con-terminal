@@ -344,6 +344,20 @@ impl WindowsGhosttyTerminal {
         self.inner.lock().as_ref().and_then(RenderSession::progress)
     }
 
+    pub fn program_resume_context(&self) -> Option<uuid::Uuid> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::program_resume_context)
+    }
+
+    pub fn take_program_resume_reader(&self) -> Option<crate::ProgramResumeRead> {
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::take_program_resume_reader)
+    }
+
     pub fn take_program_events(&self) -> Vec<crate::ProgramStatusEvent> {
         self.inner
             .lock()

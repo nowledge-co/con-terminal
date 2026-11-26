@@ -136,15 +136,27 @@ impl ConWorkspace {
 
     pub(super) fn save_session(&self, cx: &App) {
         if !self.window_close_prepared {
-            self.queue_session_snapshot(false, false, cx);
+            self.queue_session_snapshot(false, false, Vec::new(), cx);
         }
     }
 
     pub(super) fn flush_session_save(&self, cx: &App) {
-        self.queue_session_snapshot(self.window_close_prepared, true, cx);
+        self.queue_session_snapshot(self.window_close_prepared, true, Vec::new(), cx);
     }
 
-    fn queue_session_snapshot(&self, closed: bool, flush: bool, cx: &App) {
+    pub(super) fn save_program_resume_updates(&self, writes: Vec<ProgramResumeWrite>, cx: &App) {
+        if !writes.is_empty() && !self.window_close_prepared && !self.is_quick_terminal {
+            self.queue_session_snapshot(false, false, writes, cx);
+        }
+    }
+
+    fn queue_session_snapshot(
+        &self,
+        closed: bool,
+        flush: bool,
+        program_resume_writes: Vec<ProgramResumeWrite>,
+        cx: &App,
+    ) {
         let (done, complete) = crossbeam_channel::bounded(1);
         let started = std::time::Instant::now();
         let snapshot = (!self.is_quick_terminal).then(|| self.snapshot_session(cx));
@@ -163,6 +175,7 @@ impl ConWorkspace {
             snapshot,
             closed: closed && !self.is_quick_terminal,
             history: Some(self.snapshot_global_history()),
+            program_resume_writes,
             done: flush.then_some(done),
         };
         if let Err(error) = self.session_save_tx.send(request) {
@@ -173,12 +186,43 @@ impl ConWorkspace {
         }
     }
 
+    /// Drop the layout references now and erase the records on the serial
+    /// session worker before the next snapshot or a window-close flush.
+    pub(super) fn discard_program_resumes<'a>(
+        &self,
+        terminals: impl IntoIterator<Item = &'a TerminalPane>,
+    ) {
+        let program_resume_writes = terminals
+            .into_iter()
+            .filter_map(TerminalPane::take_saved_program_resume)
+            .map(ProgramResumeWrite::Remove)
+            .collect::<Vec<_>>();
+        if program_resume_writes.is_empty() {
+            return;
+        }
+        if self
+            .session_save_tx
+            .send(SessionSaveRequest {
+                window: self.workspace_handle.entity_id(),
+                snapshot: None,
+                closed: false,
+                history: None,
+                program_resume_writes,
+                done: None,
+            })
+            .is_err()
+        {
+            log::warn!("Failed to queue deletion of private program resume records");
+        }
+    }
+
     pub(super) fn remove_session_snapshot(&self) {
         if let Err(error) = self.session_save_tx.send(SessionSaveRequest {
             window: self.workspace_handle.entity_id(),
             snapshot: None,
             closed: true,
             history: None,
+            program_resume_writes: Vec::new(),
             done: None,
         }) {
             log::warn!("Failed to remove closed window snapshot: {error}");

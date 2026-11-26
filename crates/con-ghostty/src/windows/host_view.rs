@@ -38,6 +38,7 @@ use super::vt::{
     VtKeyOutcome, VtMouseAction, VtMouseButton, VtMouseEvent, VtMouseModifiers, VtPasteResult,
     VtPasteSource, VtScreen,
 };
+use con_terminal::program_resume::{PtyResumeEnvironment, ResumeOwner, ResumeReport};
 
 use super::render::CellMetrics;
 
@@ -138,6 +139,7 @@ impl RenderSession {
         shell: String,
         cwd: Option<PathBuf>,
         initial_output: Option<Vec<u8>>,
+        enable_program_resume: bool,
         clipboard_write_enabled: bool,
         desktop_notification_policy: Arc<DesktopNotificationPolicy>,
         wake: W,
@@ -216,6 +218,14 @@ impl RenderSession {
         // responses into the new shell. Enable replies only after replay,
         // while the child process still cannot have emitted output.
         accept_vt_replies.store(true, Ordering::Release);
+        let resume_environment = (enable_program_resume
+            && con_process::current_process_is_unelevated())
+        .then(PtyResumeEnvironment::new)
+        .transpose()
+        .context("generate OSC 7577 environment")?;
+        if let Some(environment) = &resume_environment {
+            vt.enable_program_resume_capture(environment.token().to_owned())?;
+        }
 
         let vt_for_pty = vt.clone();
         let vt_for_exit = vt.clone();
@@ -228,10 +238,11 @@ impl RenderSession {
              cell={cell_width_px}x{cell_height_px}"
         );
         let conpty = prepared_conpty
-            .spawn(
+            .spawn_with_program_resume(
                 &shell,
                 shell_cwd.as_deref(),
                 PtySize { cols, rows },
+                resume_environment.as_ref(),
                 move |bytes| {
                     let text = String::from_utf8_lossy(bytes);
                     transcript_for_pty.lock().push(text.as_ref());
@@ -489,6 +500,21 @@ impl RenderSession {
 
     pub fn is_alive(&self) -> bool {
         self.conpty.is_alive() && !self.vt.is_write_desynchronized()
+    }
+
+    pub(crate) fn take_program_resume_reader(&self) -> Option<crate::ProgramResumeRead> {
+        let root = self.root_identity()?;
+        let reports = match self.vt.take_program_resume_reports() {
+            Ok(reports) if reports.is_empty() => return None,
+            Ok(reports) => reports,
+            Err(error) => return Some(Box::new(move || Err(error))),
+        };
+        let cwd = self.shell_cwd.clone();
+        Some(Box::new(move || verify_resume_reports(root, cwd, reports)))
+    }
+
+    pub fn program_resume_context(&self) -> Option<uuid::Uuid> {
+        self.conpty.program_resume_context()
     }
 
     pub fn root_identity(&self) -> Option<crate::process::ProcessIdentity> {
@@ -1012,4 +1038,39 @@ fn is_valid_shell_cwd(path: &Path) -> bool {
 
 fn scale_font_size(logical_px: f32, dpi: u32) -> f32 {
     logical_px * (dpi as f32) / 96.0
+}
+
+fn verify_resume_reports(
+    root: con_process::ProcessIdentity,
+    cwd: Option<PathBuf>,
+    reports: Vec<ResumeReport>,
+) -> Result<Vec<crate::VerifiedResumeReport>> {
+    let candidates = con_process::descendants_batch(std::slice::from_ref(&root))
+        .pop()
+        .unwrap_or_default();
+    Ok(reports
+        .into_iter()
+        .filter_map(|report| {
+            let pid = report.pid.get();
+            let process = if pid == root.pid {
+                &root
+            } else {
+                &candidates
+                    .iter()
+                    .find(|process| process.identity.pid == pid)?
+                    .identity
+            };
+            if !con_process::is_current_user_process(process) {
+                return None;
+            }
+            Some((
+                ResumeOwner {
+                    pid: report.pid,
+                    started_at: process.started_at,
+                },
+                report,
+                cwd.clone(),
+            ))
+        })
+        .collect())
 }

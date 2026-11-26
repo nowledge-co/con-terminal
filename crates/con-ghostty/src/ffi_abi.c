@@ -2,6 +2,9 @@
 
 #include <ghostty.h>
 
+_Static_assert(GHOSTTY_EMBEDDED_OSC_TERMINATOR_ST == 0, "embedded OSC ST value");
+_Static_assert(GHOSTTY_EMBEDDED_OSC_TERMINATOR_BEL == 1, "embedded OSC BEL value");
+
 /*
  * Con handwrites the internal macOS Ghostty ABI in ffi.rs. Most action-tag
  * changes do not alter the enclosing union size, so Rust layout assertions

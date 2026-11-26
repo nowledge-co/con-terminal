@@ -16,12 +16,18 @@ log.workspace = true
 crossbeam-channel.workspace = true
 parking_lot.workspace = true
 dirs.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 futures.workspace = true
 tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

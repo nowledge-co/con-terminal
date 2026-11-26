@@ -398,6 +398,7 @@ impl ConWorkspace {
                         continue;
                     };
                     let closing = close_outcome.terminal.clone();
+                    self.discard_program_resumes([&closing]);
                     closing.set_focus_state(false, cx);
                     closing.set_native_view_visible(false, cx);
                     closing.shutdown_surface(Some(window), cx);

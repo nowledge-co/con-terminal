@@ -4,6 +4,14 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.190` - 2026-11-26
+
+### Added
+
+**Terminal**
+
+- Programs that report a resume command through OSC 7577 can save it across a restart. Open **Review Program Resume…** in the terminal’s command palette to inspect its executable, directory and arguments before resuming. _(PR [#574](https://github.com/nowledge-co/con-terminal/pull/574) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.189` - 2026-11-26
 
 ### Fixed

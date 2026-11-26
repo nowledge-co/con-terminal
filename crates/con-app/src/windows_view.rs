@@ -627,6 +627,7 @@ impl GhosttyView {
             shell,
             cwd,
             initial_output,
+            true,
             self.app.clipboard_write_enabled(),
             self.app.desktop_notification_policy(),
             wake,

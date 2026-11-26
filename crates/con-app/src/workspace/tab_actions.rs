@@ -495,6 +495,7 @@ impl ConWorkspace {
             .into_iter()
             .find(|surface| surface.terminal.entity_id() == entity_id);
         let Some(surface) = surface else { return };
+        self.discard_program_resumes([&surface.terminal]);
         self.record_runtime_event_for_terminal(
             tab_idx,
             &surface.terminal,

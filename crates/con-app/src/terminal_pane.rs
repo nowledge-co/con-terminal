@@ -11,9 +11,19 @@ use gpui::*;
 use crate::ghostty_view::GhosttyView;
 use crate::workspace::ConWorkspace;
 
+#[derive(Default)]
+pub(crate) struct ProgramResumeTracking {
+    pub context: Option<uuid::Uuid>,
+    pub live: con_terminal::program_resume::LiveResume,
+    pub scan_pending: bool,
+}
+
 #[derive(Clone)]
 pub struct TerminalPane {
     pub(crate) native_agent: crate::native_agent::SharedNativeAgent,
+    /// Reference only. Arguments belong to the private per-account store.
+    program_resume_record: std::rc::Rc<std::cell::Cell<Option<uuid::Uuid>>>,
+    pub(crate) program_resume_tracking: std::rc::Rc<std::cell::RefCell<ProgramResumeTracking>>,
     entity: Entity<GhosttyView>,
     subscriptions: std::rc::Rc<std::cell::RefCell<Vec<Subscription>>>,
     presentation_icon: std::rc::Rc<std::cell::Cell<&'static str>>,
@@ -25,6 +35,8 @@ impl TerminalPane {
     pub fn new(entity: Entity<GhosttyView>) -> Self {
         Self {
             native_agent: Default::default(),
+            program_resume_record: Default::default(),
+            program_resume_tracking: Default::default(),
             entity,
             subscriptions: Default::default(),
             presentation_icon: std::rc::Rc::new(std::cell::Cell::new(
@@ -33,6 +45,49 @@ impl TerminalPane {
             #[cfg(target_os = "macos")]
             pane_surround: Default::default(),
         }
+    }
+
+    pub(crate) fn saved_program_resume(&self) -> Option<uuid::Uuid> {
+        self.program_resume_record.get()
+    }
+
+    pub(crate) fn recoverable_program_resume(&self) -> Option<uuid::Uuid> {
+        if self
+            .program_resume_tracking
+            .borrow()
+            .live
+            .candidate()
+            .is_some()
+        {
+            return None;
+        }
+        self.saved_program_resume()
+    }
+
+    pub(crate) fn take_program_resume_reader(
+        &self,
+        cx: &App,
+    ) -> Option<con_ghostty::ProgramResumeRead> {
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        return self
+            .entity
+            .read(cx)
+            .terminal()?
+            .take_program_resume_reader();
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            let _ = cx;
+            None
+        }
+    }
+
+    pub(crate) fn set_saved_program_resume(&self, record: Option<uuid::Uuid>) {
+        self.program_resume_record.set(record);
+    }
+
+    pub(crate) fn take_saved_program_resume(&self) -> Option<uuid::Uuid> {
+        self.program_resume_record.take()
     }
 
     pub(crate) fn presentation_icon(&self) -> &'static str {
@@ -89,6 +144,17 @@ impl TerminalPane {
             .read(cx)
             .terminal()
             .and_then(|terminal| terminal.root_identity())
+    }
+
+    pub(crate) fn program_resume_context(&self, cx: &App) -> Option<uuid::Uuid> {
+        let terminal = self.entity.read(cx).terminal()?;
+        if !terminal.is_alive() {
+            return None;
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        return terminal.program_resume_context();
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        None
     }
 
     pub fn tty_name(&self, cx: &App) -> Option<String> {

@@ -6,3 +6,9 @@ version.workspace = true
 
 [dependencies]
 con-paths.workspace = true
+base64 = "0.22"
+getrandom = "0.4"
+sha2 = "0.10"
+serde.workspace = true
+subtle = "2.6"
+uuid.workspace = true

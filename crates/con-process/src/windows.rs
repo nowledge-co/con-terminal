@@ -4,13 +4,20 @@ use std::collections::{BTreeMap, HashSet};
 use std::mem::size_of;
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES, FILETIME, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, FILETIME, HANDLE,
+};
+use windows::Win32::Security::{
+    EqualSid, GetTokenInformation, PSID, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation,
+    TokenUser,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    GetCurrentProcess, GetProcessTimes, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::core::PWSTR;
 
@@ -43,6 +50,110 @@ impl Drop for OwnedHandle {
 
 fn filetime_ticks(time: FILETIME) -> u64 {
     (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
+}
+
+fn query_token(process: HANDLE) -> Option<OwnedHandle> {
+    let mut token = HANDLE::default();
+    // SAFETY: token receives a new handle for the supplied process.
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token).ok()? };
+    Some(OwnedHandle::new(token))
+}
+
+pub(super) fn current_process_is_unelevated() -> Option<bool> {
+    let token = query_token(unsafe { GetCurrentProcess() })?;
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut len = 0;
+    // SAFETY: the output buffer matches this information class.
+    unsafe {
+        GetTokenInformation(
+            token.get(),
+            TokenElevation,
+            Some((&mut elevation as *mut TOKEN_ELEVATION).cast()),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        )
+        .ok()?;
+    }
+    Some(elevation.TokenIsElevated == 0)
+}
+
+pub(super) fn process_incarnation_exited(pid: u32, started_at: u64) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(process) => OwnedHandle::new(process),
+        Err(error) => return error.code() == ERROR_INVALID_PARAMETER.to_hresult(),
+    };
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all outputs are initialized and valid for the live handle.
+    let result = unsafe {
+        GetProcessTimes(
+            process.get(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    result.is_ok() && (filetime_ticks(creation) != started_at || filetime_ticks(exit) != 0)
+}
+
+pub(super) fn is_current_user_process(identity: &ProcessIdentity) -> Option<bool> {
+    let process = OwnedHandle::new(unsafe {
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, identity.pid).ok()?
+    });
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: the process is a live, owned handle and these are writable outputs.
+    unsafe {
+        GetProcessTimes(
+            process.get(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+        .ok()?;
+    }
+    if filetime_ticks(creation) != identity.started_at || filetime_ticks(exit) != 0 {
+        return Some(false);
+    }
+
+    let token = query_token(process.get())?;
+    let current = query_token(unsafe { GetCurrentProcess() })?;
+    let mut observed_buffer = [0usize; 32];
+    let mut current_buffer = [0usize; 32];
+    let observed = token_user_sid(token.get(), &mut observed_buffer)?;
+    let expected = token_user_sid(current.get(), &mut current_buffer)?;
+    // SAFETY: both SIDs are borrowed from the live aligned buffers.
+    Some(unsafe { EqualSid(observed, expected) }.is_ok())
+}
+
+fn token_user_sid(token: HANDLE, output: &mut [usize; 32]) -> Option<PSID> {
+    let mut len = 0;
+    let data = output.as_mut_ptr().cast::<TOKEN_USER>();
+    // SAFETY: the buffer is pointer-aligned, has space for TOKEN_USER and a
+    // variable-length SID, and the kernel rejects an insufficient buffer.
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(data.cast()),
+            size_of::<[usize; 32]>() as u32,
+            &mut len,
+        )
+        .ok()?;
+        if len < size_of::<TOKEN_USER>() as u32 {
+            return None;
+        }
+        Some((*data).User.Sid)
+    }
 }
 
 pub(super) fn read_process(pid: u32) -> Option<ProcessInfo> {
@@ -280,5 +391,29 @@ mod tests {
             .len(),
             MAX_PROCESS_CANDIDATES
         );
+    }
+}
+
+#[cfg(test)]
+mod resume_account_tests {
+    use super::*;
+
+    #[test]
+    fn resume_account_verification_requires_the_same_live_incarnation() {
+        let current = read_process(std::process::id()).unwrap().identity;
+        assert_eq!(is_current_user_process(&current), Some(true));
+        let reused_pid = ProcessIdentity {
+            started_at: current.started_at.saturating_sub(1),
+            ..current
+        };
+        assert_eq!(is_current_user_process(&reused_pid), Some(false));
+        assert!(!process_incarnation_exited(
+            reused_pid.pid,
+            current.started_at
+        ));
+        assert!(process_incarnation_exited(
+            reused_pid.pid,
+            reused_pid.started_at
+        ));
     }
 }
