@@ -1,30 +1,37 @@
 # panes/split.test
 # Pane split: create a split pane and verify layout.
 
-con-cli --json panes list --tab 1  # start with 1 pane
+con-cli --json tabs new
+---- json-subset
+{"tab_index":2}
+
+con-cli --json panes list --tab 2  # start with 1 pane
 ---- json-subset
 {"panes":[{"index":1}]}
 
-con-cli --json panes create --tab 1 --location right  # split right
+con-cli --json panes create --tab 2 --location right  # split right
 ---- contains
-"wait_ready":"con-cli --json surfaces wait-ready --tab 1 --surface-id 1 --pty-only --timeout 30"
+"wait_ready":"con-cli --json surfaces wait-ready --tab 2 --surface-id 1 --pty-only --timeout 30"
 
-con-cli --json panes list --tab 1  # now have 2 panes
+con-cli --json panes list --tab 2  # now have 2 panes
 ---- contains
 "index":2
 
-con-cli --json surfaces list --tab 1  # the surface is discoverable before waiting
+con-cli --json surfaces list --tab 2  # the surface is discoverable before waiting
 ---- contains
 "surface_id":1
 
-con-cli --json surfaces wait-ready --tab 1 --surface-id 1 --pty-only --timeout 15
+con-cli --json surfaces wait-ready --tab 2 --surface-id 1 --pty-only --timeout 15
 ---- json-subset
 {"status":"ready","surface_id":1,"is_alive":true}
 
-con-cli --json panes list --tab 1  # both panes are alive
+con-cli --json panes list --tab 2  # both panes are alive
 ---- json-subset
 {"panes":[{"is_alive":true,"terminal_state":"ready"},{"is_alive":true,"terminal_state":"ready"}]}
 
-con-cli --json surfaces list --tab 1
+con-cli --json surfaces list --tab 2
 ---- contains
 "terminal_state":"ready"
+
+con-cli --json tabs close --tab 2
+---- ok

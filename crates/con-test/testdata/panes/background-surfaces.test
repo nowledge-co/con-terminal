@@ -1,0 +1,60 @@
+con-cli --json tabs new --background
+---- json-subset
+{"tab_index":2,"active_tab_index":1,"tab_count":2}
+
+con-cli --json tabs close --tab 2
+---- ok
+
+con-cli --json tabs new
+---- json-subset
+{"tab_index":2,"active_tab_index":2}
+
+con-cli --json surfaces create --tab 2 --pane-id 0 --background --owner fixture --title worker
+---- json-subset
+{"surface_id":1,"pane_id":0}
+
+con-cli --json tree --tab 2
+---- contains
+"active_surface_id":0
+
+con-cli surfaces close --tab 2 --surface-id 1 --owner another-worker
+---- error
+matching owner
+
+con-cli --json surfaces close --tab 2 --surface-id 1 --owner fixture
+---- ok
+
+con-cli --json surfaces split --tab 2 --surface-id 0 --background --owner fixture
+---- json-subset
+{"surface_id":2,"pane_id":1}
+
+con-cli --json tree --tab 2
+---- contains
+"focused_pane_id":0
+
+con-cli --json surfaces close --tab 2 --surface-id 2 --owner fixture --close-empty-owned-pane
+---- json-subset
+{"closed_pane":true}
+
+con-cli --json tree --tab 2
+---- contains
+"focused_pane_id":0
+
+con-cli --json panes create --tab 2 --background --owner pane-worker
+---- json-subset
+{"surface_id":3,"pane_id":2,"wait_ready":"con-cli --json surfaces wait-ready --tab 2 --surface-id 3 --pty-only --timeout 30"}
+
+con-cli --json tree --tab 2
+---- contains
+"focused_pane_id":0
+
+con-cli surfaces close --tab 2 --surface-id 3 --owner another-worker --close-empty-owned-pane
+---- error
+matching owner
+
+con-cli --json surfaces close --tab 2 --surface-id 3 --owner pane-worker --close-empty-owned-pane
+---- json-subset
+{"closed_pane":true}
+
+con-cli --json tabs close --tab 2
+---- ok

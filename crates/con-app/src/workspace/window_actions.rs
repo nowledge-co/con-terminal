@@ -426,10 +426,21 @@ impl ConWorkspace {
     }
 
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_tab(false, window, cx);
+    }
+
+    pub(super) fn create_tab(
+        &mut self,
+        background: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.close_confirmation.is_some() {
             return;
         }
-        self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
+        if !background {
+            self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
+        }
         let cwd = self
             .has_active_tab()
             .then(|| self.try_active_terminal().and_then(|t| t.current_dir(cx)))
@@ -466,8 +477,13 @@ impl ConWorkspace {
             });
         }
 
-        let new_index = self.tabs.len() - 1;
-        self.activate_tab(new_index, window, cx);
+        if background && self.tabs.len() > 1 {
+            self.sync_sidebar(cx);
+            self.save_session(cx);
+            cx.notify();
+        } else {
+            self.activate_tab(self.tabs.len() - 1, window, cx);
+        }
     }
 
     pub(super) fn focus_agent_inline_input_next_frame(
@@ -794,7 +810,7 @@ impl ConWorkspace {
 
         for request in std::mem::take(&mut self.pending_window_control_requests) {
             match request {
-                PendingWindowControlRequest::TabsNew { response_tx } => {
+                PendingWindowControlRequest::TabsNew { response_tx, .. } => {
                     Self::send_control_result(
                         response_tx,
                         Err(ControlError::internal(

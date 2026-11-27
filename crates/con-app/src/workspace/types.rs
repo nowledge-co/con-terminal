@@ -290,6 +290,7 @@ pub(super) struct PendingCreatePane {
 
 pub(super) enum PendingWindowControlRequest {
     TabsNew {
+        background: bool,
         response_tx: oneshot::Sender<ControlResult>,
     },
     TabsClose {
@@ -305,6 +306,7 @@ pub(super) enum PendingSurfaceControlRequest {
         title: Option<String>,
         command: Option<String>,
         owner: Option<String>,
+        background: bool,
         close_pane_when_last: bool,
         response_tx: oneshot::Sender<ControlResult>,
     },
@@ -315,12 +317,14 @@ pub(super) enum PendingSurfaceControlRequest {
         title: Option<String>,
         command: Option<String>,
         owner: Option<String>,
+        background: bool,
         close_pane_when_last: bool,
         response_tx: oneshot::Sender<ControlResult>,
     },
     Close {
         tab_idx: usize,
         target: con_core::SurfaceTarget,
+        expected_owner: Option<String>,
         close_empty_owned_pane: bool,
         response_tx: oneshot::Sender<ControlResult>,
     },

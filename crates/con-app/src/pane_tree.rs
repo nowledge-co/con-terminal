@@ -283,6 +283,7 @@ pub struct SurfaceCreateOptions {
     pub title: Option<String>,
     pub owner: Option<String>,
     pub close_pane_when_last: bool,
+    pub background: bool,
 }
 
 impl SurfaceCreateOptions {
@@ -291,6 +292,7 @@ impl SurfaceCreateOptions {
             title,
             owner: None,
             close_pane_when_last: false,
+            background: false,
         }
     }
 }
@@ -501,6 +503,14 @@ impl PaneTree {
         Self::find_terminal(&self.root, self.focused_pane_id)
     }
 
+    pub fn focused_surface_title(&self) -> Option<&str> {
+        let title = Self::find_terminal_surface(&self.root, self.focused_pane_id)?
+            .title
+            .as_deref()?
+            .trim();
+        (!title.is_empty()).then_some(title)
+    }
+
     /// Get all terminals in the tree
     pub fn all_terminals(&self) -> Vec<&TerminalPane> {
         let mut result = Vec::new();
@@ -584,6 +594,7 @@ impl PaneTree {
         new_terminal: TerminalPane,
         options: SurfaceCreateOptions,
     ) -> Option<(PaneId, SurfaceId)> {
+        let background = options.background;
         let new_id = self.next_id;
         self.next_id += 1;
         let new_surface_id = self.next_surface_id;
@@ -601,8 +612,10 @@ impl PaneTree {
             new_split_id,
             options,
         ) {
-            self.focused_pane_id = new_id;
-            self.zoomed_pane_id = None;
+            if !background {
+                self.focused_pane_id = new_id;
+                self.zoomed_pane_id = None;
+            }
             Some((new_id, new_surface_id))
         } else {
             None
@@ -758,11 +771,10 @@ impl PaneTree {
         surface.owner = options.owner;
         surface.close_pane_when_last = options.close_pane_when_last;
 
-        if Self::push_surface(&mut self.root, pane_id, surface) {
-            if self.zoomed_pane_id.is_some_and(|zoomed| zoomed != pane_id) {
-                self.zoomed_pane_id = None;
+        if Self::push_surface(&mut self.root, pane_id, surface, !options.background) {
+            if !options.background {
+                self.focus_pane(pane_id);
             }
-            self.focused_pane_id = pane_id;
             Some(surface_id)
         } else {
             None
@@ -1424,6 +1436,10 @@ impl PaneTree {
     // --- Private helpers ---
 
     fn find_terminal(node: &PaneNode, target_id: PaneId) -> Option<&TerminalPane> {
+        Self::find_terminal_surface(node, target_id).map(|surface| &surface.terminal)
+    }
+
+    fn find_terminal_surface(node: &PaneNode, target_id: PaneId) -> Option<&PaneSurface> {
         match node {
             PaneNode::Leaf {
                 id,
@@ -1433,12 +1449,10 @@ impl PaneTree {
                         active_surface_id,
                     },
                 ..
-            } if *id == target_id => {
-                Self::active_surface(surfaces, *active_surface_id).map(|surface| &surface.terminal)
-            }
+            } if *id == target_id => Self::active_surface(surfaces, *active_surface_id),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => Self::find_terminal(first, target_id)
-                .or_else(|| Self::find_terminal(second, target_id)),
+            PaneNode::Split { first, second, .. } => Self::find_terminal_surface(first, target_id)
+                .or_else(|| Self::find_terminal_surface(second, target_id)),
         }
     }
 
@@ -1783,7 +1797,12 @@ impl PaneTree {
         }
     }
 
-    fn push_surface(node: &mut PaneNode, pane_id: PaneId, surface: PaneSurface) -> bool {
+    fn push_surface(
+        node: &mut PaneNode,
+        pane_id: PaneId,
+        surface: PaneSurface,
+        activate: bool,
+    ) -> bool {
         match node {
             PaneNode::Leaf {
                 id,
@@ -1796,13 +1815,15 @@ impl PaneTree {
             } if *id == pane_id => {
                 let surface_id = surface.id;
                 surfaces.push(surface);
-                *active_surface_id = surface_id;
+                if activate {
+                    *active_surface_id = surface_id;
+                }
                 true
             }
             PaneNode::Leaf { .. } => false,
             PaneNode::Split { first, second, .. } => {
-                Self::push_surface(first, pane_id, surface.clone())
-                    || Self::push_surface(second, pane_id, surface)
+                Self::push_surface(first, pane_id, surface.clone(), activate)
+                    || Self::push_surface(second, pane_id, surface, activate)
             }
         }
     }
@@ -4219,6 +4240,7 @@ mod tests {
                         SurfaceCreateOptions {
                             title: title.map(str::to_owned),
                             owner: owner.map(str::to_owned),
+                            background: false,
                             close_pane_when_last: false,
                         },
                     );
@@ -5411,6 +5433,7 @@ mod tests {
                 SurfaceCreateOptions {
                     title: Some("worker".into()),
                     owner: Some("orchestrator".into()),
+                    background: false,
                     close_pane_when_last: true,
                 },
             );

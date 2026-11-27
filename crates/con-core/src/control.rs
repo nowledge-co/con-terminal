@@ -158,6 +158,7 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "List tabs and their conversation/session metadata.",
     ),
     ("tabs.new", "Create a new active tab."),
+    ("tabs.new_background", "Create a tab without selecting it."),
     (
         "tabs.close",
         "Close a tab by index or close the active tab.",
@@ -219,6 +220,18 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
     ),
     ("surfaces.focus", "Focus a pane-local terminal surface."),
     ("surfaces.rename", "Rename a pane-local terminal surface."),
+    (
+        "surfaces.create_background",
+        "Add a surface without selecting it.",
+    ),
+    (
+        "surfaces.split_background",
+        "Split without changing terminal focus.",
+    ),
+    (
+        "surfaces.close_owned",
+        "Close an exact surface after matching its owner label.",
+    ),
     ("surfaces.close", "Close a pane-local terminal surface."),
     (
         "surfaces.read",
@@ -307,7 +320,9 @@ pub enum ControlCommand {
     SystemIdentify,
     SystemCapabilities,
     TabsList,
-    TabsNew,
+    TabsNew {
+        background: bool,
+    },
     TabsClose {
         tab_index: Option<usize>,
     },
@@ -385,6 +400,7 @@ pub enum ControlCommand {
         title: Option<String>,
         command: Option<String>,
         owner: Option<String>,
+        background: bool,
         close_pane_when_last: bool,
     },
     SurfacesSplit {
@@ -394,6 +410,7 @@ pub enum ControlCommand {
         title: Option<String>,
         command: Option<String>,
         owner: Option<String>,
+        background: bool,
         close_pane_when_last: bool,
     },
     SurfacesFocus {
@@ -408,6 +425,7 @@ pub enum ControlCommand {
     SurfacesClose {
         tab_index: Option<usize>,
         target: SurfaceTarget,
+        expected_owner: Option<String>,
         close_empty_owned_pane: bool,
     },
     SurfacesRead {
@@ -489,7 +507,10 @@ impl ControlCommand {
             Self::SystemIdentify => "system.identify",
             Self::SystemCapabilities => "system.capabilities",
             Self::TabsList => "tabs.list",
-            Self::TabsNew => "tabs.new",
+            Self::TabsNew {
+                background: true, ..
+            } => "tabs.new_background",
+            Self::TabsNew { .. } => "tabs.new",
             Self::TabsClose { .. } => "tabs.close",
             Self::PanesList { .. } => "panes.list",
             Self::PanesRead { .. } => "panes.read",
@@ -500,10 +521,20 @@ impl ControlCommand {
             Self::PanesProbeShell { .. } => "panes.probe_shell",
             Self::TreeGet { .. } => "tree.get",
             Self::SurfacesList { .. } => "surfaces.list",
+            Self::SurfacesCreate {
+                background: true, ..
+            } => "surfaces.create_background",
             Self::SurfacesCreate { .. } => "surfaces.create",
+            Self::SurfacesSplit {
+                background: true, ..
+            } => "surfaces.split_background",
             Self::SurfacesSplit { .. } => "surfaces.split",
             Self::SurfacesFocus { .. } => "surfaces.focus",
             Self::SurfacesRename { .. } => "surfaces.rename",
+            Self::SurfacesClose {
+                expected_owner: Some(_),
+                ..
+            } => "surfaces.close_owned",
             Self::SurfacesClose { .. } => "surfaces.close",
             Self::NativeSessionReport { .. } => "native_sessions.report",
             Self::SurfacesResumeAgent { .. } => "surfaces.resume_agent",
@@ -529,9 +560,10 @@ impl ControlCommand {
     pub fn params_json(&self) -> Value {
         match self {
             Self::Handoff(command) => command.params(),
-            Self::SystemIdentify | Self::SystemCapabilities | Self::TabsList | Self::TabsNew => {
+            Self::SystemIdentify | Self::SystemCapabilities | Self::TabsList => {
                 json!({})
             }
+            Self::TabsNew { background } => json!({"background": background}),
             Self::TabsClose { tab_index } => json!({ "tab_index": tab_index }),
             Self::PanesList { tab_index } => json!({ "tab_index": tab_index }),
             Self::PanesRead {
@@ -604,6 +636,7 @@ impl ControlCommand {
                 title,
                 command,
                 owner,
+                background,
                 close_pane_when_last,
             } => json!({
                 "tab_index": tab_index,
@@ -612,6 +645,7 @@ impl ControlCommand {
                 "title": title,
                 "command": command,
                 "owner": owner,
+                "background": background,
                 "close_pane_when_last": close_pane_when_last,
             }),
             Self::SurfacesSplit {
@@ -621,6 +655,7 @@ impl ControlCommand {
                 title,
                 command,
                 owner,
+                background,
                 close_pane_when_last,
             } => json!({
                 "tab_index": tab_index,
@@ -631,6 +666,7 @@ impl ControlCommand {
                 "title": title,
                 "command": command,
                 "owner": owner,
+                "background": background,
                 "close_pane_when_last": close_pane_when_last,
             }),
             Self::NativeSessionReport {
@@ -691,12 +727,14 @@ impl ControlCommand {
             Self::SurfacesClose {
                 tab_index,
                 target,
+                expected_owner,
                 close_empty_owned_pane,
             } => json!({
                 "tab_index": tab_index,
                 "pane_index": target.pane_index,
                 "pane_id": target.pane_id,
                 "surface_id": target.surface_id,
+                "expected_owner": expected_owner,
                 "close_empty_owned_pane": close_empty_owned_pane,
             }),
             Self::SurfacesRead {
@@ -807,7 +845,17 @@ impl ControlCommand {
             "system.identify" => Ok(Self::SystemIdentify),
             "system.capabilities" => Ok(Self::SystemCapabilities),
             "tabs.list" => Ok(Self::TabsList),
-            "tabs.new" => Ok(Self::TabsNew),
+            "tabs.new" | "tabs.new_background" => {
+                #[derive(Default, Deserialize)]
+                #[serde(default)]
+                struct Params {
+                    background: bool,
+                }
+                let params: Params = decode_params(params)?;
+                Ok(Self::TabsNew {
+                    background: params.background || method == "tabs.new_background",
+                })
+            }
             "tabs.close" => {
                 let params: TabScopedParams = decode_params(params)?;
                 Ok(Self::TabsClose {
@@ -881,7 +929,7 @@ impl ControlCommand {
                     pane: params.target(),
                 })
             }
-            "surfaces.create" => {
+            "surfaces.create" | "surfaces.create_background" => {
                 let params: SurfaceCreateParams = decode_params(params)?;
                 Ok(Self::SurfacesCreate {
                     tab_index: params.tab_index,
@@ -889,10 +937,11 @@ impl ControlCommand {
                     title: params.title,
                     command: params.command,
                     owner: params.owner,
+                    background: params.background || method == "surfaces.create_background",
                     close_pane_when_last: params.close_pane_when_last,
                 })
             }
-            "surfaces.split" => {
+            "surfaces.split" | "surfaces.split_background" => {
                 let params: SurfaceSplitParams = decode_params(params)?;
                 Ok(Self::SurfacesSplit {
                     tab_index: params.tab_index,
@@ -901,6 +950,7 @@ impl ControlCommand {
                     title: params.title,
                     command: params.command,
                     owner: params.owner,
+                    background: params.background || method == "surfaces.split_background",
                     close_pane_when_last: params.close_pane_when_last,
                 })
             }
@@ -964,11 +1014,21 @@ impl ControlCommand {
                     title: params.title,
                 })
             }
-            "surfaces.close" => {
+            "surfaces.close" | "surfaces.close_owned" => {
                 let params: SurfaceCloseParams = decode_params(params)?;
+                if method == "surfaces.close_owned" || params.expected_owner.is_some() {
+                    if params.surface_id.is_none()
+                        || params.expected_owner.as_deref().is_none_or(str::is_empty)
+                    {
+                        return Err(ControlError::invalid_params(
+                            "Owned surface close requires a surface ID and a non-empty owner label.",
+                        ));
+                    }
+                }
                 Ok(Self::SurfacesClose {
                     tab_index: params.tab_index,
                     target: params.target(),
+                    expected_owner: params.expected_owner,
                     close_empty_owned_pane: params.close_empty_owned_pane,
                 })
             }
@@ -1618,6 +1678,7 @@ struct SurfaceCreateParams {
     title: Option<String>,
     command: Option<String>,
     owner: Option<String>,
+    background: bool,
     close_pane_when_last: bool,
 }
 
@@ -1638,6 +1699,7 @@ struct SurfaceSplitParams {
     title: Option<String>,
     command: Option<String>,
     owner: Option<String>,
+    background: bool,
     close_pane_when_last: bool,
 }
 
@@ -1652,6 +1714,7 @@ impl Default for SurfaceSplitParams {
             title: None,
             command: None,
             owner: None,
+            background: false,
             close_pane_when_last: true,
         }
     }
@@ -1686,6 +1749,7 @@ struct SurfaceCloseParams {
     pane_index: Option<usize>,
     pane_id: Option<usize>,
     surface_id: Option<usize>,
+    expected_owner: Option<String>,
     close_empty_owned_pane: bool,
 }
 
@@ -2100,6 +2164,7 @@ mod tests {
             title: Some("worker".to_string()),
             command: Some("codex".to_string()),
             owner: Some("subagent".to_string()),
+            background: true,
             close_pane_when_last: true,
         };
 
@@ -2114,6 +2179,7 @@ mod tests {
                 title,
                 command,
                 owner,
+                background,
                 close_pane_when_last,
             } => {
                 assert_eq!(tab_index, Some(3));
@@ -2124,9 +2190,28 @@ mod tests {
                 assert_eq!(command.as_deref(), Some("codex"));
                 assert_eq!(owner.as_deref(), Some("subagent"));
                 assert!(close_pane_when_last);
+                assert!(background);
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn owned_close_requires_an_exact_target_and_a_label() {
+        assert!(
+            ControlCommand::from_rpc("surfaces.close_owned", json!({"surface_id": 3})).is_err()
+        );
+        assert!(
+            ControlCommand::from_rpc("surfaces.close_owned", json!({"expected_owner": "worker"}))
+                .is_err()
+        );
+        let command = ControlCommand::from_rpc(
+            "surfaces.close_owned",
+            json!({"surface_id": 3, "expected_owner": "worker"}),
+        )
+        .expect("parse exact owned close");
+        assert_eq!(command.method_name(), "surfaces.close_owned");
+        assert_eq!(command.params_json()["expected_owner"], "worker");
     }
 
     #[test]
@@ -2136,6 +2221,7 @@ mod tests {
 
         match parsed {
             ControlCommand::SurfacesSplit {
+                background: false,
                 close_pane_when_last,
                 ..
             } => assert!(close_pane_when_last),
