@@ -703,6 +703,7 @@ impl ConWorkspace {
                 tab_index,
                 target,
                 timeout_secs,
+                pty_only,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
                     let requested_tab_index = tab_idx + 1;
@@ -736,7 +737,7 @@ impl ConWorkspace {
                                 };
                                 let is_ready = resolved.terminal.surface_ready(cx)
                                     && resolved.terminal.is_alive(cx)
-                                    && resolved.terminal.has_shell_integration(cx);
+                                    && (pty_only || resolved.terminal.has_shell_integration(cx));
                                 let timed_out = started.elapsed() >= timeout;
                                 if is_ready || timed_out {
                                     let status = if is_ready { "ready" } else { "timeout" };

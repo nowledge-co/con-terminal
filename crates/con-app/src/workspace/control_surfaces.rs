@@ -1,4 +1,5 @@
 use super::*;
+use con_core::control::terminal_state;
 
 impl ConWorkspace {
     pub(super) fn flush_pending_window_control_requests(
@@ -156,6 +157,7 @@ impl ConWorkspace {
             let _ = req.response_tx.send(con_agent::PaneResponse::PaneCreated {
                 pane_index,
                 pane_id,
+                surface_id: pane_tree.active_surface_id_for_pane(pane_id),
                 surface_ready: terminal.surface_ready(cx),
                 is_alive: terminal.is_alive(cx),
                 has_shell_integration: terminal.has_shell_integration(cx),
@@ -786,6 +788,8 @@ impl ConWorkspace {
             .into_iter()
             .find_map(|surface| (surface.surface_id == surface_id).then_some(surface.surface_index))
             .unwrap_or(1);
+        let surface_ready = terminal.surface_ready(cx);
+        let is_alive = terminal.is_alive(cx);
         json!({
             "tab_index": tab_idx + 1,
             "created_pane": created_pane,
@@ -795,8 +799,9 @@ impl ConWorkspace {
             "surface_index": surface_index,
             "surface_id": surface_id,
             "surface_ref": format!("surface:{surface_index}"),
-            "surface_ready": terminal.surface_ready(cx),
-            "is_alive": terminal.is_alive(cx),
+            "terminal_state": terminal_state(surface_ready, is_alive),
+            "surface_ready": surface_ready,
+            "is_alive": is_alive,
             "has_shell_integration": terminal.has_shell_integration(cx),
             "observation_support": terminal.observation_support(cx),
             "foreground_process_group_id": terminal.foreground_process_group_id(cx),
@@ -840,6 +845,8 @@ impl ConWorkspace {
             .or_else(|| surface.terminal.title(cx))
             .unwrap_or_else(|| format!("Surface {}", surface.surface_index));
         let (cols, rows) = surface.terminal.grid_size(cx);
+        let surface_ready = surface.terminal.surface_ready(cx);
+        let is_alive = surface.terminal.is_alive(cx);
         json!({
             "tab_index": tab_idx + 1,
             "pane_index": surface.pane_index,
@@ -852,8 +859,9 @@ impl ConWorkspace {
             "cwd": surface.terminal.current_dir(cx),
             "is_active": surface.is_active,
             "is_focused_pane": surface.is_focused_pane,
-            "surface_ready": surface.terminal.surface_ready(cx),
-            "is_alive": surface.terminal.is_alive(cx),
+            "terminal_state": terminal_state(surface_ready, is_alive),
+            "surface_ready": surface_ready,
+            "is_alive": is_alive,
             "has_shell_integration": surface.terminal.has_shell_integration(cx),
             "is_busy": surface.terminal.is_busy(cx),
             "observation_support": surface.terminal.observation_support(cx),
@@ -1149,10 +1157,18 @@ impl ConWorkspace {
         response: con_agent::PaneResponse,
     ) -> ControlResult {
         match response {
-            con_agent::PaneResponse::PaneList(panes) => Ok(json!({
-                "tab_index": tab_idx + 1,
-                "panes": panes,
-            })),
+            con_agent::PaneResponse::PaneList(panes) => {
+                let panes = panes
+                    .into_iter()
+                    .map(|pane| {
+                        let mut value = json!(&pane);
+                        value["terminal_state"] =
+                            json!(terminal_state(pane.surface_ready, pane.is_alive));
+                        value
+                    })
+                    .collect::<Vec<_>>();
+                Ok(json!({"tab_index": tab_idx + 1, "panes": panes}))
+            }
             con_agent::PaneResponse::Content(content) => Ok(json!({ "content": content })),
             con_agent::PaneResponse::KeysSent => Ok(json!({ "status": "sent" })),
             con_agent::PaneResponse::TmuxInfo(tmux) => Ok(json!({
@@ -1196,6 +1212,7 @@ impl ConWorkspace {
             con_agent::PaneResponse::PaneCreated {
                 pane_index,
                 pane_id,
+                surface_id,
                 surface_ready,
                 is_alive,
                 has_shell_integration,
@@ -1206,6 +1223,12 @@ impl ConWorkspace {
                 "tab_index": tab_idx + 1,
                 "pane_index": pane_index,
                 "pane_id": pane_id,
+                "surface_id": surface_id,
+                "terminal_state": terminal_state(surface_ready, is_alive),
+                "wait_ready": surface_id.map(|id| format!(
+                    "con-cli --json surfaces wait-ready --tab {} --surface-id {id} --pty-only --timeout 30",
+                    tab_idx + 1,
+                )),
                 "surface_ready": surface_ready,
                 "is_alive": is_alive,
                 "has_shell_integration": has_shell_integration,

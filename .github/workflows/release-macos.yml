@@ -81,6 +81,7 @@ jobs:
         shell: bash
         env:
           CON_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
           CON_APP_VERSION: ${{ steps.meta.outputs.version }}
           CON_BUILD_NUMBER: ${{ github.run_number }}
           CON_ARCH: ${{ matrix.arch }}

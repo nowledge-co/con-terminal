@@ -169,11 +169,37 @@ Create a visible split:
 con-cli --json panes create --tab 1 --location right --command "htop"
 ```
 
+Creation returns immediately with `pane_id`, the initial `surface_id`,
+`terminal_state`, and a `wait_ready` command. A `starting` terminal may
+have `is_alive: false` while the PTY is being initialized. Keep the returned
+IDs and wait on that surface before retrying. Reuse your original `--socket`
+option if you specified one.
+
+```sh
+con-cli --json surfaces wait-ready --tab 1 --surface-id <id> --pty-only --timeout 30
+```
+
+Use `--pty-only` for a live PTY without requiring shell integration. Inspect
+the returned `status`; a timeout does not close the surface. For an interactive
+TUI, follow this with a bounded check for the program's actual input prompt
+using `surfaces read`. Send the message with `surfaces send-text`, then submit
+with `surfaces send-key … enter`. If the program emits OSC 7501, take a
+baseline before submission and use `surfaces wait-status`. Otherwise use a
+program-defined completion marker or result artifact. A quiet screen alone
+does not establish that a turn finished.
+
 Run a command visibly in a shell pane:
 
 ```sh
 con-cli --json panes exec --tab 1 --pane-id 0 -- cargo test -q
 ```
+
+`create --command` takes one shell string. `panes exec` takes a program and
+separate arguments. For shell syntax in `exec`, pass the shell explicitly,
+for example `-- sh -c 'cargo test && cargo check'` on Unix.
+Check the JSON `exit_code` for the command result. The CLI exit status
+indicates whether the control request itself succeeded.
+Use `con-cli --version` to report the companion build when filing an issue.
 
 Use `pane_id` for follow-up automation. Pane indexes can change when a user
 splits, closes, or rearranges panes.

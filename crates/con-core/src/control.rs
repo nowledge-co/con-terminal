@@ -36,6 +36,15 @@ pub const DEFAULT_SOCKET_PATH: &str = "con.sock";
 #[cfg(all(not(any(unix, windows)), debug_assertions))]
 pub const DEFAULT_SOCKET_PATH: &str = "con-debug.sock";
 
+/// State of the terminal transport, independent of shell or application readiness.
+pub fn terminal_state(surface_ready: bool, is_alive: bool) -> &'static str {
+    match (surface_ready, is_alive) {
+        (false, _) => "starting",
+        (true, true) => "ready",
+        (true, false) => "exited",
+    }
+}
+
 pub const JSON_RPC_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -420,6 +429,7 @@ pub enum ControlCommand {
         tab_index: Option<usize>,
         target: SurfaceTarget,
         timeout_secs: Option<u64>,
+        pty_only: bool,
     },
     TmuxInspect {
         tab_index: Option<usize>,
@@ -658,12 +668,14 @@ impl ControlCommand {
                 tab_index,
                 target,
                 timeout_secs,
+                pty_only,
             } => json!({
                 "tab_index": tab_index,
                 "pane_index": target.pane_index,
                 "pane_id": target.pane_id,
                 "surface_id": target.surface_id,
                 "timeout_secs": timeout_secs,
+                "pty_only": pty_only,
             }),
             Self::SurfacesRename {
                 tab_index,
@@ -990,6 +1002,7 @@ impl ControlCommand {
                     tab_index: params.tab_index,
                     target: params.target(),
                     timeout_secs: params.timeout_secs,
+                    pty_only: params.pty_only,
                 })
             }
             "tmux.inspect" => {
@@ -1586,6 +1599,8 @@ struct SurfaceWaitReadyParams {
     pane_id: Option<usize>,
     surface_id: Option<usize>,
     timeout_secs: Option<u64>,
+    #[serde(default)]
+    pty_only: bool,
 }
 
 impl SurfaceWaitReadyParams {
@@ -2145,13 +2160,27 @@ mod tests {
                 tab_index,
                 target,
                 timeout_secs,
+                pty_only,
             } => {
                 assert_eq!(tab_index, Some(2));
                 assert_eq!(target.surface_id, Some(7));
                 assert_eq!(timeout_secs, Some(15));
+                assert!(!pty_only);
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn surface_wait_ready_round_trips_pty_only() {
+        let method = "surfaces.wait_ready";
+        let command = ControlCommand::from_rpc(method, json!({"surface_id": 7, "pty_only": true}))
+            .expect("parse PTY-only readiness");
+        assert!(matches!(
+            &command,
+            ControlCommand::SurfacesWaitReady { pty_only: true, .. }
+        ));
+        assert_eq!(command.params_json()["pty_only"], true);
     }
 
     #[test]
