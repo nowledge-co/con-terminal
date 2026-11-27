@@ -6,15 +6,25 @@ con-cli --json panes list --tab 1  # start with 1 pane
 {"panes":[{"index":1}]}
 
 con-cli --json panes create --tab 1 --location right  # split right
----- ok
+---- contains
+"wait_ready":"con-cli --json surfaces wait-ready --tab 1 --surface-id 1 --pty-only --timeout 30"
 
 con-cli --json panes list --tab 1  # now have 2 panes
 ---- contains
 "index":2
 
-con-cli --json panes wait --tab 1 --pane-index 2 --timeout 15  # wait for new pane to become alive
----- ok
+con-cli --json surfaces list --tab 1  # the surface is discoverable before waiting
+---- contains
+"surface_id":1
+
+con-cli --json surfaces wait-ready --tab 1 --surface-id 1 --pty-only --timeout 15
+---- json-subset
+{"status":"ready","surface_id":1,"is_alive":true}
 
 con-cli --json panes list --tab 1  # both panes are alive
 ---- json-subset
-{"panes":[{"is_alive":true},{"is_alive":true}]}
+{"panes":[{"is_alive":true,"terminal_state":"ready"},{"is_alive":true,"terminal_state":"ready"}]}
+
+con-cli --json surfaces list --tab 1
+---- contains
+"terminal_state":"ready"

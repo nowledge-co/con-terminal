@@ -21,7 +21,11 @@ mod ssh;
 mod ssh_cache;
 
 #[derive(Parser)]
-#[command(name = "con-cli", about = "CLI control surface for a running con app")]
+#[command(
+    name = "con-cli",
+    version = con_update::BUILD_VERSION,
+    about = "CLI control surface for a running con app"
+)]
 struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     socket: Option<PathBuf>,
@@ -38,17 +42,23 @@ enum Command {
         #[command(subcommand)]
         command: native_session::NativeSessionCommand,
     },
+    /// Identify the connected con instance.
     Identify,
+    /// List supported socket methods.
     Capabilities,
+    /// List, create, or close tabs.
     Tabs {
         #[command(subcommand)]
         command: TabsCommand,
     },
+    /// Inspect and control visible panes.
     Panes {
         #[command(subcommand)]
         command: PanesCommand,
     },
+    /// List tabs, panes, and their surfaces.
     Tree(TabArgs),
+    /// Target individual terminal sessions inside panes.
     Surfaces {
         #[command(subcommand)]
         command: SurfacesCommand,
@@ -87,8 +97,10 @@ enum PanesCommand {
     Status(PaneTargetArgs),
     List(TabArgs),
     Read(PaneReadArgs),
+    /// Run a program at a verified shell prompt. Pass its arguments as separate words.
     Exec(PaneExecArgs),
     SendKeys(PaneSendKeysArgs),
+    /// Create a pane and return its identity immediately, including a wait-ready command.
     Create(PaneCreateArgs),
     Wait(PaneWaitArgs),
     ProbeShell(PaneTargetArgs),
@@ -113,6 +125,7 @@ enum SurfacesCommand {
     Read(SurfaceReadArgs),
     SendText(SurfaceSendTextArgs),
     SendKey(SurfaceSendKeyArgs),
+    /// Wait for a live terminal and shell integration, or for the PTY alone with --pty-only.
     WaitReady(SurfaceWaitReadyArgs),
 }
 
@@ -127,9 +140,11 @@ enum TmuxCommand {
 
 #[derive(Subcommand)]
 enum AgentCommand {
+    /// Send a request to the built-in con agent.
     Ask(AgentAskArgs),
     NewConversation(TabArgs),
     OpenPanelForRequest(TabArgs),
+    /// Report the built-in agent panel state.
     PanelState(TabArgs),
 }
 
@@ -192,6 +207,9 @@ struct SurfaceWaitReadyArgs {
     target: SurfaceTargetArgs,
     #[arg(long)]
     timeout: Option<u64>,
+    /// Do not require shell integration. This does not indicate TUI readiness.
+    #[arg(long)]
+    pty_only: bool,
 }
 
 #[derive(Args, Clone)]
@@ -239,6 +257,7 @@ struct PaneCreateArgs {
     tab: TabArgs,
     #[arg(long, value_enum, default_value_t = PaneCreateLocationArg::Right)]
     location: PaneCreateLocationArg,
+    /// Shell source to submit in the new pane.
     #[arg(long)]
     command: Option<String>,
 }
@@ -699,6 +718,7 @@ fn main() -> Result<()> {
                         tab_index: args.target.pane.tab.tab,
                         target: args.target.target(),
                         timeout_secs: args.timeout,
+                        pty_only: args.pty_only,
                     },
                 )?;
                 print_result(&result, cli.json, render_surface_wait)?;
@@ -1035,6 +1055,7 @@ fn render_panes_list(value: &Value) -> Result<()> {
         };
         let index = pane["index"].as_u64().unwrap_or(0);
         let pane_id = pane["pane_id"].as_u64().unwrap_or(0);
+        let state = pane["terminal_state"].as_str().unwrap_or("unknown");
         let mode = pane["mode"].as_str().unwrap_or("unknown");
         let target = pane
             .get("visible_target")
@@ -1055,7 +1076,7 @@ fn render_panes_list(value: &Value) -> Result<()> {
             })
             .unwrap_or_default();
         println!(
-            "{marker} pane {index:<3} id={pane_id:<3} mode={mode:<14} target={target:<16} cwd={cwd}"
+            "{marker} pane {index:<3} id={pane_id:<3} state={state} mode={mode:<14} target={target:<16} cwd={cwd}"
         );
         if !title.is_empty() {
             println!("    title: {title}");
@@ -1163,9 +1184,10 @@ fn render_surface_rows(surfaces: &[Value], prefix: &str) {
         let surface_id = surface["surface_id"].as_u64().unwrap_or(0);
         let title = surface["title"].as_str().unwrap_or("Surface");
         let cwd = surface["cwd"].as_str().unwrap_or("");
+        let state = surface["terminal_state"].as_str().unwrap_or("unknown");
         let owner = surface["owner"].as_str().unwrap_or("");
         println!(
-            "{prefix}{marker} surface {surface_index:<3} id={surface_id:<3} pane={pane_index} pane_id={pane_id} owner={owner} cwd={cwd}"
+            "{prefix}{marker} surface {surface_index:<3} id={surface_id:<3} pane={pane_index} pane_id={pane_id} state={state} owner={owner} cwd={cwd}"
         );
         if !title.is_empty() {
             println!("{prefix}    title: {title}");
@@ -1209,6 +1231,14 @@ fn render_create_result(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(state) = value["terminal_state"].as_str() {
+        println!("    terminal: {state}");
+    }
+    if value["terminal_state"] == "starting"
+        && let Some(wait) = value["wait_ready"].as_str()
+    {
+        println!("    wait: {wait}");
+    }
     if let Some(details) = format_pty_details(value) {
         println!("    {details}");
     }
@@ -1230,6 +1260,9 @@ fn render_surface_created(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(state) = value["terminal_state"].as_str() {
+        println!("    terminal: {state}");
+    }
     if let Some(details) = format_pty_details(value) {
         println!("    {details}");
     }

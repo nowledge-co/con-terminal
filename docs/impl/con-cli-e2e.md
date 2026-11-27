@@ -96,19 +96,12 @@ Current command:
 con-cli --json panes create --tab 2 --location right
 ```
 
-Current status as of April 10, 2026:
-
-- the request now returns promptly
-- the returned pane identity is stable
-- the response now reports `surface_ready`, `is_alive`, and `has_shell_integration`
-- the response includes `observation_support`; on macOS, it marks `foreground_process_group_id` and `tty_name` as supported and reports their values when libghostty can provide them
-
-Treat startup-command panes as provisional until their foreground state settles, but a clean pane creation should now come back with a live initialized surface:
-
-```bash
-con-cli --json panes list --tab 2
-con-cli --json panes read --tab 2 --pane-id <new_id> --lines 40
-```
+Inspect the returned `terminal_state`: `starting` means the surface
+exists and its transport has not initialized. Retain `pane_id` and
+`surface_id`, then follow `wait_ready` to wait on the existing surface.
+The response also includes `observation_support` and any available process
+group and TTY observations. `--pty-only` waits for a live PTY without
+requiring shell integration.
 
 For follow-up shell control, wait until the pane reports:
 

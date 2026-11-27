@@ -968,6 +968,7 @@ pub enum PaneResponse {
     PaneCreated {
         pane_index: usize,
         pane_id: usize,
+        surface_id: Option<usize>,
         surface_ready: bool,
         is_alive: bool,
         has_shell_integration: bool,
