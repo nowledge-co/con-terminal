@@ -1248,6 +1248,34 @@ impl PaneTree {
         Self::count_leaves(&self.root)
     }
 
+    pub(crate) fn surface_label(title: Option<&str>, terminal: &TerminalPane, cx: &App) -> String {
+        Self::surface_label_from_context(
+            title,
+            || terminal.title_name(cx),
+            || terminal.current_dir(cx),
+        )
+    }
+
+    fn surface_label_from_context(
+        title: Option<&str>,
+        terminal_title: impl FnOnce() -> Option<String>,
+        current_dir: impl FnOnce() -> Option<String>,
+    ) -> String {
+        let label = |value: Option<&str>| {
+            value
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        label(title)
+            .or_else(|| label(terminal_title().as_deref()))
+            .or_else(|| {
+                let directory = current_dir()?;
+                label(Some(Self::short_pane_title(directory.trim())))
+            })
+            .unwrap_or_else(|| "Terminal".to_string())
+    }
+
     fn terminal_title_or_default(terminal: &TerminalPane, cx: &App) -> String {
         let title = terminal.title(cx).unwrap_or_else(|| "Terminal".to_string());
         Self::short_pane_title(&title).to_string()
@@ -3332,12 +3360,9 @@ impl PaneTree {
                 .overflow_x_scroll()
                 .track_scroll(&navigation.scroll);
 
-            for (index, surface) in surfaces.iter().enumerate() {
+            for surface in surfaces {
                 let is_active = surface.id == active_surface_id;
-                let title = surface
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| format!("Surface {}", index + 1));
+                let title = Self::surface_label(surface.title.as_deref(), &surface.terminal, cx);
                 let color = if is_active {
                     theme.foreground
                 } else {
@@ -5343,6 +5368,28 @@ mod tests {
         };
 
         assert_eq!(tree.focused_terminal_entity_id(), None);
+    }
+
+    #[::core::prelude::v1::test]
+    fn surface_label_prefers_explicit_name_then_title_then_directory() {
+        let label = |explicit, osc: Option<&str>, cwd: Option<&str>| {
+            PaneTree::surface_label_from_context(
+                explicit,
+                || osc.map(str::to_owned),
+                || cwd.map(str::to_owned),
+            )
+        };
+        assert_eq!(
+            label(Some("Viewer"), Some("python"), Some("/src/logs")),
+            "Viewer"
+        );
+        assert_eq!(
+            label(None, Some("nvim src/main.rs"), Some("/src")),
+            "nvim src/main.rs"
+        );
+        assert_eq!(label(Some(" "), Some("  "), Some("/src/项目/")), "项目");
+        assert_eq!(label(None, None, Some(r"C:\work\logs")), "logs");
+        assert_eq!(label(None, None, None), "Terminal");
     }
 
     #[::core::prelude::v1::test]
