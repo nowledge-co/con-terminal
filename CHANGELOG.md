@@ -4,6 +4,14 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.193` - 2026-11-27
+
+### Fixed
+
+**Panes**
+
+- Unnamed terminals in a pane stack now show their program title or working directory. Explicit names take precedence. _(PR [#580](https://github.com/nowledge-co/con-terminal/pull/580) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.192` - 2026-11-27
 
 ### Added
