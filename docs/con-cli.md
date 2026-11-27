@@ -204,6 +204,26 @@ Use `con-cli --version` to report the companion build when filing an issue.
 Use `pane_id` for follow-up automation. Pane indexes can change when a user
 splits, closes, or rearranges panes.
 
+## Background workers
+
+Use `tabs new --background` to add a tab without selecting it. For a worker
+in an existing tab, `surfaces create --background` adds a stacked surface
+and `surfaces split --background` adds a pane. Both preserve the current
+selection and keyboard focus. A hidden terminal may remain in `starting`
+until it receives its first presentation layout. Treat a readiness timeout
+as an observation and retain the returned IDs.
+
+Set a distinct `--owner` label when creating worker surfaces. Use the returned
+surface ID to close a worker, with `--owner` to check the label before closing:
+
+```sh
+con-cli surfaces close --tab 1 --surface-id 7 --owner my-task --close-empty-owned-pane
+```
+
+The label is a target check. Closing a running agent still requires confirmation
+in con. `--close-empty-owned-pane` permits removal of an eligible ephemeral pane
+when its last surface is closed.
+
 ## Surface commands
 
 A pane is a visible split region. A surface is a terminal session inside one

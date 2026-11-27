@@ -1691,7 +1691,7 @@ impl ConWorkspace {
                                 } else {
                                     terminal.set_focus_state(false, cx);
                                 }
-                            } else {
+                            } else if !terminal.is_focused(window, cx) {
                                 terminal.set_focus_state(false, cx);
                             }
                             if terminal.surface_ready(cx) {

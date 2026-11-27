@@ -87,7 +87,11 @@ enum Command {
 #[derive(Subcommand)]
 enum TabsCommand {
     List,
-    New,
+    New {
+        /// Leave the current tab selected.
+        #[arg(long)]
+        background: bool,
+    },
     Close(TabArgs),
 }
 
@@ -282,6 +286,9 @@ struct SurfaceCreateArgs {
     command: Option<String>,
     #[arg(long)]
     owner: Option<String>,
+    /// Keep the current pane, surface, and keyboard focus.
+    #[arg(long)]
+    background: bool,
     #[arg(long)]
     close_pane_when_last: bool,
 }
@@ -298,6 +305,9 @@ struct SurfaceSplitArgs {
     command: Option<String>,
     #[arg(long)]
     owner: Option<String>,
+    /// Keep the current pane, surface, and keyboard focus.
+    #[arg(long)]
+    background: bool,
     #[arg(long = "keep-pane-when-last", action = clap::ArgAction::SetFalse, default_value_t = true)]
     close_pane_when_last: bool,
 }
@@ -316,6 +326,9 @@ struct SurfaceCloseArgs {
     target: SurfaceTargetArgs,
     #[arg(long)]
     close_empty_owned_pane: bool,
+    /// Require this owner label on the exact surface ID before closing.
+    #[arg(long, requires = "surface_id", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    owner: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -447,8 +460,8 @@ fn main() -> Result<()> {
                 let result = send_command(&socket_path, ControlCommand::TabsList)?;
                 print_result(&result, cli.json, render_tabs_list)?;
             }
-            TabsCommand::New => {
-                let result = send_command(&socket_path, ControlCommand::TabsNew)?;
+            TabsCommand::New { background } => {
+                let result = send_command(&socket_path, ControlCommand::TabsNew { background })?;
                 print_result(&result, cli.json, render_pretty_json)?;
             }
             TabsCommand::Close(args) => {
@@ -626,6 +639,7 @@ fn main() -> Result<()> {
                         title: args.title,
                         command: args.command,
                         owner: args.owner,
+                        background: args.background,
                         close_pane_when_last: args.close_pane_when_last,
                     },
                 )?;
@@ -641,6 +655,7 @@ fn main() -> Result<()> {
                         title: args.title,
                         command: args.command,
                         owner: args.owner,
+                        background: args.background,
                         close_pane_when_last: args.close_pane_when_last,
                     },
                 )?;
@@ -673,6 +688,7 @@ fn main() -> Result<()> {
                     ControlCommand::SurfacesClose {
                         tab_index: args.target.pane.tab.tab,
                         target: args.target.target(),
+                        expected_owner: args.owner,
                         close_empty_owned_pane: args.close_empty_owned_pane,
                     },
                 )?;

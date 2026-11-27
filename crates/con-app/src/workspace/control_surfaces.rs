@@ -14,7 +14,10 @@ impl ConWorkspace {
 
         for request in pending {
             match request {
-                PendingWindowControlRequest::TabsNew { response_tx } => {
+                PendingWindowControlRequest::TabsNew {
+                    background,
+                    response_tx,
+                } => {
                     if self.close_confirmation.is_some() {
                         Self::send_control_result(
                             response_tx,
@@ -24,8 +27,9 @@ impl ConWorkspace {
                         );
                         continue;
                     }
-                    self.new_tab(&NewTab, window, cx);
+                    self.create_tab(background, window, cx);
                     let result = Ok(json!({
+                        "tab_index": self.tabs.len(),
                         "active_tab_index": self.active_tab + 1,
                         "tab_count": self.tabs.len(),
                         "focused_pane_id": self.tabs[self.active_tab].pane_tree.focused_pane_id(),
@@ -193,6 +197,7 @@ impl ConWorkspace {
                     title,
                     command,
                     owner,
+                    background,
                     close_pane_when_last,
                     response_tx,
                 } => {
@@ -223,6 +228,7 @@ impl ConWorkspace {
                     let options = SurfaceCreateOptions {
                         title,
                         owner,
+                        background,
                         close_pane_when_last,
                     };
                     let Some(surface_id) = self.tabs[tab_idx].pane_tree.create_surface_in_pane(
@@ -240,7 +246,7 @@ impl ConWorkspace {
                         );
                         continue;
                     };
-                    if tab_idx == self.active_tab {
+                    if tab_idx == self.active_tab && !background {
                         #[cfg(target_os = "macos")]
                         self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
                         self.notify_tab_terminal_views(tab_idx, cx);
@@ -255,6 +261,7 @@ impl ConWorkspace {
                         terminal,
                         command,
                         false,
+                        background,
                         response_tx,
                         window,
                         cx,
@@ -267,6 +274,7 @@ impl ConWorkspace {
                     title,
                     command,
                     owner,
+                    background,
                     close_pane_when_last,
                     response_tx,
                 } => {
@@ -297,6 +305,7 @@ impl ConWorkspace {
                     let options = SurfaceCreateOptions {
                         title,
                         owner: Some(owner.unwrap_or_else(|| "con-cli".to_string())),
+                        background,
                         close_pane_when_last,
                     };
                     let Some((pane_id, surface_id)) = self.tabs[tab_idx]
@@ -334,6 +343,7 @@ impl ConWorkspace {
                         terminal,
                         command,
                         true,
+                        background,
                         response_tx,
                         window,
                         cx,
@@ -342,6 +352,7 @@ impl ConWorkspace {
                 PendingSurfaceControlRequest::Close {
                     tab_idx,
                     target,
+                    expected_owner,
                     close_empty_owned_pane,
                     response_tx,
                 } => {
@@ -369,6 +380,21 @@ impl ConWorkspace {
                         .iter()
                         .find(|surface| surface.surface_id == resolved.surface_id)
                         .cloned();
+                    if let Some(owner) = expected_owner
+                        && (target.surface_id.is_none()
+                            || current
+                                .as_ref()
+                                .and_then(|surface| surface.owner.as_deref())
+                                != Some(owner.as_str()))
+                    {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::invalid_params(
+                                "Closing by owner requires an explicit surface ID with the matching owner.",
+                            )),
+                        );
+                        continue;
+                    }
                     let closing_was_focused = current
                         .as_ref()
                         .is_some_and(|surface| surface.is_active && surface.is_focused_pane);
@@ -420,7 +446,7 @@ impl ConWorkspace {
                             }
                         }
                         self.sync_active_tab_native_view_visibility(cx);
-                        if (closing_was_focused || close_outcome.closed_pane)
+                        if closing_was_focused
                             && let Some(replacement) =
                                 self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
                         {
@@ -460,12 +486,13 @@ impl ConWorkspace {
         terminal: TerminalPane,
         command: Option<String>,
         created_pane: bool,
+        background: bool,
         response_tx: oneshot::Sender<ControlResult>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_is_active = tab_idx == self.active_tab;
-        if tab_is_active {
+        let should_focus = tab_idx == self.active_tab && !background;
+        if should_focus {
             terminal.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
             #[cfg(not(target_os = "macos"))]
@@ -476,7 +503,7 @@ impl ConWorkspace {
         }
         Self::schedule_terminal_bootstrap_reassert(
             &terminal,
-            tab_is_active,
+            should_focus,
             self.window_handle,
             self.workspace_handle.clone(),
             cx,

@@ -92,8 +92,9 @@ con-cli --json surfaces create --tab "$TAB" --pane-id "$WORKER_PANE" \
 
 Record its returned surface ID and repeat the initialization/launch sequence.
 A surface inherits cwd from its host's active terminal; explicitly select each
-worker's directory. A new surface may become active; don't assume the user's
-focus or the pane's active session stayed unchanged.
+worker's directory. Use `--background` when preserving the user's selection
+matters. A hidden terminal can stay in `starting` until it has a first layout.
+Keep its returned ID if readiness times out.
 
 ## Observe and collect
 

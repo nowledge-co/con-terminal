@@ -111,7 +111,7 @@ impl ConWorkspace {
         if self.close_confirmation.is_some()
             && matches!(
                 &command,
-                ControlCommand::TabsNew
+                ControlCommand::TabsNew { .. }
                     | ControlCommand::PanesCreate { .. }
                     | ControlCommand::SurfacesCreate { .. }
                     | ControlCommand::SurfacesSplit { .. }
@@ -258,9 +258,12 @@ impl ConWorkspace {
                     })),
                 );
             }
-            ControlCommand::TabsNew => {
+            ControlCommand::TabsNew { background } => {
                 self.pending_window_control_requests
-                    .push(PendingWindowControlRequest::TabsNew { response_tx });
+                    .push(PendingWindowControlRequest::TabsNew {
+                        background,
+                        response_tx,
+                    });
                 self.schedule_pending_create_pane_flush(cx);
             }
             ControlCommand::TabsClose { tab_index } => {
@@ -472,6 +475,7 @@ impl ConWorkspace {
                 title,
                 command,
                 owner,
+                background,
                 close_pane_when_last,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
@@ -482,6 +486,7 @@ impl ConWorkspace {
                             title,
                             command,
                             owner,
+                            background,
                             close_pane_when_last,
                             response_tx,
                         },
@@ -497,6 +502,7 @@ impl ConWorkspace {
                 title,
                 command,
                 owner,
+                background,
                 close_pane_when_last,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
@@ -508,6 +514,7 @@ impl ConWorkspace {
                             title,
                             command,
                             owner,
+                            background,
                             close_pane_when_last,
                             response_tx,
                         },
@@ -602,6 +609,7 @@ impl ConWorkspace {
             ControlCommand::SurfacesClose {
                 tab_index,
                 target,
+                expected_owner,
                 close_empty_owned_pane,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
@@ -609,6 +617,7 @@ impl ConWorkspace {
                         PendingSurfaceControlRequest::Close {
                             tab_idx,
                             target,
+                            expected_owner,
                             close_empty_owned_pane,
                             response_tx,
                         },

@@ -139,6 +139,7 @@ impl ConWorkspace {
         let options = SurfaceCreateOptions {
             title: Some("Surface 1".to_string()),
             owner: Some("command-palette".to_string()),
+            background: false,
             close_pane_when_last: true,
         };
         let Some((_pane_id, _surface_id)) = self.tabs[tab_idx]
