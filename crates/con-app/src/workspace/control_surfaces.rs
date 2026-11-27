@@ -38,6 +38,7 @@ impl ConWorkspace {
                         "tab_index": self.tabs.len(),
                         "active_tab_index": self.active_tab + 1,
                         "tab_count": self.tabs.len(),
+                        "focus_changed": !background,
                         "focused_pane_id": self.tabs[self.active_tab].pane_tree.focused_pane_id(),
                     }));
                     Self::send_control_result(response_tx, result);
@@ -168,6 +169,7 @@ impl ConWorkspace {
                 pane_index,
                 pane_id,
                 surface_id: pane_tree.active_surface_id_for_pane(pane_id),
+                focus_changed: should_focus,
                 surface_ready: terminal.surface_ready(cx),
                 is_alive: terminal.is_alive(cx),
                 has_shell_integration: terminal.has_shell_integration(cx),
@@ -204,6 +206,7 @@ impl ConWorkspace {
                     command,
                     owner,
                     background,
+                    wait_timeout_secs,
                     close_pane_when_last,
                     response_tx,
                 } => {
@@ -268,6 +271,7 @@ impl ConWorkspace {
                         command,
                         false,
                         background,
+                        wait_timeout_secs,
                         response_tx,
                         window,
                         cx,
@@ -281,6 +285,7 @@ impl ConWorkspace {
                     command,
                     owner,
                     background,
+                    wait_timeout_secs,
                     close_pane_when_last,
                     response_tx,
                 } => {
@@ -350,6 +355,7 @@ impl ConWorkspace {
                         command,
                         true,
                         background,
+                        wait_timeout_secs,
                         response_tx,
                         window,
                         cx,
@@ -494,6 +500,7 @@ impl ConWorkspace {
         command: Option<String>,
         created_pane: bool,
         background: bool,
+        wait_timeout_secs: Option<u64>,
         response_tx: oneshot::Sender<ControlResult>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -526,10 +533,23 @@ impl ConWorkspace {
             },
         );
         self.sync_sidebar(cx);
-        let result =
+        let mut result =
             self.surface_created_result(tab_idx, pane_id, surface_id, created_pane, &terminal, cx);
-        Self::send_control_result(response_tx, Ok(result));
+        result["focus_changed"] = json!(should_focus);
         self.save_session(cx);
+        if let Some(timeout) = wait_timeout_secs {
+            self.wait_for_surface_ready(
+                tab_idx,
+                surface_id,
+                timeout,
+                true,
+                Some(result),
+                response_tx,
+                cx,
+            );
+        } else {
+            Self::send_control_result(response_tx, Ok(result));
+        }
     }
 
     pub(super) fn reconcile_runtime_trackers_for_tab(&self, tab_idx: usize) {
@@ -843,6 +863,96 @@ impl ConWorkspace {
             "foreground_process_group_id": terminal.foreground_process_group_id(cx),
             "tty_name": terminal.tty_name(cx),
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn wait_for_surface_ready(
+        &self,
+        tab_idx: usize,
+        surface_id: usize,
+        timeout_secs: u64,
+        pty_only: bool,
+        mut creation: Option<serde_json::Value>,
+        response_tx: oneshot::Sender<ControlResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.tabs[tab_idx].summary_id;
+        let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs.clamp(1, 300));
+        cx.spawn(async move |this, cx| {
+            loop {
+                if response_tx.is_closed() {
+                    return;
+                }
+                let result = this.update(cx, |workspace, cx| {
+                    let Some(current_tab_idx) = workspace.tab_index_for_summary_id(tab_id) else {
+                        return Some(Err(ControlError::invalid_params(
+                            "The target tab was closed.",
+                        )));
+                    };
+                    let resolved = match workspace.resolve_surface_target_for_tab(
+                        current_tab_idx,
+                        con_core::SurfaceTarget::new(None, None, Some(surface_id)),
+                    ) {
+                        Ok(resolved) => resolved,
+                        Err(err) => return Some(Err(err)),
+                    };
+                    let ready = resolved.terminal.surface_ready(cx)
+                        && resolved.terminal.is_alive(cx)
+                        && (pty_only || resolved.terminal.has_shell_integration(cx));
+                    let status = if ready {
+                        "ready"
+                    } else if creation.is_some()
+                        && resolved.terminal.surface_ready(cx)
+                        && !resolved.terminal.is_alive(cx)
+                    {
+                        "exited"
+                    } else if std::time::Instant::now() >= deadline {
+                        "timeout"
+                    } else {
+                        return None;
+                    };
+                    let observed =
+                        workspace.surface_wait_ready_result(current_tab_idx, &resolved, status, cx);
+                    let Some(mut created) = creation.take() else {
+                        return Some(Ok(observed));
+                    };
+                    created["terminal_state"] = json!(terminal_state(
+                        resolved.terminal.surface_ready(cx),
+                        resolved.terminal.is_alive(cx),
+                    ));
+                    created["wait_ready"] =
+                        json!(surface_wait_ready_command(current_tab_idx + 1, surface_id));
+                    created["pane_ref"] = json!(format!("pane:{}", resolved.pane_index));
+                    created["surface_ref"] = json!(format!("surface:{}", resolved.surface_index));
+                    if let Some(observed) = observed.as_object() {
+                        for (key, value) in observed {
+                            created[key] = value.clone();
+                        }
+                    }
+                    Some(Ok(created))
+                });
+                match result {
+                    Ok(Some(result)) => {
+                        Self::send_control_result(response_tx, result);
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        Self::send_control_result(
+                            response_tx,
+                            Err(ControlError::internal(format!(
+                                "Failed to wait for surface readiness: {err}"
+                            ))),
+                        );
+                        return;
+                    }
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+        })
+        .detach();
     }
 
     pub(super) fn surface_wait_ready_result(
@@ -1249,6 +1359,7 @@ impl ConWorkspace {
                 pane_index,
                 pane_id,
                 surface_id,
+                focus_changed,
                 surface_ready,
                 is_alive,
                 has_shell_integration,
@@ -1260,6 +1371,7 @@ impl ConWorkspace {
                 "pane_index": pane_index,
                 "pane_id": pane_id,
                 "surface_id": surface_id,
+                "focus_changed": focus_changed,
                 "terminal_state": terminal_state(surface_ready, is_alive),
                 "wait_ready": surface_id.map(|id| surface_wait_ready_command(tab_idx + 1, id)),
                 "surface_ready": surface_ready,

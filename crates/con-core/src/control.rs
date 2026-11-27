@@ -221,9 +221,14 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
     ("surfaces.focus", "Focus a pane-local terminal surface."),
     ("surfaces.rename", "Rename a pane-local terminal surface."),
     (
+        "surfaces.create_wait",
+        "Add a surface and wait for its PTY.",
+    ),
+    (
         "surfaces.create_background",
         "Add a surface without selecting it.",
     ),
+    ("surfaces.split_wait", "Split a pane and wait for its PTY."),
     (
         "surfaces.split_background",
         "Split without changing terminal focus.",
@@ -401,6 +406,7 @@ pub enum ControlCommand {
         command: Option<String>,
         owner: Option<String>,
         background: bool,
+        wait_timeout_secs: Option<u64>,
         close_pane_when_last: bool,
     },
     SurfacesSplit {
@@ -411,6 +417,7 @@ pub enum ControlCommand {
         command: Option<String>,
         owner: Option<String>,
         background: bool,
+        wait_timeout_secs: Option<u64>,
         close_pane_when_last: bool,
     },
     SurfacesFocus {
@@ -522,9 +529,17 @@ impl ControlCommand {
             Self::TreeGet { .. } => "tree.get",
             Self::SurfacesList { .. } => "surfaces.list",
             Self::SurfacesCreate {
+                wait_timeout_secs: Some(_),
+                ..
+            } => "surfaces.create_wait",
+            Self::SurfacesCreate {
                 background: true, ..
             } => "surfaces.create_background",
             Self::SurfacesCreate { .. } => "surfaces.create",
+            Self::SurfacesSplit {
+                wait_timeout_secs: Some(_),
+                ..
+            } => "surfaces.split_wait",
             Self::SurfacesSplit {
                 background: true, ..
             } => "surfaces.split_background",
@@ -637,6 +652,7 @@ impl ControlCommand {
                 command,
                 owner,
                 background,
+                wait_timeout_secs,
                 close_pane_when_last,
             } => json!({
                 "tab_index": tab_index,
@@ -646,6 +662,7 @@ impl ControlCommand {
                 "command": command,
                 "owner": owner,
                 "background": background,
+                "wait_timeout_secs": wait_timeout_secs,
                 "close_pane_when_last": close_pane_when_last,
             }),
             Self::SurfacesSplit {
@@ -656,6 +673,7 @@ impl ControlCommand {
                 command,
                 owner,
                 background,
+                wait_timeout_secs,
                 close_pane_when_last,
             } => json!({
                 "tab_index": tab_index,
@@ -667,6 +685,7 @@ impl ControlCommand {
                 "command": command,
                 "owner": owner,
                 "background": background,
+                "wait_timeout_secs": wait_timeout_secs,
                 "close_pane_when_last": close_pane_when_last,
             }),
             Self::NativeSessionReport {
@@ -929,7 +948,7 @@ impl ControlCommand {
                     pane: params.target(),
                 })
             }
-            "surfaces.create" | "surfaces.create_background" => {
+            "surfaces.create" | "surfaces.create_background" | "surfaces.create_wait" => {
                 let params: SurfaceCreateParams = decode_params(params)?;
                 Ok(Self::SurfacesCreate {
                     tab_index: params.tab_index,
@@ -938,10 +957,12 @@ impl ControlCommand {
                     command: params.command,
                     owner: params.owner,
                     background: params.background || method == "surfaces.create_background",
+                    wait_timeout_secs: (method == "surfaces.create_wait")
+                        .then(|| params.wait_timeout_secs.unwrap_or(30)),
                     close_pane_when_last: params.close_pane_when_last,
                 })
             }
-            "surfaces.split" | "surfaces.split_background" => {
+            "surfaces.split" | "surfaces.split_background" | "surfaces.split_wait" => {
                 let params: SurfaceSplitParams = decode_params(params)?;
                 Ok(Self::SurfacesSplit {
                     tab_index: params.tab_index,
@@ -951,6 +972,8 @@ impl ControlCommand {
                     command: params.command,
                     owner: params.owner,
                     background: params.background || method == "surfaces.split_background",
+                    wait_timeout_secs: (method == "surfaces.split_wait")
+                        .then(|| params.wait_timeout_secs.unwrap_or(30)),
                     close_pane_when_last: params.close_pane_when_last,
                 })
             }
@@ -1679,6 +1702,7 @@ struct SurfaceCreateParams {
     command: Option<String>,
     owner: Option<String>,
     background: bool,
+    wait_timeout_secs: Option<u64>,
     close_pane_when_last: bool,
 }
 
@@ -1700,6 +1724,7 @@ struct SurfaceSplitParams {
     command: Option<String>,
     owner: Option<String>,
     background: bool,
+    wait_timeout_secs: Option<u64>,
     close_pane_when_last: bool,
 }
 
@@ -1715,6 +1740,7 @@ impl Default for SurfaceSplitParams {
             command: None,
             owner: None,
             background: false,
+            wait_timeout_secs: None,
             close_pane_when_last: true,
         }
     }
@@ -2165,6 +2191,7 @@ mod tests {
             command: Some("codex".to_string()),
             owner: Some("subagent".to_string()),
             background: true,
+            wait_timeout_secs: Some(15),
             close_pane_when_last: true,
         };
 
@@ -2180,6 +2207,7 @@ mod tests {
                 command,
                 owner,
                 background,
+                wait_timeout_secs,
                 close_pane_when_last,
             } => {
                 assert_eq!(tab_index, Some(3));
@@ -2191,6 +2219,7 @@ mod tests {
                 assert_eq!(owner.as_deref(), Some("subagent"));
                 assert!(close_pane_when_last);
                 assert!(background);
+                assert_eq!(wait_timeout_secs, Some(15));
             }
             other => panic!("unexpected command: {other:?}"),
         }

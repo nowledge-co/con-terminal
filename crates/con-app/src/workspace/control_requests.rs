@@ -481,6 +481,7 @@ impl ConWorkspace {
                 command,
                 owner,
                 background,
+                wait_timeout_secs,
                 close_pane_when_last,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
@@ -492,6 +493,7 @@ impl ConWorkspace {
                             command,
                             owner,
                             background,
+                            wait_timeout_secs,
                             close_pane_when_last,
                             response_tx,
                         },
@@ -508,6 +510,7 @@ impl ConWorkspace {
                 command,
                 owner,
                 background,
+                wait_timeout_secs,
                 close_pane_when_last,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
@@ -520,6 +523,7 @@ impl ConWorkspace {
                             command,
                             owner,
                             background,
+                            wait_timeout_secs,
                             close_pane_when_last,
                             response_tx,
                         },
@@ -720,8 +724,6 @@ impl ConWorkspace {
                 pty_only,
             } => match self.resolve_control_tab_index(tab_index) {
                 Ok(tab_idx) => {
-                    let requested_tab_index = tab_idx + 1;
-                    let tab_id = self.tabs[tab_idx].summary_id;
                     let surface_id = match self.resolve_surface_target_for_tab(tab_idx, target) {
                         Ok(resolved) => resolved.surface_id,
                         Err(err) => {
@@ -729,66 +731,15 @@ impl ConWorkspace {
                             return;
                         }
                     };
-                    let timeout = Duration::from_secs(timeout_secs.unwrap_or(10).clamp(1, 300));
-                    let started = std::time::Instant::now();
-                    cx.spawn(async move |this, cx| {
-                        loop {
-                            let result = this.update(cx, |workspace, cx| {
-                                let Some(current_tab_idx) =
-                                    workspace.tab_index_for_summary_id(tab_id)
-                                else {
-                                    return Some(Err(ControlError::invalid_params(format!(
-                                        "Tab {} is no longer available.",
-                                        requested_tab_index
-                                    ))));
-                                };
-                                let resolved = match workspace.resolve_surface_target_for_tab(
-                                    current_tab_idx,
-                                    con_core::SurfaceTarget::new(None, None, Some(surface_id)),
-                                ) {
-                                    Ok(resolved) => resolved,
-                                    Err(err) => return Some(Err(err)),
-                                };
-                                let is_ready = resolved.terminal.surface_ready(cx)
-                                    && resolved.terminal.is_alive(cx)
-                                    && (pty_only || resolved.terminal.has_shell_integration(cx));
-                                let timed_out = started.elapsed() >= timeout;
-                                if is_ready || timed_out {
-                                    let status = if is_ready { "ready" } else { "timeout" };
-                                    Some(Ok(workspace.surface_wait_ready_result(
-                                        current_tab_idx,
-                                        &resolved,
-                                        status,
-                                        cx,
-                                    )))
-                                } else {
-                                    None
-                                }
-                            });
-
-                            match result {
-                                Ok(Some(result)) => {
-                                    Self::send_control_result(response_tx, result);
-                                    return;
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    Self::send_control_result(
-                                        response_tx,
-                                        Err(ControlError::internal(format!(
-                                            "Failed to wait for surface readiness: {err}"
-                                        ))),
-                                    );
-                                    return;
-                                }
-                            }
-
-                            cx.background_executor()
-                                .timer(Duration::from_millis(50))
-                                .await;
-                        }
-                    })
-                    .detach();
+                    self.wait_for_surface_ready(
+                        tab_idx,
+                        surface_id,
+                        timeout_secs.unwrap_or(10),
+                        pty_only,
+                        None,
+                        response_tx,
+                        cx,
+                    );
                 }
                 Err(err) => Self::send_control_result(response_tx, Err(err)),
             },
