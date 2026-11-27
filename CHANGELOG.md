@@ -4,6 +4,31 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.191` - 2026-11-27
+
+### Added
+
+**CLI**
+
+- Create tabs, panes and stacked terminals in the background. Use an owner label and the returned surface ID to clean up finished workers. _(PR [#578](https://github.com/nowledge-co/con-terminal/pull/578) by [@wey-gu](https://github.com/wey-gu))_
+
+### Changed
+
+**CLI**
+
+- `panes exec` exits successfully only when the terminal reports a zero exit code. JSON output still carries the command result. A command accidentally passed as one argument gets a hint when the shell cannot find it. _(PR [#578](https://github.com/nowledge-co/con-terminal/pull/578) by [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Panes**
+
+- New terminals show `starting` while their PTY initializes. Creation returns the surface ID and a command to wait for it. _(PR [#577](https://github.com/nowledge-co/con-terminal/pull/577) by [@wey-gu](https://github.com/wey-gu))_
+- Keep the active terminal’s explicit title when a program changes its title, with manually named tabs taking precedence. _(PR [#578](https://github.com/nowledge-co/con-terminal/pull/578) by [@wey-gu](https://github.com/wey-gu))_
+
+**macOS**
+
+- Keep the original Codex conversation linked to its terminal after `/recap`, so restarting con can still restore it. _(PR [#576](https://github.com/nowledge-co/con-terminal/pull/576) by [@adaiguoguo](https://github.com/adaiguoguo))_
+
 ## `v0.1.0-beta.190` - 2026-11-26
 
 ### Added
