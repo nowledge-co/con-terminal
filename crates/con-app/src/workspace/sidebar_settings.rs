@@ -330,7 +330,9 @@ impl ConWorkspace {
                 (None, Some(tab.title.clone()), None)
             };
         let initial = tab_rename_initial_label(
-            tab.user_label.as_deref(),
+            tab.user_label
+                .as_deref()
+                .or_else(|| tab.pane_tree.focused_surface_title()),
             tab.ai_label.as_deref(),
             tab.ai_icon.map(|kind| kind.svg_path()),
             tab.agent_cli,
@@ -628,7 +630,9 @@ impl ConWorkspace {
                 (None, Some(tab.title.clone()), None)
             };
         let mut presentation = smart_tab_presentation(
-            tab.user_label.as_deref(),
+            tab.user_label
+                .as_deref()
+                .or_else(|| tab.pane_tree.focused_surface_title()),
             tab.ai_label.as_deref(),
             tab.ai_icon.map(|k| k.svg_path()),
             tab.agent_cli,

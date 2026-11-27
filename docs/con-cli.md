@@ -197,8 +197,9 @@ con-cli --json panes exec --tab 1 --pane-id 0 -- cargo test -q
 `create --command` takes one shell string. `panes exec` takes a program and
 separate arguments. For shell syntax in `exec`, pass the shell explicitly,
 for example `-- sh -c 'cargo test && cargo check'` on Unix.
-Check the JSON `exit_code` for the command result. The CLI exit status
-indicates whether the control request itself succeeded.
+The CLI exits zero only when the terminal reports that the command succeeded.
+With `--json`, stdout still contains the result, including the command’s exact
+`exit_code` or `null` if the terminal did not report one.
 Use `con-cli --version` to report the companion build when filing an issue.
 
 Use `pane_id` for follow-up automation. Pane indexes can change when a user
@@ -208,13 +209,14 @@ splits, closes, or rearranges panes.
 
 Use `tabs new --background` to add a tab without selecting it. For a worker
 in an existing tab, `surfaces create --background` adds a stacked surface
-and `surfaces split --background` adds a pane. Both preserve the current
-selection and keyboard focus. A hidden terminal may remain in `starting`
-until it receives its first presentation layout. Treat a readiness timeout
-as an observation and retain the returned IDs.
+and either `panes create --background` or `surfaces split --background` adds
+a pane. These options preserve the current selection and keyboard focus.
+A hidden terminal may remain in `starting` until its first presentation
+layout. If readiness times out, retain the returned IDs to retry the wait.
 
-Set a distinct `--owner` label when creating worker surfaces. Use the returned
-surface ID to close a worker, with `--owner` to check the label before closing:
+Set a distinct `--owner` label with `panes create`, `surfaces create`, or
+`surfaces split`. Use the returned surface ID with `--owner` to check the
+label before closing a worker:
 
 ```sh
 con-cli surfaces close --tab 1 --surface-id 7 --owner my-task --close-empty-owned-pane
@@ -222,7 +224,12 @@ con-cli surfaces close --tab 1 --surface-id 7 --owner my-task --close-empty-owne
 
 The label is a target check. Closing a running agent still requires confirmation
 in con. `--close-empty-owned-pane` permits removal of an eligible ephemeral pane
-when its last surface is closed.
+when its last surface is closed. After the agent exits normally, you can
+use owner-checked cleanup for its remaining shell.
+
+An explicit tab name takes precedence. If the tab has no explicit name,
+the focused surface’s `--title` takes precedence over the title reported
+by the running program.
 
 ## Surface commands
 

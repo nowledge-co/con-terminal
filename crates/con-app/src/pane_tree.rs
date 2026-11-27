@@ -503,6 +503,14 @@ impl PaneTree {
         Self::find_terminal(&self.root, self.focused_pane_id)
     }
 
+    pub fn focused_surface_title(&self) -> Option<&str> {
+        let title = Self::find_terminal_surface(&self.root, self.focused_pane_id)?
+            .title
+            .as_deref()?
+            .trim();
+        (!title.is_empty()).then_some(title)
+    }
+
     /// Get all terminals in the tree
     pub fn all_terminals(&self) -> Vec<&TerminalPane> {
         let mut result = Vec::new();
@@ -1428,6 +1436,10 @@ impl PaneTree {
     // --- Private helpers ---
 
     fn find_terminal(node: &PaneNode, target_id: PaneId) -> Option<&TerminalPane> {
+        Self::find_terminal_surface(node, target_id).map(|surface| &surface.terminal)
+    }
+
+    fn find_terminal_surface(node: &PaneNode, target_id: PaneId) -> Option<&PaneSurface> {
         match node {
             PaneNode::Leaf {
                 id,
@@ -1437,12 +1449,10 @@ impl PaneTree {
                         active_surface_id,
                     },
                 ..
-            } if *id == target_id => {
-                Self::active_surface(surfaces, *active_surface_id).map(|surface| &surface.terminal)
-            }
+            } if *id == target_id => Self::active_surface(surfaces, *active_surface_id),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => Self::find_terminal(first, target_id)
-                .or_else(|| Self::find_terminal(second, target_id)),
+            PaneNode::Split { first, second, .. } => Self::find_terminal_surface(first, target_id)
+                .or_else(|| Self::find_terminal_surface(second, target_id)),
         }
     }
 

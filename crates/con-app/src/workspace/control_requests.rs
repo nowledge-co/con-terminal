@@ -239,9 +239,14 @@ impl ConWorkspace {
                     .map(|(idx, tab)| TabInfo {
                         index: idx + 1,
                         title: tab
-                            .pane_tree
-                            .try_focused_terminal()
-                            .and_then(|t| t.title(cx))
+                            .user_label
+                            .clone()
+                            .or_else(|| tab.pane_tree.focused_surface_title().map(str::to_owned))
+                            .or_else(|| {
+                                tab.pane_tree
+                                    .try_focused_terminal()
+                                    .and_then(|t| t.title(cx))
+                            })
                             .unwrap_or_else(|| tab.title.clone()),
                         is_active: idx == self.active_tab,
                         pane_count: tab.pane_tree.pane_count(),

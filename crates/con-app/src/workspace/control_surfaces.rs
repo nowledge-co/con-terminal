@@ -1,6 +1,12 @@
 use super::*;
 use con_core::control::terminal_state;
 
+fn surface_wait_ready_command(tab_index: usize, surface_id: usize) -> String {
+    format!(
+        "con-cli --json surfaces wait-ready --tab {tab_index} --surface-id {surface_id} --pty-only --timeout 30"
+    )
+}
+
 impl ConWorkspace {
     pub(super) fn flush_pending_window_control_requests(
         &mut self,
@@ -458,6 +464,7 @@ impl ConWorkspace {
                     if close_outcome.closed_pane {
                         self.reconcile_runtime_trackers_for_tab(tab_idx);
                     }
+                    self.sync_sidebar(cx);
                     self.save_session(cx);
                     Self::send_control_result(
                         response_tx,
@@ -518,6 +525,7 @@ impl ConWorkspace {
                 startup_command: command.clone(),
             },
         );
+        self.sync_sidebar(cx);
         let result =
             self.surface_created_result(tab_idx, pane_id, surface_id, created_pane, &terminal, cx);
         Self::send_control_result(response_tx, Ok(result));
@@ -827,6 +835,7 @@ impl ConWorkspace {
             "surface_id": surface_id,
             "surface_ref": format!("surface:{surface_index}"),
             "terminal_state": terminal_state(surface_ready, is_alive),
+            "wait_ready": surface_wait_ready_command(tab_idx + 1, surface_id),
             "surface_ready": surface_ready,
             "is_alive": is_alive,
             "has_shell_integration": terminal.has_shell_integration(cx),
@@ -1252,10 +1261,7 @@ impl ConWorkspace {
                 "pane_id": pane_id,
                 "surface_id": surface_id,
                 "terminal_state": terminal_state(surface_ready, is_alive),
-                "wait_ready": surface_id.map(|id| format!(
-                    "con-cli --json surfaces wait-ready --tab {} --surface-id {id} --pty-only --timeout 30",
-                    tab_idx + 1,
-                )),
+                "wait_ready": surface_id.map(|id| surface_wait_ready_command(tab_idx + 1, id)),
                 "surface_ready": surface_ready,
                 "is_alive": is_alive,
                 "has_shell_integration": has_shell_integration,

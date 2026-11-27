@@ -40,5 +40,21 @@ con-cli --json tree --tab 2
 ---- contains
 "focused_pane_id":0
 
+con-cli --json panes create --tab 2 --background --owner pane-worker
+---- json-subset
+{"surface_id":3,"pane_id":2,"wait_ready":"con-cli --json surfaces wait-ready --tab 2 --surface-id 3 --pty-only --timeout 30"}
+
+con-cli --json tree --tab 2
+---- contains
+"focused_pane_id":0
+
+con-cli surfaces close --tab 2 --surface-id 3 --owner another-worker --close-empty-owned-pane
+---- error
+matching owner
+
+con-cli --json surfaces close --tab 2 --surface-id 3 --owner pane-worker --close-empty-owned-pane
+---- json-subset
+{"closed_pane":true}
+
 con-cli --json tabs close --tab 2
 ---- ok

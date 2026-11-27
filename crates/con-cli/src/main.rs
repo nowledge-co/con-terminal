@@ -264,6 +264,12 @@ struct PaneCreateArgs {
     /// Shell source to submit in the new pane.
     #[arg(long)]
     command: Option<String>,
+    /// Label the first terminal for owner-checked cleanup.
+    #[arg(long)]
+    owner: Option<String>,
+    /// Keep the current pane, surface, and keyboard focus.
+    #[arg(long)]
+    background: bool,
 }
 
 #[derive(Args, Clone)]
@@ -506,6 +512,8 @@ fn main() -> Result<()> {
                 print_result(&result, cli.json, render_content_only)?;
             }
             PanesCommand::Exec(args) => {
+                let single_word_with_spaces =
+                    matches!(args.command.as_slice(), [word] if word.contains(char::is_whitespace));
                 let result = send_command(
                     &socket_path,
                     ControlCommand::PanesExec {
@@ -515,6 +523,14 @@ fn main() -> Result<()> {
                     },
                 )?;
                 print_result(&result, cli.json, render_exec_result)?;
+                match result["exit_code"].as_i64() {
+                    Some(0) => {}
+                    Some(127) if single_word_with_spaces => anyhow::bail!(
+                        "Pane command exited with status 127. Pass the program and arguments separately, or use an explicit shell for a command string."
+                    ),
+                    Some(code) => anyhow::bail!("Pane command exited with status {code}."),
+                    None => anyhow::bail!("The terminal did not report the command's exit status."),
+                }
             }
             PanesCommand::SendKeys(args) => {
                 let result = send_command(
@@ -528,14 +544,25 @@ fn main() -> Result<()> {
                 print_result(&result, cli.json, render_status_only)?;
             }
             PanesCommand::Create(args) => {
-                let result = send_command(
-                    &socket_path,
+                let command = if args.background || args.owner.is_some() {
+                    ControlCommand::SurfacesSplit {
+                        tab_index: args.tab.tab,
+                        source: SurfaceTarget::new(None, None, None),
+                        location: args.location.into(),
+                        title: None,
+                        command: args.command,
+                        close_pane_when_last: args.owner.is_some(),
+                        owner: args.owner,
+                        background: args.background,
+                    }
+                } else {
                     ControlCommand::PanesCreate {
                         tab_index: args.tab.tab,
                         location: args.location.into(),
                         command: args.command,
-                    },
-                )?;
+                    }
+                };
+                let result = send_command(&socket_path, command)?;
                 print_result(&result, cli.json, render_create_result)?;
             }
             PanesCommand::Wait(args) => {
