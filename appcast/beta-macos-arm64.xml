@@ -8,6 +8,79 @@
     <item>
       <title>Version 0.1.0</title>
       <pubDate />
+      <sparkle:version>202</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.191/con-Beta-0.1.0-beta.191-macos-arm64.dmg" length="61974661" type="application/octet-stream" sparkle:edSignature="5ex9KnDJ96w4rHIJzxekQI8kZJjuhK4m3IPBkZHLizIK+3q9rqPLsE/0r4Sr54IDnClkSFv4Czq+uTfgPO/VCw==" />
+      <description>&lt;!doctype html&gt;
+&lt;html lang="en"&gt;&lt;head&gt;&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;meta name="color-scheme" content="light dark"&gt;
+&lt;meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"&gt;
+&lt;title&gt;con 0.1.0-beta.191 — What’s new&lt;/title&gt;
+&lt;style&gt;
+:root { color-scheme: light dark; --ground: #fffcf0; --ink: #100f0f;
+  --muted: #6f6e69; --link: #205ea6; --wash: rgba(16,15,15,.055); }
+@media (prefers-color-scheme: dark) {
+  :root { --ground: #100f0f; --ink: #cecdc3; --muted: #9f9d96;
+    --link: #66a0c8; --wash: rgba(206,205,195,.08); }
+}
+* { box-sizing: border-box; }
+html { background: var(--ground); color: var(--ink); }
+body { margin: 0; padding: 20px 22px 24px;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere; }
+article { max-width: 66ch; margin: 0 auto; }
+header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 16px; }
+h1 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 650; }
+.version { margin: 0; color: var(--muted); font-size: 12px; }
+h2 { margin: 20px 0 8px; font-size: 15px; line-height: 1.4; font-weight: 650; }
+h3 { margin: 10px 0 6px; font-size: 13px; line-height: 1.4; font-weight: 650; }
+p { margin: 8px 0; }
+ul { padding-left: 18px; margin: 6px 0 16px; }
+li { padding-left: 2px; }
+li + li { margin-top: 12px; }
+li::marker { color: var(--muted); }
+a { color: var(--link); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 2px; }
+code { font: .9em ui-monospace, Menlo, Consolas, monospace;
+  background: var(--wash); border-radius: 3px; padding: 1px 3px; }
+.credit { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.credit a { color: inherit; }
+footer { margin-top: 26px; font-size: 12px; }
+::selection { background: var(--link); color: var(--ground); }
+@media (max-width: 380px) { body { padding: 16px; } h1 { font-size: 18px; } }
+&lt;/style&gt;&lt;/head&gt;&lt;body&gt;&lt;article&gt;
+&lt;header&gt;&lt;h1&gt;What’s new&lt;/h1&gt;&lt;p class="version"&gt;con 0.1.0-beta.191 · 2026-11-27&lt;/p&gt;&lt;/header&gt;
+&lt;h2&gt;Added&lt;/h2&gt;
+&lt;h3&gt;CLI&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Create tabs, panes and stacked terminals in the background. Use an owner label and the returned surface ID to clean up finished workers.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/578"&gt;#578&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Changed&lt;/h2&gt;
+&lt;h3&gt;CLI&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;panes exec&lt;/code&gt; exits successfully only when the terminal reports a zero exit code. JSON output still carries the command result. A command accidentally passed as one argument gets a hint when the shell cannot find it.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/578"&gt;#578&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2&gt;Fixed&lt;/h2&gt;
+&lt;h3&gt;Panes&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;New terminals show &lt;code&gt;starting&lt;/code&gt; while their PTY initializes. Creation returns the surface ID and a command to wait for it.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/577"&gt;#577&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;li&gt;Keep the active terminal’s explicit title when a program changes its title, with manually named tabs taking precedence.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/578"&gt;#578&lt;/a&gt; by &lt;a href="https://github.com/wey-gu"&gt;@wey-gu&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3&gt;macOS&lt;/h3&gt;
+&lt;ul&gt;
+&lt;li&gt;Keep the original Codex conversation linked to its terminal after &lt;code&gt;/recap&lt;/code&gt;, so restarting con can still restore it.&lt;span class="credit"&gt;PR &lt;a href="https://github.com/nowledge-co/con-terminal/pull/576"&gt;#576&lt;/a&gt; by &lt;a href="https://github.com/adaiguoguo"&gt;@adaiguoguo&lt;/a&gt;&lt;/span&gt;&lt;/li&gt;
+&lt;/ul&gt;
+&lt;footer&gt;&lt;a href="https://con.nowledge.co/changelog/"&gt;Read the full changelog&lt;/a&gt;&lt;/footer&gt;
+&lt;/article&gt;&lt;/body&gt;&lt;/html&gt;
+</description>
+      <sparkle:fullReleaseNotesLink>https://con.nowledge.co/changelog/</sparkle:fullReleaseNotesLink>
+    </item>
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate />
       <sparkle:version>201</sparkle:version>
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
@@ -836,14 +909,6 @@ footer { margin-top: 26px; font-size: 12px; }
       <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.168/con-Beta-0.1.0-beta.168-macos-arm64.dmg" length="61531034" type="application/octet-stream" sparkle:edSignature="Uv5o5eDGdoJxa0snef1iugTUKMwH1ke4rKnelYtn7wn9Eo5TkXuTdorfqig2W0VyctV3YNocsgXrjOrme5eqCg==" />
-    </item>
-    <item>
-      <title>Version 0.1.0</title>
-      <pubDate />
-      <sparkle:version>178</sparkle:version>
-      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>10.15.7</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.167/con-Beta-0.1.0-beta.167-macos-arm64.dmg" length="61504596" type="application/octet-stream" sparkle:edSignature="P2zE1NQi5+p3OkgMEjkAHmIH9crOuoy2xNr3UI/4SrDJLzc9qw70CyX0ctDUTJrNNyFfQR/G/as5eGM6r/AuDw==" />
     </item>
   </channel>
 </rss>
