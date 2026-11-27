@@ -76,9 +76,12 @@ at recovery. Unsupported or missing history never falls back to a recent session
 
 SessionStart links the exact native session ID, working directory, native store
 and any reported history path to that surface. When Codex omits the path,
-con passes the exact saved UUID to native Codex for lookup in the recorded
-store. For Claude, con preserves whether the configuration directory was
-explicitly set, since this affects global settings and API-key approval.
+con checks whether Codex holds the history writer lock for that exact UUID
+in the reported store before saving the link. A temporary thread without a
+writer leaves the existing link in place. At resume time, con passes the
+saved UUID to Codex for lookup in the recorded store. For Claude, con preserves
+whether the configuration directory was explicitly set, since this affects global
+settings and API-key approval.
 For older Claude links to the default directory, con uses default settings
 unless the shell explicitly selects that same directory.
 
