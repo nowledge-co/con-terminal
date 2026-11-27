@@ -77,12 +77,7 @@ impl ConWorkspace {
             .unwrap_or_else(|| self.tabs[tab_idx].pane_tree.focused_pane_id());
         let cwd = focused_terminal.and_then(|(_, terminal)| terminal.current_dir(cx));
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
-        let next_surface_index = self.tabs[tab_idx]
-            .pane_tree
-            .surface_infos(Some(pane_id))
-            .len()
-            .saturating_add(1);
-        let options = SurfaceCreateOptions::plain(Some(format!("Surface {next_surface_index}")));
+        let options = SurfaceCreateOptions::plain(None);
         let Some(_surface_id) =
             self.tabs[tab_idx]
                 .pane_tree
@@ -220,11 +215,7 @@ impl ConWorkspace {
             .surface_infos(Some(pane_id))
             .into_iter()
             .find(|surface| surface.is_active)?;
-        let title = surface
-            .title
-            .clone()
-            .or_else(|| surface.terminal.title(cx))
-            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
+        let title = PaneTree::surface_label(surface.title.as_deref(), &surface.terminal, cx);
 
         Some((tab_idx, surface.surface_id, title))
     }
@@ -275,10 +266,7 @@ impl ConWorkspace {
         else {
             return;
         };
-        let initial = surface
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("Surface {}", surface.surface_index + 1));
+        let initial = PaneTree::surface_label(surface.title.as_deref(), &surface.terminal, cx);
 
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -293,7 +281,9 @@ impl ConWorkspace {
                     return;
                 }
                 let value = input_entity.read(cx).value().to_string();
-                this.rename_surface_title(tab_idx, surface_id, value, cx);
+                if value.trim() != initial {
+                    this.rename_surface_title(tab_idx, surface_id, value, cx);
+                }
                 this.surface_rename = None;
                 this.refocus_active_terminal(window, cx);
                 cx.notify();
