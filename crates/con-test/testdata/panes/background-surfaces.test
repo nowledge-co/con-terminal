@@ -1,17 +1,17 @@
 con-cli --json tabs new --background
 ---- json-subset
-{"tab_index":2,"active_tab_index":1,"tab_count":2}
+{"tab_index":2,"active_tab_index":1,"tab_count":2,"focus_changed":false}
 
 con-cli --json tabs close --tab 2
 ---- ok
 
 con-cli --json tabs new
 ---- json-subset
-{"tab_index":2,"active_tab_index":2}
+{"tab_index":2,"active_tab_index":2,"focus_changed":true}
 
-con-cli --json surfaces create --tab 2 --pane-id 0 --background --owner fixture --title worker
+con-cli --json surfaces create --tab 2 --pane-id 0 --background --owner fixture --title worker --wait --timeout 20
 ---- json-subset
-{"surface_id":1,"pane_id":0}
+{"surface_id":1,"pane_id":0,"focus_changed":false,"status":"ready","terminal_state":"ready"}
 
 con-cli --json tree --tab 2
 ---- contains
@@ -24,9 +24,9 @@ matching owner
 con-cli --json surfaces close --tab 2 --surface-id 1 --owner fixture
 ---- ok
 
-con-cli --json surfaces split --tab 2 --surface-id 0 --background --owner fixture
+con-cli --json surfaces split --tab 2 --surface-id 0 --background --owner fixture --wait
 ---- json-subset
-{"surface_id":2,"pane_id":1}
+{"surface_id":2,"pane_id":1,"focus_changed":false,"status":"ready"}
 
 con-cli --json tree --tab 2
 ---- contains
@@ -40,13 +40,17 @@ con-cli --json tree --tab 2
 ---- contains
 "focused_pane_id":0
 
-con-cli --json panes create --tab 2 --background --owner pane-worker
+con-cli --json panes create --tab 2 --background --owner pane-worker --title "Background viewer" --wait --timeout 20
 ---- json-subset
-{"surface_id":3,"pane_id":2,"wait_ready":"con-cli --json surfaces wait-ready --tab 2 --surface-id 3 --pty-only --timeout 30"}
+{"surface_id":3,"pane_id":2,"focus_changed":false,"status":"ready","terminal_state":"ready","wait_ready":"con-cli --json surfaces wait-ready --tab 2 --surface-id 3 --pty-only --timeout 30"}
 
 con-cli --json tree --tab 2
 ---- contains
 "focused_pane_id":0
+
+con-cli --json surfaces list --tab 2 --pane-id 2
+---- json-subset
+{"surfaces":[{"surface_id":3,"title":"Background viewer","owner":"pane-worker"}]}
 
 con-cli surfaces close --tab 2 --surface-id 3 --owner another-worker --close-empty-owned-pane
 ---- error

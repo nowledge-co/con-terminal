@@ -4,6 +4,15 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.192` - 2026-11-27
+
+### Added
+
+**CLI**
+
+- Creation commands report whether focus moved. Use `panes create --title` to name the first terminal in a pane. _(PR [#579](https://github.com/nowledge-co/con-terminal/pull/579) by [@wey-gu](https://github.com/wey-gu))_
+- Add `--wait` to pane creation, surface creation, and splits to wait for a live PTY in one call. A timeout keeps the created IDs available for follow-up. _(PR [#579](https://github.com/nowledge-co/con-terminal/pull/579) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.191` - 2026-11-27
 
 ### Added

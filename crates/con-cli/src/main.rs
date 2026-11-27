@@ -104,7 +104,7 @@ enum PanesCommand {
     /// Run a program at a verified shell prompt. Pass its arguments as separate words.
     Exec(PaneExecArgs),
     SendKeys(PaneSendKeysArgs),
-    /// Create a pane and return its identity immediately, including a wait-ready command.
+    /// Create a pane and return its identity and readiness.
     Create(PaneCreateArgs),
     Wait(PaneWaitArgs),
     ProbeShell(PaneTargetArgs),
@@ -256,11 +256,30 @@ impl From<PaneCreateLocationArg> for PaneCreateLocation {
 }
 
 #[derive(Args, Clone)]
+struct CreateWaitArgs {
+    /// Wait for a live PTY. The response keeps the created IDs on timeout.
+    #[arg(long)]
+    wait: bool,
+    /// Seconds to wait for the PTY (1–300).
+    #[arg(long, requires = "wait", value_parser = clap::value_parser!(u64).range(1..=300))]
+    timeout: Option<u64>,
+}
+
+impl CreateWaitArgs {
+    fn timeout_secs(&self) -> Option<u64> {
+        self.wait.then(|| self.timeout.unwrap_or(30))
+    }
+}
+
+#[derive(Args, Clone)]
 struct PaneCreateArgs {
     #[command(flatten)]
     tab: TabArgs,
     #[arg(long, value_enum, default_value_t = PaneCreateLocationArg::Right)]
     location: PaneCreateLocationArg,
+    /// Title for the first terminal in the new pane.
+    #[arg(long)]
+    title: Option<String>,
     /// Shell source to submit in the new pane.
     #[arg(long)]
     command: Option<String>,
@@ -270,6 +289,8 @@ struct PaneCreateArgs {
     /// Keep the current pane, surface, and keyboard focus.
     #[arg(long)]
     background: bool,
+    #[command(flatten)]
+    readiness: CreateWaitArgs,
 }
 
 #[derive(Args, Clone)]
@@ -297,6 +318,8 @@ struct SurfaceCreateArgs {
     background: bool,
     #[arg(long)]
     close_pane_when_last: bool,
+    #[command(flatten)]
+    readiness: CreateWaitArgs,
 }
 
 #[derive(Args, Clone)]
@@ -316,6 +339,8 @@ struct SurfaceSplitArgs {
     background: bool,
     #[arg(long = "keep-pane-when-last", action = clap::ArgAction::SetFalse, default_value_t = true)]
     close_pane_when_last: bool,
+    #[command(flatten)]
+    readiness: CreateWaitArgs,
 }
 
 #[derive(Args, Clone)]
@@ -544,12 +569,18 @@ fn main() -> Result<()> {
                 print_result(&result, cli.json, render_status_only)?;
             }
             PanesCommand::Create(args) => {
-                let command = if args.background || args.owner.is_some() {
+                let wait_timeout_secs = args.readiness.timeout_secs();
+                let command = if args.background
+                    || args.owner.is_some()
+                    || args.title.is_some()
+                    || wait_timeout_secs.is_some()
+                {
                     ControlCommand::SurfacesSplit {
                         tab_index: args.tab.tab,
                         source: SurfaceTarget::new(None, None, None),
                         location: args.location.into(),
-                        title: None,
+                        title: args.title,
+                        wait_timeout_secs,
                         command: args.command,
                         close_pane_when_last: args.owner.is_some(),
                         owner: args.owner,
@@ -667,6 +698,7 @@ fn main() -> Result<()> {
                         command: args.command,
                         owner: args.owner,
                         background: args.background,
+                        wait_timeout_secs: args.readiness.timeout_secs(),
                         close_pane_when_last: args.close_pane_when_last,
                     },
                 )?;
@@ -683,6 +715,7 @@ fn main() -> Result<()> {
                         command: args.command,
                         owner: args.owner,
                         background: args.background,
+                        wait_timeout_secs: args.readiness.timeout_secs(),
                         close_pane_when_last: args.close_pane_when_last,
                     },
                 )?;
@@ -1274,6 +1307,19 @@ fn render_create_result(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(changed) = value["focus_changed"].as_bool() {
+        println!(
+            "    focus: {}",
+            if changed {
+                "moved to new terminal"
+            } else {
+                "unchanged"
+            }
+        );
+    }
+    if let Some(status) = value["status"].as_str() {
+        println!("    wait: {status}");
+    }
     if let Some(state) = value["terminal_state"].as_str() {
         println!("    terminal: {state}");
     }
@@ -1303,6 +1349,19 @@ fn render_surface_created(value: &Value) -> Result<()> {
         value["pane_id"].as_u64().unwrap_or(0),
         value["tab_index"].as_u64().unwrap_or(0)
     );
+    if let Some(changed) = value["focus_changed"].as_bool() {
+        println!(
+            "    focus: {}",
+            if changed {
+                "moved to new terminal"
+            } else {
+                "unchanged"
+            }
+        );
+    }
+    if let Some(status) = value["status"].as_str() {
+        println!("    wait: {status}");
+    }
     if let Some(state) = value["terminal_state"].as_str() {
         println!("    terminal: {state}");
     }

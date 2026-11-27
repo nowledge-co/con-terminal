@@ -179,6 +179,21 @@ option if you specified one.
 con-cli --json surfaces wait-ready --tab 1 --surface-id <id> --pty-only --timeout 30
 ```
 
+Add `--title` to name the first terminal in the pane. The JSON field
+`focus_changed` reports whether creation moved focus to the new terminal
+or selected the new tab, as measured when creation happens.
+
+```sh
+con-cli --json panes create --tab 1 --background --title "Live log" --wait --timeout 15
+```
+
+`panes create`, `surfaces create`, and `surfaces split` accept `--wait` to
+return after a live PTY is observed. The default wait is 30 seconds, and
+`--timeout` accepts 1–300 seconds. Check `status` for `ready`, `timeout`,
+or `exited`. A timeout is a successful creation result and retains the IDs.
+Use those IDs to wait again. A live PTY still does not establish that an
+interactive program has reached its input prompt.
+
 Use `--pty-only` for a live PTY without requiring shell integration. Inspect
 the returned `status`; a timeout does not close the surface. For an interactive
 TUI, follow this with a bounded check for the program's actual input prompt
