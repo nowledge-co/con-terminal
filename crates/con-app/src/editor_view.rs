@@ -539,6 +539,7 @@ pub struct EditorView {
     view_id: u64,
     preview_scroll_handle: ScrollHandle,
     file_tab_scroll_handle: ScrollHandle,
+    pub(crate) file_tab_close_run: crate::pane_tree::PaneTabCloseRun,
     file_tab_reveal_pending: bool,
     preview_parse_generation: u64,
     preview_parse_task: Option<Task<()>>,
@@ -610,6 +611,7 @@ impl EditorView {
             view_id: NEXT_EDITOR_VIEW_ID.fetch_add(1, Ordering::Relaxed),
             preview_scroll_handle: ScrollHandle::new(),
             file_tab_scroll_handle: ScrollHandle::new(),
+            file_tab_close_run: Default::default(),
             file_tab_reveal_pending: false,
             preview_parse_generation: 0,
             preview_parse_task: None,
@@ -999,6 +1001,10 @@ impl EditorView {
 
     pub fn file_tab_scroll_handle(&self) -> &ScrollHandle {
         &self.file_tab_scroll_handle
+    }
+
+    pub(crate) fn skip_file_tab_reveal(&mut self) {
+        self.file_tab_reveal_pending = false;
     }
 
     pub fn reveal_active_file_tab_after_layout(&mut self, cx: &mut Context<Self>) {

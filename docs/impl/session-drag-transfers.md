@@ -5,9 +5,17 @@ shows which half of the target pane will receive it. A tab containing several
 panes keeps its internal layout, ratios and surface stacks. Hover another tab
 briefly during a drag to reveal that tab's layout first.
 
-Drag a pane's title (or a surface label within its header) onto the tab strip or vertical tab list to give it its own
-tab. The entire pane moves, including inactive surfaces or unsaved editor state.
-The existing active surface and surface order stay intact.
+Drag a pane's title, a surface label, or the empty space after the surface
+tabs to an edge of another pane to change the split layout. Drop onto the tab
+strip or vertical tab list to give the pane its own tab. The entire pane moves,
+including inactive surfaces or unsaved editor state. The existing active surface
+and surface order stay intact. A stacked pane's drag preview shows the number
+of terminals in the move.
+
+Terminal and file tabs can be closed with the middle mouse button. When
+clicking a close button, the next tab takes the same slot for consecutive
+closes while the pointer stays in the rail. Running-agent confirmation and
+the editor's unsaved-file guard still apply.
 
 Drag a tab or pane outside its source window and release to move it into an
 independent window. On macOS, a quiet title-and-action preview follows the pointer
