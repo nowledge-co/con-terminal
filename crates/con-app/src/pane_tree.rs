@@ -194,9 +194,66 @@ pub(crate) struct PaneSurface {
     tab_navigation: SurfaceTabNavigation,
 }
 
+/// Keep the measured slots during consecutive pointer closes. The successor
+/// takes the closed tab's slot until the pointer leaves the rail.
+#[derive(Clone, Default)]
+pub(crate) struct PaneTabCloseRun(std::rc::Rc<std::cell::RefCell<Option<PaneTabCloseLayout>>>);
+
+#[derive(Clone)]
+struct PaneTabCloseLayout {
+    scroll: ScrollHandle,
+    slots: Vec<Pixels>,
+    trailing_space: Pixels,
+}
+
+impl PaneTabCloseRun {
+    fn arm(&self, index: usize, count: usize, scroll: &ScrollHandle, window: &Window) {
+        let previous = self.layout(count);
+        let layout = (index + 1 < count && scroll.bounds().contains(&window.mouse_position()))
+            .then(|| {
+                let mut slots = (0..count)
+                    .map(|index| {
+                        scroll
+                            .bounds_for_item(index)
+                            .map(|bounds| bounds.size.width)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let last_width = slots.pop()?;
+                let trailing_space = previous.map_or(last_width, |layout| {
+                    layout.trailing_space + px(2.0) + last_width
+                });
+                Some(PaneTabCloseLayout {
+                    scroll: scroll.clone(),
+                    slots,
+                    trailing_space,
+                })
+            })
+            .flatten();
+        self.0.replace(layout);
+    }
+
+    fn layout(&self, count: usize) -> Option<PaneTabCloseLayout> {
+        let mut state = self.0.borrow_mut();
+        if state
+            .as_ref()
+            .is_some_and(|layout| layout.slots.len() != count)
+        {
+            *state = None;
+        }
+        state.clone()
+    }
+
+    fn on_hover(&self, hovered: bool, window: &mut Window) {
+        if !hovered && self.0.borrow_mut().take().is_some() {
+            window.refresh();
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct SurfaceTabNavigation {
     scroll: ScrollHandle,
+    close_run: PaneTabCloseRun,
     last_layout: std::rc::Rc<std::cell::Cell<Option<(Pixels, Pixels, usize)>>>,
 }
 
@@ -1828,7 +1885,7 @@ impl PaneTree {
     fn push_surface(
         node: &mut PaneNode,
         pane_id: PaneId,
-        surface: PaneSurface,
+        mut surface: PaneSurface,
         activate: bool,
     ) -> bool {
         match node {
@@ -1841,6 +1898,9 @@ impl PaneTree {
                     },
                 ..
             } if *id == pane_id => {
+                if let Some(first) = surfaces.first() {
+                    surface.tab_navigation.close_run = first.tab_navigation.close_run.clone();
+                }
                 let surface_id = surface.id;
                 surfaces.push(surface);
                 if activate {
@@ -2896,10 +2956,23 @@ impl PaneTree {
         }
 
         let reveal_view = view.downgrade();
+        let close_run = editor.file_tab_close_run.clone();
+        let tab_count = tabs.len();
+        let close_layout = close_run.layout(tab_count);
+        let scroll = editor.file_tab_scroll_handle().clone();
+        let hover_close_run = close_run.clone();
         let mut tab_list = div()
             .on_children_prepainted(move |_, _, cx| {
                 let _ = reveal_view.update(cx, |editor, cx| {
-                    editor.reveal_active_file_tab_after_layout(cx);
+                    if editor
+                        .file_tab_close_run
+                        .layout(editor.tab_count())
+                        .is_some()
+                    {
+                        editor.skip_file_tab_reveal();
+                    } else {
+                        editor.reveal_active_file_tab_after_layout(cx);
+                    }
                 });
             })
             .id(("editor-file-tabs", pane_id))
@@ -2911,8 +2984,10 @@ impl PaneTree {
             .h_full()
             .gap(px(2.0))
             .overflow_x_scroll()
-            .track_scroll(editor.file_tab_scroll_handle());
+            .track_scroll(&scroll)
+            .on_hover(move |hovered, window, _| hover_close_run.on_hover(*hovered, window));
         for (index, (name, dirty)) in tabs.into_iter().enumerate() {
+            let pinned_width = close_layout.as_ref().map(|layout| layout.slots[index]);
             let temporary = editor.is_temporary_tab(index);
             let is_active = index == active_index;
             let label_color = if is_active {
@@ -2938,6 +3013,7 @@ impl PaneTree {
                 .flex_shrink_0()
                 .min_w_0()
                 .max_w(px(190.0))
+                .when_some(pinned_width, |tab, width| tab.w(width))
                 .h(pane_tab_height(theme))
                 .items_center()
                 .gap(px(6.0))
@@ -2999,6 +3075,7 @@ impl PaneTree {
                     // Truncate long names at the capsule's maximum width;
                     // additional tabs remain reachable through horizontal scrolling.
                     .min_w_0()
+                    .when(pinned_width.is_some(), |label| label.flex_1())
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
@@ -3016,6 +3093,8 @@ impl PaneTree {
             );
 
             let close_view = view.clone();
+            let close_run = close_run.clone();
+            let close_scroll = scroll.clone();
             let focus_cb_close = focus_pane_cb.clone();
             let mut close = pane_tab_close_button(
                 ElementId::Name(format!("editor-file-close-{pane_id}-{index}").into()),
@@ -3025,13 +3104,14 @@ impl PaneTree {
             .debug_selector(move || format!("editor-file-close-{index}"));
             if !is_active {
                 close = close
-                    .invisible()
-                    .group_hover("editor-file-tab", |s| s.visible());
+                    .opacity(0.55)
+                    .group_hover("editor-file-tab", |s| s.opacity(1.0));
             }
             tab = tab.child(
                 close
                     .on_click(move |_event, window, cx| {
                         cx.stop_propagation();
+                        close_run.arm(index, tab_count, &close_scroll, window);
                         focus_cb_close(pane_id, window, cx);
                         close_view.update(cx, |editor, cx| {
                             editor.focus_handle(cx).focus(window, cx);
@@ -3048,6 +3128,11 @@ impl PaneTree {
             tab_list = tab_list.child(tab);
         }
 
+        if let Some(layout) = close_layout {
+            // Retain the scroll extent so closing near the right end cannot
+            // clamp the offset and move the surviving close buttons.
+            tab_list = tab_list.child(div().w(layout.trailing_space).flex_shrink_0());
+        }
         bar = bar.child(tab_list.horizontal_scrollbar(editor.file_tab_scroll_handle()));
 
         if let Some(button) = crate::editor_browser::render_button(pane_id, view, cx) {
@@ -3320,9 +3405,36 @@ impl PaneTree {
                 .position(|surface| surface.id == active.id)
                 .unwrap_or(0);
             let surface_count = surfaces.len();
+            let close_run = navigation.close_run.clone();
+            let close_layout = close_run.layout(surface_count);
+            let scroll = close_layout
+                .as_ref()
+                .map_or_else(|| navigation.scroll.clone(), |layout| layout.scroll.clone());
+            let hover_close_run = close_run.clone();
+            let pin_active = close_layout.is_some();
+            let pane_drag = DraggedTab {
+                source_window: Default::default(),
+                session_id,
+                label: if surface_count > 1 {
+                    format!("Pane · {surface_count} terminals").into()
+                } else {
+                    Self::surface_label(active.title.as_deref(), &active.terminal, cx).into()
+                },
+                icon: if surface_count > 1 {
+                    "phosphor/stack-fill.svg"
+                } else {
+                    active.terminal.presentation_icon()
+                },
+                origin: DraggedTabOrigin::Pane,
+                preview_constraint: None,
+                pane_id: Some(pane_id),
+            };
             let reveal = navigation.clone();
             let mut surface_rail = div()
                 .on_children_prepainted(move |_, window, _| {
+                    if pin_active {
+                        return;
+                    }
                     let Some(tab) = reveal.scroll.bounds_for_item(active_index) else {
                         return;
                     };
@@ -3358,9 +3470,11 @@ impl PaneTree {
                 .max_w(relative(1.0))
                 .font_family(theme.font_family.clone())
                 .overflow_x_scroll()
-                .track_scroll(&navigation.scroll);
+                .track_scroll(&scroll)
+                .on_hover(move |hovered, window, _| hover_close_run.on_hover(*hovered, window));
 
-            for surface in surfaces {
+            for (index, surface) in surfaces.iter().enumerate() {
+                let pinned_width = close_layout.as_ref().map(|layout| layout.slots[index]);
                 let is_active = surface.id == active_surface_id;
                 let title = Self::surface_label(surface.title.as_deref(), &surface.terminal, cx);
                 let color = if is_active {
@@ -3381,8 +3495,9 @@ impl PaneTree {
                 let rename_cb_for_menu = rename_surface_cb.clone();
                 let close_cb_for_menu = close_surface_cb.clone();
                 let close_cb_for_button = close_surface_cb.clone();
-                let can_close =
-                    surfaces.len() > 1 || surface.close_pane_when_last && surface.owner.is_some();
+                let can_close = surfaces.len() > 1
+                    || tree_has_splits && surface.close_pane_when_last && surface.owner.is_some();
+                let middle_close = close_surface_cb.clone();
                 let editing_input = rename_editor
                     .as_ref()
                     .filter(|editor| editor.surface_id == sid)
@@ -3398,6 +3513,7 @@ impl PaneTree {
                     .gap(px(6.0))
                     .h(pane_tab_height(theme))
                     .max_w(px(190.0))
+                    .when_some(pinned_width, |tab, width| tab.w(width))
                     .min_w_0()
                     .flex_shrink_0()
                     .pl(px(8.0))
@@ -3413,6 +3529,12 @@ impl PaneTree {
                             focus_cb(sid, window, cx);
                         }
                     })
+                    .when(can_close && !is_editing, |tab| {
+                        tab.on_mouse_up(MouseButton::Middle, move |_, window, cx| {
+                            cx.stop_propagation();
+                            middle_close(sid, window, cx);
+                        })
+                    })
                     .on_double_click(move |_, window, cx| {
                         if !is_editing {
                             rename_cb(sid, window, cx);
@@ -3425,15 +3547,7 @@ impl PaneTree {
                         !is_editing && (tree_has_splits || surfaces.len() > 1),
                         |tab| {
                             tab.cursor_grab().on_drag(
-                                DraggedTab {
-                                    source_window: Default::default(),
-                                    session_id,
-                                    label: title.clone().into(),
-                                    icon: surface.terminal.presentation_icon(),
-                                    origin: DraggedTabOrigin::Pane,
-                                    preview_constraint: None,
-                                    pane_id: Some(pane_id),
-                                },
+                                pane_drag.clone(),
                                 |dragged, _, window, cx| {
                                     cx.stop_propagation();
                                     dragged.begin(window, cx)
@@ -3472,6 +3586,7 @@ impl PaneTree {
                                 div()
                                     .truncate()
                                     .min_w_0()
+                                    .when(pinned_width.is_some(), |label| label.flex_1())
                                     .text_size(ui_px(theme, 11.5))
                                     .line_height(ui_px(theme, 14.0))
                                     .font_family(theme.font_family.clone())
@@ -3487,17 +3602,20 @@ impl PaneTree {
                     );
 
                 if can_close {
+                    let close_run = close_run.clone();
+                    let close_scroll = scroll.clone();
                     let mut close =
                         pane_tab_close_button(("surface-close", sid).into(), "Close surface", cx)
                             .debug_selector(move || format!("surface-close-action-{sid}"))
                             .on_click(move |_event, window, cx| {
+                                close_run.arm(index, surface_count, &close_scroll, window);
                                 close_cb_for_button(sid, window, cx);
                                 cx.stop_propagation();
                             });
                     if !is_active {
                         close = close
-                            .invisible()
-                            .group_hover("pane-surface-tab", |s| s.visible());
+                            .opacity(0.55)
+                            .group_hover("pane-surface-tab", |s| s.opacity(1.0));
                     }
                     tab = tab.child(
                         close.child(
@@ -3559,6 +3677,30 @@ impl PaneTree {
                 surface_rail = surface_rail.child(tab);
             }
 
+            if let Some(layout) = close_layout {
+                surface_rail = surface_rail.child(div().w(layout.trailing_space).flex_shrink_0());
+            }
+            if surfaces.len() > 1 || tree_has_splits {
+                let focus = focus_pane_cb.clone();
+                surface_rail = surface_rail.child(
+                    div()
+                        .id(("surface-pane-grip", pane_id))
+                        .debug_selector(move || format!("surface-pane-grip-{pane_id}"))
+                        .h_full()
+                        .flex_1()
+                        .min_w_0()
+                        .cursor_grab()
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            focus(pane_id, window, cx);
+                            cx.stop_propagation();
+                        })
+                        .on_drag(pane_drag, |dragged, _, window, cx| {
+                            cx.stop_propagation();
+                            dragged.begin(window, cx)
+                        }),
+                );
+            }
+
             surface_tabs = Some(
                 div()
                     .flex()
@@ -3571,7 +3713,7 @@ impl PaneTree {
                     .when(show_pane_header, |row| {
                         row.pr(ui_space_px(theme, 20.0) * 2.0 + px(6.0))
                     })
-                    .child(surface_rail.horizontal_scrollbar(&navigation.scroll))
+                    .child(surface_rail.horizontal_scrollbar(&scroll))
                     .into_any_element(),
             );
         }
@@ -3975,6 +4117,7 @@ impl PaneTree {
                     };
                 }
 
+                let close_run = PaneTabCloseRun::default();
                 let mut restored_surfaces = Vec::with_capacity(surfaces.len());
                 let mut restored_active_surface_id = None;
                 for state in surfaces {
@@ -4017,6 +4160,7 @@ impl PaneTree {
                     if active_surface_id == &Some(state.surface_id) {
                         restored_active_surface_id = Some(surface_id);
                     }
+                    surface.tab_navigation.close_run = close_run.clone();
                     restored_surfaces.push(surface);
                 }
 
@@ -4124,6 +4268,7 @@ mod tests {
 
     impl Render for SurfaceRenameTestView {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let owner = cx.weak_entity();
             let terminal = self.tree.focused_terminal().clone();
             div().size_full().child(self.tree.render(
                 1,
@@ -4131,7 +4276,12 @@ mod tests {
                 move |_, window, cx| terminal.focus(window, cx),
                 |_, _, _| {},
                 |_, _, _| {},
-                |_, _, _| {},
+                move |id, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.tree.close_surface(id, false);
+                        cx.notify();
+                    });
+                },
                 |_, _, _| {},
                 |_, _, _| {},
                 self.rename_editor.clone(),
@@ -4148,7 +4298,74 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[gpui::test]
-    fn a_surface_label_can_drag_its_complete_pane_without_header_whitespace(
+    fn surface_labels_and_trailing_space_drag_the_complete_pane(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let app = std::sync::Arc::new(
+            con_ghostty::GhosttyApp::new(
+                None, None, None, None, None, None, None, None, None, None, None, None, None, false,
+            )
+            .unwrap(),
+        );
+        for hide_pane_titles in [false, true] {
+            let (view, cx) = cx.add_window_view(|_, cx| {
+                let terminal = |cx: &mut App| {
+                    TerminalPane::new(cx.new(|cx| {
+                        crate::ghostty_view::GhosttyView::new(app.clone(), None, None, 14.0, cx)
+                    }))
+                };
+                let mut tree = PaneTree::new(terminal(cx));
+                tree.create_surface_in_pane(
+                    0,
+                    terminal(cx),
+                    SurfaceCreateOptions::plain(Some("worker".into())),
+                );
+                tree.split(SplitDirection::Horizontal, terminal(cx));
+                SurfaceRenameTestView {
+                    tree,
+                    rename_editor: None,
+                    hide_pane_titles,
+                }
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            for selector in ["surface-tab-1", "surface-pane-grip-0"] {
+                let origin = cx.debug_bounds(selector).expect(selector).center();
+                cx.simulate_mouse_down(origin, MouseButton::Left, Modifiers::default());
+                cx.simulate_mouse_move(
+                    origin + point(px(0.0), px(50.0)),
+                    MouseButton::Left,
+                    Modifiers::default(),
+                );
+                cx.update(|window, cx| {
+                    assert!(cx.has_active_drag(), "{selector} must start the pane drag");
+                    let payload = cx
+                        .global::<crate::sidebar::ActiveSessionDrag>()
+                        .0
+                        .as_ref()
+                        .unwrap();
+                    assert_eq!(payload.origin, DraggedTabOrigin::Pane);
+                    assert_eq!(payload.pane_id, Some(0));
+                    assert_eq!(payload.session_id, 1);
+                    assert_eq!(payload.label.as_ref(), "Pane · 2 terminals");
+                    assert_eq!(
+                        payload.source_window.get(),
+                        Some(window.window_handle().window_id())
+                    );
+                    cx.stop_active_drag(window);
+                });
+                cx.simulate_mouse_up(origin, MouseButton::Left, Modifiers::default());
+            }
+            view.read_with(cx, |view, _| {
+                assert_eq!(view.tree.surface_infos(Some(0)).len(), 2)
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn surface_close_handles_inactive_owned_tabs_and_the_middle_button(
         cx: &mut gpui::TestAppContext,
     ) {
         cx.update(gpui_component::init);
@@ -4164,52 +4381,46 @@ mod tests {
                     crate::ghostty_view::GhosttyView::new(app.clone(), None, None, 14.0, cx)
                 }))
             };
-            let mut tree = PaneTree::new(terminal(cx));
-            tree.create_surface_in_pane(
-                0,
+            let mut tree = PaneTree::new_with_surface_options(
                 terminal(cx),
-                SurfaceCreateOptions::plain(Some("worker".into())),
+                SurfaceCreateOptions {
+                    title: Some("Long-running log viewer".into()),
+                    owner: Some("fixture".into()),
+                    close_pane_when_last: true,
+                    background: false,
+                },
             );
+            for name in ["Log", "Build", "Shell"] {
+                tree.create_surface_in_pane(
+                    0,
+                    terminal(cx),
+                    SurfaceCreateOptions::plain(Some(name.into())),
+                );
+            }
             SurfaceRenameTestView {
                 tree,
                 rename_editor: None,
-                hide_pane_titles: false,
+                hide_pane_titles: true,
             }
         });
         cx.run_until_parked();
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
-        let label = cx
-            .debug_bounds("surface-tab-1")
-            .expect("stacked surface label");
-        cx.simulate_mouse_down(label.center(), MouseButton::Left, Modifiers::default());
-        cx.simulate_mouse_move(
-            label.center() + point(px(0.0), px(50.0)),
-            MouseButton::Left,
-            Modifiers::default(),
+        let point = cx.debug_bounds("surface-close-action-0").unwrap().center();
+        cx.simulate_click(point, Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("surface-close-action-1")
+                .unwrap()
+                .contains(&point)
         );
-        cx.update(|window, cx| {
-            assert!(
-                cx.has_active_drag(),
-                "the label must provide a grip even without a header gap"
-            );
-            let payload = cx
-                .global::<crate::sidebar::ActiveSessionDrag>()
-                .0
-                .as_ref()
-                .unwrap();
-            assert_eq!(payload.origin, DraggedTabOrigin::Pane);
-            assert_eq!(payload.pane_id, Some(0));
-            assert_eq!(payload.session_id, 1);
-            assert_eq!(
-                payload.source_window.get(),
-                Some(window.window_handle().window_id())
-            );
-            cx.stop_active_drag(window);
-        });
+        cx.simulate_click(point, Modifiers::default());
+        cx.run_until_parked();
+        let tab = cx.debug_bounds("surface-tab-2").unwrap().center();
+        cx.simulate_mouse_down(tab, MouseButton::Middle, Modifiers::default());
+        cx.simulate_mouse_up(tab, MouseButton::Middle, Modifiers::default());
         view.read_with(cx, |view, _| {
-            assert_eq!(view.tree.surface_infos(Some(0)).len(), 2)
+            let surfaces = view.tree.surface_infos(Some(0));
+            assert_eq!(surfaces.len(), 1);
+            assert_eq!(surfaces[0].surface_id, 3);
         });
     }
 
@@ -5046,6 +5257,42 @@ mod tests {
         editor.update(cx, |editor, cx| {
             editor.open_temporary_file("/tmp/con-preview-next.png".into(), cx);
             assert_eq!(editor.tab_count(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn consecutive_file_closes_keep_the_successor_under_the_pointer(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        let dir = tempfile::tempdir().unwrap();
+        let editor = cx.new(|cx| EditorView::new_with_font_size(14.0, cx));
+        for name in ["README.md", "a.rs", "last.rs"] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, "test").unwrap();
+            editor.update(cx, |editor, cx| editor.open_file(file, cx));
+            cx.run_until_parked();
+        }
+        editor.update(cx, |editor, cx| editor.activate_tab_and_emit(0, cx));
+        let (_, cx) = cx.add_window_view(|_, _| EditorBarTestView(editor.clone(), false));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let point = cx.debug_bounds("editor-file-close-0").unwrap().center();
+        cx.simulate_click(point, Modifiers::default());
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| assert_eq!(editor.tab_count(), 2));
+        let remaining = cx.debug_bounds("editor-file-close-0").unwrap();
+        assert!(
+            remaining.contains(&point),
+            "{point:?} outside {remaining:?}"
+        );
+        cx.simulate_click(point, Modifiers::default());
+        editor.read_with(cx, |editor, _| {
+            assert_eq!(editor.tab_count(), 1);
+            assert_eq!(
+                editor.active_path(),
+                Some(dir.path().join("last.rs").as_path())
+            );
         });
     }
 
