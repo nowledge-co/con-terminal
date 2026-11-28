@@ -4,6 +4,15 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.194` - 2026-11-29
+
+### Fixed
+
+**Panes**
+
+- Drag the empty space after the terminal tabs to rearrange the whole pane. The preview identifies the stack being moved. _(PR [#581](https://github.com/nowledge-co/con-terminal/pull/581) by [@wey-gu](https://github.com/wey-gu))_
+- Close inactive terminal and file tabs directly and keep the next close button under the pointer for consecutive clicks. Terminal tabs now support middle-click close. _(PR [#581](https://github.com/nowledge-co/con-terminal/pull/581) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.193` - 2026-11-27
 
 ### Fixed
